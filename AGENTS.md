@@ -17,3 +17,17 @@
   capability without checking its documentation and types.
 - Make architectural decisions for the long term. Do not accept a stopgap
   that only works for now and is meant to be replaced later.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked in GitHub Issues for `kareem-sf/quantix`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The default mattpocock/skills triage labels are used. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Domain documentation uses the single-context layout. See `docs/agents/domain.md`.
