@@ -352,8 +352,16 @@ _Avoid_: New drafting phase, commitment change
 The independent verification that the produced Submission Package matches the Coordinated Bid Baseline, covers every mandatory requirement and addendum, preserves information boundaries, and satisfies its manifest and release rules.
 _Avoid_: Production self-check, manager file-by-file drafting review
 
+**Final Review Plan**:
+The versioned assignment of independent, qualified reviewers and exact review scopes for one Submission Package Version, derived from its Submission Sections, Capability requirements, risks, and Package Validation Policy. A coordinator may consolidate specialist results but cannot edit reviewed files, close their own findings, or override a specialist finding.
+_Avoid_: One generic sign-off, producer self-review, informal review request
+
+**Release Readiness Report**:
+The evidence-linked decision view presented to the Tendering Manager for Final Approval, identifying the exact package and manifest hashes, approved baselines, coverage, validations, execution, query treatments, assumptions, qualifications, exclusions, departures, findings, exceptions, information-boundary results, deadline, and changes since the reviewed version. It summarizes but does not replace its underlying records.
+_Avoid_: Agent recommendation, unlinked dashboard score, approval record
+
 **Final Approval**:
-The Approval Gate at which the Tendering Manager reviews the release summary and either returns the Submission Package for correction or freezes an immutable package version as Ready for Submission. Any later content change creates a new version, revokes Final Approval, and requires Final Review again.
+The atomic Approval Gate at which the Tendering Manager reviews the Release Readiness Report and either returns the Submission Package for correction or freezes one exact immutable package version and manifest with zero open Critical Review Findings, only permitted Major Exception Approvals, and disclosed Minor findings. The transaction rechecks identity, deadline, addenda, staleness, hashes, validation, independent review, and exceptions; any later content change creates a new version, revokes approval, and requires Final Review again.
 _Avoid_: External submission, editable approval, agent release decision
 
 **Evidence**:
@@ -373,8 +381,44 @@ The immutable result of an Approval Gate, binding an explicit Engineer User outc
 _Avoid_: Chat confirmation, approval of latest, editable sign-off
 
 **Submission Package**:
-The controlled set of tender files that has passed completeness and consistency validation and received the Tendering Manager's approval for external submission.
-_Avoid_: Agent draft, unvalidated export
+The stable logical identity of the controlled tender submission across its immutable Submission Package Versions. Only one exact version that passes Final Review and receives Final Approval may become Ready for Submission.
+_Avoid_: Export folder, agent draft, collection of latest files
+
+**Submission Package Version**:
+An immutable domain object binding one approved Coordinated Bid Baseline to an exact Submission Manifest, required Submission Sections, and the content digests of every included file. Its root digest derives from the canonical manifest; any changed commitment invalidates affected baseline approval and returns the work through review.
+_Avoid_: Mutable package folder, approved latest, archive as system of record
+
+**Submission Manifest**:
+The immutable, deterministically generated structured record for one Submission Package Version. It binds the approved Coordinated Bid Baseline and Calculation Manifest, Submission Deadline, Submission Sections, every item and its exact release properties and content digest, coverage, required execution, validation, Reviews, permitted exceptions, and approvals.
+_Avoid_: Hand-edited file list, archive index, unhashed release note
+
+**Submission Section**:
+A typed part of a Submission Package Version representing a Tender-required envelope, volume, folder, language, alternative, or upload group, with deterministic membership and information-separation rules derived from verified requirements rather than a fixed technical-commercial layout.
+_Avoid_: Arbitrary folder, hard-coded envelope structure
+
+**Submission Manifest Item**:
+The entry for one included file, binding its required purpose and package location to an exact approved Artifact Version or explicitly required unchanged Source Artifact Version, together with provenance, requirement coverage, Data Classification, and content digest. An unregistered file cannot enter a Submission Package Version.
+_Avoid_: Loose file, path-only manifest row, mutable attachment
+
+**Submission Coverage Matrix**:
+The versioned proof that every mandatory requirement, deliverable, addendum instruction, form field, signature, evaluation response, and required file has an exact package item and location or an Evidence-supported permitted disposition. Final Approval requires complete disposition, and omission is never an implicit disposition.
+_Avoid_: Informal checklist, percentage-only completeness score, silent omission
+
+**Manual Verification**:
+A controlled verification of one exact file hash against a versioned checklist by the Engineer User or a qualified independent reviewer when automated inspection cannot establish a required property. It records verifier identity, capability, checks, Evidence, result, limitations, and timestamp; it is not an exception and cannot make an unverifiable mandatory file releasable.
+_Avoid_: Visual glance, blanket waiver, self-attested agent output
+
+**Package Validation Policy**:
+The versioned union of Quantix release invariants and verified Tender-specific submission rules defining the deterministic, independent, and manual checks, severities, permitted dispositions, and release conditions for a Submission Package. AI recommendations cannot change the policy or declare a check passed.
+_Avoid_: Prompt checklist, reviewer preference, package-specific waiver
+
+**Package Validation Run**:
+An immutable execution of one exact Package Validation Policy against one exact Submission Package Version and its files. It records validator and renderer versions, deterministic results, Manual Verifications, discovered inconsistencies, information-boundary checks, Review Findings, timestamps, and hashes. Every package version receives a new run; an item result may be reused only for the identical file hash, check version, policy, and context, while package-wide checks always rerun.
+_Avoid_: Mutable validation status, agent confidence, validation of latest
+
+**Release Copy**:
+A Tender-shaped folder, archive, or split volume deterministically exported from one frozen Submission Package Version, reopened, and verified against its Submission Manifest. It is a reproducible delivery copy rather than the Tender system of record; later external edits make only that copy unverified, and producing it does not mean Quantix submitted it externally.
+_Avoid_: Submission Package Version, submitted package, live export folder
 
 **Approval Gate**:
 A workflow boundary that cannot advance until the authenticated Engineer User, acting as Tendering Manager in v0, explicitly accepts, returns, or rejects the specified proposal, commitment, exception, or output. The approval records the engineer identity, timestamp, decision, object versions and hashes, evidence, comments, conditions, exceptions, and history.
