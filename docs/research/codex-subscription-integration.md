@@ -113,6 +113,11 @@ This is evidence that runs use the authenticated engineer's Codex account and
 its ChatGPT limits rather than a Quantix API key. It is not evidence of a
 separate quota reserved for Quantix.
 
+OpenAI's [Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)
+article likewise says Codex is included across ChatGPT plans, requires users to
+sign in with their ChatGPT account, and applies the user's ChatGPT or
+business-workspace terms to Codex use.
+
 [Codex pricing and plan documentation](https://learn.chatgpt.com/docs/pricing)
 says local messages and cloud chats share a five-hour allowance and that
 additional weekly limits may apply. Consumption varies with model, task size,
@@ -166,8 +171,12 @@ rate-limit or overload responses rather than assuming unlimited parallelism.
    but the public docs do not reconcile that path with the personal Terms of
    Use restriction on automatic/programmatic extraction of data or Output, nor
    do they explicitly approve resale of a product whose core AI service is each
-   customer's Plus/Pro allowance. Obtain written OpenAI confirmation before
-   public commercial distribution. This report makes no legal conclusion.
+   customer's Plus/Pro allowance. The
+   [OpenAI Services Agreement](https://openai.com/policies/services-agreement/)
+   expressly grants Customer Application integration rights for the API, but
+   does not separately make that grant for ChatGPT subscription quotas. Obtain
+   written OpenAI confirmation before public commercial distribution. This
+   report makes no legal conclusion.
 3. **Do not assume app-server currently has a production-support guarantee.**
    Its own page calls the app-server command and WebSocket transport
    experimental and unsupported for production workloads. Pinning a version
@@ -220,9 +229,11 @@ Before a public commercial launch, ask OpenAI to confirm in writing:
 - [Codex App Server](https://developers.openai.com/codex/app-server)
 - [Codex SDK](https://developers.openai.com/codex/codex-sdk)
 - [Codex authentication](https://learn.chatgpt.com/docs/auth)
+- [Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)
 - [Codex pricing and usage limits](https://learn.chatgpt.com/docs/pricing)
 - [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
 - [Open-source Codex components](https://learn.chatgpt.com/docs/open-source)
 - [Official TypeScript SDK source](https://github.com/openai/codex/tree/a17da5e6e4a5a9b45396f0693b0a4d5b9df06318/sdk/typescript)
 - [OpenAI Terms of Use](https://openai.com/policies/terms-of-use/)
+- [OpenAI Services Agreement](https://openai.com/policies/services-agreement/)
 - [OpenAI Account Sharing Policy](https://help.openai.com/en/articles/10471989-openai-account-sharing-policy)
