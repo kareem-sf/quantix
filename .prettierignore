@@ -1,0 +1,9 @@
+.scratch
+dist
+docs
+node_modules
+prototypes
+src/bindings
+src-tauri/gen
+src-tauri/target
+*.md

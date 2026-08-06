@@ -31,3 +31,17 @@ The default mattpocock/skills triage labels are used. See `docs/agents/triage-la
 ### Domain docs
 
 Domain documentation uses the single-context layout. See `docs/agents/domain.md`.
+
+## Repository commands
+
+- Install JavaScript dependencies: `npm install`
+- Run the desktop application in development: `npm run tauri dev`
+- Check formatting without changing files: `npm run format:check`
+- Run TypeScript typechecking and Rust clippy: `npm run check`
+- Run deterministic tests and regenerate Rust-owned TypeScript DTOs: `npm test`
+- Build the production renderer: `npm run build`
+- Build the native desktop package: `npm run build:desktop`
+- Run the development verification gate without building: `npm run verify`
+
+Keep generated declarations under `src/bindings` committed. Do not edit them manually.
+Production builds are explicit release-stage operations; do not run them during normal development.
