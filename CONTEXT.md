@@ -36,6 +36,58 @@ _Avoid_: Chatbot, fixed agent list
 The AI role that coordinates the Tender Office's daily work, dependencies, deadlines, consolidation, and escalation without taking decisions reserved for the Tendering Manager.
 _Avoid_: Tendering Manager Agent, autonomous manager
 
+**AI Provider**:
+A connected AI execution service that performs bounded Agent Profile work and returns operational results to Quantix. It supplies intelligence but owns no Tender state, permission, workflow transition, decision, or approval authority.
+_Avoid_: Tender Office, workflow engine, system of record
+
+**Provider Connection**:
+The credential-free Quantix view of one configured AI Provider, including its identity, readiness, authentication state, and compatibility with required capabilities. In v0 it represents only Codex using the Engineer User's Codex-managed ChatGPT subscription session.
+_Avoid_: API key configuration, provider account, model router
+
+**AI Provider Contract**:
+The versioned Quantix definition of the mandatory lifecycle, execution, tool, sandbox, event, usage, interruption, and failure capabilities an AI Provider must satisfy. Provider-specific protocols remain behind the contract, and incompatibility blocks provider work rather than weakening a requirement.
+_Avoid_: Codex protocol mirror, optional feature catalogue, provider router
+
+**Provider Thread**:
+The AI Provider's externally managed conversational context dedicated to one Agent Profile Version within one Tender and known to Quantix only by an opaque reference. It may improve continuity but remains noncanonical, carries irreversible exposure, and grants no authority through its memory.
+_Avoid_: Agent Profile, Tender Store, cross-Tender memory
+
+**Provider Turn**:
+One bounded AI Provider execution for exactly one Agent Run on a Provider Thread. Reconnecting may recover that same turn, but starting another turn creates another Agent Run.
+_Avoid_: Tender Task, hidden retry, whole provider thread
+
+**Provider Turn Request**:
+The immutable execution envelope binding a Provider Turn to its Agent Run, Provider Thread, exact Agent Profile Version instructions, Tender Task objective, Data Views, output contract, Typed Tools, Permission Grant-derived constraints, resource budget, and required language.
+_Avoid_: Free-form prompt, provider thread memory, mutable run configuration
+
+**Provider Instruction Bundle**:
+The ordered, versioned controls within a Provider Turn Request, comprising Quantix invariants, exact Agent Profile instructions, the Tender Task objective, input manifest, output and tool contracts, and escalation rules. Supplied Tender content remains untrusted data and cannot become an instruction source.
+_Avoid_: System prompt, thread memory, document instructions
+
+**Provider Turn Result**:
+The normalized terminal outcome of one Provider Turn as Completed, Interrupted, Failed, or Indeterminate, including structured candidate output, staged-output manifest, usage, error, and opaque provider references. It is Agent Run evidence rather than a verified record or Artifact Version.
+_Avoid_: Approved answer, Artifact Version, chat response
+
+**Provider Control Request**:
+An AI Provider's uniquely correlated request for the host to permit a tool, command, file, network, or user-input action during a Provider Turn. It grants nothing, is never an EITL Approval Gate or Access Request, and is answered only when Quantix independently proves the action already fits the current Permission Grant.
+_Avoid_: Access Request, Approval Gate, provider-granted permission
+
+**Provider Event**:
+An attributable, normalized operational fact in a monotonic Agent Run sequence, such as a state change, Typed Tool call, file change, usage update, warning, interruption, or redacted failure. Delivery gaps remain explicit; raw protocol traffic, streamed deltas, credentials, and hidden reasoning are not Provider Events.
+_Avoid_: Audit Event, chat transcript, raw provider payload
+
+**Provider Failure**:
+The normalized explanation of why a Provider Connection or Provider Turn could not proceed, including its stable category, retry safety, required user action, and redacted provider detail. Quantix workflow never depends directly on a provider-specific error code.
+_Avoid_: Raw exception, agent explanation, Review Finding
+
+**Indeterminate Agent Run**:
+An Agent Run whose Provider Turn outcome cannot be established after connection loss or failed interruption. Its workspace and partial outputs remain quarantined and its Tender Task remains Blocked until an attributable recovery decision starts a separate run or closes the uncertainty.
+_Avoid_: Failed run, silent retry, successful partial result
+
+**Provider Usage**:
+The available attributable consumption and capacity information for a Provider Turn or Provider Connection, including token, context-window, elapsed-time, and rate-limit observations without inferred monetary cost. Missing measurements remain unknown rather than zero.
+_Avoid_: API invoice, estimated subscription cost, resource budget
+
 **Capability**:
 A named Tender Office competence required by policy or the verified needs of a Tender and carried by one or more Agent Profiles. A Capability does not itself own a provider thread, Tender Task, permission, or approval authority.
 _Avoid_: Agent Profile, job title, task
@@ -173,7 +225,7 @@ An immutable, hashed version of an Artifact registered after validating its Tend
 _Avoid_: Working Artifact, mutable draft, latest file
 
 **Agent Run**:
-The immutable execution trace connecting one Tender Task and Agent Profile version to its Permission Grant, registered inputs and Data Views, provider thread and exposure, approved instructions, workspace manifest, Typed Tool calls, usage, outcome, errors, and produced Artifact Versions. It preserves auditable user-visible activity but not secrets or hidden model reasoning.
+The immutable execution trace connecting one Tender Task and Agent Profile version to its Permission Grant, registered inputs and Data Views, exactly one Provider Turn, provider thread and exposure, approved instructions, workspace manifest, Typed Tool calls, usage, outcome, errors, and produced Artifact Versions. It preserves auditable user-visible activity but not secrets or hidden model reasoning.
 _Avoid_: Chat as system of record, chain of thought
 
 **Audit Event**:
