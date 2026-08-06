@@ -36,9 +36,61 @@ _Avoid_: Chatbot, fixed agent list
 The AI role that coordinates the Tender Office's daily work, dependencies, deadlines, consolidation, and escalation without taking decisions reserved for the Tendering Manager.
 _Avoid_: Tendering Manager Agent, autonomous manager
 
+**Capability**:
+A named Tender Office competence required by policy or the verified needs of a Tender and carried by one or more Agent Profiles. A Capability does not itself own a provider thread, Tender Task, permission, or approval authority.
+_Avoid_: Agent Profile, job title, task
+
+**Capability Demand**:
+A project-specific need for a Capability classified as Policy-required, Tender-required, Risk-recommended, Manager-added, or a Capability Gap, with its triggering policy or Evidence and rationale. Policy-required and Tender-required demands are deterministic for the same exact Project Fingerprint, Capability Catalogue, and policy versions.
+_Avoid_: Unexplained role suggestion, staffing guess
+
+**Capability Catalogue**:
+The versioned set of Capabilities Quantix can safely activate, including each Capability's supported tools, data scopes, output contracts, qualification constraints, and review requirements. Team Composer may specialize approved components into project-specific roles but cannot invent unsupported authority.
+_Avoid_: Prompt library, unrestricted role generator
+
+**Capability Gap**:
+A visible record that a Tender requires competence, tooling, or qualified review not supported by the current Capability Catalogue. Affected work remains Blocked until the gap receives an EITL-approved external, limited, or newly supported treatment.
+_Avoid_: Fictional expert, silent limitation
+
 **Agent Profile**:
-The operational definition of a Tender Office role, including its capabilities, objective, professional stance, permissions, constraints, output contract, review requirements, and resource budget.
-_Avoid_: Fictional personality, character prompt
+The Tender-scoped operational definition of one coherent Tender Office role, including its stable human-readable identity, discipline, seniority, capabilities, objective, behavioral work controls, permissions, constraints, output contract, review requirements, and resource budget. It may combine compatible Capabilities, but independence, permission, qualification, or workload boundaries require separate profiles.
+_Avoid_: Fictional personality, character prompt, one all-purpose agent
+
+**Agent Profile Version**:
+An immutable revision of an Agent Profile's identity, instructions, Capabilities, permissions, constraints, output and review contracts, and resource budget. Tender Tasks and Agent Runs bind the exact version; a material profile change creates a proposed new version rather than altering active history.
+_Avoid_: Mutable system prompt, latest agent
+
+**Profile Status**:
+The activation state of an Agent Profile: Proposed, Active, Suspended, or Retired. It is distinct from Verification Status; suspension stops new work without replacing the profile, while retirement preserves its registered history and archives its provider thread.
+_Avoid_: Task state, verification state, deleted agent
+
+**Role Archetype**:
+A reusable approved set of defaults from which Team Composer may create a Tender-scoped Agent Profile. It carries no provider thread, Tender Task ownership, project data access, or approval authority on its own.
+_Avoid_: Persistent cross-Tender agent, active employee
+
+**Team Composer**:
+The controlled composition authority that maps verified Project Fingerprint signals and mandatory policy to Capability Demands, proposed Agent Profiles, Tender Tasks, reviewer assignments, and constraints for a Work Plan. It may use AI recommendations but cannot activate an Agent Profile or approve its own proposal.
+_Avoid_: Autonomous staffing agent, fixed team list
+
+**Bootstrap Team**:
+The fixed restricted set of Tender Office Coordinator, Document Controller, Tender Analyst, and Independent Reviewer Agent Profiles authorized when the Engineer User creates a Tender. It may register and analyze the Tender Package, open the Query Register, and propose the Bid Decision Package and full Work Plan, but cannot perform Active Production or external actions.
+_Avoid_: Full Tender Office, approved Work Plan
+
+**Document Controller**:
+The Agent Profile responsible for Source Artifact registration, revision and addendum control, controlled distribution, the Query Register record, and Submission Package document control. It preserves provenance and status without deciding technical, commercial, or contractual meaning.
+_Avoid_: File uploader, technical reviewer
+
+**Tender Analyst**:
+The Agent Profile responsible for evidence-linked Tender requirements, deadlines, evaluation criteria, compliance conditions, information gaps, and Project Fingerprint inputs. It analyzes and proposes but does not make Tender Decisions or approve compliance.
+_Avoid_: Tendering Manager, general-purpose analyst
+
+**Cost Estimator**:
+The Agent Profile responsible for developing evidence-linked quantities, rate inputs, quotations, cost build-ups, and Calculation Scenarios through the Calculation Engine. It cannot approve its own estimate, choose margin, or determine the Approved Tender Price.
+_Avoid_: LLM calculator, pricing authority
+
+**Independent Reviewer**:
+The mandatory Agent Profile that reviews exact work produced by other profiles, raises Review Findings, and verifies evidence and output contracts without editing the reviewed target. Specialist work requires a separate reviewer with the relevant Capability when this profile is not qualified.
+_Avoid_: Author self-check, AI approver
 
 **Tender Package**:
 The complete project directory supplied for a Tender, either as a connected directory or a compressed archive, containing every source artifact the Tender Office must register and assess.
@@ -113,8 +165,20 @@ The versioned, evidence-linked information presented to the Tendering Manager fo
 _Avoid_: Agent recommendation alone
 
 **Work Plan**:
-The manager-approved organization of Agent Profiles, Workstreams, Tender Tasks, responsibilities, internal milestones, reviews, resource budgets, and data scopes for one Tender.
+The versioned organization of Agent Profiles, Workstreams, Tender Tasks, responsibilities, internal milestones, reviews, resource budgets, and data scopes approved by the Tendering Manager for one Tender.
 _Avoid_: Chat plan, agent-generated to-do list
+
+**Work Plan Proposal**:
+A versioned candidate Work Plan that the Engineer User may add to, remove from, split, combine, rename, or adjust within Quantix invariants before approval. Each edit produces a newly validated proposal version and has no production authority until Work Plan Approval.
+_Avoid_: Partially approved team, mutable approved plan
+
+**Work Plan Approval**:
+The Approval Gate after a Proceed Bid Decision at which the Tendering Manager approves, returns, or holds one exact Work Plan version. Only an approved version may activate the full production team and authorize Active Production.
+_Avoid_: Partial team activation, agent staffing decision
+
+**Work Plan Amendment**:
+The EITL-controlled replacement of an approved Work Plan when team membership, Agent Profile Versions, capability coverage, permissions, resource envelopes, critical responsibilities, milestones, or reviewer independence must materially change. Routine coordination inside the approved envelope is audited but does not require an amendment.
+_Avoid_: Silent team change, routine task scheduling
 
 **Submission Deadline**:
 The exact manager-approved timestamp and time zone for delivering the Submission Package, linked to its Evidence and superseded only through a controlled addendum change.
