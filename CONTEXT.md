@@ -16,6 +16,14 @@ _Avoid_: Tender, workspace
 The open-source tender operating system defined by this repository.
 _Avoid_: Context (obsolete working name)
 
+**Quantix Application Home**:
+The Engineer User's single local `~/.quantix` root containing every Quantix-managed Tender Store, setting, workspace, backup, archive, and operational record. Connected Tender Packages and Codex-managed credentials, configuration, and thread storage remain outside it.
+_Avoid_: Codex home, connected project directory, arbitrary application-data folders
+
+**Quantix Setup**:
+The first-run operation that establishes the Quantix Application Home and verifies the local capabilities required to begin Tender work. It does not take ownership of Codex credentials or depend on unverified system runtimes.
+_Avoid_: Tender intake, provider login, installer
+
 **Tendering Manager**:
 The contractor-side decision authority accountable for approving the tender office's plans, commitments, exceptions, and final outputs. In the single-user v0, the authenticated Engineer User fills this role. The Tendering Manager does not perform routine analysis, drafting, document control, or production work.
 _Avoid_: Tender analyst, proposal writer, chatbot operator
@@ -168,6 +176,10 @@ _Avoid_: Current permission, erasable model memory
 A versioned, host-controlled operation with defined Capability, input and output schemas, required Data Scopes and Data Classifications, side-effect class, resource limits, and audit behavior. An Agent Profile may invoke it only through an exact Permission Grant; arbitrary shells, executables, package installation, application control, and tool discovery are not Typed Tools.
 _Avoid_: Unrestricted shell, arbitrary MCP tool, prompt-defined function
 
+**Safety Limit**:
+A non-overridable bound on input size, expansion, nesting, duration, memory, output, or storage consumption that protects the Tender and Engineer User's device from unsafe work. Crossing it blocks the operation and cannot be converted into permission or approval.
+_Avoid_: Resource budget, Permission Grant, manager override
+
 **Team Composer**:
 The controlled composition authority that maps verified Project Fingerprint signals and mandatory policy to Capability Demands, proposed Agent Profiles, Tender Tasks, reviewer assignments, and constraints for a Work Plan. It may use AI recommendations but cannot activate an Agent Profile or approve its own proposal.
 _Avoid_: Autonomous staffing agent, fixed team list
@@ -196,9 +208,49 @@ _Avoid_: Author self-check, AI approver
 The complete project directory supplied for a Tender, either as a connected directory or a compressed archive, containing every source artifact the Tender Office must register and assess.
 _Avoid_: Single prompt attachment
 
+**Connected Tender Package**:
+The external directory or compressed archive selected as intake input. Quantix records its provenance and copies every registered source version into the Tender Store, after which the connection may disappear without invalidating canonical Tender work.
+_Avoid_: Tender Store, live synchronized folder, editable source of truth
+
 **Tender Store**:
-The Quantix-managed authoritative collection of one Tender's records and registered artifact versions under the Quantix application home. External directories, archives, chats, Codex threads, temporary files, and agent sandboxes are inputs or working material rather than the system of record.
+The self-contained Quantix-managed authoritative collection of one Tender's records, retained revisions, and registered content under the Quantix Application Home. It can be verified, backed up, archived, transferred, or explicitly deleted as one unit; external inputs and working material never become the system of record by location alone.
 _Avoid_: Chat history, live source directory, agent workspace
+
+**Content Object**:
+An immutable byte sequence copied into a Tender Store, addressed and reverified by its cryptographic digest. Source Artifact Versions and Artifact Versions reference Content Objects while preserving their distinct logical identities, provenance, filenames, and revision histories.
+_Avoid_: Source Artifact, Artifact Version, mutable file, external path
+
+**Tender Backup**:
+A verified restorable copy of one complete Tender Store retained for recovery. It is neither a Submission Package nor evidence that any material was delivered externally.
+_Avoid_: Portable Tender Archive, Delivery Export, live Tender Store
+
+**Tender Recovery**:
+The EITL-controlled replacement of an existing Tender Store from a verified Tender Backup after corruption, loss, or another declared recovery need. It never merges stores or silently overwrites an existing Tender.
+_Avoid_: Portable Tender Archive import, automatic rollback, record-level correction
+
+**Recovery Required**:
+The read-only Tender state entered when the integrity of its Tender Store cannot be established. Canonical work, approvals, backups represented as valid, and Submission Package release remain blocked until Tender Recovery or explicit whole-Tender purge.
+_Avoid_: Blocked task, Impact Assessment, automatic repair
+
+**Tender Integrity Verification**:
+A deterministic examination of one Tender Store's records, Audit Events, and registered content for internal consistency and digest agreement. It changes no Tender content, and any failure places the Tender in Recovery Required.
+_Avoid_: Artifact review, Tender Recovery, confidence score
+
+**Portable Tender Archive**:
+A verified, self-contained transfer copy of one complete Tender Store that can be moved and restored without its original Quantix installation. It is distinct from an internal Tender Backup and from a client-facing Delivery Export.
+_Avoid_: Tender Backup, Submission Package, Delivery Export, compressed Tender Package
+
+**Archived Tender**:
+A complete Tender placed in a reversible read-only lifecycle state after active work ends. Its Tender Store and history remain intact and it may return to active use through an attributable Engineer User decision.
+_Avoid_: Tender Backup, Portable Tender Archive, deleted Tender
+
+**Tender Trash**:
+The recoverable holding state for a complete Tender Store after an approved deletion request. Restoration and permanent purge are separate attributable Engineer User decisions, and no automatic purge occurs.
+_Avoid_: Archived Tender, operating-system recycle bin, permanent deletion
+
+**Deletion Receipt**:
+The minimal installation-level record proving that an identified Tender was permanently purged through an attributable Engineer User decision, without retaining the Tender's confidential content.
+_Avoid_: Tender Backup, Audit Event, recoverable tombstone
 
 **Source Artifact**:
 The stable logical identity of a supplied Tender file across confirmed revisions. Files with uncertain revision relationships remain separate Source Artifacts until resolved.
@@ -215,6 +267,10 @@ _Avoid_: Informal chat request
 **Working Artifact**:
 Mutable, disposable material inside an Agent Run Workspace that has not passed a Tender Task's output contract and is not part of the Tender Store.
 _Avoid_: Artifact Version, approved draft, system-of-record file
+
+**Recovery Quarantine**:
+The protected holding state for an indeterminate or failed Agent Run's workspace and candidate outputs until the Engineer User resolves their disposition. Quarantined material is not canonical and cannot support downstream work or approval.
+_Avoid_: Tender Store, completed Agent Run, automatic retry queue
 
 **Artifact**:
 The stable logical identity of a controlled Tender Office output across its registered versions.
