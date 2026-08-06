@@ -68,6 +68,54 @@ _Avoid_: Task state, verification state, deleted agent
 A reusable approved set of defaults from which Team Composer may create a Tender-scoped Agent Profile. It carries no provider thread, Tender Task ownership, project data access, or approval authority on its own.
 _Avoid_: Persistent cross-Tender agent, active employee
 
+**Permission Policy**:
+The versioned, Quantix-owned default-deny rules that decide whether an Agent Profile may access exact Tender data or use a tool for controlled work. Prompts and provider threads grant no authority; every denial fails closed and is auditable.
+_Avoid_: Prompt permission, model-enforced security
+
+**Permission Grant**:
+An immutable, short-lived authorization for one Agent Run, binding an exact Agent Profile Version, Tender Task, Work Plan version, Data Scopes, Data Classifications, record versions or resolved record set, permitted actions, approved tools, private workspace, quotas, purpose, and expiry. Every operation is rechecked against current policy and state; a grant cannot be delegated, inherited, reused for another task, or expanded by a provider thread.
+_Avoid_: Role-wide session access, prompt-granted permission
+
+**Access Request**:
+A structured request raised when a Tender Task cannot proceed within its current Permission Grant, identifying the exact additional data, action, tool, purpose, duration, and risk. It grants nothing and leaves affected work Blocked until denied, approved, or superseded.
+_Avoid_: Agent self-expansion, informal permission request
+
+**Access Approval**:
+The EITL decision granting one exact, expiring access expansion within an already approved Agent Profile and Work Plan ceiling. Recurring or ceiling-changing access requires a Work Plan Amendment, and Secret data is never eligible.
+_Avoid_: Permanent exception, secret disclosure
+
+**Prohibited Action**:
+An invariant operation no Agent Profile can receive, including access to Secret data, direct Tender Store or security-control mutation, cross-workspace access, untrusted code execution, autonomous external action, approval, or concealment of audit history. The Engineer User may perform separately authorized workflow actions but cannot convert a Prohibited Action into agent authority.
+_Avoid_: Overridable deny, high-risk permission
+
+**Data Scope**:
+A named business compartment of Tender or company information used to constrain access independently of its sensitivity, such as tender sources, commercial estimate, commercial markup, supplier quotes, legal advice, or company CVs. Access to one Data Scope never implies access to another.
+_Avoid_: Folder permission, broad sensitive-data access
+
+**Data Classification**:
+The handling level attached to data independently of its Data Scope: Tender Internal, Sensitive, or Secret. Secret data such as credentials, tokens, encryption keys, signing material, and portal secrets is never model-visible or copied into provider threads, sandboxes, artifacts, or logs.
+_Avoid_: Data Scope, public-by-default, model-visible credential
+
+**Declassification**:
+The controlled reduction of a registered output's inherited Data Classification after redaction, preserved provenance, independent verification, and any material EITL approval. An Agent Profile cannot declassify its own output or erase the classification of its inputs.
+_Avoid_: Agent redaction claim, automatic sensitivity reduction
+
+**Data View**:
+A task-specific representation of exact registered data limited to the fields, rows, and content permitted by a Permission Grant. It preserves provenance and classification; redacted or derived content never silently replaces the authoritative Source Artifact Version used as Evidence.
+_Avoid_: Full-record access, untracked redaction
+
+**Agent Run Workspace**:
+The fresh, private, disposable filesystem made available to one Agent Run, containing read-only exact inputs, a writable working area, and an output staging area under its Permission Grant. It has no direct access to the Tender Store, original Tender Package location, repository, user directories, operating-system secrets, or any other run workspace.
+_Avoid_: Shared agent folder, Tender Store, persistent profile workspace
+
+**Thread Exposure Set**:
+The cumulative Data Scopes, Data Classifications, and exact inputs disclosed to one provider thread. Exposure is irreversible; a thread may be reused only when its prior exposure is compatible with the next Tender Task and output destination, otherwise Quantix archives it and starts a fresh thread.
+_Avoid_: Current permission, erasable model memory
+
+**Typed Tool**:
+A versioned, host-controlled operation with defined Capability, input and output schemas, required Data Scopes and Data Classifications, side-effect class, resource limits, and audit behavior. An Agent Profile may invoke it only through an exact Permission Grant; arbitrary shells, executables, package installation, application control, and tool discovery are not Typed Tools.
+_Avoid_: Unrestricted shell, arbitrary MCP tool, prompt-defined function
+
 **Team Composer**:
 The controlled composition authority that maps verified Project Fingerprint signals and mandatory policy to Capability Demands, proposed Agent Profiles, Tender Tasks, reviewer assignments, and constraints for a Work Plan. It may use AI recommendations but cannot activate an Agent Profile or approve its own proposal.
 _Avoid_: Autonomous staffing agent, fixed team list
@@ -113,7 +161,7 @@ A controlled unit of Tender Office work with an owner Agent Profile version, obj
 _Avoid_: Informal chat request
 
 **Working Artifact**:
-Mutable, disposable material inside an Agent Profile's sandbox that has not passed a Tender Task's output contract and is not part of the Tender Store.
+Mutable, disposable material inside an Agent Run Workspace that has not passed a Tender Task's output contract and is not part of the Tender Store.
 _Avoid_: Artifact Version, approved draft, system-of-record file
 
 **Artifact**:
@@ -121,11 +169,11 @@ The stable logical identity of a controlled Tender Office output across its regi
 _Avoid_: Working file, individual version
 
 **Artifact Version**:
-An immutable, hashed version of an Artifact registered after validating its Tender Task output contract, with provenance linking its exact inputs, producing task, Agent Profile, Agent Run, tools, template, timestamp, and parent version.
+An immutable, hashed version of an Artifact registered after validating its Tender Task output contract, with inherited Data Scopes and Data Classification and provenance linking its exact inputs, producing task, Agent Profile, Agent Run, tools, template, timestamp, and parent version.
 _Avoid_: Working Artifact, mutable draft, latest file
 
 **Agent Run**:
-The immutable execution trace connecting one Tender Task and Agent Profile version to its registered inputs, provider thread, approved instructions, tool and file access, usage, outcome, errors, and produced Artifact Versions. It preserves auditable user-visible activity but not secrets or hidden model reasoning.
+The immutable execution trace connecting one Tender Task and Agent Profile version to its Permission Grant, registered inputs and Data Views, provider thread and exposure, approved instructions, workspace manifest, Typed Tool calls, usage, outcome, errors, and produced Artifact Versions. It preserves auditable user-visible activity but not secrets or hidden model reasoning.
 _Avoid_: Chat as system of record, chain of thought
 
 **Audit Event**:
