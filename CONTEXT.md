@@ -528,6 +528,30 @@ _Avoid_: Mutable validation status, agent confidence, validation of latest
 A Tender-shaped folder, archive, or split volume deterministically exported from one frozen Submission Package Version, reopened, and verified against its Submission Manifest. It is a reproducible delivery copy rather than the Tender system of record; later external edits make only that copy unverified, and producing it does not mean Quantix submitted it externally.
 _Avoid_: Submission Package Version, submitted package, live export folder
 
+**Acceptance Tender Fixture**:
+The exact versioned, fully synthetic bilingual Egyptian building Tender Package, synthetic contractor library, and machine-readable Acceptance Oracle used to qualify Quantix v0. Its public contents are dedicated under CC0-1.0; authentic FIDIC text and real-company material belong only to a separate private licensed calibration lane.
+_Avoid_: Customer Tender, demonstration folder, mutable sample data
+
+**Acceptance Oracle**:
+The machine-readable expected requirements, classifications, deadlines, addenda, forms, BOQ rows, calculations, evidence links, permitted assumptions, workflow outcomes, and package properties for one exact Acceptance Tender Fixture version.
+_Avoid_: Agent answer key, prose checklist, mutable expected output
+
+**Product Acceptance Run**:
+An immutable execution of one exact product acceptance suite against an exact Quantix release candidate, Acceptance Tender Fixture, dependency and provider versions, and native platform. It records deterministic results, live-provider evaluations when required, safety and recovery results, metrics, timings, findings, artifacts, and hashes outside every Tender Store.
+_Avoid_: Package Validation Run, ordinary test log, Tender approval
+
+**Product Acceptance Record**:
+The immutable aggregate of the Product Acceptance Runs and release evidence required for one Quantix release candidate, including fixture and binary hashes, application, Codex and Docling versions, platform results, evaluation metrics, known non-blocking findings, approved exceptions, and attributable release approval. It qualifies software; it does not approve a Tender or Submission Package.
+_Avoid_: Release Readiness Report, Final Approval, CI dashboard
+
+**Private v0 Qualification**:
+The product gate allowing an engineer-operated, non-public Quantix v0 to proceed after deterministic verification, five consecutive qualifying live Codex runs, and a full packaged Windows 11 end-to-end Product Acceptance Run. It grants no public-production claim.
+_Avoid_: Public Release Gate, prototype success, production support
+
+**Public Release Gate**:
+The additional product gate that blocks public Quantix distribution until the same native packaged acceptance passes on Windows 11 x64, macOS 14+ Apple Silicon, and Ubuntu 24.04 x64, and the Codex integration has production assurance and terms permitting its intended third-party subscription-backed use. Technical risk acceptance cannot waive contractual authorization.
+_Avoid_: Private v0 Qualification, Tender Final Approval, assumed entitlement
+
 **Approval Gate**:
 A workflow boundary that cannot advance until the authenticated Engineer User, acting as Tendering Manager in v0, explicitly accepts, returns, or rejects the specified proposal, commitment, exception, or output. The approval records the engineer identity, timestamp, decision, object versions and hashes, evidence, comments, conditions, exceptions, and history.
 _Avoid_: Agent self-approval, informal chat confirmation
