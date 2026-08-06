@@ -128,6 +128,50 @@ _Avoid_: Lifecycle state, independent project
 The mandatory Active Production Workstream that develops quantities, rate build-ups, quotations, direct and indirect costs, risk provisions, and pricing scenarios through deterministic calculations and independent review.
 _Avoid_: LLM arithmetic, one-step price generation, final price decision
 
+**Calculation Engine**:
+The Quantix authority that validates exact numeric inputs, dimensions, units, currencies, rule versions, precision, and policy before computing and registering canonical calculated values. Codex may prepare inputs, request scenarios, and explain results but cannot supply authoritative arithmetic.
+_Avoid_: LLM calculator, spreadsheet as system of record, agent-generated total
+
+**Calculation**:
+The stable logical identity of a derived numeric conclusion across its deterministic executions.
+_Avoid_: Spreadsheet cell, prose total, individual execution
+
+**Calculation Run**:
+An immutable, hashed execution of an exact Calculation Rule version against exact input revisions, units, currencies, policies, scenario, and engine version. It preserves unrounded and contractual results, validation, provenance, and review state and inherits unresolved trust conditions from its inputs.
+_Avoid_: Recalculated cell, overwritten result, LLM arithmetic
+
+**Calculation Input**:
+A typed numeric value admitted from a Verified canonical record, EITL-approved Assumption, non-Stale Calculation Run, approved scenario parameter, or attributable Engineer User entry. Missing, blank, unavailable, not-applicable, and explicit zero remain distinct.
+_Avoid_: Prompt number, implicit zero, unsourced spreadsheet value
+
+**Calculation Rule**:
+A versioned, deterministic formula and its applicability, input and output dimensions, validation, precision, rounding, and tests. Engineering rules also identify their governing standard and edition and applicability limits; every new or changed rule remains unavailable to Tender work until tested, independently reviewed, and approved through EITL, and retired versions remain historical only.
+_Avoid_: Prompt formula, unreviewed spreadsheet formula, free-form arithmetic
+
+**Calculation Scenario**:
+A named, versioned alternative comprising exact Calculation Inputs, rules, policies, and an optional parent scenario. Scenario comparison is deterministic, and only an EITL decision may promote one into an approved baseline or Tender Price.
+_Avoid_: Overwritten estimate, informal what-if, hidden option
+
+**Calculation Adjustment**:
+An explicit amount or factor introduced as a reviewed Calculation Input with its unit or currency, reason, scope, provenance, affected Calculation, and EITL approval. It replaces direct overrides and hidden balancing values.
+_Avoid_: Manual total override, buried allowance, plug
+
+**Calculation Manifest**:
+The versioned dependency graph of exact Calculation Runs, inputs, rules, intermediate values, units, Exchange Rates, Rounding Policies, adjustments, assumptions, scenario, engine version, results, and hashes needed to reproduce and verify an approved numeric baseline.
+_Avoid_: Spreadsheet total, current calculation state, narrative summary
+
+**Exchange Rate**:
+A versioned, evidence-linked currency conversion input recording its pair, direction, exact value, effective date, pricing date, rate type, source, and approval status. Original and converted monetary amounts remain visible together.
+_Avoid_: Current rate, inferred currency, overwritten quote amount
+
+**Rounding Policy**:
+The versioned rules specifying where, how, and to what scale a quantity, rate, percentage, tax, currency amount, line value, or total is rounded. Calculation Runs retain their unrounded values and every applied contractual or display value.
+_Avoid_: Default formatting, hidden precision loss, balancing adjustment
+
+**Engineering Calculation**:
+A design- or safety-related calculated result produced by an approved discipline-specific Calculation Rule or verified external engineering tool. Without either, Quantix may register an external result as Evidence but cannot substitute Codex arithmetic.
+_Avoid_: AI engineering answer, unchecked formula, narrative estimate
+
 **Query and RFI Control Workstream**:
 The mandatory cross-lifecycle Workstream that registers, triages, coordinates, issues, tracks, interprets, and resolves Tender queries from Intake through Final Review under EITL control.
 _Avoid_: One-time clarification phase, informal chat question, autonomous external communication
@@ -157,11 +201,11 @@ The controlled hierarchy linking Tender requirements and scope to work packages,
 _Avoid_: Unmapped spreadsheet rows, employer BOQ alone
 
 **Priced Cost Baseline**:
-The independently reviewed and Engineer User-approved expected cost of delivering the Construction Project, including direct costs, indirect costs, explicit allowances, and approved risk provisions, before final commercial pricing decisions.
+The independently reviewed and Engineer User-approved expected cost of delivering the Construction Project, including direct costs, indirect costs, explicit allowances, and approved risk provisions, bound to an exact Calculation Manifest before final commercial pricing decisions.
 _Avoid_: Tender Price, unreviewed estimate
 
 **Approved Tender Price**:
-The immutable, versioned customer-facing price approved by the Engineer User after considering the Priced Cost Baseline, risk provision, overhead, financing, profit, discounts, and commercial adjustments.
+The immutable, versioned customer-facing price and Calculation Manifest approved by the Engineer User after considering the Priced Cost Baseline, risk provision, overhead, financing, profit, discounts, and commercial adjustments.
 _Avoid_: Expected cost, agent-selected price, editable total
 
 **Ready for Integration**:
