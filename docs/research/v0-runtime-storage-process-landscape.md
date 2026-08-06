@@ -3,6 +3,8 @@
 Status: decision research for GitHub issue #13
 Evidence snapshot: 2026-08-06
 
+Current decision: the Electron recommendation below was superseded on 2026-08-07 by the revised [ADR 0009](../adr/0009-run-one-local-host-over-self-contained-tender-stores.md), which selects Tauri 2 with a genuine Rust Host by explicit Engineer User direction.
+
 ## Decision in one page
 
 Keep the accepted Electron architecture. Tauri is an excellent framework, but it

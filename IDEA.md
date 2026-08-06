@@ -504,21 +504,21 @@ Architecture and open-source reuse
 
 Recommended stack
 
-The simplest durable implementation is a TypeScript-oriented monorepo with an Electron desktop shell and a separately packaged Python document-processing worker.
+The simplest durable implementation is a Tauri 2 desktop application with a genuine Rust Quantix Host, a React/TypeScript renderer, and a pinned Docling runtime installed and supervised by the Host. There is no Node Host sidecar.
 
 
 
 Layer	Recommended component	Reason
 
-Desktop runtime	electron/electron	Cross-platform Windows, macOS and Linux runtime using JavaScript, HTML, CSS, Node.js and Chromium; MIT licensed. 
+Desktop runtime	tauri-apps/tauri	Cross-platform Rust Core with the operating system WebView, scoped capabilities and native packaging; MIT/Apache-2.0 licensed.
 
-Packaging	electron/forge	Established Electron packaging and publishing tooling maintained under the Electron organisation. 
+Packaging	Tauri CLI and updater	Native Windows, macOS and Linux bundles with mandatory signed updater artifacts and first-party release tooling.
 
 UI	React, TypeScript and Vite	Familiar, strongly typed ecosystem suitable for Codex-generated components
 
-Workflow	statelyai/xstate	MIT-licensed TypeScript state machines and actors with zero dependencies, intended for predictable application and workflow orchestration. 
+Workflow	Typed Rust domain transitions	Pure transition functions plus persisted SQLite facts and Audit Events; add a state-machine crate only after repeated hierarchy is demonstrated.
 
-Agent runtime	openai/openai-agents-js	TypeScript agent primitives, tools, manager/handoff patterns, guardrails, sessions, human-in-loop and tracing. 
+Agent runtime	Pinned openai/codex app-server	Codex-managed ChatGPT login and threads behind the Quantix-owned AI Provider Interface; no BYOK or custom token handling.
 
 Local database	SQLite	Single-file local storage, transactions, indexing and straightforward backup
 
@@ -534,101 +534,65 @@ DOCX generation	dolanmiu/docx	MIT-licensed Word generation and modification for 
 
 XLSX handling	exceljs/exceljs	Reads, manipulates and writes Excel workbooks and JSON data. 
 
-Validation	Zod and JSON Schema	Shared runtime and static validation for agent outputs, configuration and IPC
+Validation	Serde, garde, ts-rs and JSON Schema	Strict Rust command decoding, Safety Limits, generated TypeScript DTOs and version-matched external output validation
 
-Testing	Vitest, Playwright and Python pytest	Unit, contract, document and cross-platform end-to-end testing
+Testing	Cargo test, Vitest, Playwright and Python pytest	Domain, contract, document and native cross-platform end-to-end testing
 
-Observability	Agent SDK tracing plus local audit log	Agent tracing can capture runs, agents, generations, tools, guardrails and handoffs. 
-
-
-
-Electron is recommended over Tauri for the first long-term architecture because Context already needs a Node/TypeScript agent runtime and a Python document worker. Electron keeps the application layer in one primary language and avoids adding Rust plus sidecar orchestration. Tauri remains a reasonable alternative where smaller binaries and OS-level capability configuration outweigh the additional integration complexity; Tauri supports scoped capability files, secret storage through Stronghold and bundled sidecars. 
+Observability	Rust tracing plus local Audit Events	Structured operational diagnostics remain separate from the canonical, tamper-evident Tender audit sequence.
 
 
 
-Electron must be treated as privileged software. Its official security guidance recommends context isolation, renderer sandboxing, restrictive Content Security Policy, validation of IPC senders and avoidance of unsafe remote content. Context should load only bundled local UI code, expose a small typed preload API and perform file, database, network and model operations outside the renderer. 
+Tauri 2 with a genuine Rust Host is the selected long-term desktop architecture. The React renderer is an untrusted presentation Module; the Rust Core owns all domain commands, EITL decisions, filesystem access, SQLite transactions, process supervision, recovery and updates. Quantix accepts the additional Rust-to-TypeScript binding and process-containment work in exchange for one durable native Host, declarative capability control and no Electron ABI or Chromium-distribution layer.
 
 
 
-API keys should use the operating system’s credential facilities. Electron’s safeStorage provides OS-backed encryption, but its Linux documentation warns that some environments can fall back to a weak basic\_text backend; Context should detect that state and refuse to represent the secret as securely stored. 
+Tauri's Rust Core is privileged software. Quantix loads only bundled local UI code, applies a restrictive Content Security Policy and grants the main WebView only named, domain-shaped commands through a minimal capability manifest. The renderer receives no generic filesystem, SQL, shell, credential or updater permission.
+
+
+
+Quantix does not store an OpenAI API key. The bundled Codex executable owns the Engineer User's ChatGPT authentication and exposes account state through app-server; Quantix never reads or exports Codex credentials. Any future provider requiring application-owned secrets needs a separate decision and an operating-system credential Adapter.
 
 
 
 Repository structure
 
-text
-
-Copy
-
-context/
-
-&#x20; apps/
-
-&#x20;   desktop/
-
-&#x20;     main/
-
-&#x20;     preload/
-
-&#x20;     renderer/
-
-&#x20; packages/
-
-&#x20;   domain/
-
-&#x20;   workflow/
-
-&#x20;   agents/
-
-&#x20;   storage/
-
-&#x20;   evidence/
-
-&#x20;   permissions/
-
-&#x20;   estimating/
-
-&#x20;   artifacts/
-
-&#x20;   integrations/
-
-&#x20;   testing/
-
-&#x20; workers/
-
-&#x20;   docling/
-
-&#x20; workflow-packs/
-
-&#x20;   core-construction/
-
-&#x20;   fidic/
-
-&#x20;   egypt/
-
-&#x20; templates/
-
-&#x20;   bid-no-bid/
-
-&#x20;   compliance-matrix/
-
-&#x20;   technical-proposal/
-
-&#x20;   commercial-submission/
-
-&#x20; fixtures/
-
-&#x20;   synthetic-tenders/
-
-&#x20; docs/
-
-&#x20;   architecture-decisions/
-
-&#x20;   domain/
-
-&#x20;   security/
-
-&#x20; AGENTS.md
+```text
+quantix/
+  apps/
+    desktop/
+      src/                 # React/TypeScript renderer
+      src-tauri/
+        src/               # Rust Quantix Host and deep Modules
+        capabilities/      # least-authority WebView commands
+        binaries/          # target-specific Codex and uv sidecars
+  crates/
+    domain/
+    workflow/
+    agents/
+    tender-store/
+    evidence/
+    permissions/
+    estimating/
+    artifacts/
+    integrations/
+    testing/
+  workflow-packs/
+    core-construction/
+    fidic/
+    egypt/
+  templates/
+    bid-no-bid/
+    compliance-matrix/
+    technical-proposal/
+    commercial-submission/
+  fixtures/
+    synthetic-tenders/
+  docs/
+    adr/
+    domain/
+    security/
+  AGENTS.md
+```
 
 The boundaries should be strict:
 
@@ -648,11 +612,11 @@ estimating performs deterministic quantities and arithmetic.
 
 artifacts generates controlled outputs.
 
-desktop presents the product but contains no tendering logic.
+the renderer presents the product but contains no tendering logic or privileged mechanism.
 
-workers/docling is replaceable through a narrow document-conversion interface.
+the Rust Process Supervisor owns replaceable Codex and Docling Adapters behind narrow internal seams.
 
-There should be no microservices, Kubernetes, cloud collaboration server, event broker or distributed database in the first product. A local SQLite database, a content-addressed project file store, a TypeScript application process and one Python ingestion worker are sufficient.
+There should be no microservices, Kubernetes, cloud collaboration server, event broker or distributed database in the first product. One Tauri Rust Host, local SQLite Tender Stores, a content-addressed file store, the packaged Codex process and disposable Docling jobs are sufficient.
 
 
 
@@ -686,15 +650,15 @@ Domain vocabulary and entity schemas.
 
 Project and document storage.
 
-Electron shell with sandboxed renderer.
+Tauri 2 shell with a least-authority React renderer and genuine Rust Host.
 
 Docling worker adapter.
 
 PDF evidence viewer.
 
-XState tender workflow.
+Typed Rust Tender workflow transitions persisted as domain facts and Audit Events.
 
-Agent SDK adapter.
+Pinned Codex app-server Adapter using the Engineer User's Codex login.
 
 Structured logging and audit events.
 
@@ -1166,5 +1130,5 @@ The recommended defaults produce a coherent first mission:
 
 
 
-Context v0 should be a local single-user Electron application for English and Arabic construction tenders, initially focused on FIDIC-oriented building projects. It should import PDF/DOCX/XLSX packages, extract an evidence-linked compliance matrix, generate a bid/no-bid decision and tender work plan through three controlled agents, and export reviewed Word and Excel artifacts. No pricing autonomy, external communication, portal submission, cloud collaboration or speculative plugin system should enter the first end-to-end release.
+Quantix v0 should be a local single-user Tauri 2 application with a genuine Rust Host for English and Arabic construction tenders, initially focused on FIDIC-oriented building projects. It should import PDF/DOCX/XLSX packages, extract an evidence-linked compliance matrix, generate a bid/no-bid decision and Tender work plan through controlled agents, and export reviewed Word and Excel artifacts. No pricing autonomy, external communication, portal submission, cloud collaboration or speculative plugin system should enter the first end-to-end release.
 

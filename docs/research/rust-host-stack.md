@@ -4,6 +4,8 @@ Status: decision research for GitHub issue #18
 
 Evidence snapshot: 2026-08-06
 
+Current decision: the Engineer User accepted the additional Interface costs identified here and selected this Tauri 2/Rust Host direction on 2026-08-07; see [ADR 0009](../adr/0009-run-one-local-host-over-self-contained-tender-stores.md).
+
 Decision under review: [ADR 0009](../adr/0009-run-one-local-host-over-self-contained-tender-stores.md)
 
 ## Answer

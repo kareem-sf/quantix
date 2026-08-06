@@ -4,6 +4,8 @@
 
 **Evidence snapshot:** 2026-08-06
 
+**Current decision:** The Engineer User cancelled the packaged comparison and selected Tauri 2 with a genuine Rust Host on 2026-08-07; this report remains evidence for the Codex, Docling, and process-supervision consequences recorded in [ADR 0009](../adr/0009-run-one-local-host-over-self-contained-tender-stores.md).
+
 **Scope:** Compare an Electron/TypeScript Host with a Tauri 2/Rust Host for packaging and supervising one Codex app-server and disposable Docling jobs on Windows, macOS, and Linux. This report does not replace ADR 0009.
 
 ## Conclusion

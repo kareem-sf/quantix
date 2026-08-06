@@ -4,6 +4,8 @@ Status: research for GitHub issue [#17](https://github.com/kareem-sf/quantix/iss
 
 Evidence snapshot: 2026-08-06
 
+Current decision: this remains historical comparison evidence. On 2026-08-07 the Engineer User cancelled the packaged comparison and explicitly selected Tauri 2 with a genuine Rust Host in [ADR 0009](../adr/0009-run-one-local-host-over-self-contained-tender-stores.md).
+
 Scope: desktop shell, renderer boundary, platform WebView, packaging, signing,
 updates, accessibility, crash visibility, maintenance, and operational evidence.
 This report does not change ADR 0009 and does not decide the Rust Host library
