@@ -44,13 +44,57 @@ _Avoid_: Fictional personality, character prompt
 The complete project directory supplied for a Tender, either as a connected directory or a compressed archive, containing every source artifact the Tender Office must register and assess.
 _Avoid_: Single prompt attachment
 
+**Tender Store**:
+The Quantix-managed authoritative collection of one Tender's records and registered artifact versions under the Quantix application home. External directories, archives, chats, Codex threads, temporary files, and agent sandboxes are inputs or working material rather than the system of record.
+_Avoid_: Chat history, live source directory, agent workspace
+
 **Source Artifact**:
-An immutable, versioned file registered from the Tender Package that can support evidence or require action.
-_Avoid_: Editable working copy
+The stable logical identity of a supplied Tender file across confirmed revisions. Files with uncertain revision relationships remain separate Source Artifacts until resolved.
+_Avoid_: File path, content blob, editable working copy
+
+**Source Artifact Version**:
+An immutable, hashed capture of one Source Artifact at a particular revision, including its origin and package-relative path. Addenda, replacements, and changed source files create new versions rather than overwriting prior bytes.
+_Avoid_: Latest file, live external file
 
 **Tender Task**:
-A controlled unit of Tender Office work with an owner, objective, inputs, dependencies, deadline, output contract, status, and review requirement.
+A controlled unit of Tender Office work with an owner Agent Profile version, objective, exact registered inputs, dependencies, deadline, output contract, review policy, permissions, resource budget, state, Agent Runs, and registered outputs. Only the Quantix workflow transitions it, and completion requires validated outputs, satisfied reviews, resolved dependencies, and required approvals.
 _Avoid_: Informal chat request
+
+**Working Artifact**:
+Mutable, disposable material inside an Agent Profile's sandbox that has not passed a Tender Task's output contract and is not part of the Tender Store.
+_Avoid_: Artifact Version, approved draft, system-of-record file
+
+**Artifact**:
+The stable logical identity of a controlled Tender Office output across its registered versions.
+_Avoid_: Working file, individual version
+
+**Artifact Version**:
+An immutable, hashed version of an Artifact registered after validating its Tender Task output contract, with provenance linking its exact inputs, producing task, Agent Profile, Agent Run, tools, template, timestamp, and parent version.
+_Avoid_: Working Artifact, mutable draft, latest file
+
+**Agent Run**:
+The immutable execution trace connecting one Tender Task and Agent Profile version to its registered inputs, provider thread, approved instructions, tool and file access, usage, outcome, errors, and produced Artifact Versions. It preserves auditable user-visible activity but not secrets or hidden model reasoning.
+_Avoid_: Chat as system of record, chain of thought
+
+**Audit Event**:
+An append-only, tamper-evident record of a material creation, revision, transition, access, decision, correction, denial, or failure in the Tender Store. Its per-Tender sequence and before/after references explain canonical history, but Audit Events are not replayed to reconstruct current Tender state.
+_Avoid_: Editable log entry, chat transcript, event-sourced state
+
+**Verification Status**:
+The trust state of an evidence-bearing record: Proposed, Verified, Rejected, Stale, or Superseded. Registration proves structural validity and provenance, while verification determines whether the record may support controlled Tender work or an approval.
+_Avoid_: Confidence score, approval status, database presence
+
+**Stale**:
+The status of a previously usable record, Review, or output whose exact dependency has materially changed and which must be revalidated before current use. Stale history remains preserved.
+_Avoid_: Deleted, automatically corrected, failed
+
+**Provenance Link**:
+A typed dependency from a derived record or Artifact Version to an exact input revision or version, used to explain its origin and calculate targeted invalidation.
+_Avoid_: Generic backlink, chat reference
+
+**Named Version Reference**:
+A workflow-controlled pointer such as Current Candidate, Reviewed Version, Approved Version, or Submission Version that resolves to one exact immutable Artifact Version. Moving the pointer is audited and never changes the version bound to an existing review or approval.
+_Avoid_: Latest file, timestamp-selected version
 
 **Intake**:
 The first Tender state, in which Quantix inventories the connected Tender Package, records unreadable or unsupported Source Artifacts, identifies revisions and addenda, and proposes deadline candidates.
@@ -124,9 +168,13 @@ _Avoid_: Expected cost, agent-selected price, editable total
 The Workstream status reached when its output contract validates, required Evidence and reviews exist, dependencies are resolved, assumptions and exceptions are explicit, and no critical blocker remains.
 _Avoid_: Draft complete, agent finished
 
+**Review**:
+An independent assessment of an exact Artifact Version, record revision, calculation baseline, or Submission Package version under a versioned review policy. A changed target makes the Review historical and requires the affected checks to run again.
+_Avoid_: Author self-check, review of latest
+
 **Review Finding**:
-An independently raised problem in a Tender output, classified as Critical, Major, or Minor and tracked until corrected or given an allowed disposition.
-_Avoid_: Author self-review, informal feedback
+An immutable problem statement raised by a Review, classified as Critical, Major, or Minor. Its disposition is appended and may close it only through verified correction, permitted Exception Approval, or explicit supersession by someone other than its author.
+_Avoid_: Editable feedback, author self-closure
 
 **Exception Approval**:
 The Approval Gate through which the Tendering Manager knowingly accepts a Major Review Finding or another explicit departure that the workflow permits to continue.
@@ -153,8 +201,20 @@ The Approval Gate at which the Tendering Manager reviews the release summary and
 _Avoid_: External submission, editable approval, agent release decision
 
 **Evidence**:
-A traceable link from a requirement, deadline, risk, assumption, quantity, or claim to an exact location in a Source Artifact.
-_Avoid_: Unsupported assertion, generic file citation
+A structured link from a canonical claim or record field to an exact Source Artifact Version and typed location, preserving the original excerpt, extraction provenance, confidence, verification status, and any non-authoritative translation. New source versions leave historical Evidence intact but can make it stale for current work.
+_Avoid_: Unsupported assertion, generic file citation, translated text as authority
+
+**Assumption**:
+A first-class record of an unproven proposition needed for Tender work, including its evidence gap, owner, affected work, proposed treatment, confidence, status, and EITL decision when material. Approval permits controlled reliance but never converts an Assumption into a fact.
+_Avoid_: Hidden premise, unsupported Evidence, approved fact
+
+**Tender Decision**:
+The canonical record of a formal Engineer User judgment, including the question, options, outcome, rationale, Evidence, affected exact records, conditions, expiry, identity, timestamp, and any superseded decision.
+_Avoid_: Chat answer, agent recommendation, Audit Event
+
+**Approval Record**:
+The immutable result of an Approval Gate, binding an explicit Engineer User outcome to exact record revisions, artifact versions, hashes, Evidence, conditions, and exceptions. Material dependency changes invalidate rather than erase it.
+_Avoid_: Chat confirmation, approval of latest, editable sign-off
 
 **Submission Package**:
 The controlled set of tender files that has passed completeness and consistency validation and received the Tendering Manager's approval for external submission.
