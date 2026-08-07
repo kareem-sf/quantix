@@ -29,13 +29,15 @@ use crate::tender_intake::{
 };
 use crate::{setup::SetupState, QuantixHost};
 
+mod agent_records;
+
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 3;
+const TENDER_SCHEMA_VERSION: i64 = 4;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -189,6 +191,105 @@ CREATE VIRTUAL TABLE evidence_fts USING fts5(
   ordinal UNINDEXED,
   tokenize = 'unicode61 remove_diacritics 0'
 );
+CREATE TABLE agent_profiles (
+  profile_id TEXT PRIMARY KEY CHECK (length(profile_id) = 32),
+  stable_identity TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE agent_profile_versions (
+  profile_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  identity TEXT NOT NULL,
+  profession TEXT NOT NULL,
+  capabilities_json TEXT NOT NULL CHECK (json_valid(capabilities_json)),
+  instructions TEXT NOT NULL,
+  output_contract_json TEXT NOT NULL CHECK (json_valid(output_contract_json)),
+  review_policy TEXT NOT NULL,
+  permissions_json TEXT NOT NULL CHECK (json_valid(permissions_json)),
+  resource_budget_json TEXT NOT NULL CHECK (json_valid(resource_budget_json)),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (profile_id, version),
+  FOREIGN KEY (profile_id) REFERENCES agent_profiles(profile_id)
+);
+CREATE TABLE tender_tasks (
+  task_id TEXT PRIMARY KEY CHECK (length(task_id) = 32),
+  profile_id TEXT NOT NULL,
+  profile_version INTEGER NOT NULL CHECK (profile_version > 0),
+  objective TEXT NOT NULL,
+  exact_inputs_json TEXT NOT NULL CHECK (json_valid(exact_inputs_json)),
+  output_contract_json TEXT NOT NULL CHECK (json_valid(output_contract_json)),
+  review_policy TEXT NOT NULL,
+  deadline TEXT NOT NULL,
+  permissions_json TEXT NOT NULL CHECK (json_valid(permissions_json)),
+  resource_budget_json TEXT NOT NULL CHECK (json_valid(resource_budget_json)),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (profile_id, profile_version)
+    REFERENCES agent_profile_versions(profile_id, version)
+);
+CREATE TABLE provider_threads (
+  profile_id TEXT NOT NULL,
+  profile_version INTEGER NOT NULL CHECK (profile_version > 0),
+  thread_ref TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL CHECK (status IN ('active', 'archived')),
+  created_at TEXT NOT NULL,
+  archived_at TEXT,
+  PRIMARY KEY (profile_id, profile_version),
+  FOREIGN KEY (profile_id, profile_version)
+    REFERENCES agent_profile_versions(profile_id, version),
+  CHECK (
+    (status = 'active' AND archived_at IS NULL)
+    OR (status = 'archived' AND archived_at IS NOT NULL)
+  )
+);
+CREATE TABLE agent_runs (
+  run_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL UNIQUE CHECK (length(run_id) = 32),
+  task_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  profile_version INTEGER NOT NULL CHECK (profile_version > 0),
+  retry_of_run_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'interrupted', 'failed', 'indeterminate')),
+  provider_thread_ref TEXT,
+  provider_turn_ref TEXT,
+  usage_json TEXT CHECK (usage_json IS NULL OR json_valid(usage_json)),
+  failure_json TEXT CHECK (failure_json IS NULL OR json_valid(failure_json)),
+  started_at TEXT NOT NULL,
+  completed_at TEXT,
+  FOREIGN KEY (task_id) REFERENCES tender_tasks(task_id),
+  FOREIGN KEY (profile_id, profile_version)
+    REFERENCES agent_profile_versions(profile_id, version),
+  FOREIGN KEY (retry_of_run_id) REFERENCES agent_runs(run_id),
+  CHECK (
+    (status = 'running' AND completed_at IS NULL AND usage_json IS NULL AND failure_json IS NULL)
+    OR
+    (status = 'completed' AND completed_at IS NOT NULL AND provider_thread_ref IS NOT NULL
+      AND provider_turn_ref IS NOT NULL AND failure_json IS NULL)
+    OR
+    (status IN ('interrupted', 'failed', 'indeterminate') AND completed_at IS NOT NULL
+      AND failure_json IS NOT NULL)
+  )
+);
+CREATE TABLE provider_events (
+  run_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL CHECK (sequence > 0),
+  kind TEXT NOT NULL CHECK (kind IN (
+    'run_started', 'thread_established', 'thread_resumed', 'turn_started',
+    'usage_observed', 'control_request_denied', 'warning', 'terminal'
+  )),
+  summary TEXT NOT NULL,
+  opaque_reference TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, sequence),
+  FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
+);
+CREATE TABLE proposed_agent_results (
+  result_id TEXT PRIMARY KEY CHECK (length(result_id) = 32),
+  run_id TEXT NOT NULL UNIQUE,
+  verification_status TEXT NOT NULL CHECK (verification_status = 'proposed'),
+  payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
+);
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
   event_type TEXT NOT NULL,
@@ -324,6 +425,113 @@ CREATE TRIGGER evidence_locations_no_delete
 BEFORE DELETE ON evidence_locations
 BEGIN
   SELECT RAISE(ABORT, 'Evidence locations are immutable');
+END;
+CREATE TRIGGER agent_profiles_no_update
+BEFORE UPDATE ON agent_profiles
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Profiles are immutable');
+END;
+CREATE TRIGGER agent_profiles_no_delete
+BEFORE DELETE ON agent_profiles
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Profiles are immutable');
+END;
+CREATE TRIGGER agent_profile_versions_no_update
+BEFORE UPDATE ON agent_profile_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Profile Versions are immutable');
+END;
+CREATE TRIGGER agent_profile_versions_no_delete
+BEFORE DELETE ON agent_profile_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Profile Versions are immutable');
+END;
+CREATE TRIGGER tender_tasks_no_update
+BEFORE UPDATE ON tender_tasks
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Tasks are immutable');
+END;
+CREATE TRIGGER tender_tasks_no_delete
+BEFORE DELETE ON tender_tasks
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Tasks are immutable');
+END;
+CREATE TRIGGER provider_threads_only_archive
+BEFORE UPDATE ON provider_threads
+WHEN OLD.status != 'active'
+  OR NEW.status != 'archived'
+  OR NEW.profile_id != OLD.profile_id
+  OR NEW.profile_version != OLD.profile_version
+  OR NEW.thread_ref != OLD.thread_ref
+  OR NEW.created_at != OLD.created_at
+  OR NEW.archived_at IS NULL
+BEGIN
+  SELECT RAISE(ABORT, 'Provider Threads are immutable except for archival');
+END;
+CREATE TRIGGER provider_threads_no_delete
+BEFORE DELETE ON provider_threads
+BEGIN
+  SELECT RAISE(ABORT, 'Provider Threads are immutable');
+END;
+CREATE TRIGGER agent_runs_terminal_facts_no_rewrite
+BEFORE UPDATE ON agent_runs
+WHEN OLD.status != 'running'
+  OR NEW.run_sequence != OLD.run_sequence
+  OR NEW.run_id != OLD.run_id
+  OR NEW.task_id != OLD.task_id
+  OR NEW.profile_id != OLD.profile_id
+  OR NEW.profile_version != OLD.profile_version
+  OR NEW.retry_of_run_id IS NOT OLD.retry_of_run_id
+  OR NEW.started_at != OLD.started_at
+  OR (
+    NEW.status = 'running'
+    AND (
+      NEW.usage_json IS NOT NULL
+      OR NEW.failure_json IS NOT NULL
+      OR NEW.completed_at IS NOT NULL
+      OR (OLD.provider_thread_ref IS NOT NULL
+          AND NEW.provider_thread_ref IS NOT OLD.provider_thread_ref)
+      OR (OLD.provider_turn_ref IS NOT NULL
+          AND NEW.provider_turn_ref IS NOT OLD.provider_turn_ref)
+      OR (NEW.provider_turn_ref IS NOT NULL AND NEW.provider_thread_ref IS NULL)
+    )
+  )
+  OR (
+    NEW.status != 'running'
+    AND (
+      (OLD.provider_thread_ref IS NOT NULL
+       AND NEW.provider_thread_ref IS NOT OLD.provider_thread_ref)
+      OR (OLD.provider_turn_ref IS NOT NULL
+          AND NEW.provider_turn_ref IS NOT OLD.provider_turn_ref)
+    )
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Run terminal facts are immutable');
+END;
+CREATE TRIGGER agent_runs_no_delete
+BEFORE DELETE ON agent_runs
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Runs are immutable');
+END;
+CREATE TRIGGER provider_events_no_update
+BEFORE UPDATE ON provider_events
+BEGIN
+  SELECT RAISE(ABORT, 'Provider Events are immutable');
+END;
+CREATE TRIGGER provider_events_no_delete
+BEFORE DELETE ON provider_events
+BEGIN
+  SELECT RAISE(ABORT, 'Provider Events are immutable');
+END;
+CREATE TRIGGER proposed_agent_results_no_update
+BEFORE UPDATE ON proposed_agent_results
+BEGIN
+  SELECT RAISE(ABORT, 'Proposed Agent Results are immutable');
+END;
+CREATE TRIGGER proposed_agent_results_no_delete
+BEFORE DELETE ON proposed_agent_results
+BEGIN
+  SELECT RAISE(ABORT, 'Proposed Agent Results are immutable');
 END;
 CREATE TRIGGER audit_events_no_update
 BEFORE UPDATE ON audit_events
@@ -705,6 +913,7 @@ impl TenderStore {
             connection,
         };
         store.reconcile_interrupted_parses(expected_tender_id)?;
+        store.reconcile_interrupted_agent_runs(expected_tender_id)?;
         Ok(store)
     }
 
@@ -2487,11 +2696,19 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn store_unavailable(_error: std::io::Error) -> TenderCommandError {
+fn store_unavailable(error: std::io::Error) -> TenderCommandError {
+    #[cfg(feature = "runtime-fixture")]
+    eprintln!("Tender Store fixture I/O failure: {error}");
+    #[cfg(not(feature = "runtime-fixture"))]
+    let _ = error;
     TenderCommandError::new(TenderErrorCode::StoreUnavailable)
 }
 
-fn sql_error(_error: rusqlite::Error) -> TenderCommandError {
+fn sql_error(error: rusqlite::Error) -> TenderCommandError {
+    #[cfg(feature = "runtime-fixture")]
+    eprintln!("Tender Store fixture SQLite failure: {error}");
+    #[cfg(not(feature = "runtime-fixture"))]
+    let _ = error;
     TenderCommandError::new(TenderErrorCode::StoreUnavailable)
 }
 

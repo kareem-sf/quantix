@@ -9,6 +9,7 @@ use std::{
 
 use tokio_util::sync::CancellationToken;
 
+use crate::agent_runtime::CodexProvider;
 use crate::process_supervisor::ProcessSupervisor;
 use crate::runtime_readiness::RuntimeLayout;
 use crate::setup::{ensure_application_home, SetupOutcome, SetupPlatform, SystemSetupPlatform};
@@ -24,7 +25,15 @@ struct QuantixHostInner {
     process_supervisor: ProcessSupervisor,
     runtime_preparation: Mutex<Option<CancellationToken>>,
     active_parses: Mutex<HashMap<ParseTargetKey, CancellationToken>>,
+    active_agent_run: Mutex<Option<ActiveAgentRun>>,
+    agent_provider: tokio::sync::Mutex<Option<CodexProvider>>,
     runtime_verified: AtomicBool,
+}
+
+struct ActiveAgentRun {
+    tender_id: String,
+    run_id: Option<String>,
+    cancellation: CancellationToken,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -89,6 +98,8 @@ impl QuantixHost {
                 process_supervisor: ProcessSupervisor,
                 runtime_preparation: Mutex::new(None),
                 active_parses: Mutex::new(HashMap::new()),
+                active_agent_run: Mutex::new(None),
+                agent_provider: tokio::sync::Mutex::new(None),
                 runtime_verified: AtomicBool::new(false),
             }),
         }
@@ -124,6 +135,10 @@ impl QuantixHost {
 
     pub(crate) fn process_supervisor(&self) -> &ProcessSupervisor {
         &self.inner.process_supervisor
+    }
+
+    pub(crate) fn agent_provider(&self) -> &tokio::sync::Mutex<Option<CodexProvider>> {
+        &self.inner.agent_provider
     }
 
     pub(crate) fn runtime_preparation_is_active(&self) -> bool {
@@ -207,6 +222,63 @@ impl QuantixHost {
         } else {
             false
         }
+    }
+
+    pub(crate) fn begin_active_agent_run(
+        &self,
+        tender_id: &str,
+    ) -> Result<CancellationToken, TenderCommandError> {
+        let mut active = self
+            .inner
+            .active_agent_run
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        if active.is_some() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let cancellation = CancellationToken::new();
+        *active = Some(ActiveAgentRun {
+            tender_id: tender_id.to_owned(),
+            run_id: None,
+            cancellation: cancellation.clone(),
+        });
+        Ok(cancellation)
+    }
+
+    pub(crate) fn identify_active_agent_run(&self, run_id: &str) -> Result<(), TenderCommandError> {
+        let mut active = self
+            .inner
+            .active_agent_run
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let active = active
+            .as_mut()
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        active.run_id = Some(run_id.to_owned());
+        Ok(())
+    }
+
+    pub(crate) fn finish_active_agent_run(&self) {
+        *self
+            .inner
+            .active_agent_run
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+
+    pub(crate) fn cancel_active_agent_run(&self, tender_id: &str, run_id: &str) -> bool {
+        let active = self
+            .inner
+            .active_agent_run
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(active) = active.as_ref() {
+            if active.tender_id == tender_id && active.run_id.as_deref() == Some(run_id) {
+                active.cancellation.cancel();
+                return true;
+            }
+        }
+        false
     }
 
     pub(crate) fn set_runtime_verified(&self, verified: bool) {

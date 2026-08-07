@@ -60,7 +60,7 @@ const SUPPORTED_CHATGPT_PLANS: [&str; 13] = [
     "enterprise",
     "edu",
 ];
-const CODEX_PROTOCOL_SCHEMA: &str =
+pub(crate) const CODEX_PROTOCOL_SCHEMA: &str =
     include_str!("../runtime/codex_app_server_protocol.schemas.json");
 
 #[derive(Debug, Clone)]
@@ -75,7 +75,7 @@ impl RuntimeLayout {
         }
     }
 
-    fn codex_executable(&self) -> PathBuf {
+    pub(crate) fn codex_executable(&self) -> PathBuf {
         self.runtime_resources
             .join("bin")
             .join(executable_name("codex"))

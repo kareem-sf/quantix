@@ -2,6 +2,10 @@ use std::{
     ffi::OsString,
     path::PathBuf,
     process::{ExitStatus, Stdio},
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -190,7 +194,12 @@ impl ProcessSupervisor {
             .take()
             .ok_or(ProcessError::ObservationFailed)?;
         let (limit_sender, limit_receiver) = mpsc::channel(1);
-        let stderr_task = tokio::spawn(read_bounded(stderr, spec.stderr_limit, limit_sender));
+        let stderr_budget = Arc::new(ConversationOutputBudget::new(spec.stderr_limit));
+        let stderr_task = tokio::spawn(read_operation_bounded(
+            stderr,
+            Arc::clone(&stderr_budget),
+            limit_sender,
+        ));
         Ok(SupervisedConversation {
             child,
             stdin: Some(stdin),
@@ -202,6 +211,7 @@ impl ProcessSupervisor {
             deadline: Instant::now() + spec.timeout,
             cancellation,
             limit_receiver,
+            stderr_budget,
             stderr_task,
             failure_termination: None,
             observed_exit_status: None,
@@ -263,12 +273,31 @@ pub(crate) struct SupervisedConversation {
     deadline: Instant,
     cancellation: CancellationToken,
     limit_receiver: mpsc::Receiver<()>,
+    stderr_budget: Arc<ConversationOutputBudget>,
     stderr_task: JoinHandle<std::io::Result<BoundedOutput>>,
     failure_termination: Option<ProcessTermination>,
     observed_exit_status: Option<ExitStatus>,
 }
 
 impl SupervisedConversation {
+    pub fn begin_operation(
+        &mut self,
+        timeout: Duration,
+        stdout_limit: usize,
+        stderr_limit: usize,
+    ) -> Result<(), ProcessError> {
+        if timeout.is_zero() || stdout_limit == 0 || stderr_limit == 0 {
+            return Err(ProcessError::InvalidRequest);
+        }
+        self.deadline = Instant::now() + timeout;
+        self.stdin_bytes = 0;
+        self.stdout_bytes = 0;
+        self.stdout_limit = stdout_limit;
+        self.stderr_budget.begin_operation(stderr_limit);
+        while self.limit_receiver.try_recv().is_ok() {}
+        Ok(())
+    }
+
     pub async fn write(&mut self, bytes: &[u8]) -> Result<(), ProcessError> {
         self.stdin_bytes = self
             .stdin_bytes
@@ -428,6 +457,56 @@ struct BoundedOutput {
     exceeded: bool,
 }
 
+struct ConversationOutputBudget {
+    generation: AtomicU64,
+    limit: AtomicUsize,
+}
+
+impl ConversationOutputBudget {
+    fn new(limit: usize) -> Self {
+        Self {
+            generation: AtomicU64::new(0),
+            limit: AtomicUsize::new(limit),
+        }
+    }
+
+    fn begin_operation(&self, limit: usize) {
+        self.limit.store(limit, Ordering::Release);
+        self.generation.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+async fn read_operation_bounded(
+    mut reader: impl AsyncRead + Unpin,
+    budget: Arc<ConversationOutputBudget>,
+    limit_sender: mpsc::Sender<()>,
+) -> std::io::Result<BoundedOutput> {
+    let mut generation = budget.generation.load(Ordering::Acquire);
+    let mut bytes = Vec::with_capacity(budget.limit.load(Ordering::Acquire).min(8192));
+    let mut buffer = [0_u8; 8192];
+    let mut exceeded = false;
+    loop {
+        let read = reader.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        let current_generation = budget.generation.load(Ordering::Acquire);
+        if current_generation != generation {
+            generation = current_generation;
+            bytes.clear();
+            exceeded = false;
+        }
+        let limit = budget.limit.load(Ordering::Acquire);
+        let remaining = limit.saturating_sub(bytes.len());
+        bytes.extend_from_slice(&buffer[..read.min(remaining)]);
+        if read > remaining && !exceeded {
+            exceeded = true;
+            let _ = limit_sender.send(()).await;
+        }
+    }
+    Ok(BoundedOutput { bytes, exceeded })
+}
+
 async fn read_bounded(
     mut reader: impl AsyncRead + Unpin,
     limit: usize,
@@ -555,6 +634,46 @@ mod tests {
             .expect("finish supervised conversation");
         assert_eq!(terminal.termination, ProcessTermination::Exited);
         assert_eq!(terminal.exit_code, Some(0));
+    }
+
+    #[tokio::test]
+    async fn conversation_operation_budget_can_restart_after_idle_time() {
+        let supervisor = ProcessSupervisor;
+        let mut spec = fixture_spec("conversation_budget");
+        spec.stdin.clear();
+        spec.timeout = Duration::from_millis(50);
+        spec.stdout_limit = 1536;
+        let mut conversation = supervisor
+            .start_conversation(spec, CancellationToken::new())
+            .await
+            .expect("start supervised conversation");
+        conversation
+            .write(b"initialize\n")
+            .await
+            .expect("write first operation");
+        let first_output = vec![b'a'; 1024];
+        assert_eq!(
+            read_fixture_line(&mut conversation, &first_output).await,
+            first_output
+        );
+        tokio::time::sleep(Duration::from_millis(75)).await;
+        conversation
+            .begin_operation(Duration::from_secs(1), 1536, 4096)
+            .expect("reset conversation operation budget");
+        conversation
+            .write(b"account/read\n")
+            .await
+            .expect("write after prior deadline");
+        let second_output = vec![b'b'; 1024];
+        assert_eq!(
+            read_fixture_line(&mut conversation, &second_output).await,
+            second_output
+        );
+        let terminal = conversation
+            .finish(None)
+            .await
+            .expect("finish restarted conversation");
+        assert_eq!(terminal.termination, ProcessTermination::Exited);
     }
 
     #[tokio::test]
@@ -828,6 +947,28 @@ mod tests {
                     Some("account/read")
                 );
                 println!("chatgpt");
+            }
+            Ok("conversation_budget") => {
+                let mut lines = BufReader::new(std::io::stdin()).lines();
+                assert_eq!(
+                    lines
+                        .next()
+                        .transpose()
+                        .expect("read first budget operation")
+                        .as_deref(),
+                    Some("initialize")
+                );
+                println!("{}", "a".repeat(1024));
+                std::io::stdout().flush().expect("flush first operation");
+                assert_eq!(
+                    lines
+                        .next()
+                        .transpose()
+                        .expect("read second budget operation")
+                        .as_deref(),
+                    Some("account/read")
+                );
+                println!("{}", "b".repeat(1024));
             }
             Ok("abrupt_host") => {
                 let runtime = tokio::runtime::Runtime::new().expect("fixture Tokio runtime");

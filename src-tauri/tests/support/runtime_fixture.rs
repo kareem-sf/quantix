@@ -28,7 +28,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if tool.contains("codex") {
-        return run_codex(&executable);
+        return run_codex(&executable, &arguments);
     }
     if tool == "uv" {
         return run_uv(&executable, &arguments);
@@ -42,7 +42,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Err(format!("unrecognized fixture tool {tool}").into())
 }
 
-fn run_codex(executable: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn run_codex(
+    executable: &Path,
+    arguments: &[std::ffi::OsString],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let agent_scenario = executable.with_extension("agent-scenario");
+    if agent_scenario.is_file() {
+        return run_agent_codex(
+            executable,
+            arguments,
+            fs::read_to_string(agent_scenario)?.trim(),
+        );
+    }
     let mut requests = io::BufReader::new(io::stdin()).lines();
     let initialize = requests.next().ok_or("missing initialize request")??;
     if !initialize.contains("\"method\":\"initialize\"")
@@ -108,6 +119,461 @@ fn run_codex(executable: &Path) -> Result<(), Box<dyn std::error::Error>> {
         }
         state => return Err(format!("unknown auth fixture state {state}").into()),
     }
+    Ok(())
+}
+
+fn run_agent_codex(
+    executable: &Path,
+    arguments: &[std::ffi::OsString],
+    _scenario: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let arguments = arguments
+        .iter()
+        .filter_map(|value| value.to_str())
+        .collect::<Vec<_>>();
+    for feature in [
+        "apps",
+        "browser_use",
+        "computer_use",
+        "hooks",
+        "image_generation",
+        "in_app_browser",
+        "multi_agent",
+        "plugins",
+        "shell_tool",
+        "unified_exec",
+    ] {
+        if !arguments
+            .windows(2)
+            .any(|pair| pair == ["--disable", feature])
+        {
+            return Err(format!("agent fixture missing disabled feature {feature}").into());
+        }
+    }
+    if !arguments.contains(&"--strict-config")
+        || !arguments.contains(&"mcp_servers={}")
+        || !arguments.contains(&"web_search=\"disabled\"")
+    {
+        return Err("agent fixture lacks default-deny provider configuration".into());
+    }
+    let mut environment = env::vars_os()
+        .filter_map(|(name, _)| name.into_string().ok())
+        .collect::<Vec<_>>();
+    environment.sort();
+    fs::write(
+        executable.with_extension("agent-environment"),
+        environment.join("\n"),
+    )?;
+    let start_count_path = executable.with_extension("agent-start-count");
+    let start_count = fs::read_to_string(&start_count_path)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or("agent fixture start count overflow")?;
+    fs::write(&start_count_path, start_count.to_string())?;
+    let mut requests = io::BufReader::new(io::stdin()).lines();
+    let initialize = read_json_request(&mut requests, "initialize")?;
+    let initialize_id = initialize.get("id").cloned().ok_or("initialize id")?;
+    write_json(&serde_json::json!({
+        "id": initialize_id,
+        "result": {
+            "codexHome": executable.parent().ok_or("missing fixture parent")?,
+            "userAgent": "quantix-agent-fixture/0.147.0",
+            "platformFamily": if cfg!(windows) { "windows" } else { "unix" },
+            "platformOs": env::consts::OS,
+        }
+    }))?;
+    let initialized = read_json_line(&mut requests)?;
+    if initialized
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        != Some("initialized")
+    {
+        return Err("missing initialized notification".into());
+    }
+    write_json(&serde_json::json!({
+        "method": "account/updated",
+        "params": { "authMode": null, "planType": null }
+    }))?;
+
+    loop {
+        if !run_agent_turn(executable, &mut requests)? {
+            return Ok(());
+        }
+    }
+}
+
+fn run_agent_turn(
+    executable: &Path,
+    requests: &mut impl Iterator<Item = io::Result<String>>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let Some(thread_request) = requests.next() else {
+        return Ok(false);
+    };
+    let thread_request: serde_json::Value = serde_json::from_str(&thread_request?)?;
+    let scenario = fs::read_to_string(executable.with_extension("agent-scenario"))?;
+    let scenario = scenario.trim();
+    let thread_method = thread_request
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("thread method")?;
+    if !matches!(thread_method, "thread/start" | "thread/resume") {
+        return Err("expected thread start or resume".into());
+    }
+    if thread_method == "thread/start"
+        && (thread_request.pointer("/params/sandbox")
+            != Some(&serde_json::Value::String("read-only".into()))
+            || thread_request.pointer("/params/approvalPolicy")
+                != Some(&serde_json::Value::String("never".into())))
+    {
+        return Err("thread lacks its default-deny sandbox contract".into());
+    }
+    if scenario == "hang-before-thread" {
+        fs::write(executable.with_extension("thread-waiting"), b"waiting")?;
+        for request in requests {
+            request?;
+        }
+        return Ok(false);
+    }
+    if scenario == "malformed-before-turn" {
+        println!("not-json");
+        io::stdout().flush()?;
+        return Ok(false);
+    }
+    if scenario == "process-failure-before-turn" {
+        return Err("fixture provider process failure".into());
+    }
+    let thread_id = thread_request
+        .pointer("/params/threadId")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("thr_fixture_1");
+    let cwd = thread_request
+        .pointer("/params/cwd")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            env::current_dir()
+                .expect("fixture cwd")
+                .to_string_lossy()
+                .into_owned()
+        });
+    let thread = serde_json::json!({
+        "id": thread_id,
+        "sessionId": thread_id,
+        "preview": "",
+        "ephemeral": false,
+        "modelProvider": "openai",
+        "createdAt": 1_780_000_000_i64,
+        "updatedAt": 1_780_000_000_i64,
+        "cwd": cwd.clone(),
+        "source": "appServer",
+        "cliVersion": "0.147.0",
+        "status": { "type": "idle" },
+        "turns": [],
+    });
+    let thread_id_response = thread_request
+        .get("id")
+        .cloned()
+        .ok_or("thread request id")?;
+    write_json(&serde_json::json!({
+        "id": thread_id_response,
+        "result": {
+            "approvalPolicy": "never",
+            "approvalsReviewer": "user",
+            "cwd": cwd.clone(),
+            "model": "gpt-5.6-terra",
+            "modelProvider": "openai",
+            "reasoningEffort": "medium",
+            "sandbox": {
+                "type": "readOnly",
+                "networkAccess": false,
+            },
+            "thread": thread.clone(),
+        }
+    }))?;
+    write_json(&serde_json::json!({
+        "method": "thread/started",
+        "params": { "thread": thread }
+    }))?;
+
+    let turn_request = read_json_request(requests, "turn/start")?;
+    if turn_request.pointer("/params/outputSchema").is_none()
+        || turn_request.pointer("/params/sandboxPolicy/type")
+            != Some(&serde_json::Value::String("readOnly".into()))
+        || turn_request.pointer("/params/sandboxPolicy/networkAccess")
+            != Some(&serde_json::Value::Bool(false))
+    {
+        return Err("turn lacks its exact output or sandbox contract".into());
+    }
+    let turn_id = if scenario == "success-retry" {
+        "turn_fixture_2"
+    } else {
+        "turn_fixture_1"
+    };
+    let turn_request_id = turn_request.get("id").cloned().ok_or("turn request id")?;
+    let running_turn = serde_json::json!({
+        "id": turn_id,
+        "status": "inProgress",
+        "items": [],
+        "error": null,
+        "startedAt": 1_780_000_001_i64,
+        "completedAt": null,
+        "durationMs": null,
+    });
+    write_json(&serde_json::json!({
+        "id": turn_request_id,
+        "result": { "turn": running_turn }
+    }))?;
+    write_json(&serde_json::json!({
+        "method": "turn/started",
+        "params": { "threadId": thread_id, "turn": running_turn }
+    }))?;
+
+    if scenario == "hang" {
+        fs::write(executable.with_extension("turn-waiting"), b"waiting")?;
+        for request in requests {
+            request?;
+        }
+        return Ok(false);
+    }
+    if scenario == "malformed-after-turn" {
+        println!("not-json");
+        io::stdout().flush()?;
+        return Ok(false);
+    }
+    if scenario == "rate-limited" {
+        let error = serde_json::json!({
+            "message": "fixture usage limit",
+            "codexErrorInfo": "usageLimitExceeded"
+        });
+        write_json(&serde_json::json!({
+            "method": "error",
+            "params": {
+                "threadId": thread_id,
+                "turnId": turn_id,
+                "willRetry": false,
+                "error": error.clone()
+            }
+        }))?;
+        write_json(&serde_json::json!({
+            "method": "turn/completed",
+            "params": {
+                "threadId": thread_id,
+                "turn": {
+                    "id": turn_id,
+                    "status": "failed",
+                    "items": [],
+                    "error": error,
+                    "startedAt": 1_780_000_001_i64,
+                    "completedAt": 1_780_000_002_i64,
+                    "durationMs": 1000
+                }
+            }
+        }))?;
+        for request in requests {
+            request?;
+        }
+        return Ok(false);
+    }
+    if scenario == "interrupt" {
+        let interrupt = read_json_request(requests, "turn/interrupt")?;
+        if interrupt
+            .pointer("/params/threadId")
+            .and_then(serde_json::Value::as_str)
+            != Some(thread_id)
+            || interrupt
+                .pointer("/params/turnId")
+                .and_then(serde_json::Value::as_str)
+                != Some(turn_id)
+        {
+            return Err("interrupt targeted the wrong Provider Turn".into());
+        }
+        write_json(&serde_json::json!({
+            "id": interrupt.get("id").cloned().ok_or("interrupt id")?,
+            "result": {}
+        }))?;
+        write_json(&serde_json::json!({
+            "method": "turn/completed",
+            "params": {
+                "threadId": thread_id,
+                "turn": {
+                    "id": turn_id,
+                    "status": "interrupted",
+                    "items": [],
+                    "error": null,
+                    "startedAt": 1_780_000_001_i64,
+                    "completedAt": 1_780_000_002_i64,
+                    "durationMs": 1000
+                }
+            }
+        }))?;
+        for request in requests {
+            request?;
+        }
+        return Ok(false);
+    }
+    if !matches!(
+        scenario,
+        "success" | "success-retry" | "phase-null-final" | "retry-then-success" | "output-invalid"
+    ) {
+        return Err(format!("unknown agent fixture scenario {scenario}").into());
+    }
+    let started_item = serde_json::json!({
+        "id": "message_fixture_1",
+        "type": "agentMessage",
+        "text": "",
+        "phase": null
+    });
+    write_json(&serde_json::json!({
+        "method": "item/started",
+        "params": {
+            "threadId": thread_id,
+            "turnId": turn_id,
+            "startedAtMs": 1_780_000_001_000_i64,
+            "item": started_item
+        }
+    }))?;
+    write_json(&serde_json::json!({
+        "method": "item/agentMessage/delta",
+        "params": {
+            "threadId": thread_id,
+            "turnId": turn_id,
+            "itemId": "message_fixture_1",
+            "delta": "streamed-delta-must-not-be-canonical"
+        }
+    }))?;
+    write_json(&serde_json::json!({
+        "method": "item/reasoning/textDelta",
+        "params": {
+            "threadId": thread_id,
+            "turnId": turn_id,
+            "itemId": "reasoning_fixture_1",
+            "contentIndex": 0,
+            "delta": "hidden-reasoning-must-not-be-canonical"
+        }
+    }))?;
+    if scenario == "retry-then-success" {
+        write_json(&serde_json::json!({
+            "method": "error",
+            "params": {
+                "threadId": thread_id,
+                "turnId": turn_id,
+                "willRetry": true,
+                "error": {
+                    "message": "fixture transient provider error",
+                    "codexErrorInfo": null
+                }
+            }
+        }))?;
+    }
+    write_json(&serde_json::json!({
+        "method": "thread/tokenUsage/updated",
+        "params": {
+            "threadId": thread_id,
+            "turnId": turn_id,
+            "tokenUsage": {
+                "last": {
+                    "inputTokens": 120,
+                    "cachedInputTokens": 20,
+                    "outputTokens": 35,
+                    "reasoningOutputTokens": 10,
+                    "totalTokens": 155
+                },
+                "total": {
+                    "inputTokens": 120,
+                    "cachedInputTokens": 20,
+                    "outputTokens": 35,
+                    "reasoningOutputTokens": 10,
+                    "totalTokens": 155
+                },
+                "modelContextWindow": 200000
+            }
+        }
+    }))?;
+    write_json(&serde_json::json!({
+        "id": "control_fixture_1",
+        "method": "item/commandExecution/requestApproval",
+        "params": {
+            "threadId": thread_id,
+            "turnId": turn_id,
+            "itemId": "command_fixture_1",
+            "startedAtMs": 1_780_000_001_000_i64,
+            "command": "forbidden-command"
+        }
+    }))?;
+    let denial = read_json_line(requests)?;
+    if denial.get("id").and_then(serde_json::Value::as_str) != Some("control_fixture_1")
+        || denial
+            .pointer("/result/decision")
+            .and_then(serde_json::Value::as_str)
+            != Some("decline")
+    {
+        return Err("Host did not deny the control request".into());
+    }
+    let candidate = if scenario == "output-invalid" {
+        r#"{"summary":"Missing the required next action."}"#
+    } else {
+        r#"{"summary":"The Tender is ready for controlled intake analysis.","recommended_next_action":"Verify the imported package before detailed analysis."}"#
+    };
+    let final_item = serde_json::json!({
+        "id": "message_fixture_1",
+        "type": "agentMessage",
+        "text": candidate,
+        "phase": if scenario == "phase-null-final" {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String("final_answer".into())
+        }
+    });
+    write_json(&serde_json::json!({
+        "method": "item/completed",
+        "params": {
+            "threadId": thread_id,
+            "turnId": turn_id,
+            "completedAtMs": 1_780_000_002_000_i64,
+            "item": final_item.clone()
+        }
+    }))?;
+    write_json(&serde_json::json!({
+        "method": "turn/completed",
+        "params": {
+            "threadId": thread_id,
+            "turn": {
+                "id": turn_id,
+                "status": "completed",
+                "items": [final_item.clone()],
+                "error": null,
+                "startedAt": 1_780_000_001_i64,
+                "completedAt": 1_780_000_002_i64,
+                "durationMs": 1000
+            }
+        }
+    }))?;
+    Ok(true)
+}
+
+fn read_json_request(
+    requests: &mut impl Iterator<Item = io::Result<String>>,
+    expected_method: &str,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let request = read_json_line(requests)?;
+    if request.get("method").and_then(serde_json::Value::as_str) != Some(expected_method) {
+        return Err(format!("expected {expected_method} request").into());
+    }
+    Ok(request)
+}
+
+fn read_json_line(
+    requests: &mut impl Iterator<Item = io::Result<String>>,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let line = requests.next().ok_or("missing JSONL request")??;
+    Ok(serde_json::from_str(&line)?)
+}
+
+fn write_json(value: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+    println!("{}", serde_json::to_string(value)?);
+    io::stdout().flush()?;
     Ok(())
 }
 

@@ -1,3 +1,4 @@
+mod agent_runtime;
 mod document_parsing;
 mod host;
 mod process_supervisor;
@@ -6,6 +7,12 @@ mod setup;
 mod tender_intake;
 mod tender_store;
 
+pub use agent_runtime::{
+    AgentProfileVersionView, AgentResourceBudget, AgentRunInspection, AgentRunPermissions,
+    AgentRunState, AgentTaskInputReference, InterruptAgentRunCommand, ProposedAgentResult,
+    ProviderEvent, ProviderEventKind, ProviderFailure, ProviderFailureCategory, ProviderUsage,
+    RunBootstrapAgentCommand, TenderTaskView, VerificationStatus,
+};
 pub use document_parsing::{
     DocumentParseResult, EvidenceBoundingBox, EvidenceDocument, EvidenceLanguage, EvidenceLocation,
     EvidenceLocationKind, EvidenceRegion, EvidenceSearchHit, EvidenceSearchResult,
@@ -34,12 +41,13 @@ use tauri::Manager;
 
 mod tauri_commands {
     use super::{
-        ensure_quantix_setup as ensure_setup, ChooseTenderPackageCommand,
+        ensure_quantix_setup as ensure_setup, AgentRunInspection, ChooseTenderPackageCommand,
         ConfirmSourceRelationshipCommand, CreateTenderCommand, DocumentParseResult,
         DocumentRegister, EvidenceDocument, EvidenceSearchResult, ImportTenderPackageCommand,
-        OpenTenderCommand, ParseSourceArtifactCommand, QuantixHost, ReviseTenderCommand,
-        RuntimeReadiness, SearchEvidenceCommand, SetupOutcome, TenderCommandError, TenderErrorCode,
-        TenderPackageImportResult, TenderPackageSourceKind, TenderSummary,
+        InterruptAgentRunCommand, OpenTenderCommand, ParseSourceArtifactCommand, QuantixHost,
+        ReviseTenderCommand, RunBootstrapAgentCommand, RuntimeReadiness, SearchEvidenceCommand,
+        SetupOutcome, TenderCommandError, TenderErrorCode, TenderPackageImportResult,
+        TenderPackageSourceKind, TenderSummary,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -232,6 +240,35 @@ mod tauri_commands {
     pub(super) fn cancel_runtime_preparation(host: tauri::State<'_, QuantixHost>) -> bool {
         host.inner().cancel_runtime_preparation()
     }
+
+    #[tauri::command]
+    pub(super) async fn run_bootstrap_agent(
+        host: tauri::State<'_, QuantixHost>,
+        command: RunBootstrapAgentCommand,
+    ) -> Result<AgentRunInspection, TenderCommandError> {
+        host.inner().run_bootstrap_agent(command).await
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_agent_runs(
+        host: tauri::State<'_, QuantixHost>,
+        command: OpenTenderCommand,
+    ) -> Result<Vec<AgentRunInspection>, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.inspect_agent_runs(&command.tender_id))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) fn interrupt_agent_run(
+        host: tauri::State<'_, QuantixHost>,
+        command: InterruptAgentRunCommand,
+    ) -> Result<bool, TenderCommandError> {
+        host.inner().interrupt_agent_run(command)
+    }
 }
 
 pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
@@ -250,7 +287,10 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
         tauri_commands::search_evidence,
         tauri_commands::inspect_runtime_readiness,
         tauri_commands::repair_runtime_readiness,
-        tauri_commands::cancel_runtime_preparation
+        tauri_commands::cancel_runtime_preparation,
+        tauri_commands::run_bootstrap_agent,
+        tauri_commands::inspect_agent_runs,
+        tauri_commands::interrupt_agent_run
     ])
 }
 

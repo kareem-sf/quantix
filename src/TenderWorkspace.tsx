@@ -1,10 +1,11 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import type { DocumentRegister } from "./bindings/DocumentRegister";
 import type { SourceRelationshipKind } from "./bindings/SourceRelationshipKind";
 import type { TenderPackageImportResult } from "./bindings/TenderPackageImportResult";
 import type { TenderPackageSourceKind } from "./bindings/TenderPackageSourceKind";
 import type { TenderSummary } from "./bindings/TenderSummary";
+import { AgentRunOffice } from "./AgentRunOffice";
 import { DocumentEvidenceOffice } from "./DocumentEvidenceOffice";
 import {
   chooseAndImportTenderPackage,
@@ -36,6 +37,7 @@ export function TenderWorkspace() {
     useState<SourceRelationshipKind>("replacement");
   const [busy, setBusy] = useState(false);
   const [commandFailed, setCommandFailed] = useState(false);
+  const reportCommandFailure = useCallback(() => setCommandFailed(true), []);
 
   useEffect(() => {
     let active = true;
@@ -345,6 +347,11 @@ export function TenderWorkspace() {
                   </p>
                 ) : null}
               </section>
+              <AgentRunOffice
+                key={`agents-${selected.tender_id}`}
+                tenderId={selected.tender_id}
+                reportCommandFailure={reportCommandFailure}
+              />
               <section
                 className="document-register"
                 aria-labelledby="document-register-title"
@@ -362,7 +369,7 @@ export function TenderWorkspace() {
                     tenderId={selected.tender_id}
                     register={documentRegister}
                     updateRegister={setDocumentRegister}
-                    reportCommandFailure={() => setCommandFailed(true)}
+                    reportCommandFailure={reportCommandFailure}
                   />
                 ) : (
                   <p className="catalogue-message">

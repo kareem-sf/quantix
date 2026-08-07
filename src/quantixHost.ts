@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import type { AgentRunInspection } from "./bindings/AgentRunInspection";
 import type { ChooseTenderPackageCommand } from "./bindings/ChooseTenderPackageCommand";
 import type { ConfirmSourceRelationshipCommand } from "./bindings/ConfirmSourceRelationshipCommand";
 import type { CreateTenderCommand } from "./bindings/CreateTenderCommand";
@@ -7,10 +8,12 @@ import type { DocumentRegister } from "./bindings/DocumentRegister";
 import type { DocumentParseResult } from "./bindings/DocumentParseResult";
 import type { EvidenceDocument } from "./bindings/EvidenceDocument";
 import type { EvidenceSearchResult } from "./bindings/EvidenceSearchResult";
+import type { InterruptAgentRunCommand } from "./bindings/InterruptAgentRunCommand";
 import type { OpenTenderCommand } from "./bindings/OpenTenderCommand";
 import type { ParseSourceArtifactCommand } from "./bindings/ParseSourceArtifactCommand";
 import type { ReviseTenderCommand } from "./bindings/ReviseTenderCommand";
 import type { RuntimeReadiness } from "./bindings/RuntimeReadiness";
+import type { RunBootstrapAgentCommand } from "./bindings/RunBootstrapAgentCommand";
 import type { SearchEvidenceCommand } from "./bindings/SearchEvidenceCommand";
 import type { SetupOutcome } from "./bindings/SetupOutcome";
 import type { SourceRelationshipKind } from "./bindings/SourceRelationshipKind";
@@ -148,4 +151,33 @@ export function searchEvidence(
 ): Promise<EvidenceSearchResult> {
   const command: SearchEvidenceCommand = { tender_id: tenderId, query };
   return invoke<EvidenceSearchResult>("search_evidence", { command });
+}
+
+export function runBootstrapAgent(
+  tenderId: string,
+  retryOfRunId: string | null = null,
+): Promise<AgentRunInspection> {
+  const command: RunBootstrapAgentCommand = {
+    tender_id: tenderId,
+    retry_of_run_id: retryOfRunId,
+  };
+  return invoke<AgentRunInspection>("run_bootstrap_agent", { command });
+}
+
+export function inspectAgentRuns(
+  tenderId: string,
+): Promise<AgentRunInspection[]> {
+  const command: OpenTenderCommand = { tender_id: tenderId };
+  return invoke<AgentRunInspection[]>("inspect_agent_runs", { command });
+}
+
+export function interruptAgentRun(
+  tenderId: string,
+  runId: string,
+): Promise<boolean> {
+  const command: InterruptAgentRunCommand = {
+    tender_id: tenderId,
+    run_id: runId,
+  };
+  return invoke<boolean>("interrupt_agent_run", { command });
 }
