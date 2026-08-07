@@ -2,6 +2,7 @@ mod host;
 mod process_supervisor;
 mod runtime_readiness;
 mod setup;
+mod tender_intake;
 mod tender_store;
 
 pub use host::QuantixHost;
@@ -12,6 +13,11 @@ pub use setup::{
     ensure_quantix_setup, DeviceProtection, SetupIssue, SetupOutcome, SetupPlatform, SetupState,
     StoragePermissions, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
+pub use tender_intake::{
+    ChooseTenderPackageCommand, ConfirmSourceRelationshipCommand, DocumentRegister,
+    DocumentRegisterEntry, ImportTenderPackageCommand, IntakeExceptionCode, RegistrationState,
+    SourceRelationshipKind, SupersessionState, TenderPackageImportResult, TenderPackageSourceKind,
+};
 pub use tender_store::{
     ContentVersionSummary, CreateTenderCommand, OpenTenderCommand, RegisterTenderContentCommand,
     ReviseTenderCommand, TenderCommandError, TenderErrorCode, TenderInspection, TenderSummary,
@@ -21,10 +27,13 @@ use tauri::Manager;
 
 mod tauri_commands {
     use super::{
-        ensure_quantix_setup as ensure_setup, CreateTenderCommand, OpenTenderCommand, QuantixHost,
-        ReviseTenderCommand, RuntimeReadiness, SetupOutcome, TenderCommandError, TenderErrorCode,
-        TenderSummary,
+        ensure_quantix_setup as ensure_setup, ChooseTenderPackageCommand,
+        ConfirmSourceRelationshipCommand, CreateTenderCommand, DocumentRegister,
+        ImportTenderPackageCommand, OpenTenderCommand, QuantixHost, ReviseTenderCommand,
+        RuntimeReadiness, SetupOutcome, TenderCommandError, TenderErrorCode,
+        TenderPackageImportResult, TenderPackageSourceKind, TenderSummary,
     };
+    use tauri_plugin_dialog::DialogExt;
 
     #[tauri::command]
     pub(super) async fn ensure_quantix_setup(
@@ -88,6 +97,74 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn choose_and_import_tender_package<R: tauri::Runtime>(
+        app: tauri::AppHandle<R>,
+        host: tauri::State<'_, QuantixHost>,
+        command: ChooseTenderPackageCommand,
+    ) -> Result<Option<TenderPackageImportResult>, TenderCommandError> {
+        let source_kind = command.source_kind;
+        let selected = tauri::async_runtime::spawn_blocking(move || {
+            let picker = app.dialog().file();
+            match source_kind {
+                TenderPackageSourceKind::Directory => picker.blocking_pick_folder(),
+                TenderPackageSourceKind::ZipArchive => picker
+                    .add_filter("ZIP archive", &["zip"])
+                    .blocking_pick_file(),
+            }
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?;
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        let source_path = selected.into_path().map_err(|_| TenderCommandError {
+            code: TenderErrorCode::InvalidCommand,
+        })?;
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.import_tender_package(ImportTenderPackageCommand {
+                tender_id: command.tender_id,
+                source_path: source_path.to_string_lossy().into_owned(),
+            })
+            .map(Some)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_document_register(
+        host: tauri::State<'_, QuantixHost>,
+        command: OpenTenderCommand,
+    ) -> Result<DocumentRegister, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.inspect_document_register(&command.tender_id)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn confirm_source_relationship(
+        host: tauri::State<'_, QuantixHost>,
+        command: ConfirmSourceRelationshipCommand,
+    ) -> Result<DocumentRegister, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.confirm_source_relationship(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
     pub(super) async fn inspect_runtime_readiness(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<RuntimeReadiness, &'static str> {
@@ -114,6 +191,9 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
         tauri_commands::list_tenders,
         tauri_commands::open_tender,
         tauri_commands::revise_tender,
+        tauri_commands::choose_and_import_tender_package,
+        tauri_commands::inspect_document_register,
+        tauri_commands::confirm_source_relationship,
         tauri_commands::inspect_runtime_readiness,
         tauri_commands::repair_runtime_readiness,
         tauri_commands::cancel_runtime_preparation
@@ -123,6 +203,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     configure_tauri_builder(tauri::Builder::default())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();

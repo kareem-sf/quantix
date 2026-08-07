@@ -37,6 +37,7 @@ tauri-build = { version = "2", features = [] }
 cacache = { version = "13.1.0", default-features = false, features = ["mmap", "tokio-runtime"] }
 fs4 = "1.1.0"
 garde = { version = "0.23.0", features = ["derive"] }
+infer = "0.19.0"
 jsonschema = { version = "0.40.0", default-features = false }
 processkit = { version = "=3.2.0", default-features = false }
 rusqlite = { version = "0.40.1", features = ["bundled", "limits"] }
@@ -44,6 +45,7 @@ semver = "1.0.27"
 serde_json_canonicalizer = "0.3.2"
 sha2 = "0.11.0"
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2.4.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -53,6 +55,7 @@ tokio = { version = "1.47.1", features = ["io-util", "macros", "process", "rt-mu
 tokio-util = { version = "0.7.16", features = ["rt"] }
 ts-rs = "12.0.1"
 walkdir = "2.5.0"
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(windows)'.dependencies]
 junction = { version = "2.0.0", default-features = false }

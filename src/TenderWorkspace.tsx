@@ -1,8 +1,15 @@
 import { FormEvent, useEffect, useState } from "react";
 
+import type { DocumentRegister } from "./bindings/DocumentRegister";
+import type { SourceRelationshipKind } from "./bindings/SourceRelationshipKind";
+import type { TenderPackageImportResult } from "./bindings/TenderPackageImportResult";
+import type { TenderPackageSourceKind } from "./bindings/TenderPackageSourceKind";
 import type { TenderSummary } from "./bindings/TenderSummary";
 import {
+  chooseAndImportTenderPackage,
+  confirmSourceRelationship,
   createTender,
+  inspectDocumentRegister,
   listTenders,
   openTender,
   reviseTender,
@@ -18,8 +25,14 @@ export function TenderWorkspace() {
     kind: "loading",
   });
   const [selected, setSelected] = useState<TenderSummary>();
+  const [documentRegister, setDocumentRegister] = useState<DocumentRegister>();
+  const [lastIntake, setLastIntake] = useState<TenderPackageImportResult>();
   const [newName, setNewName] = useState("");
   const [revisionName, setRevisionName] = useState("");
+  const [priorVersionKey, setPriorVersionKey] = useState("");
+  const [replacementVersionKey, setReplacementVersionKey] = useState("");
+  const [relationshipKind, setRelationshipKind] =
+    useState<SourceRelationshipKind>("replacement");
   const [busy, setBusy] = useState(false);
   const [commandFailed, setCommandFailed] = useState(false);
 
@@ -69,7 +82,13 @@ export function TenderWorkspace() {
     const name = newName.trim();
     if (!name) return;
     void runCommand(() => createTender(name)).then((created) => {
-      if (created) setNewName("");
+      if (created) {
+        setNewName("");
+        setDocumentRegister({ query_register_open: false, documents: [] });
+        setLastIntake(undefined);
+        setPriorVersionKey("");
+        setReplacementVersionKey("");
+      }
     });
   };
 
@@ -78,6 +97,94 @@ export function TenderWorkspace() {
     const name = revisionName.trim();
     if (!selected || !name) return;
     void runCommand(() => reviseTender(selected.tender_id, name));
+  };
+
+  const handleOpen = async (tenderId: string) => {
+    setBusy(true);
+    setCommandFailed(false);
+    setDocumentRegister(undefined);
+    setPriorVersionKey("");
+    setReplacementVersionKey("");
+    try {
+      updateTender(await openTender(tenderId));
+      setDocumentRegister(await inspectDocumentRegister(tenderId));
+      setLastIntake(undefined);
+    } catch {
+      setCommandFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePackageChoice = async (sourceKind: TenderPackageSourceKind) => {
+    if (!selected) return;
+    setBusy(true);
+    setCommandFailed(false);
+    try {
+      const imported = await chooseAndImportTenderPackage(
+        selected.tender_id,
+        sourceKind,
+      );
+      if (imported) {
+        setLastIntake(imported);
+        setDocumentRegister(await inspectDocumentRegister(selected.tender_id));
+        updateTender(await openTender(selected.tender_id));
+        setPriorVersionKey("");
+        setReplacementVersionKey("");
+      }
+    } catch {
+      setCommandFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const readableState = (value: string) => value.replace(/_/g, " ");
+  const versionKey = (artifactId: string, version: number) =>
+    `${artifactId}:${version}`;
+  const registeredDocuments =
+    documentRegister?.documents.filter(
+      (document) => document.registration_state === "registered",
+    ) ?? [];
+
+  const handleRelationshipConfirmation = async (
+    event: FormEvent<HTMLFormElement>,
+  ) => {
+    event.preventDefault();
+    if (!selected) return;
+    const prior = registeredDocuments.find(
+      (document) =>
+        versionKey(document.artifact_id, document.version) === priorVersionKey,
+    );
+    const replacement = registeredDocuments.find(
+      (document) =>
+        versionKey(document.artifact_id, document.version) ===
+        replacementVersionKey,
+    );
+    if (!prior || !replacement || priorVersionKey === replacementVersionKey)
+      return;
+
+    setBusy(true);
+    setCommandFailed(false);
+    try {
+      setDocumentRegister(
+        await confirmSourceRelationship(
+          selected.tender_id,
+          prior.artifact_id,
+          prior.version,
+          replacement.artifact_id,
+          replacement.version,
+          relationshipKind,
+        ),
+      );
+      updateTender(await openTender(selected.tender_id));
+      setPriorVersionKey("");
+      setReplacementVersionKey("");
+    } catch {
+      setCommandFailed(true);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -139,9 +246,7 @@ export function TenderWorkspace() {
                         ? "tender-row tender-row--selected"
                         : "tender-row"
                     }
-                    onClick={() =>
-                      void runCommand(() => openTender(tender.tender_id))
-                    }
+                    onClick={() => void handleOpen(tender.tender_id)}
                     disabled={busy}
                   >
                     <span>{tender.name}</span>
@@ -189,6 +294,221 @@ export function TenderWorkspace() {
                   Save immutable revision
                 </button>
               </form>
+              <section
+                className="intake-panel"
+                aria-labelledby="tender-intake-title"
+              >
+                <div className="intake-panel__heading">
+                  <div>
+                    <p className="section-label">Controlled source</p>
+                    <h4 id="tender-intake-title">Tender Package intake</h4>
+                  </div>
+                  <span
+                    className={
+                      documentRegister?.query_register_open
+                        ? "status-badge status-badge--ready"
+                        : "status-badge"
+                    }
+                  >
+                    Query Register{" "}
+                    {documentRegister?.query_register_open
+                      ? "open"
+                      : "not open"}
+                  </span>
+                </div>
+                <p>
+                  Choose one source. Quantix copies verified documents into this
+                  Tender; the original can then be moved or disconnected.
+                </p>
+                <div className="intake-actions">
+                  <button
+                    type="button"
+                    onClick={() => void handlePackageChoice("directory")}
+                    disabled={busy}
+                  >
+                    Choose project directory
+                  </button>
+                  <button
+                    type="button"
+                    className="button-secondary"
+                    onClick={() => void handlePackageChoice("zip_archive")}
+                    disabled={busy}
+                  >
+                    Choose ZIP archive
+                  </button>
+                </div>
+                {lastIntake ? (
+                  <p className="intake-result" role="status">
+                    Intake registered {lastIntake.registered_count} of{" "}
+                    {lastIntake.discovered_count} discovered entries.{" "}
+                    {lastIntake.exception_count} require review.
+                  </p>
+                ) : null}
+              </section>
+              <section
+                className="document-register"
+                aria-labelledby="document-register-title"
+              >
+                <div className="document-register__heading">
+                  <div>
+                    <p className="section-label">Canonical evidence</p>
+                    <h4 id="document-register-title">Document Register</h4>
+                  </div>
+                  <span>{documentRegister?.documents.length ?? 0} entries</span>
+                </div>
+                {documentRegister && documentRegister.documents.length > 0 ? (
+                  <div className="document-register__table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Document</th>
+                          <th>Identity</th>
+                          <th>Version</th>
+                          <th>Language</th>
+                          <th>Type</th>
+                          <th>Digest</th>
+                          <th>Registration</th>
+                          <th>Supersession</th>
+                          <th>Exception</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {documentRegister.documents.map((document) => (
+                          <tr
+                            key={`${document.artifact_id}-${document.version}`}
+                          >
+                            <td>{document.package_path}</td>
+                            <td title={document.artifact_id}>
+                              {document.artifact_id.slice(0, 8)}
+                            </td>
+                            <td>{document.version}</td>
+                            <td>{document.language}</td>
+                            <td>{readableState(document.document_type)}</td>
+                            <td
+                              title={document.sha256 ?? "No registered digest"}
+                            >
+                              {document.sha256?.slice(0, 12) ?? "—"}
+                            </td>
+                            <td>
+                              {readableState(document.registration_state)}
+                            </td>
+                            <td>
+                              {readableState(document.supersession_state)}
+                            </td>
+                            <td>
+                              {document.exception
+                                ? readableState(document.exception)
+                                : "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="catalogue-message">
+                    No source documents registered. Intake opens the empty Query
+                    Register and records every accepted document or exception.
+                  </p>
+                )}
+                {registeredDocuments.length >= 2 ? (
+                  <form
+                    className="relationship-form"
+                    onSubmit={handleRelationshipConfirmation}
+                  >
+                    <div className="relationship-form__heading">
+                      <div>
+                        <p className="section-label">Engineer decision</p>
+                        <h5>Confirm source relationship</h5>
+                      </div>
+                      <p>
+                        Quantix never infers supersession. Confirm only a known
+                        addendum or replacement.
+                      </p>
+                    </div>
+                    <div className="relationship-form__fields">
+                      <label>
+                        Prior version
+                        <select
+                          value={priorVersionKey}
+                          onChange={(event) =>
+                            setPriorVersionKey(event.target.value)
+                          }
+                          disabled={busy}
+                        >
+                          <option value="">Select prior document</option>
+                          {registeredDocuments.map((document) => (
+                            <option
+                              key={`prior-${versionKey(
+                                document.artifact_id,
+                                document.version,
+                              )}`}
+                              value={versionKey(
+                                document.artifact_id,
+                                document.version,
+                              )}
+                            >
+                              {document.package_path} · v{document.version}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Relationship
+                        <select
+                          value={relationshipKind}
+                          onChange={(event) =>
+                            setRelationshipKind(
+                              event.target.value as SourceRelationshipKind,
+                            )
+                          }
+                          disabled={busy}
+                        >
+                          <option value="replacement">Replacement</option>
+                          <option value="addendum">Addendum</option>
+                        </select>
+                      </label>
+                      <label>
+                        New version
+                        <select
+                          value={replacementVersionKey}
+                          onChange={(event) =>
+                            setReplacementVersionKey(event.target.value)
+                          }
+                          disabled={busy}
+                        >
+                          <option value="">Select new document</option>
+                          {registeredDocuments.map((document) => (
+                            <option
+                              key={`replacement-${versionKey(
+                                document.artifact_id,
+                                document.version,
+                              )}`}
+                              value={versionKey(
+                                document.artifact_id,
+                                document.version,
+                              )}
+                            >
+                              {document.package_path} · v{document.version}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={
+                        busy ||
+                        !priorVersionKey ||
+                        !replacementVersionKey ||
+                        priorVersionKey === replacementVersionKey
+                      }
+                    >
+                      Confirm relationship
+                    </button>
+                  </form>
+                ) : null}
+              </section>
             </>
           ) : (
             <div className="tender-detail__empty">

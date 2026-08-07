@@ -16,6 +16,11 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
+use crate::tender_intake::{
+    prepare_package, ConfirmSourceRelationshipCommand, DocumentRegister, DocumentRegisterEntry,
+    ImportTenderPackageCommand, IntakeExceptionCode, PreparedIntake, RegistrationState,
+    SupersessionState, TenderPackageImportResult,
+};
 use crate::{setup::SetupState, QuantixHost};
 
 #[cfg(test)]
@@ -24,7 +29,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 1;
+const TENDER_SCHEMA_VERSION: i64 = 2;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -62,6 +67,64 @@ CREATE TABLE content_heads (
   current_revision INTEGER NOT NULL CHECK (current_revision > 0),
   FOREIGN KEY (logical_id, current_revision)
     REFERENCES content_versions(logical_id, revision)
+);
+CREATE TABLE intake_runs (
+  intake_id TEXT PRIMARY KEY CHECK (length(intake_id) = 32),
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('directory', 'zip_archive')),
+  source_path TEXT NOT NULL,
+  source_name TEXT NOT NULL,
+  discovered_count INTEGER NOT NULL CHECK (discovered_count >= 0),
+  registered_count INTEGER NOT NULL CHECK (registered_count >= 0),
+  exception_count INTEGER NOT NULL CHECK (exception_count >= 0),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE query_register (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  opened_by_intake_id TEXT NOT NULL,
+  opened_at TEXT NOT NULL,
+  FOREIGN KEY (opened_by_intake_id) REFERENCES intake_runs(intake_id)
+);
+CREATE TABLE source_artifacts (
+  artifact_id TEXT PRIMARY KEY CHECK (length(artifact_id) = 32),
+  intake_id TEXT NOT NULL,
+  package_path TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (intake_id) REFERENCES intake_runs(intake_id)
+);
+CREATE TABLE source_artifact_versions (
+  artifact_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  language TEXT NOT NULL,
+  document_type TEXT NOT NULL,
+  media_type TEXT,
+  sha256 TEXT,
+  size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+  registration_state TEXT NOT NULL CHECK (registration_state IN ('registered', 'exception')),
+  exception_code TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (artifact_id, version),
+  FOREIGN KEY (artifact_id) REFERENCES source_artifacts(artifact_id),
+  FOREIGN KEY (sha256) REFERENCES content_objects(sha256),
+  CHECK (
+    (registration_state = 'registered' AND sha256 IS NOT NULL AND media_type IS NOT NULL AND exception_code IS NULL)
+    OR
+    (registration_state = 'exception' AND sha256 IS NULL AND media_type IS NULL AND exception_code IS NOT NULL)
+  )
+);
+CREATE TABLE source_relationships (
+  relationship_id TEXT PRIMARY KEY CHECK (length(relationship_id) = 32),
+  prior_artifact_id TEXT NOT NULL,
+  prior_version INTEGER NOT NULL CHECK (prior_version > 0),
+  replacement_artifact_id TEXT NOT NULL,
+  replacement_version INTEGER NOT NULL CHECK (replacement_version > 0),
+  relationship_kind TEXT NOT NULL CHECK (relationship_kind IN ('addendum', 'replacement')),
+  created_at TEXT NOT NULL,
+  UNIQUE (prior_artifact_id, prior_version, replacement_artifact_id, replacement_version, relationship_kind),
+  CHECK (prior_artifact_id != replacement_artifact_id OR prior_version != replacement_version),
+  FOREIGN KEY (prior_artifact_id, prior_version)
+    REFERENCES source_artifact_versions(artifact_id, version),
+  FOREIGN KEY (replacement_artifact_id, replacement_version)
+    REFERENCES source_artifact_versions(artifact_id, version)
 );
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
@@ -111,6 +174,56 @@ CREATE TRIGGER content_versions_no_delete
 BEFORE DELETE ON content_versions
 BEGIN
   SELECT RAISE(ABORT, 'Content versions are immutable');
+END;
+CREATE TRIGGER intake_runs_no_update
+BEFORE UPDATE ON intake_runs
+BEGIN
+  SELECT RAISE(ABORT, 'Intake runs are immutable');
+END;
+CREATE TRIGGER intake_runs_no_delete
+BEFORE DELETE ON intake_runs
+BEGIN
+  SELECT RAISE(ABORT, 'Intake runs are immutable');
+END;
+CREATE TRIGGER query_register_no_update
+BEFORE UPDATE ON query_register
+BEGIN
+  SELECT RAISE(ABORT, 'Query Register identity is immutable');
+END;
+CREATE TRIGGER query_register_no_delete
+BEFORE DELETE ON query_register
+BEGIN
+  SELECT RAISE(ABORT, 'Query Register identity is immutable');
+END;
+CREATE TRIGGER source_artifacts_no_update
+BEFORE UPDATE ON source_artifacts
+BEGIN
+  SELECT RAISE(ABORT, 'Source Artifacts are immutable');
+END;
+CREATE TRIGGER source_artifacts_no_delete
+BEFORE DELETE ON source_artifacts
+BEGIN
+  SELECT RAISE(ABORT, 'Source Artifacts are immutable');
+END;
+CREATE TRIGGER source_artifact_versions_no_update
+BEFORE UPDATE ON source_artifact_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Source Artifact Versions are immutable');
+END;
+CREATE TRIGGER source_artifact_versions_no_delete
+BEFORE DELETE ON source_artifact_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Source Artifact Versions are immutable');
+END;
+CREATE TRIGGER source_relationships_no_update
+BEFORE UPDATE ON source_relationships
+BEGIN
+  SELECT RAISE(ABORT, 'Source relationships are immutable');
+END;
+CREATE TRIGGER source_relationships_no_delete
+BEFORE DELETE ON source_relationships
+BEGIN
+  SELECT RAISE(ABORT, 'Source relationships are immutable');
 END;
 CREATE TRIGGER audit_events_no_update
 BEFORE UPDATE ON audit_events
@@ -248,6 +361,20 @@ impl TenderId {
 pub(crate) struct TenderStore {
     root: std::path::PathBuf,
     connection: Connection,
+}
+
+struct RawDocumentRegisterEntry {
+    artifact_id: String,
+    version: u32,
+    package_path: String,
+    language: String,
+    document_type: String,
+    media_type: Option<String>,
+    sha256: Option<String>,
+    size_bytes: i64,
+    registration_state: String,
+    supersession_state: String,
+    exception_code: Option<String>,
 }
 
 impl TenderStore {
@@ -564,6 +691,359 @@ impl TenderStore {
         Err(error)
     }
 
+    fn import_package(
+        &mut self,
+        source: &Path,
+    ) -> Result<TenderPackageImportResult, TenderCommandError> {
+        let prepared = prepare_package(source, &self.root.join("content"))?;
+        self.publish_intake(prepared)
+    }
+
+    fn publish_intake(
+        &mut self,
+        prepared: PreparedIntake,
+    ) -> Result<TenderPackageImportResult, TenderCommandError> {
+        let discovered_count = u32::try_from(prepared.documents.len())
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let registered_count = u32::try_from(
+            prepared
+                .documents
+                .iter()
+                .filter(|document| document.exception.is_none())
+                .count(),
+        )
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let exception_count = discovered_count
+            .checked_sub(registered_count)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let (tender_id, tender_revision): (String, u32) = transaction
+            .query_row(
+                "SELECT tender_id, current_revision FROM tender WHERE singleton = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(sql_error)?;
+        let intake_id = random_identifier(&transaction)?;
+        let created_at = sqlite_timestamp(&transaction)?;
+        transaction
+            .execute(
+                "INSERT INTO intake_runs (
+                   intake_id, source_kind, source_path, source_name,
+                   discovered_count, registered_count, exception_count, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    intake_id,
+                    prepared.source_kind.as_str(),
+                    prepared.source_path,
+                    prepared.source_name,
+                    discovered_count,
+                    registered_count,
+                    exception_count,
+                    created_at
+                ],
+            )
+            .map_err(sql_error)?;
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO query_register (singleton, opened_by_intake_id, opened_at)
+                 VALUES (1, ?1, ?2)",
+                params![intake_id, created_at],
+            )
+            .map_err(sql_error)?;
+
+        for document in prepared.documents {
+            let artifact_id = random_identifier(&transaction)?;
+            transaction
+                .execute(
+                    "INSERT INTO source_artifacts (
+                       artifact_id, intake_id, package_path, created_at
+                     ) VALUES (?1, ?2, ?3, ?4)",
+                    params![artifact_id, intake_id, document.package_path, created_at],
+                )
+                .map_err(sql_error)?;
+            let registration_state = if document.exception.is_some() {
+                RegistrationState::Exception
+            } else {
+                RegistrationState::Registered
+            };
+            if registration_state == RegistrationState::Registered {
+                let sha256 = document
+                    .sha256
+                    .as_ref()
+                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+                let integrity = document
+                    .integrity
+                    .as_ref()
+                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+                let size_bytes = i64::try_from(document.size_bytes)
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+                transaction
+                    .execute(
+                        "INSERT INTO content_objects (sha256, integrity, size_bytes)
+                         VALUES (?1, ?2, ?3)
+                         ON CONFLICT(sha256) DO NOTHING",
+                        params![sha256, integrity, size_bytes],
+                    )
+                    .map_err(sql_error)?;
+                let stored: (String, i64) = transaction
+                    .query_row(
+                        "SELECT integrity, size_bytes FROM content_objects WHERE sha256 = ?1",
+                        [sha256],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(sql_error)?;
+                if stored != (integrity.clone(), size_bytes) {
+                    return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+                }
+            }
+            transaction
+                .execute(
+                    "INSERT INTO source_artifact_versions (
+                       artifact_id, version, language, document_type, media_type, sha256,
+                       size_bytes, registration_state, exception_code, created_at
+                     ) VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        artifact_id,
+                        document.language,
+                        document.document_type,
+                        document.media_type,
+                        document.sha256,
+                        i64::try_from(document.size_bytes).map_err(|_| {
+                            TenderCommandError::new(TenderErrorCode::InvalidCommand)
+                        })?,
+                        registration_state.as_str(),
+                        document.exception.map(IntakeExceptionCode::as_str),
+                        created_at
+                    ],
+                )
+                .map_err(sql_error)?;
+            if let Some(exception) = document.exception {
+                append_audit_event(
+                    &transaction,
+                    &tender_id,
+                    "source_artifact_registration_failed",
+                    tender_revision,
+                    json!({
+                        "artifact_id": artifact_id,
+                        "exception": exception.as_str(),
+                        "package_path": document.package_path,
+                    }),
+                    &created_at,
+                )?;
+            }
+        }
+        append_audit_event(
+            &transaction,
+            &tender_id,
+            "tender_package_imported",
+            tender_revision,
+            json!({
+                "discovered_count": discovered_count.to_string(),
+                "exception_count": exception_count.to_string(),
+                "intake_id": intake_id,
+                "registered_count": registered_count.to_string(),
+                "source_kind": prepared.source_kind.as_str(),
+                "source_name": prepared.source_name,
+            }),
+            &created_at,
+        )?;
+        transaction.commit().map_err(sql_error)?;
+
+        Ok(TenderPackageImportResult {
+            intake_id: intake_id.clone(),
+            source_kind: prepared.source_kind,
+            discovered_count,
+            registered_count,
+            exception_count,
+            query_register_open: self.query_register_open()?,
+            documents: self.document_register_entries(Some(&intake_id))?,
+        })
+    }
+
+    fn document_register(&self) -> Result<DocumentRegister, TenderCommandError> {
+        Ok(DocumentRegister {
+            query_register_open: self.query_register_open()?,
+            documents: self.document_register_entries(None)?,
+        })
+    }
+
+    fn query_register_open(&self) -> Result<bool, TenderCommandError> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM query_register WHERE singleton = 1)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)
+    }
+
+    fn document_register_entries(
+        &self,
+        intake_id: Option<&str>,
+    ) -> Result<Vec<DocumentRegisterEntry>, TenderCommandError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT
+                   sa.artifact_id,
+                   sav.version,
+                   sa.package_path,
+                   sav.language,
+                   sav.document_type,
+                   sav.media_type,
+                   sav.sha256,
+                   sav.size_bytes,
+                   sav.registration_state,
+                   CASE
+                     WHEN EXISTS (
+                       SELECT 1 FROM source_relationships sr
+                       WHERE sr.prior_artifact_id = sav.artifact_id
+                         AND sr.prior_version = sav.version
+                         AND sr.relationship_kind = 'replacement'
+                     ) THEN 'superseded'
+                     WHEN EXISTS (
+                       SELECT 1 FROM source_relationships sr
+                       WHERE (sr.replacement_artifact_id = sav.artifact_id
+                              AND sr.replacement_version = sav.version)
+                          OR (sr.prior_artifact_id = sav.artifact_id
+                              AND sr.prior_version = sav.version
+                              AND sr.relationship_kind = 'addendum')
+                     ) THEN 'current'
+                     ELSE 'unconfirmed'
+                   END,
+                   sav.exception_code
+                 FROM source_artifacts sa
+                 JOIN source_artifact_versions sav ON sav.artifact_id = sa.artifact_id
+                 WHERE (?1 IS NULL OR sa.intake_id = ?1)
+                 ORDER BY sa.rowid, sav.version",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map(params![intake_id], |row| {
+                Ok(RawDocumentRegisterEntry {
+                    artifact_id: row.get(0)?,
+                    version: row.get(1)?,
+                    package_path: row.get(2)?,
+                    language: row.get(3)?,
+                    document_type: row.get(4)?,
+                    media_type: row.get(5)?,
+                    sha256: row.get(6)?,
+                    size_bytes: row.get(7)?,
+                    registration_state: row.get(8)?,
+                    supersession_state: row.get(9)?,
+                    exception_code: row.get(10)?,
+                })
+            })
+            .map_err(sql_error)?;
+        let mut documents = Vec::new();
+        for row in rows {
+            let row = row.map_err(sql_error)?;
+            documents.push(DocumentRegisterEntry {
+                artifact_id: row.artifact_id,
+                version: row.version,
+                package_path: row.package_path,
+                language: row.language,
+                document_type: row.document_type,
+                media_type: row.media_type,
+                sha256: row.sha256,
+                size_bytes: row
+                    .size_bytes
+                    .try_into()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+                registration_state: RegistrationState::parse(&row.registration_state)?,
+                supersession_state: SupersessionState::parse(&row.supersession_state)?,
+                exception: row
+                    .exception_code
+                    .as_deref()
+                    .map(IntakeExceptionCode::parse)
+                    .transpose()?,
+            });
+        }
+        Ok(documents)
+    }
+
+    fn confirm_source_relationship(
+        &mut self,
+        command: &ConfirmSourceRelationshipCommand,
+    ) -> Result<DocumentRegister, TenderCommandError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let (tender_id, tender_revision): (String, u32) = transaction
+            .query_row(
+                "SELECT tender_id, current_revision FROM tender WHERE singleton = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(sql_error)?;
+        if tender_id != command.tender_id {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        for (artifact_id, version) in [
+            (&command.prior_artifact_id, command.prior_version),
+            (
+                &command.replacement_artifact_id,
+                command.replacement_version,
+            ),
+        ] {
+            let exists: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM source_artifact_versions
+                       WHERE artifact_id = ?1 AND version = ?2
+                         AND registration_state = 'registered'
+                     )",
+                    params![artifact_id, version],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            if !exists {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+        }
+        let relationship_id = random_identifier(&transaction)?;
+        let created_at = sqlite_timestamp(&transaction)?;
+        transaction
+            .execute(
+                "INSERT INTO source_relationships (
+                   relationship_id, prior_artifact_id, prior_version,
+                   replacement_artifact_id, replacement_version, relationship_kind, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    relationship_id,
+                    command.prior_artifact_id,
+                    command.prior_version,
+                    command.replacement_artifact_id,
+                    command.replacement_version,
+                    command.relationship_kind.as_str(),
+                    created_at
+                ],
+            )
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        append_audit_event(
+            &transaction,
+            &tender_id,
+            "source_relationship_confirmed",
+            tender_revision,
+            json!({
+                "prior_artifact_id": command.prior_artifact_id,
+                "prior_version": command.prior_version.to_string(),
+                "relationship_kind": command.relationship_kind.as_str(),
+                "replacement_artifact_id": command.replacement_artifact_id,
+                "replacement_version": command.replacement_version.to_string(),
+            }),
+            &created_at,
+        )?;
+        transaction.commit().map_err(sql_error)?;
+        self.document_register()
+    }
+
     fn record_command_denied(
         &mut self,
         expected_tender_id: &TenderId,
@@ -720,6 +1200,66 @@ impl QuantixHost {
         Ok(content)
     }
 
+    pub fn import_tender_package(
+        &self,
+        command: ImportTenderPackageCommand,
+    ) -> Result<TenderPackageImportResult, TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let source = Path::new(&command.source_path);
+        if command.validate().is_err()
+            || !source.is_absolute()
+            || fs::symlink_metadata(source).is_err()
+        {
+            return self.reject_tender_command(&tender_id, "import_tender_package");
+        }
+        let store = self.tender_store(&tender_id)?;
+        let imported = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .import_package(source)?;
+        Ok(imported)
+    }
+
+    pub fn inspect_document_register(
+        &self,
+        tender_id: &str,
+    ) -> Result<DocumentRegister, TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let register = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .document_register()?;
+        Ok(register)
+    }
+
+    pub fn confirm_source_relationship(
+        &self,
+        command: ConfirmSourceRelationshipCommand,
+    ) -> Result<DocumentRegister, TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        if command.validate().is_err()
+            || !valid_identifier(&command.prior_artifact_id)
+            || !valid_identifier(&command.replacement_artifact_id)
+            || (command.prior_artifact_id == command.replacement_artifact_id
+                && command.prior_version == command.replacement_version)
+        {
+            return self.reject_tender_command(&tender_id, "confirm_source_relationship");
+        }
+        let store = self.tender_store(&tender_id)?;
+        let register = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .confirm_source_relationship(&command)?;
+        Ok(register)
+    }
+
     pub fn inspect_tender(&self, tender_id: &str) -> Result<TenderInspection, TenderCommandError> {
         self.require_runtime_verified()?;
         require_setup(self)?;
@@ -855,6 +1395,13 @@ fn valid_logical_id(logical_id: &str) -> bool {
         && logical_id.chars().all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
         })
+}
+
+fn valid_identifier(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .chars()
+            .all(|character| character.is_ascii_digit() || matches!(character, 'a'..='f'))
 }
 
 fn valid_media_type(media_type: &str) -> bool {
@@ -1175,6 +1722,12 @@ fn sqlite_timestamp(transaction: &Transaction<'_>) -> Result<String, TenderComma
         .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |row| {
             row.get(0)
         })
+        .map_err(sql_error)
+}
+
+fn random_identifier(transaction: &Transaction<'_>) -> Result<String, TenderCommandError> {
+    transaction
+        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
         .map_err(sql_error)
 }
 
