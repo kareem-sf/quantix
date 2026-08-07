@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use ts_rs::TS;
 use zip::{CompressionMethod, ZipArchive};
 
-use crate::{TenderCommandError, TenderErrorCode};
+use crate::{ParseExceptionCode, ParseState, TenderCommandError, TenderErrorCode};
 
 pub(crate) const MAX_INTAKE_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_INTAKE_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
@@ -226,6 +226,8 @@ pub struct DocumentRegisterEntry {
     pub sha256: Option<String>,
     pub size_bytes: u64,
     pub registration_state: RegistrationState,
+    pub parse_state: ParseState,
+    pub parse_exception: Option<ParseExceptionCode>,
     pub supersession_state: SupersessionState,
     pub exception: Option<IntakeExceptionCode>,
 }

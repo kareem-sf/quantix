@@ -5,6 +5,7 @@ import type { SourceRelationshipKind } from "./bindings/SourceRelationshipKind";
 import type { TenderPackageImportResult } from "./bindings/TenderPackageImportResult";
 import type { TenderPackageSourceKind } from "./bindings/TenderPackageSourceKind";
 import type { TenderSummary } from "./bindings/TenderSummary";
+import { DocumentEvidenceOffice } from "./DocumentEvidenceOffice";
 import {
   chooseAndImportTenderPackage,
   confirmSourceRelationship,
@@ -139,7 +140,6 @@ export function TenderWorkspace() {
     }
   };
 
-  const readableState = (value: string) => value.replace(/_/g, " ");
   const versionKey = (artifactId: string, version: number) =>
     `${artifactId}:${version}`;
   const registeredDocuments =
@@ -357,54 +357,13 @@ export function TenderWorkspace() {
                   <span>{documentRegister?.documents.length ?? 0} entries</span>
                 </div>
                 {documentRegister && documentRegister.documents.length > 0 ? (
-                  <div className="document-register__table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Document</th>
-                          <th>Identity</th>
-                          <th>Version</th>
-                          <th>Language</th>
-                          <th>Type</th>
-                          <th>Digest</th>
-                          <th>Registration</th>
-                          <th>Supersession</th>
-                          <th>Exception</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {documentRegister.documents.map((document) => (
-                          <tr
-                            key={`${document.artifact_id}-${document.version}`}
-                          >
-                            <td>{document.package_path}</td>
-                            <td title={document.artifact_id}>
-                              {document.artifact_id.slice(0, 8)}
-                            </td>
-                            <td>{document.version}</td>
-                            <td>{document.language}</td>
-                            <td>{readableState(document.document_type)}</td>
-                            <td
-                              title={document.sha256 ?? "No registered digest"}
-                            >
-                              {document.sha256?.slice(0, 12) ?? "—"}
-                            </td>
-                            <td>
-                              {readableState(document.registration_state)}
-                            </td>
-                            <td>
-                              {readableState(document.supersession_state)}
-                            </td>
-                            <td>
-                              {document.exception
-                                ? readableState(document.exception)
-                                : "—"}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  <DocumentEvidenceOffice
+                    key={selected.tender_id}
+                    tenderId={selected.tender_id}
+                    register={documentRegister}
+                    updateRegister={setDocumentRegister}
+                    reportCommandFailure={() => setCommandFailed(true)}
+                  />
                 ) : (
                   <p className="catalogue-message">
                     No source documents registered. Intake opens the empty Query

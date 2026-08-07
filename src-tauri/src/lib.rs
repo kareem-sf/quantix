@@ -1,3 +1,4 @@
+mod document_parsing;
 mod host;
 mod process_supervisor;
 mod runtime_readiness;
@@ -5,6 +6,12 @@ mod setup;
 mod tender_intake;
 mod tender_store;
 
+pub use document_parsing::{
+    DocumentParseResult, EvidenceBoundingBox, EvidenceDocument, EvidenceLanguage, EvidenceLocation,
+    EvidenceLocationKind, EvidenceRegion, EvidenceSearchHit, EvidenceSearchResult,
+    ParseExceptionCode, ParseSourceArtifactCommand, ParseState, SearchEvidenceCommand,
+    TextDirection,
+};
 pub use host::QuantixHost;
 pub use runtime_readiness::{
     RuntimeLayout, RuntimeReadiness, RuntimeReadinessIssue, RuntimeReadinessState,
@@ -28,9 +35,10 @@ use tauri::Manager;
 mod tauri_commands {
     use super::{
         ensure_quantix_setup as ensure_setup, ChooseTenderPackageCommand,
-        ConfirmSourceRelationshipCommand, CreateTenderCommand, DocumentRegister,
-        ImportTenderPackageCommand, OpenTenderCommand, QuantixHost, ReviseTenderCommand,
-        RuntimeReadiness, SetupOutcome, TenderCommandError, TenderErrorCode,
+        ConfirmSourceRelationshipCommand, CreateTenderCommand, DocumentParseResult,
+        DocumentRegister, EvidenceDocument, EvidenceSearchResult, ImportTenderPackageCommand,
+        OpenTenderCommand, ParseSourceArtifactCommand, QuantixHost, ReviseTenderCommand,
+        RuntimeReadiness, SearchEvidenceCommand, SetupOutcome, TenderCommandError, TenderErrorCode,
         TenderPackageImportResult, TenderPackageSourceKind, TenderSummary,
     };
     use tauri_plugin_dialog::DialogExt;
@@ -165,6 +173,48 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn parse_source_artifact(
+        host: tauri::State<'_, QuantixHost>,
+        command: ParseSourceArtifactCommand,
+    ) -> Result<DocumentParseResult, TenderCommandError> {
+        host.inner().parse_source_artifact(command).await
+    }
+
+    #[tauri::command]
+    pub(super) fn cancel_source_artifact_parse(
+        host: tauri::State<'_, QuantixHost>,
+        command: ParseSourceArtifactCommand,
+    ) -> Result<bool, TenderCommandError> {
+        host.inner().cancel_source_artifact_parse(command)
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_evidence(
+        host: tauri::State<'_, QuantixHost>,
+        command: ParseSourceArtifactCommand,
+    ) -> Result<EvidenceDocument, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.inspect_evidence(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn search_evidence(
+        host: tauri::State<'_, QuantixHost>,
+        command: SearchEvidenceCommand,
+    ) -> Result<EvidenceSearchResult, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.search_evidence(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
     pub(super) async fn inspect_runtime_readiness(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<RuntimeReadiness, &'static str> {
@@ -194,6 +244,10 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
         tauri_commands::choose_and_import_tender_package,
         tauri_commands::inspect_document_register,
         tauri_commands::confirm_source_relationship,
+        tauri_commands::parse_source_artifact,
+        tauri_commands::cancel_source_artifact_parse,
+        tauri_commands::inspect_evidence,
+        tauri_commands::search_evidence,
         tauri_commands::inspect_runtime_readiness,
         tauri_commands::repair_runtime_readiness,
         tauri_commands::cancel_runtime_preparation

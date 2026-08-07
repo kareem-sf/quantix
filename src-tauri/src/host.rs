@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -22,7 +23,25 @@ struct QuantixHostInner {
     runtime_layout: RuntimeLayout,
     process_supervisor: ProcessSupervisor,
     runtime_preparation: Mutex<Option<CancellationToken>>,
+    active_parses: Mutex<HashMap<ParseTargetKey, CancellationToken>>,
     runtime_verified: AtomicBool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ParseTargetKey {
+    tender_id: String,
+    artifact_id: String,
+    version: u32,
+}
+
+impl ParseTargetKey {
+    pub(crate) fn new(tender_id: &str, artifact_id: &str, version: u32) -> Self {
+        Self {
+            tender_id: tender_id.to_owned(),
+            artifact_id: artifact_id.to_owned(),
+            version,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -69,6 +88,7 @@ impl QuantixHost {
                 runtime_layout,
                 process_supervisor: ProcessSupervisor,
                 runtime_preparation: Mutex::new(None),
+                active_parses: Mutex::new(HashMap::new()),
                 runtime_verified: AtomicBool::new(false),
             }),
         }
@@ -143,6 +163,45 @@ impl QuantixHost {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(cancellation) = preparation.as_ref() {
+            cancellation.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn begin_active_parse(
+        &self,
+        key: ParseTargetKey,
+    ) -> Result<CancellationToken, TenderCommandError> {
+        let mut active = self
+            .inner
+            .active_parses
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        if active.contains_key(&key) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let cancellation = CancellationToken::new();
+        active.insert(key, cancellation.clone());
+        Ok(cancellation)
+    }
+
+    pub(crate) fn finish_active_parse(&self, key: &ParseTargetKey) {
+        self.inner
+            .active_parses
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(key);
+    }
+
+    pub(crate) fn cancel_active_parse(&self, key: &ParseTargetKey) -> bool {
+        let active = self
+            .inner
+            .active_parses
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cancellation) = active.get(key) {
             cancellation.cancel();
             true
         } else {

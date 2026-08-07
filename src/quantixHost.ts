@@ -4,9 +4,14 @@ import type { ChooseTenderPackageCommand } from "./bindings/ChooseTenderPackageC
 import type { ConfirmSourceRelationshipCommand } from "./bindings/ConfirmSourceRelationshipCommand";
 import type { CreateTenderCommand } from "./bindings/CreateTenderCommand";
 import type { DocumentRegister } from "./bindings/DocumentRegister";
+import type { DocumentParseResult } from "./bindings/DocumentParseResult";
+import type { EvidenceDocument } from "./bindings/EvidenceDocument";
+import type { EvidenceSearchResult } from "./bindings/EvidenceSearchResult";
 import type { OpenTenderCommand } from "./bindings/OpenTenderCommand";
+import type { ParseSourceArtifactCommand } from "./bindings/ParseSourceArtifactCommand";
 import type { ReviseTenderCommand } from "./bindings/ReviseTenderCommand";
 import type { RuntimeReadiness } from "./bindings/RuntimeReadiness";
+import type { SearchEvidenceCommand } from "./bindings/SearchEvidenceCommand";
 import type { SetupOutcome } from "./bindings/SetupOutcome";
 import type { SourceRelationshipKind } from "./bindings/SourceRelationshipKind";
 import type { TenderSummary } from "./bindings/TenderSummary";
@@ -93,4 +98,54 @@ export function confirmSourceRelationship(
     relationship_kind: relationshipKind,
   };
   return invoke<DocumentRegister>("confirm_source_relationship", { command });
+}
+
+function parseTarget(
+  tenderId: string,
+  artifactId: string,
+  version: number,
+): ParseSourceArtifactCommand {
+  return {
+    tender_id: tenderId,
+    artifact_id: artifactId,
+    version,
+  };
+}
+
+export function parseSourceArtifact(
+  tenderId: string,
+  artifactId: string,
+  version: number,
+): Promise<DocumentParseResult> {
+  return invoke<DocumentParseResult>("parse_source_artifact", {
+    command: parseTarget(tenderId, artifactId, version),
+  });
+}
+
+export function cancelSourceArtifactParse(
+  tenderId: string,
+  artifactId: string,
+  version: number,
+): Promise<boolean> {
+  return invoke<boolean>("cancel_source_artifact_parse", {
+    command: parseTarget(tenderId, artifactId, version),
+  });
+}
+
+export function inspectEvidence(
+  tenderId: string,
+  artifactId: string,
+  version: number,
+): Promise<EvidenceDocument> {
+  return invoke<EvidenceDocument>("inspect_evidence", {
+    command: parseTarget(tenderId, artifactId, version),
+  });
+}
+
+export function searchEvidence(
+  tenderId: string,
+  query: string,
+): Promise<EvidenceSearchResult> {
+  const command: SearchEvidenceCommand = { tender_id: tenderId, query };
+  return invoke<EvidenceSearchResult>("search_evidence", { command });
 }

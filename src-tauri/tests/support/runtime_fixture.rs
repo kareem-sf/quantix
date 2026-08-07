@@ -233,6 +233,10 @@ fn run_docling(arguments: &[std::ffi::OsString]) -> Result<(), Box<dyn std::erro
     if arguments.first().and_then(|value| value.to_str()) != Some("convert") {
         return Err("unexpected Docling fixture command".into());
     }
+    let source = arguments
+        .get(1)
+        .map(PathBuf::from)
+        .ok_or("missing staged Docling source")?;
     let output = argument_value(arguments, "--output")?;
     let models = argument_value(arguments, "--artifacts-path")?;
     for profile in [
@@ -246,13 +250,135 @@ fn run_docling(arguments: &[std::ffi::OsString]) -> Result<(), Box<dyn std::erro
             return Err(format!("fixture {profile} model is missing").into());
         }
     }
+    if source.file_name().and_then(|name| name.to_str()) == Some("readiness.pdf") {
+        return run_docling_readiness(arguments, &output);
+    }
+    for flag in [
+        "--no-enable-remote-services",
+        "--no-allow-external-plugins",
+        "--abort-on-error",
+        "--quiet",
+    ] {
+        if !arguments.iter().any(|argument| argument == flag) {
+            return Err(format!("missing controlled Docling flag {flag}").into());
+        }
+    }
+    let input_format = source
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .ok_or("staged source has no format")?;
+    if argument_value(arguments, "--from")? != Path::new(input_format)
+        || argument_value(arguments, "--to")? != Path::new("json")
+        || argument_value(arguments, "--image-export-mode")? != Path::new("placeholder")
+        || argument_value(arguments, "--document-timeout")? != Path::new("840")
+        || argument_value(arguments, "--num-threads")? != Path::new("2")
+        || argument_value(arguments, "--device")? != Path::new("cpu")
+    {
+        return Err("unexpected controlled Docling parse contract".into());
+    }
+    if source
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        != Some("input")
+        || output.file_name().and_then(|name| name.to_str()) != Some("candidate")
+    {
+        return Err("Docling did not receive isolated staged paths".into());
+    }
+    fs::create_dir_all(&output)?;
+    let name = source
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .ok_or("invalid staged source name")?;
+    let source_bytes = fs::read(&source)?;
+    if source_bytes
+        .windows(b"INTERRUPTED_PROCESS".len())
+        .any(|window| window == b"INTERRUPTED_PROCESS")
+    {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+    }
+    if source_bytes
+        .windows(b"PROCESS_FAILURE".len())
+        .any(|window| window == b"PROCESS_FAILURE")
+        || source_bytes
+            .windows(b"/Encrypt".len())
+            .any(|window| window == b"/Encrypt")
+    {
+        return Err("fixture Docling conversion failed".into());
+    }
+    if source_bytes
+        .windows(b"MALFORMED_OUTPUT".len())
+        .any(|window| window == b"MALFORMED_OUTPUT")
+    {
+        fs::write(
+            output.join(format!("{name}.json")),
+            br#"{"schema_name":"DoclingDocument"}"#,
+        )?;
+        return Ok(());
+    }
+    if source_bytes
+        .windows(b"EXCESSIVE_OUTPUT".len())
+        .any(|window| window == b"EXCESSIVE_OUTPUT")
+    {
+        fs::File::create(output.join(format!("{name}.json")))?.set_len(64 * 1024 + 1)?;
+        return Ok(());
+    }
+    if source_bytes
+        .windows(b"LOSS_OUTPUT".len())
+        .any(|window| window == b"LOSS_OUTPUT")
+    {
+        fs::write(
+            output.join(format!("{name}.json")),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_name": "DoclingDocument",
+                "version": "1.10.0",
+                "name": name,
+                "origin": { "mimetype": "application/pdf", "filename": format!("{name}.pdf") },
+                "body": { "self_ref": "#/body", "children": [] },
+                "groups": [],
+                "texts": [],
+                "tables": [],
+                "pages": {}
+            }))?,
+        )?;
+        return Ok(());
+    }
+    if source_bytes
+        .windows(b"INVALID_REFERENCE_OUTPUT".len())
+        .any(|window| window == b"INVALID_REFERENCE_OUTPUT")
+    {
+        let mut document = bilingual_pdf_document(name);
+        document["body"]["children"] = serde_json::json!([{ "$ref": "#/texts/999" }]);
+        fs::write(
+            output.join(format!("{name}.json")),
+            serde_json::to_vec(&document)?,
+        )?;
+        return Ok(());
+    }
+    let document = match input_format {
+        "pdf" => bilingual_pdf_document(name),
+        "docx" => bilingual_docx_document(name),
+        "xlsx" => bilingual_xlsx_document(name),
+        _ => return Err(format!("unsupported fixture input format {input_format}").into()),
+    };
+    fs::write(
+        output.join(format!("{name}.json")),
+        serde_json::to_vec(&document)?,
+    )?;
+    Ok(())
+}
+
+fn run_docling_readiness(
+    arguments: &[std::ffi::OsString],
+    output: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     if argument_value(arguments, "--ocr-engine")? != Path::new("rapidocr")
         || argument_value(arguments, "--ocr-mode")? != Path::new("full_page")
         || argument_value(arguments, "--ocr-lang")? != Path::new("ch")
     {
         return Err("RapidOCR full-page smoke was not requested".into());
     }
-    fs::create_dir_all(&output)?;
+    fs::create_dir_all(output)?;
     fs::write(
         output.join("readiness.json"),
         serde_json::to_vec(&serde_json::json!({
@@ -266,6 +392,200 @@ fn run_docling(arguments: &[std::ffi::OsString]) -> Result<(), Box<dyn std::erro
         }))?,
     )?;
     Ok(())
+}
+
+fn bilingual_pdf_document(name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "schema_name": "DoclingDocument",
+        "version": "1.10.0",
+        "name": name,
+        "origin": { "mimetype": "application/pdf", "filename": format!("{name}.pdf") },
+        "body": {
+            "self_ref": "#/body",
+            "children": [
+                { "$ref": "#/groups/0" },
+                { "$ref": "#/tables/0" }
+            ]
+        },
+        "groups": [{
+            "self_ref": "#/groups/0",
+            "parent": { "$ref": "#/body" },
+            "children": [
+                { "$ref": "#/texts/0" },
+                { "$ref": "#/texts/1" },
+                { "$ref": "#/texts/2" }
+            ],
+            "name": "Commercial Conditions",
+            "label": "section"
+        }],
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "parent": { "$ref": "#/groups/0" },
+                "label": "section_header",
+                "orig": "Commercial Conditions",
+                "text": "Commercial Conditions",
+                "prov": [{
+                    "page_no": 1,
+                    "charspan": [0, 21],
+                    "bbox": { "l": 10, "t": 90, "r": 190, "b": 70, "coord_origin": "BOTTOMLEFT" }
+                }]
+            },
+            {
+                "self_ref": "#/texts/1",
+                "parent": { "$ref": "#/groups/0" },
+                "label": "text",
+                "orig": "Bid security is required.",
+                "text": "Bid security is required.",
+                "prov": [
+                    {
+                        "page_no": 1,
+                        "charspan": [0, 12],
+                        "bbox": { "l": 10, "t": 65, "r": 190, "b": 45, "coord_origin": "BOTTOMLEFT" }
+                    },
+                    {
+                        "page_no": 2,
+                        "charspan": [12, 25],
+                        "bbox": { "l": 10, "t": 95, "r": 190, "b": 75, "coord_origin": "BOTTOMLEFT" }
+                    }
+                ]
+            },
+            {
+                "self_ref": "#/texts/2",
+                "parent": { "$ref": "#/groups/0" },
+                "label": "text",
+                "orig": "ضمان العطاء مطلوب.",
+                "text": "ضمان العطاء مطلوب.",
+                "prov": [{
+                    "page_no": 2,
+                    "charspan": [0, 19],
+                    "bbox": { "l": 10, "t": 90, "r": 190, "b": 70, "coord_origin": "BOTTOMLEFT" }
+                }]
+            }
+        ],
+        "tables": [{
+            "self_ref": "#/tables/0",
+            "parent": { "$ref": "#/body" },
+            "label": "table",
+            "prov": [{
+                "page_no": 2,
+                "charspan": [0, 0],
+                "bbox": { "l": 10, "t": 60, "r": 190, "b": 10, "coord_origin": "BOTTOMLEFT" }
+            }],
+            "data": {
+                "num_rows": 2,
+                "num_cols": 2,
+                "table_cells": [
+                    { "start_row_offset_idx": 0, "end_row_offset_idx": 1, "start_col_offset_idx": 0, "end_col_offset_idx": 1, "text": "Item" },
+                    { "start_row_offset_idx": 0, "end_row_offset_idx": 1, "start_col_offset_idx": 1, "end_col_offset_idx": 2, "text": "Price" },
+                    { "start_row_offset_idx": 1, "end_row_offset_idx": 2, "start_col_offset_idx": 0, "end_col_offset_idx": 1, "text": "Concrete" },
+                    { "start_row_offset_idx": 1, "end_row_offset_idx": 2, "start_col_offset_idx": 1, "end_col_offset_idx": 2, "text": "125000" }
+                ]
+            }
+        }],
+        "pages": {
+            "1": { "page_no": 1, "size": { "width": 200, "height": 100 } },
+            "2": { "page_no": 2, "size": { "width": 200, "height": 100 } }
+        }
+    })
+}
+
+fn bilingual_docx_document(name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "schema_name": "DoclingDocument",
+        "version": "1.10.0",
+        "name": name,
+        "origin": {
+            "mimetype": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "filename": format!("{name}.docx")
+        },
+        "body": {
+            "self_ref": "#/body",
+            "children": [{ "$ref": "#/groups/0" }]
+        },
+        "groups": [{
+            "self_ref": "#/groups/0",
+            "parent": { "$ref": "#/body" },
+            "children": [
+                { "$ref": "#/texts/0" },
+                { "$ref": "#/texts/1" },
+                { "$ref": "#/texts/2" }
+            ],
+            "name": "Scope of Works",
+            "label": "section"
+        }],
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "parent": { "$ref": "#/groups/0" },
+                "label": "section_header",
+                "orig": "Scope of Works",
+                "text": "Scope of Works"
+            },
+            {
+                "self_ref": "#/texts/1",
+                "parent": { "$ref": "#/groups/0" },
+                "label": "text",
+                "orig": "Works include concrete and finishes.",
+                "text": "Works include concrete and finishes."
+            },
+            {
+                "self_ref": "#/texts/2",
+                "parent": { "$ref": "#/groups/0" },
+                "label": "text",
+                "orig": "تشمل الأعمال الخرسانة والتشطيبات.",
+                "text": "تشمل الأعمال الخرسانة والتشطيبات."
+            }
+        ],
+        "tables": [],
+        "pages": {}
+    })
+}
+
+fn bilingual_xlsx_document(name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "schema_name": "DoclingDocument",
+        "version": "1.10.0",
+        "name": name,
+        "origin": {
+            "mimetype": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "filename": format!("{name}.xlsx")
+        },
+        "body": {
+            "self_ref": "#/body",
+            "children": [{ "$ref": "#/groups/0" }]
+        },
+        "groups": [{
+            "self_ref": "#/groups/0",
+            "parent": { "$ref": "#/body" },
+            "children": [{ "$ref": "#/tables/0" }],
+            "name": "Pricing",
+            "label": "sheet"
+        }],
+        "texts": [],
+        "tables": [{
+            "self_ref": "#/tables/0",
+            "parent": { "$ref": "#/groups/0" },
+            "label": "table",
+            "prov": [{
+                "page_no": 1,
+                "charspan": [0, 0],
+                "bbox": { "l": 0, "t": 4, "r": 3, "b": 0, "coord_origin": "TOPLEFT" }
+            }],
+            "data": {
+                "num_rows": 4,
+                "num_cols": 3,
+                "table_cells": [
+                    { "start_row_offset_idx": 0, "end_row_offset_idx": 1, "start_col_offset_idx": 0, "end_col_offset_idx": 1, "text": "Item" },
+                    { "start_row_offset_idx": 3, "end_row_offset_idx": 4, "start_col_offset_idx": 1, "end_col_offset_idx": 2, "text": "خرسانة" },
+                    { "start_row_offset_idx": 3, "end_row_offset_idx": 4, "start_col_offset_idx": 2, "end_col_offset_idx": 3, "text": "450.75" }
+                ]
+            }
+        }],
+        "pages": {
+            "1": { "page_no": 1, "size": { "width": 3, "height": 4 } }
+        }
+    })
 }
 
 fn assert_isolated_python_environment() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -16,6 +16,12 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
+use crate::document_parsing::{
+    DocumentParseResult, EvidenceDocument, EvidenceLanguage, EvidenceLocation,
+    EvidenceLocationKind, EvidenceRegion, EvidenceSearchHit, EvidenceSearchResult,
+    ParseExceptionCode, ParseJob, ParseSourceArtifactCommand, ParseState, PreparedParseOutput,
+    SearchEvidenceCommand, TextDirection,
+};
 use crate::tender_intake::{
     prepare_package, ConfirmSourceRelationshipCommand, DocumentRegister, DocumentRegisterEntry,
     ImportTenderPackageCommand, IntakeExceptionCode, PreparedIntake, RegistrationState,
@@ -29,7 +35,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 2;
+const TENDER_SCHEMA_VERSION: i64 = 3;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -125,6 +131,63 @@ CREATE TABLE source_relationships (
     REFERENCES source_artifact_versions(artifact_id, version),
   FOREIGN KEY (replacement_artifact_id, replacement_version)
     REFERENCES source_artifact_versions(artifact_id, version)
+);
+CREATE TABLE parse_attempts (
+  attempt_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  attempt_id TEXT NOT NULL UNIQUE CHECK (length(attempt_id) = 32),
+  artifact_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  status TEXT NOT NULL CHECK (status IN ('running', 'parsed', 'failed', 'interrupted', 'quarantined')),
+  exception_code TEXT,
+  started_at TEXT NOT NULL,
+  completed_at TEXT,
+  FOREIGN KEY (artifact_id, version) REFERENCES source_artifact_versions(artifact_id, version),
+  CHECK (
+    (status = 'running' AND exception_code IS NULL AND completed_at IS NULL)
+    OR (status = 'parsed' AND exception_code IS NULL AND completed_at IS NOT NULL)
+    OR (status IN ('failed', 'interrupted', 'quarantined') AND exception_code IS NOT NULL AND completed_at IS NOT NULL)
+  )
+);
+CREATE TABLE parsed_documents (
+  artifact_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  attempt_id TEXT NOT NULL UNIQUE,
+  docling_schema_version TEXT NOT NULL,
+  json_sha256 TEXT NOT NULL,
+  language TEXT NOT NULL CHECK (language IN ('arabic', 'english', 'mixed', 'undetermined')),
+  direction TEXT NOT NULL CHECK (direction IN ('left_to_right', 'right_to_left', 'mixed', 'neutral')),
+  location_count INTEGER NOT NULL CHECK (location_count > 0),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (artifact_id, version),
+  FOREIGN KEY (artifact_id, version) REFERENCES source_artifact_versions(artifact_id, version),
+  FOREIGN KEY (attempt_id) REFERENCES parse_attempts(attempt_id),
+  FOREIGN KEY (json_sha256) REFERENCES content_objects(sha256)
+);
+CREATE TABLE evidence_locations (
+  artifact_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+  kind TEXT NOT NULL CHECK (kind IN ('section', 'paragraph', 'table', 'sheet', 'cell')),
+  structural_path TEXT NOT NULL,
+  provenance_json TEXT NOT NULL,
+  section TEXT,
+  paragraph_number INTEGER,
+  table_number INTEGER,
+  sheet_name TEXT,
+  cell_range TEXT,
+  original_text TEXT NOT NULL,
+  translated_text TEXT,
+  language TEXT NOT NULL CHECK (language IN ('arabic', 'english', 'mixed', 'undetermined')),
+  direction TEXT NOT NULL CHECK (direction IN ('left_to_right', 'right_to_left', 'mixed', 'neutral')),
+  PRIMARY KEY (artifact_id, version, ordinal),
+  FOREIGN KEY (artifact_id, version) REFERENCES parsed_documents(artifact_id, version)
+);
+CREATE VIRTUAL TABLE evidence_fts USING fts5(
+  original_text,
+  artifact_id UNINDEXED,
+  version UNINDEXED,
+  ordinal UNINDEXED,
+  tokenize = 'unicode61 remove_diacritics 0'
 );
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
@@ -224,6 +287,43 @@ CREATE TRIGGER source_relationships_no_delete
 BEFORE DELETE ON source_relationships
 BEGIN
   SELECT RAISE(ABORT, 'Source relationships are immutable');
+END;
+CREATE TRIGGER parse_attempts_terminal_facts_no_rewrite
+BEFORE UPDATE ON parse_attempts
+WHEN OLD.status != 'running'
+  OR NEW.status = 'running'
+  OR NEW.attempt_sequence != OLD.attempt_sequence
+  OR NEW.attempt_id != OLD.attempt_id
+  OR NEW.artifact_id != OLD.artifact_id
+  OR NEW.version != OLD.version
+  OR NEW.started_at != OLD.started_at
+BEGIN
+  SELECT RAISE(ABORT, 'Parse attempt terminal facts are immutable');
+END;
+CREATE TRIGGER parse_attempts_no_delete
+BEFORE DELETE ON parse_attempts
+BEGIN
+  SELECT RAISE(ABORT, 'Parse attempts are immutable');
+END;
+CREATE TRIGGER parsed_documents_no_update
+BEFORE UPDATE ON parsed_documents
+BEGIN
+  SELECT RAISE(ABORT, 'Parsed Documents are immutable');
+END;
+CREATE TRIGGER parsed_documents_no_delete
+BEFORE DELETE ON parsed_documents
+BEGIN
+  SELECT RAISE(ABORT, 'Parsed Documents are immutable');
+END;
+CREATE TRIGGER evidence_locations_no_update
+BEFORE UPDATE ON evidence_locations
+BEGIN
+  SELECT RAISE(ABORT, 'Evidence locations are immutable');
+END;
+CREATE TRIGGER evidence_locations_no_delete
+BEFORE DELETE ON evidence_locations
+BEGIN
+  SELECT RAISE(ABORT, 'Evidence locations are immutable');
 END;
 CREATE TRIGGER audit_events_no_update
 BEFORE UPDATE ON audit_events
@@ -373,8 +473,79 @@ struct RawDocumentRegisterEntry {
     sha256: Option<String>,
     size_bytes: i64,
     registration_state: String,
+    parse_state: String,
+    parse_exception_code: Option<String>,
     supersession_state: String,
     exception_code: Option<String>,
+}
+
+struct RawEvidenceLocation {
+    ordinal: u32,
+    kind: String,
+    structural_path: String,
+    provenance_json: String,
+    section: Option<String>,
+    paragraph_number: Option<u32>,
+    table_number: Option<u32>,
+    sheet_name: Option<String>,
+    cell_range: Option<String>,
+    original_text: String,
+    translated_text: Option<String>,
+    language: String,
+    direction: String,
+}
+
+impl RawEvidenceLocation {
+    fn read(row: &rusqlite::Row<'_>, start: usize) -> rusqlite::Result<Self> {
+        Ok(Self {
+            ordinal: row.get(start)?,
+            kind: row.get(start + 1)?,
+            structural_path: row.get(start + 2)?,
+            provenance_json: row.get(start + 3)?,
+            section: row.get(start + 4)?,
+            paragraph_number: row.get(start + 5)?,
+            table_number: row.get(start + 6)?,
+            sheet_name: row.get(start + 7)?,
+            cell_range: row.get(start + 8)?,
+            original_text: row.get(start + 9)?,
+            translated_text: row.get(start + 10)?,
+            language: row.get(start + 11)?,
+            direction: row.get(start + 12)?,
+        })
+    }
+
+    fn into_domain(self) -> Result<EvidenceLocation, TenderCommandError> {
+        let provenance: Vec<EvidenceRegion> = serde_json::from_str(&self.provenance_json)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        if serde_json_canonicalizer::to_string(&provenance)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
+            != self.provenance_json
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        if provenance.iter().any(|region| {
+            region.page_number == 0
+                || matches!((region.char_start, region.char_end), (Some(start), Some(end)) if end < start)
+                || matches!((region.char_start, region.char_end), (Some(_), None) | (None, Some(_)))
+        }) {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        Ok(EvidenceLocation {
+            ordinal: self.ordinal,
+            kind: EvidenceLocationKind::parse(&self.kind)?,
+            structural_path: self.structural_path,
+            provenance,
+            section: self.section,
+            paragraph_number: self.paragraph_number,
+            table_number: self.table_number,
+            sheet_name: self.sheet_name,
+            cell_range: self.cell_range,
+            original_text: self.original_text,
+            translated_text: self.translated_text,
+            language: EvidenceLanguage::parse(&self.language)?,
+            direction: TextDirection::parse(&self.direction)?,
+        })
+    }
 }
 
 impl TenderStore {
@@ -423,6 +594,100 @@ impl TenderStore {
         })
     }
 
+    fn reconcile_interrupted_parses(
+        &mut self,
+        tender_id: &TenderId,
+    ) -> Result<(), TenderCommandError> {
+        let attempts = {
+            let mut statement = self
+                .connection
+                .prepare(
+                    "SELECT attempt_id, artifact_id, version
+                     FROM parse_attempts
+                     WHERE status = 'running'
+                     ORDER BY attempt_sequence",
+                )
+                .map_err(sql_error)?;
+            let attempts = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, u32>(2)?,
+                    ))
+                })
+                .map_err(sql_error)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(sql_error)?;
+            attempts
+        };
+        if attempts.is_empty() {
+            return Ok(());
+        }
+        for (attempt_id, _, _) in &attempts {
+            if !valid_identifier(attempt_id) {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            let staging_root = self
+                .root
+                .join("staging")
+                .join(format!("parse-{attempt_id}"));
+            match fs::symlink_metadata(&staging_root) {
+                Ok(metadata)
+                    if !metadata_is_unsafe_storage_link(&metadata) && metadata.is_dir() =>
+                {
+                    fs::remove_dir_all(staging_root).map_err(store_unavailable)?;
+                }
+                Ok(_) => {
+                    return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(store_unavailable(error)),
+            }
+        }
+
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let tender_revision: u32 = transaction
+            .query_row(
+                "SELECT current_revision FROM tender WHERE singleton = 1 AND tender_id = ?1",
+                [tender_id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        let completed_at = sqlite_timestamp(&transaction)?;
+        for (attempt_id, artifact_id, version) in attempts {
+            if transaction
+                .execute(
+                    "UPDATE parse_attempts
+                     SET status = 'interrupted', exception_code = 'interrupted', completed_at = ?2
+                     WHERE attempt_id = ?1 AND status = 'running'",
+                    params![attempt_id, completed_at],
+                )
+                .map_err(sql_error)?
+                != 1
+            {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            append_audit_event(
+                &transaction,
+                tender_id.as_str(),
+                "source_artifact_parse_interrupted",
+                tender_revision,
+                json!({
+                    "artifact_id": artifact_id,
+                    "attempt_id": attempt_id,
+                    "reason": "host_restart",
+                    "version": version.to_string(),
+                }),
+                &completed_at,
+            )?;
+        }
+        transaction.commit().map_err(sql_error)
+    }
+
     fn open(root: &Path, expected_tender_id: &TenderId) -> Result<Self, TenderCommandError> {
         #[cfg(test)]
         TENDER_STORE_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -435,10 +700,12 @@ impl TenderStore {
         .map_err(|_| TenderCommandError::new(TenderErrorCode::NotFound))?;
         configure_writer(&connection)?;
         validate_store(&connection, expected_tender_id)?;
-        Ok(Self {
+        let mut store = Self {
             root: root.to_path_buf(),
             connection,
-        })
+        };
+        store.reconcile_interrupted_parses(expected_tender_id)?;
+        Ok(store)
     }
 
     fn summary(&self) -> Result<TenderSummary, TenderCommandError> {
@@ -699,6 +966,464 @@ impl TenderStore {
         self.publish_intake(prepared)
     }
 
+    pub(crate) fn begin_parse(
+        &mut self,
+        command: &ParseSourceArtifactCommand,
+        tender_id: &TenderId,
+    ) -> Result<ParseJob, TenderCommandError> {
+        let (document_type, integrity, expected_sha256): (String, String, String) = self
+            .connection
+            .query_row(
+                "SELECT sav.document_type, co.integrity, co.sha256
+                 FROM source_artifact_versions sav
+                 JOIN content_objects co ON co.sha256 = sav.sha256
+                 WHERE sav.artifact_id = ?1 AND sav.version = ?2
+                   AND sav.registration_state = 'registered'",
+                params![command.artifact_id, command.version],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(sql_error)?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let input_format = match document_type.as_str() {
+            "pdf_document" => "pdf",
+            "word_document" => "docx",
+            "spreadsheet" => "xlsx",
+            _ => return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand)),
+        };
+        let already_parsed: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM parsed_documents
+                   WHERE artifact_id = ?1 AND version = ?2
+                 ) OR EXISTS(
+                   SELECT 1 FROM parse_attempts
+                   WHERE artifact_id = ?1 AND version = ?2 AND status = 'running'
+                 )",
+                params![command.artifact_id, command.version],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if already_parsed {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let integrity = integrity
+            .parse::<cacache::Integrity>()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let bytes = cacache::read_hash_sync(self.root.join("content"), &integrity)
+            .map_err(content_store_error)?;
+        let actual_sha256: String = Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if actual_sha256 != expected_sha256 {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+
+        let attempt_id = random_identifier(&self.connection)?;
+        let staging_root = self
+            .root
+            .join("staging")
+            .join(format!("parse-{attempt_id}"));
+        let input_directory = staging_root.join("input");
+        let candidate_directory = staging_root.join("candidate");
+        fs::create_dir(&staging_root).map_err(store_unavailable)?;
+        let staged = (|| -> Result<PathBuf, TenderCommandError> {
+            fs::create_dir(&input_directory).map_err(store_unavailable)?;
+            fs::create_dir(&candidate_directory).map_err(store_unavailable)?;
+            let input_path = input_directory.join(format!("source.{input_format}"));
+            fs::write(&input_path, bytes).map_err(store_unavailable)?;
+            Ok(input_path)
+        })();
+        let input_path = match staged {
+            Ok(path) => path,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&staging_root);
+                return Err(error);
+            }
+        };
+
+        let recorded = (|| -> Result<(), TenderCommandError> {
+            let transaction = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(sql_error)?;
+            let tender_revision: u32 = transaction
+                .query_row(
+                    "SELECT current_revision FROM tender WHERE singleton = 1 AND tender_id = ?1",
+                    [tender_id.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            let started_at = sqlite_timestamp(&transaction)?;
+            transaction
+                .execute(
+                    "INSERT INTO parse_attempts (
+                       attempt_id, artifact_id, version, status, exception_code,
+                       started_at, completed_at
+                     ) VALUES (?1, ?2, ?3, 'running', NULL, ?4, NULL)",
+                    params![attempt_id, command.artifact_id, command.version, started_at],
+                )
+                .map_err(sql_error)?;
+            append_audit_event(
+                &transaction,
+                tender_id.as_str(),
+                "source_artifact_parse_started",
+                tender_revision,
+                json!({
+                    "artifact_id": command.artifact_id,
+                    "attempt_id": attempt_id,
+                    "version": command.version.to_string(),
+                }),
+                &started_at,
+            )?;
+            transaction.commit().map_err(sql_error)
+        })();
+        if let Err(error) = recorded {
+            let _ = fs::remove_dir_all(&staging_root);
+            return Err(error);
+        }
+        Ok(ParseJob {
+            attempt_id,
+            tender_id: tender_id.clone(),
+            artifact_id: command.artifact_id.clone(),
+            version: command.version,
+            input_format: input_format.into(),
+            staging_root,
+            input_path,
+            candidate_directory,
+        })
+    }
+
+    pub(crate) fn publish_parse(
+        &mut self,
+        job: &ParseJob,
+        prepared: PreparedParseOutput,
+    ) -> Result<DocumentParseResult, TenderCommandError> {
+        let integrity = cacache::write_hash_sync(self.root.join("content"), &prepared.json_bytes)
+            .map_err(content_store_error)?;
+        let verified = cacache::read_hash_sync(self.root.join("content"), &integrity)
+            .map_err(content_store_error)?;
+        if verified != prepared.json_bytes {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let json_sha256: String = Sha256::digest(&prepared.json_bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let size_bytes = i64::try_from(prepared.json_bytes.len())
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let location_count = u32::try_from(prepared.locations.len())
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let tender_revision: u32 = transaction
+            .query_row(
+                "SELECT current_revision FROM tender WHERE singleton = 1 AND tender_id = ?1",
+                [job.tender_id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        let completed_at = sqlite_timestamp(&transaction)?;
+        transaction
+            .execute(
+                "INSERT INTO content_objects (sha256, integrity, size_bytes)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(sha256) DO NOTHING",
+                params![json_sha256, integrity.to_string(), size_bytes],
+            )
+            .map_err(sql_error)?;
+        let stored: (String, i64) = transaction
+            .query_row(
+                "SELECT integrity, size_bytes FROM content_objects WHERE sha256 = ?1",
+                [&json_sha256],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(sql_error)?;
+        if stored != (integrity.to_string(), size_bytes) {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        transaction
+            .execute(
+                "INSERT INTO parsed_documents (
+                   artifact_id, version, attempt_id, docling_schema_version,
+                   json_sha256, language, direction, location_count, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    job.artifact_id,
+                    job.version,
+                    job.attempt_id,
+                    prepared.schema_version,
+                    json_sha256,
+                    prepared.language.as_str(),
+                    prepared.direction.as_str(),
+                    location_count,
+                    completed_at,
+                ],
+            )
+            .map_err(sql_error)?;
+        for location in &prepared.locations {
+            let provenance_json = serde_json_canonicalizer::to_string(&location.provenance)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            transaction
+                .execute(
+                    "INSERT INTO evidence_locations (
+                       artifact_id, version, ordinal, kind, structural_path,
+                       provenance_json, section, paragraph_number, table_number,
+                       sheet_name, cell_range, original_text, translated_text,
+                       language, direction
+                     ) VALUES (
+                       ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                       ?12, ?13, ?14, ?15
+                     )",
+                    params![
+                        job.artifact_id,
+                        job.version,
+                        location.ordinal,
+                        location.kind.as_str(),
+                        location.structural_path,
+                        provenance_json,
+                        location.section,
+                        location.paragraph_number,
+                        location.table_number,
+                        location.sheet_name,
+                        location.cell_range,
+                        location.original_text,
+                        location.translated_text,
+                        location.language.as_str(),
+                        location.direction.as_str(),
+                    ],
+                )
+                .map_err(sql_error)?;
+            transaction
+                .execute(
+                    "INSERT INTO evidence_fts (original_text, artifact_id, version, ordinal)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        location.original_text,
+                        job.artifact_id,
+                        job.version,
+                        location.ordinal
+                    ],
+                )
+                .map_err(sql_error)?;
+        }
+        if transaction
+            .execute(
+                "UPDATE parse_attempts
+                 SET status = 'parsed', completed_at = ?2
+                 WHERE attempt_id = ?1 AND status = 'running'",
+                params![job.attempt_id, completed_at],
+            )
+            .map_err(sql_error)?
+            != 1
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        append_audit_event(
+            &transaction,
+            job.tender_id.as_str(),
+            "source_artifact_parsed",
+            tender_revision,
+            json!({
+                "artifact_id": job.artifact_id,
+                "attempt_id": job.attempt_id,
+                "docling_schema_version": prepared.schema_version,
+                "json_sha256": json_sha256,
+                "location_count": location_count.to_string(),
+                "version": job.version.to_string(),
+            }),
+            &completed_at,
+        )?;
+        transaction.commit().map_err(sql_error)?;
+        Ok(DocumentParseResult {
+            attempt_id: job.attempt_id.clone(),
+            artifact_id: job.artifact_id.clone(),
+            version: job.version,
+            state: ParseState::Parsed,
+            exception: None,
+            location_count,
+            language: prepared.language,
+            direction: prepared.direction,
+            docling_schema_version: Some(prepared.schema_version),
+            docling_json_sha256: Some(json_sha256),
+        })
+    }
+
+    pub(crate) fn fail_parse(
+        &mut self,
+        job: &ParseJob,
+        state: ParseState,
+        exception: ParseExceptionCode,
+    ) -> Result<DocumentParseResult, TenderCommandError> {
+        if !matches!(
+            state,
+            ParseState::Failed | ParseState::Interrupted | ParseState::Quarantined
+        ) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let tender_revision: u32 = transaction
+            .query_row(
+                "SELECT current_revision FROM tender WHERE singleton = 1 AND tender_id = ?1",
+                [job.tender_id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        let completed_at = sqlite_timestamp(&transaction)?;
+        if transaction
+            .execute(
+                "UPDATE parse_attempts
+                 SET status = ?2, exception_code = ?3, completed_at = ?4
+                 WHERE attempt_id = ?1 AND status = 'running'",
+                params![
+                    job.attempt_id,
+                    state.as_str(),
+                    exception.as_str(),
+                    completed_at
+                ],
+            )
+            .map_err(sql_error)?
+            != 1
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        append_audit_event(
+            &transaction,
+            job.tender_id.as_str(),
+            "source_artifact_parse_failed",
+            tender_revision,
+            json!({
+                "artifact_id": job.artifact_id,
+                "attempt_id": job.attempt_id,
+                "exception": exception.as_str(),
+                "state": state.as_str(),
+                "version": job.version.to_string(),
+            }),
+            &completed_at,
+        )?;
+        transaction.commit().map_err(sql_error)?;
+        Ok(DocumentParseResult {
+            attempt_id: job.attempt_id.clone(),
+            artifact_id: job.artifact_id.clone(),
+            version: job.version,
+            state,
+            exception: Some(exception),
+            location_count: 0,
+            language: EvidenceLanguage::Undetermined,
+            direction: TextDirection::Neutral,
+            docling_schema_version: None,
+            docling_json_sha256: None,
+        })
+    }
+
+    pub(crate) fn evidence_document(
+        &self,
+        command: &ParseSourceArtifactCommand,
+    ) -> Result<EvidenceDocument, TenderCommandError> {
+        let parsed: (String, String, String, String) = self
+            .connection
+            .query_row(
+                "SELECT pd.language, pd.direction, pd.docling_schema_version, pd.json_sha256
+                 FROM parsed_documents pd
+                 WHERE pd.artifact_id = ?1 AND pd.version = ?2",
+                params![command.artifact_id, command.version],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(sql_error)?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::NotFound))?;
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT ordinal, kind, structural_path, provenance_json, section,
+                        paragraph_number, table_number, sheet_name, cell_range,
+                        original_text, translated_text, language, direction
+                 FROM evidence_locations
+                 WHERE artifact_id = ?1 AND version = ?2
+                 ORDER BY ordinal",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map(params![command.artifact_id, command.version], |row| {
+                RawEvidenceLocation::read(row, 0)
+            })
+            .map_err(sql_error)?;
+        let mut locations = Vec::new();
+        for row in rows {
+            locations.push(row.map_err(sql_error)?.into_domain()?);
+        }
+        Ok(EvidenceDocument {
+            artifact_id: command.artifact_id.clone(),
+            version: command.version,
+            state: ParseState::Parsed,
+            exception: None,
+            language: EvidenceLanguage::parse(&parsed.0)?,
+            direction: TextDirection::parse(&parsed.1)?,
+            docling_schema_version: Some(parsed.2),
+            docling_json_sha256: Some(parsed.3),
+            locations,
+        })
+    }
+
+    pub(crate) fn search_evidence(
+        &self,
+        command: &SearchEvidenceCommand,
+    ) -> Result<EvidenceSearchResult, TenderCommandError> {
+        let query = command.query.trim();
+        let phrase = format!("\"{}\"", query.replace('"', "\"\""));
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT el.artifact_id, el.version, sa.package_path,
+                        el.ordinal, el.kind, el.structural_path, el.provenance_json,
+                        el.section, el.paragraph_number, el.table_number,
+                        el.sheet_name, el.cell_range, el.original_text,
+                        el.translated_text, el.language, el.direction
+                 FROM evidence_fts
+                 JOIN evidence_locations el
+                   ON el.artifact_id = evidence_fts.artifact_id
+                  AND el.version = evidence_fts.version
+                  AND el.ordinal = evidence_fts.ordinal
+                  AND el.original_text = evidence_fts.original_text
+                 JOIN source_artifacts sa ON sa.artifact_id = el.artifact_id
+                 WHERE evidence_fts MATCH ?1
+                 ORDER BY el.artifact_id, el.version, el.ordinal
+                 LIMIT 100",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([phrase], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, String>(2)?,
+                    RawEvidenceLocation::read(row, 3)?,
+                ))
+            })
+            .map_err(sql_error)?;
+        let mut matches = Vec::new();
+        for row in rows {
+            let (artifact_id, version, package_path, location) = row.map_err(sql_error)?;
+            matches.push(EvidenceSearchHit {
+                artifact_id,
+                version,
+                package_path,
+                location: location.into_domain()?,
+            });
+        }
+        Ok(EvidenceSearchResult {
+            query: query.to_owned(),
+            matches,
+        })
+    }
+
     fn publish_intake(
         &mut self,
         prepared: PreparedIntake,
@@ -893,12 +1618,20 @@ impl TenderStore {
                    sa.artifact_id,
                    sav.version,
                    sa.package_path,
-                   sav.language,
+                   COALESCE(pd.language, sav.language),
                    sav.document_type,
                    sav.media_type,
                    sav.sha256,
                    sav.size_bytes,
                    sav.registration_state,
+                   CASE
+                     WHEN sav.registration_state = 'exception' THEN 'unsupported'
+                     ELSE COALESCE(pa.status, 'not_requested')
+                   END,
+                   CASE
+                     WHEN sav.registration_state = 'exception' THEN 'unsupported'
+                     ELSE pa.exception_code
+                   END,
                    CASE
                      WHEN EXISTS (
                        SELECT 1 FROM source_relationships sr
@@ -919,6 +1652,14 @@ impl TenderStore {
                    sav.exception_code
                  FROM source_artifacts sa
                  JOIN source_artifact_versions sav ON sav.artifact_id = sa.artifact_id
+                 LEFT JOIN parse_attempts pa ON pa.attempt_sequence = (
+                   SELECT MAX(candidate.attempt_sequence)
+                   FROM parse_attempts candidate
+                   WHERE candidate.artifact_id = sav.artifact_id
+                     AND candidate.version = sav.version
+                 )
+                 LEFT JOIN parsed_documents pd
+                   ON pd.artifact_id = sav.artifact_id AND pd.version = sav.version
                  WHERE (?1 IS NULL OR sa.intake_id = ?1)
                  ORDER BY sa.rowid, sav.version",
             )
@@ -935,8 +1676,10 @@ impl TenderStore {
                     sha256: row.get(6)?,
                     size_bytes: row.get(7)?,
                     registration_state: row.get(8)?,
-                    supersession_state: row.get(9)?,
-                    exception_code: row.get(10)?,
+                    parse_state: row.get(9)?,
+                    parse_exception_code: row.get(10)?,
+                    supersession_state: row.get(11)?,
+                    exception_code: row.get(12)?,
                 })
             })
             .map_err(sql_error)?;
@@ -956,6 +1699,12 @@ impl TenderStore {
                     .try_into()
                     .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
                 registration_state: RegistrationState::parse(&row.registration_state)?,
+                parse_state: ParseState::parse(&row.parse_state)?,
+                parse_exception: row
+                    .parse_exception_code
+                    .as_deref()
+                    .map(ParseExceptionCode::parse)
+                    .transpose()?,
                 supersession_state: SupersessionState::parse(&row.supersession_state)?,
                 exception: row
                     .exception_code
@@ -1311,7 +2060,7 @@ impl QuantixHost {
         Ok(summaries)
     }
 
-    fn tender_store(
+    pub(crate) fn tender_store(
         &self,
         tender_id: &TenderId,
     ) -> Result<Arc<Mutex<TenderStore>>, TenderCommandError> {
@@ -1381,7 +2130,7 @@ impl QuantixHost {
     }
 }
 
-fn require_setup(host: &QuantixHost) -> Result<(), TenderCommandError> {
+pub(crate) fn require_setup(host: &QuantixHost) -> Result<(), TenderCommandError> {
     let outcome = host.ensure_setup();
     match outcome.state {
         SetupState::Ready | SetupState::Warning => Ok(()),
@@ -1497,7 +2246,7 @@ fn validate_tender_store_layout(root: &Path) -> Result<(), TenderCommandError> {
     Ok(())
 }
 
-fn metadata_is_unsafe_storage_link(metadata: &fs::Metadata) -> bool {
+pub(crate) fn metadata_is_unsafe_storage_link(metadata: &fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
     }
@@ -1725,8 +2474,8 @@ fn sqlite_timestamp(transaction: &Transaction<'_>) -> Result<String, TenderComma
         .map_err(sql_error)
 }
 
-fn random_identifier(transaction: &Transaction<'_>) -> Result<String, TenderCommandError> {
-    transaction
+fn random_identifier(connection: &Connection) -> Result<String, TenderCommandError> {
+    connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
         .map_err(sql_error)
 }

@@ -772,7 +772,7 @@ fn executable_name(name: &str) -> String {
     }
 }
 
-fn docling_executable(application_home: &Path) -> PathBuf {
+pub(crate) fn docling_executable(application_home: &Path) -> PathBuf {
     application_home
         .join("runtimes")
         .join("docling")
@@ -788,7 +788,7 @@ fn python_executable(application_home: &Path) -> PathBuf {
         .join(executable_name("python"))
 }
 
-fn docling_environment(application_home: &Path) -> Vec<(OsString, OsString)> {
+pub(crate) fn docling_environment(application_home: &Path) -> Vec<(OsString, OsString)> {
     let cache = application_home.join("runtimes").join("huggingface-cache");
     controlled_environment(application_home)
         .into_iter()
