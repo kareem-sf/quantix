@@ -2277,6 +2277,7 @@ dependencies = [
 name = "quantix"
 version = "0.1.0"
 dependencies = [
+ "embed-resource",
  "serde",
  "tauri",
  "tauri-build",

@@ -1,51 +1,40 @@
 import { useCallback, useEffect, useState } from "react";
 
-import type { HostCommandInterface } from "./bindings/HostCommandInterface";
-import type { HostRuntime } from "./bindings/HostRuntime";
-import type { QuantixHostStatus } from "./bindings/QuantixHostStatus";
-import type { RendererAssetSource } from "./bindings/RendererAssetSource";
-import { inspectQuantixHost } from "./quantixHost";
+import type { TenderOfficeReadiness } from "./bindings/TenderOfficeReadiness";
+import { inspectTenderOfficeReadiness } from "./quantixHost";
 import "./App.css";
 
-type ConnectionView =
+type ReadinessView =
   | { kind: "checking" }
-  | { kind: "connected"; status: QuantixHostStatus }
+  | { kind: "ready"; readiness: TenderOfficeReadiness }
   | { kind: "error" };
 
-const runtimeLabels: Record<HostRuntime, string> = {
-  local_tauri_desktop: "Local Tauri desktop",
-};
-
-const commandInterfaceLabels: Record<HostCommandInterface, string> = {
-  named_domain_commands: "Named domain commands",
-};
-
-const rendererAssetLabels: Record<RendererAssetSource, string> = {
-  bundled_local: "Bundled local interface",
+const readinessLabels: Record<TenderOfficeReadiness, string> = {
+  ready_for_setup: "Ready for first-run setup",
 };
 
 function App() {
-  const [connection, setConnection] = useState<ConnectionView>({
+  const [readiness, setReadiness] = useState<ReadinessView>({
     kind: "checking",
   });
 
-  const checkConnection = useCallback(async () => {
-    setConnection({ kind: "checking" });
+  const checkReadiness = useCallback(async () => {
+    setReadiness({ kind: "checking" });
 
     try {
-      const status = await inspectQuantixHost();
-      setConnection({ kind: "connected", status });
+      const outcome = await inspectTenderOfficeReadiness();
+      setReadiness({ kind: "ready", readiness: outcome });
     } catch {
-      setConnection({ kind: "error" });
+      setReadiness({ kind: "error" });
     }
   }, []);
 
   useEffect(() => {
-    void checkConnection();
-  }, [checkConnection]);
+    void checkReadiness();
+  }, [checkReadiness]);
 
-  const connected = connection.kind === "connected";
-  const checking = connection.kind === "checking";
+  const ready = readiness.kind === "ready";
+  const checking = readiness.kind === "checking";
 
   return (
     <div className="app-shell">
@@ -56,53 +45,41 @@ function App() {
 
       <main className="connection-layout">
         <section className="introduction" aria-labelledby="page-title">
-          <h1 id="page-title">Tender office control plane</h1>
+          <h1 id="page-title">Engineer-controlled tender office</h1>
           <p>
-            Quantix is running locally. The trusted Rust Host owns domain
-            operations and is ready to receive commands.
+            Quantix is running locally and is ready to establish the Tender
+            Office under Engineer control.
           </p>
           <button
             className="connection-button"
             type="button"
-            onClick={() => void checkConnection()}
+            onClick={() => void checkReadiness()}
             disabled={checking}
           >
-            {checking ? "Checking connection…" : "Check connection"}
+            {checking ? "Checking readiness…" : "Check readiness"}
           </button>
         </section>
 
-        <section className="status-panel" aria-labelledby="host-status-title">
+        <section className="status-panel" aria-labelledby="readiness-title">
           <div className="status-heading" aria-live="polite">
             <span
-              className={`status-indicator status-indicator--${connection.kind}`}
+              className={`status-indicator status-indicator--${readiness.kind}`}
               aria-hidden="true"
             />
-            <h2 id="host-status-title">
-              {connected
-                ? "Rust Host connected"
+            <h2 id="readiness-title">
+              {ready
+                ? "Tender office ready"
                 : checking
-                  ? "Checking Rust Host"
-                  : "Rust Host unavailable"}
+                  ? "Checking tender office"
+                  : "Tender office unavailable"}
             </h2>
           </div>
 
-          {connected ? (
-            <dl className="host-facts">
+          {ready ? (
+            <dl className="readiness-facts">
               <div>
-                <dt>Runtime</dt>
-                <dd>{runtimeLabels[connection.status.runtime]}</dd>
-              </div>
-              <div>
-                <dt>Interface</dt>
-                <dd>
-                  {commandInterfaceLabels[connection.status.command_interface]}
-                </dd>
-              </div>
-              <div>
-                <dt>Renderer</dt>
-                <dd>
-                  {rendererAssetLabels[connection.status.renderer_assets]}
-                </dd>
+                <dt>Next phase</dt>
+                <dd>{readinessLabels[readiness.readiness]}</dd>
               </div>
             </dl>
           ) : null}
@@ -110,13 +87,13 @@ function App() {
           {checking ? (
             <p className="status-message">
               <span className="spinner" aria-hidden="true" />
-              Checking connection…
+              Checking readiness…
             </p>
           ) : null}
 
-          {connection.kind === "error" ? (
+          {readiness.kind === "error" ? (
             <p className="error-message" role="alert">
-              The local Rust Host did not respond. Restart Quantix and try
+              The local Tender Office did not respond. Restart Quantix and try
               again.
             </p>
           ) : null}

@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { QuantixHostStatus } from "./bindings/QuantixHostStatus";
+import type { TenderOfficeReadiness } from "./bindings/TenderOfficeReadiness";
 
-export function inspectQuantixHost(): Promise<QuantixHostStatus> {
-  return invoke<QuantixHostStatus>("inspect_quantix_host");
+export function inspectTenderOfficeReadiness(): Promise<TenderOfficeReadiness> {
+  return invoke<TenderOfficeReadiness>("inspect_tender_office_readiness");
 }

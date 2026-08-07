@@ -183,7 +183,7 @@ button {
   background: #71809f;
 }
 
-.status-indicator--connected {
+.status-indicator--ready {
   background: #10b981;
   box-shadow: 0 0 0 6px rgb(16 185 129 / 12%);
 }
@@ -193,11 +193,11 @@ button {
   box-shadow: 0 0 0 6px rgb(212 63 69 / 10%);
 }
 
-.host-facts {
+.readiness-facts {
   margin: 8px 0 0;
 }
 
-.host-facts div {
+.readiness-facts div {
   display: grid;
   grid-template-columns: 96px 1fr;
   gap: 18px;
@@ -205,16 +205,16 @@ button {
   border-bottom: 1px solid #d8deea;
 }
 
-.host-facts div:last-child {
+.readiness-facts div:last-child {
   border-bottom: 0;
 }
 
-.host-facts dt,
-.host-facts dd {
+.readiness-facts dt,
+.readiness-facts dd {
   margin: 0;
 }
 
-.host-facts dt {
+.readiness-facts dt {
   color: #6c7893;
   font-size: 12px;
   font-weight: 700;
@@ -222,7 +222,7 @@ button {
   text-transform: uppercase;
 }
 
-.host-facts dd {
+.readiness-facts dd {
   color: #172749;
   font-size: 16px;
   font-weight: 580;
@@ -319,7 +319,7 @@ button {
     padding: 24px;
   }
 
-  .host-facts div {
+  .readiness-facts div {
     grid-template-columns: 1fr;
     gap: 8px;
   }
