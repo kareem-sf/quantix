@@ -57,6 +57,8 @@ const issueCopy: Record<SetupIssue, string> = {
     "Local storage permissions could not be verified.",
   unrecognized_application_home:
     "Existing, unrecognized Quantix data was preserved for Engineer review.",
+  unsafe_storage_location:
+    "The Application Home resolves through an unsafe linked storage location.",
   unsafe_storage_permissions:
     "Local storage permissions allow access beyond the current Engineer.",
   unsupported_installation_version:

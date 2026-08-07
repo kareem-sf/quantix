@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -18,6 +18,15 @@ const INSTALLATION_SCHEMA_VERSION: i64 = 1;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const STAGED_INSTALLATION_DATABASE: &str = "installation.sqlite.staging";
+const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
+    "installation.sqlite.staging-journal",
+    "installation.sqlite.staging-shm",
+    "installation.sqlite.staging-wal",
+];
+const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
+           singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+           schema_version INTEGER NOT NULL CHECK (schema_version = 1)
+         )";
 const APPLICATION_DIRECTORIES: [&str; 9] = [
     "archives", "backups", "exports", "logs", "models", "runtimes", "staging", "tenders", "trash",
 ];
@@ -67,6 +76,7 @@ pub enum SetupIssue {
     StorageNotWritable,
     StoragePermissionsUnverified,
     UnrecognizedApplicationHome,
+    UnsafeStorageLocation,
     UnsafeStoragePermissions,
     UnsupportedInstallationVersion,
 }
@@ -143,12 +153,30 @@ pub(crate) fn ensure_application_home(
         );
     }
 
-    let existed = application_home.exists();
-    if existed && !application_home.is_dir() {
-        return SetupOutcome::blocked(
-            SetupState::RepairRequired,
-            SetupIssue::ApplicationHomeUnavailable,
-        );
+    let application_home_metadata = match fs::symlink_metadata(application_home) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(_) => {
+            return SetupOutcome::blocked(
+                SetupState::RepairRequired,
+                SetupIssue::ApplicationHomeUnavailable,
+            )
+        }
+    };
+    let existed = application_home_metadata.is_some();
+    if let Some(metadata) = application_home_metadata.as_ref() {
+        if metadata_is_unsafe_storage_link(metadata) {
+            return SetupOutcome::blocked(
+                SetupState::RepairRequired,
+                SetupIssue::UnsafeStorageLocation,
+            );
+        }
+        if !metadata.is_dir() {
+            return SetupOutcome::blocked(
+                SetupState::RepairRequired,
+                SetupIssue::ApplicationHomeUnavailable,
+            );
+        }
     }
 
     let inspection = if existed {
@@ -160,7 +188,15 @@ pub(crate) fn ensure_application_home(
         ExistingHome::Empty
     };
 
-    let probe_path = match nearest_existing_directory(application_home) {
+    if matches!(inspection, ExistingHome::Installed) {
+        if let Some(outcome) = validate_existing_installation(application_home) {
+            return outcome;
+        }
+    }
+
+    let probe_path = match nearest_existing_directory(application_home)
+        .and_then(|path| fs::canonicalize(path).ok())
+    {
         Some(path) => path,
         None => {
             return SetupOutcome::blocked(
@@ -168,6 +204,15 @@ pub(crate) fn ensure_application_home(
                 SetupIssue::ApplicationHomeUnavailable,
             )
         }
+    };
+
+    let mut storage_permissions = if existed {
+        match checked_storage_permissions(&probe_path, platform) {
+            Ok(permissions) => Some(permissions),
+            Err(outcome) => return outcome,
+        }
+    } else {
+        None
     };
 
     match platform.available_space(&probe_path) {
@@ -197,10 +242,6 @@ pub(crate) fn ensure_application_home(
     }
 
     if matches!(inspection, ExistingHome::Installed) {
-        if let Some(outcome) = validate_existing_installation(application_home) {
-            return outcome;
-        }
-
         if application_home.join(SETUP_MARKER).exists()
             && fs::remove_file(application_home.join(SETUP_MARKER)).is_err()
         {
@@ -210,7 +251,12 @@ pub(crate) fn ensure_application_home(
             );
         }
 
-        return finish_with_storage_diagnostics(application_home, platform, false);
+        return finish_with_storage_diagnostics(
+            &probe_path,
+            storage_permissions.expect("existing homes have permission diagnostics"),
+            platform,
+            false,
+        );
     }
 
     if !existed
@@ -223,25 +269,30 @@ pub(crate) fn ensure_application_home(
         );
     }
 
-    match platform.is_writable(application_home) {
-        Ok(true) => {}
-        Ok(false) | Err(_) => {
+    let application_storage = match fs::canonicalize(application_home) {
+        Ok(path) => path,
+        Err(_) => {
             return SetupOutcome::blocked(
                 SetupState::RepairRequired,
-                SetupIssue::StorageNotWritable,
+                SetupIssue::ApplicationHomeUnavailable,
             )
         }
-    }
+    };
 
-    match platform.storage_permissions(application_home) {
-        Ok(StoragePermissions::Unsafe) => {
-            return SetupOutcome::blocked(
-                SetupState::RepairRequired,
-                SetupIssue::UnsafeStoragePermissions,
-            )
+    if !existed {
+        match platform.is_writable(&application_storage) {
+            Ok(true) => {}
+            Ok(false) | Err(_) => {
+                return SetupOutcome::blocked(
+                    SetupState::RepairRequired,
+                    SetupIssue::StorageNotWritable,
+                )
+            }
         }
-        Ok(StoragePermissions::Restrictive | StoragePermissions::Unverified) => {}
-        Err(_) => {}
+        storage_permissions = match checked_storage_permissions(&application_storage, platform) {
+            Ok(permissions) => Some(permissions),
+            Err(outcome) => return outcome,
+        };
     }
 
     if begin_or_resume_setup(application_home).is_err() {
@@ -257,7 +308,12 @@ pub(crate) fn ensure_application_home(
         );
     }
 
-    finish_with_storage_diagnostics(application_home, platform, true)
+    finish_with_storage_diagnostics(
+        &application_storage,
+        storage_permissions.expect("application homes have permission diagnostics"),
+        platform,
+        true,
+    )
 }
 
 enum ExistingHome {
@@ -281,6 +337,18 @@ fn inspect_existing_home(application_home: &Path) -> Result<ExistingHome, SetupO
                 SetupIssue::ApplicationHomeUnavailable,
             )
         })?;
+        let metadata = fs::symlink_metadata(entry.path()).map_err(|_| {
+            SetupOutcome::blocked(
+                SetupState::RepairRequired,
+                SetupIssue::ApplicationHomeUnavailable,
+            )
+        })?;
+        if metadata_is_unsafe_storage_link(&metadata) {
+            return Err(SetupOutcome::blocked(
+                SetupState::RepairRequired,
+                SetupIssue::UnsafeStorageLocation,
+            ));
+        }
         names.push(entry.file_name());
     }
 
@@ -317,17 +385,50 @@ fn is_known_application_entry(name: &OsStr) -> bool {
             SETUP_MARKER,
             INSTALLATION_DATABASE,
             STAGED_INSTALLATION_DATABASE,
-            "installation.sqlite-shm",
-            "installation.sqlite-wal",
         ]
         .iter()
         .any(|known| name == OsStr::new(known))
+        || STAGED_INSTALLATION_COMPANIONS
+            .iter()
+            .any(|known| name == OsStr::new(known))
 }
 
 fn nearest_existing_directory(path: &Path) -> Option<PathBuf> {
     path.ancestors()
         .find(|candidate| candidate.is_dir())
         .map(Path::to_path_buf)
+}
+
+fn metadata_is_unsafe_storage_link(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn checked_storage_permissions(
+    path: &Path,
+    platform: &dyn SetupPlatform,
+) -> Result<StoragePermissions, SetupOutcome> {
+    match platform.storage_permissions(path) {
+        Ok(StoragePermissions::Unsafe) => Err(SetupOutcome::blocked(
+            SetupState::RepairRequired,
+            SetupIssue::UnsafeStoragePermissions,
+        )),
+        Ok(permissions) => Ok(permissions),
+        Err(_) => Ok(StoragePermissions::Unverified),
+    }
 }
 
 fn begin_or_resume_setup(application_home: &Path) -> io::Result<()> {
@@ -359,9 +460,14 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     let staged = application_home.join(STAGED_INSTALLATION_DATABASE);
     let published = application_home.join(INSTALLATION_DATABASE);
 
-    if staged.exists() {
-        fs::remove_file(&staged)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    for setup_file in
+        std::iter::once(STAGED_INSTALLATION_DATABASE).chain(STAGED_INSTALLATION_COMPANIONS)
+    {
+        let setup_path = application_home.join(setup_file);
+        if setup_path.exists() {
+            fs::remove_file(&setup_path)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        }
     }
     if published.exists() {
         return Err(rusqlite::Error::InvalidPath(published));
@@ -369,15 +475,18 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
 
     let mut connection = Connection::open(&staged)?;
     connection.busy_timeout(Duration::from_secs(5))?;
+    let journal_mode: String =
+        connection.query_row("PRAGMA journal_mode = MEMORY", [], |row| row.get(0))?;
+    if journal_mode != "memory" {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    transaction.execute_batch(
-        "CREATE TABLE installation (
-           singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 1)
-         );
-         INSERT INTO installation (singleton, schema_version) VALUES (1, 1);
-         PRAGMA user_version = 1;",
+    transaction.execute(INSTALLATION_TABLE_SQL, [])?;
+    transaction.execute(
+        "INSERT INTO installation (singleton, schema_version) VALUES (1, 1)",
+        [],
     )?;
+    transaction.pragma_update(None, "user_version", INSTALLATION_SCHEMA_VERSION)?;
     transaction.commit()?;
     drop(connection);
 
@@ -433,7 +542,7 @@ enum CatalogueStatus {
 }
 
 fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
-    let connection = Connection::open(path)?;
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     connection.busy_timeout(Duration::from_secs(5))?;
 
     let quick_check: String = connection.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
@@ -442,20 +551,37 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
     }
 
     let schema_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if schema_version != INSTALLATION_SCHEMA_VERSION {
+    if schema_version > INSTALLATION_SCHEMA_VERSION {
         return Ok(CatalogueStatus::Unsupported);
+    }
+    if schema_version < INSTALLATION_SCHEMA_VERSION {
+        return Ok(CatalogueStatus::Corrupt);
     }
 
     let mut statement = connection.prepare(
-        "SELECT name FROM sqlite_schema
-         WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-         ORDER BY name",
+        "SELECT type, name, tbl_name, sql FROM sqlite_schema
+         WHERE name NOT LIKE 'sqlite_%'
+         ORDER BY type, name",
     )?;
-    let table_names = statement
-        .query_map([], |row| row.get::<_, String>(0))?
+    let schema_objects = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(statement);
-    if table_names != ["installation"] {
+    if schema_objects
+        != [(
+            "table".to_owned(),
+            "installation".to_owned(),
+            "installation".to_owned(),
+            Some(INSTALLATION_TABLE_SQL.to_owned()),
+        )]
+    {
         return Ok(CatalogueStatus::Corrupt);
     }
 
@@ -473,32 +599,19 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
         return Ok(CatalogueStatus::Corrupt);
     }
 
-    connection.execute_batch(
-        "PRAGMA foreign_keys = ON;
-         PRAGMA journal_mode = WAL;
-         PRAGMA synchronous = FULL;",
-    )?;
     Ok(CatalogueStatus::Ready)
 }
 
 fn finish_with_storage_diagnostics(
     application_home: &Path,
+    storage_permissions: StoragePermissions,
     platform: &dyn SetupPlatform,
     setup_performed: bool,
 ) -> SetupOutcome {
     let mut issues = Vec::new();
 
-    match platform.storage_permissions(application_home) {
-        Ok(StoragePermissions::Restrictive) => {}
-        Ok(StoragePermissions::Unsafe) => {
-            return SetupOutcome::blocked(
-                SetupState::RepairRequired,
-                SetupIssue::UnsafeStoragePermissions,
-            )
-        }
-        Ok(StoragePermissions::Unverified) | Err(_) => {
-            issues.push(SetupIssue::StoragePermissionsUnverified)
-        }
+    if matches!(storage_permissions, StoragePermissions::Unverified) {
+        issues.push(SetupIssue::StoragePermissionsUnverified);
     }
 
     match platform.device_protection(application_home) {
@@ -642,7 +755,177 @@ fn system_device_protection(path: &Path) -> DeviceProtection {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn system_device_protection(path: &Path) -> DeviceProtection {
+    use std::process::Command;
+
+    let filesystem = match Command::new("/bin/df").arg("-P").arg(path).output() {
+        Ok(output) if output.status.success() => output.stdout,
+        _ => return DeviceProtection::Unverified,
+    };
+    let file_vault = match Command::new("/usr/bin/fdesetup").arg("status").output() {
+        Ok(output) if output.status.success() => output.stdout,
+        _ => return DeviceProtection::Unverified,
+    };
+
+    macos_device_protection_from_outputs(&filesystem, &file_vault)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_device_protection_from_outputs(filesystem: &[u8], file_vault: &[u8]) -> DeviceProtection {
+    let Ok(filesystem) = std::str::from_utf8(filesystem) else {
+        return DeviceProtection::Unverified;
+    };
+    let Some(mount_point) = filesystem
+        .lines()
+        .rfind(|line| !line.trim().is_empty())
+        .and_then(|line| line.split_whitespace().next_back())
+    else {
+        return DeviceProtection::Unverified;
+    };
+    if !matches!(mount_point, "/" | "/System/Volumes/Data") {
+        return DeviceProtection::Unverified;
+    }
+
+    let Ok(file_vault) = std::str::from_utf8(file_vault) else {
+        return DeviceProtection::Unverified;
+    };
+    let file_vault = file_vault.trim();
+    if file_vault.starts_with("FileVault is On.")
+        && !file_vault.contains("Encryption in progress")
+        && !file_vault.contains("Decryption in progress")
+    {
+        DeviceProtection::Protected
+    } else if file_vault == "FileVault is Off." {
+        DeviceProtection::Unprotected
+    } else {
+        DeviceProtection::Unverified
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(serde::Deserialize)]
+struct LinuxBlockDevices {
+    blockdevices: Vec<LinuxBlockDevice>,
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(serde::Deserialize)]
+struct LinuxBlockDevice {
+    #[serde(rename = "type")]
+    device_type: String,
+    #[serde(default)]
+    mountpoints: Vec<Option<String>>,
+    #[serde(default)]
+    children: Vec<LinuxBlockDevice>,
+}
+
+#[cfg(target_os = "linux")]
+fn system_device_protection(path: &Path) -> DeviceProtection {
+    use std::process::Command;
+
+    let output = match Command::new("/usr/bin/lsblk")
+        .args([
+            "--json",
+            "--paths",
+            "--tree",
+            "--output",
+            "NAME,TYPE,MOUNTPOINTS",
+        ])
+        .output()
+    {
+        Ok(output) if output.status.success() => output.stdout,
+        _ => return DeviceProtection::Unverified,
+    };
+
+    linux_device_protection_from_lsblk(&output, path)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_device_protection_from_lsblk(output: &[u8], path: &Path) -> DeviceProtection {
+    let Ok(devices) = serde_json::from_slice::<LinuxBlockDevices>(output) else {
+        return DeviceProtection::Unverified;
+    };
+    let mut best_match = None;
+    for device in &devices.blockdevices {
+        inspect_linux_block_device(device, path, false, &mut best_match);
+    }
+
+    match best_match {
+        Some((_, true)) => DeviceProtection::Protected,
+        Some((_, false)) => DeviceProtection::Unprotected,
+        None => DeviceProtection::Unverified,
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn inspect_linux_block_device(
+    device: &LinuxBlockDevice,
+    path: &Path,
+    encrypted_ancestor: bool,
+    best_match: &mut Option<(usize, bool)>,
+) {
+    let protected = encrypted_ancestor || device.device_type == "crypt";
+    for mount_point in device.mountpoints.iter().flatten() {
+        let mount_point = Path::new(mount_point);
+        if path.starts_with(mount_point) {
+            let specificity = mount_point.components().count();
+            if best_match.is_none_or(|(current, _)| specificity > current) {
+                *best_match = Some((specificity, protected));
+            }
+        }
+    }
+    for child in &device.children {
+        inspect_linux_block_device(child, path, protected, best_match);
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 fn system_device_protection(_path: &Path) -> DeviceProtection {
     DeviceProtection::Unverified
+}
+
+#[cfg(test)]
+mod device_protection_tests {
+    use super::*;
+
+    #[test]
+    fn macos_reports_complete_file_vault_protection_for_the_data_volume() {
+        let filesystem = b"Filesystem 512-blocks Used Available Capacity Mounted on\n/dev/disk3s5 1 1 1 1% /System/Volumes/Data\n";
+
+        assert_eq!(
+            macos_device_protection_from_outputs(filesystem, b"FileVault is On.\n"),
+            DeviceProtection::Protected
+        );
+        assert_eq!(
+            macos_device_protection_from_outputs(filesystem, b"FileVault is Off.\n"),
+            DeviceProtection::Unprotected
+        );
+        assert_eq!(
+            macos_device_protection_from_outputs(
+                filesystem,
+                b"FileVault is On.\nEncryption in progress: Percent completed = 50\n"
+            ),
+            DeviceProtection::Unverified
+        );
+    }
+
+    #[test]
+    fn linux_uses_the_most_specific_mount_and_crypt_ancestry() {
+        let encrypted = br#"{"blockdevices":[{"type":"disk","mountpoints":[null],"children":[{"type":"crypt","mountpoints":[null],"children":[{"type":"lvm","mountpoints":["/"]}]}]}]}"#;
+        let plain = br#"{"blockdevices":[{"type":"disk","mountpoints":["/"],"children":[]}]}"#;
+
+        assert_eq!(
+            linux_device_protection_from_lsblk(encrypted, Path::new("/home/engineer/.quantix")),
+            DeviceProtection::Protected
+        );
+        assert_eq!(
+            linux_device_protection_from_lsblk(plain, Path::new("/home/engineer/.quantix")),
+            DeviceProtection::Unprotected
+        );
+        assert_eq!(
+            linux_device_protection_from_lsblk(b"{}", Path::new("/home/engineer/.quantix")),
+            DeviceProtection::Unverified
+        );
+    }
 }
