@@ -1,38 +1,52 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
-use serde::Serialize;
-use ts_rs::TS;
+use crate::setup::{ensure_application_home, SetupOutcome, SetupPlatform, SystemSetupPlatform};
 
-#[derive(Debug)]
-pub struct QuantixHost {
+struct QuantixHostInner {
     application_home: PathBuf,
+    setup_platform: Arc<dyn SetupPlatform>,
+    setup_lock: Mutex<()>,
+}
+
+#[derive(Clone)]
+pub struct QuantixHost {
+    inner: Arc<QuantixHostInner>,
 }
 
 impl QuantixHost {
     pub fn new(application_home: impl AsRef<Path>) -> Self {
+        Self::with_setup_platform(application_home, Arc::new(SystemSetupPlatform))
+    }
+
+    pub fn with_setup_platform(
+        application_home: impl AsRef<Path>,
+        setup_platform: Arc<dyn SetupPlatform>,
+    ) -> Self {
         Self {
-            application_home: application_home.as_ref().to_path_buf(),
+            inner: Arc::new(QuantixHostInner {
+                application_home: application_home.as_ref().to_path_buf(),
+                setup_platform,
+                setup_lock: Mutex::new(()),
+            }),
         }
     }
 
     pub fn application_home(&self) -> &Path {
-        &self.application_home
+        &self.inner.application_home
     }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(export, export_to = "../../src/bindings/")]
-pub enum TenderOfficeReadiness {
-    ReadyForSetup,
-}
-
-pub fn inspect_tender_office_readiness(
-    host: &QuantixHost,
-) -> Result<TenderOfficeReadiness, &'static str> {
-    if host.application_home().is_absolute() {
-        Ok(TenderOfficeReadiness::ReadyForSetup)
-    } else {
-        Err("Quantix Application Home must be an absolute path")
+    pub(crate) fn ensure_setup(&self) -> SetupOutcome {
+        let _guard = self
+            .inner
+            .setup_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        ensure_application_home(
+            &self.inner.application_home,
+            self.inner.setup_platform.as_ref(),
+        )
     }
 }

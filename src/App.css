@@ -88,6 +88,16 @@ button {
   max-width: 590px;
 }
 
+.eyebrow,
+.status-kicker {
+  margin: 0;
+  color: #174fd2;
+  font-size: 12px;
+  font-weight: 760;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 .introduction h1 {
   max-width: 620px;
   margin: 0;
@@ -97,7 +107,7 @@ button {
   line-height: 0.99;
 }
 
-.introduction p {
+.introduction > p:not(.eyebrow) {
   max-width: 570px;
   margin: 36px 0 42px;
   color: #273451;
@@ -169,7 +179,7 @@ button {
 }
 
 .status-heading h2 {
-  margin: 0;
+  margin: 5px 0 0;
   font-size: clamp(24px, 2.1vw, 32px);
   font-weight: 700;
   letter-spacing: -0.025em;
@@ -188,44 +198,68 @@ button {
   box-shadow: 0 0 0 6px rgb(16 185 129 / 12%);
 }
 
+.status-indicator--warning,
+.status-indicator--missing_capability,
+.status-indicator--authentication_required,
+.status-indicator--unsupported_version {
+  background: #d99119;
+  box-shadow: 0 0 0 6px rgb(217 145 25 / 12%);
+}
+
+.status-indicator--repair_required,
 .status-indicator--error {
   background: #d43f45;
   box-shadow: 0 0 0 6px rgb(212 63 69 / 10%);
 }
 
-.readiness-facts {
-  margin: 8px 0 0;
+.setup-outcome {
+  padding-top: 24px;
 }
 
-.readiness-facts div {
-  display: grid;
-  grid-template-columns: 96px 1fr;
-  gap: 18px;
-  padding: 22px 0;
-  border-bottom: 1px solid #d8deea;
-}
-
-.readiness-facts div:last-child {
-  border-bottom: 0;
-}
-
-.readiness-facts dt,
-.readiness-facts dd {
+.outcome-summary {
   margin: 0;
-}
-
-.readiness-facts dt {
-  color: #6c7893;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.readiness-facts dd {
-  color: #172749;
+  color: #273451;
   font-size: 16px;
-  font-weight: 580;
+  line-height: 1.55;
+}
+
+.issue-list {
+  display: grid;
+  gap: 12px;
+  margin: 22px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.issue-list li {
+  position: relative;
+  padding: 14px 16px 14px 42px;
+  border: 1px solid #d9b677;
+  color: #68440d;
+  background: #fffaf1;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.issue-list li::before {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  content: "";
+  background: #d99119;
+}
+
+.success-message {
+  margin: 22px 0 0;
+  padding: 15px 18px;
+  border: 1px solid #8ad7bd;
+  color: #146046;
+  background: #f4fdf9;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .status-message,
@@ -317,11 +351,6 @@ button {
   .status-panel {
     min-height: 0;
     padding: 24px;
-  }
-
-  .readiness-facts div {
-    grid-template-columns: 1fr;
-    gap: 8px;
   }
 }
 

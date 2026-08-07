@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { TenderOfficeReadiness } from "./bindings/TenderOfficeReadiness";
+import type { SetupOutcome } from "./bindings/SetupOutcome";
 
-export function inspectTenderOfficeReadiness(): Promise<TenderOfficeReadiness> {
-  return invoke<TenderOfficeReadiness>("inspect_tender_office_readiness");
+export function ensureQuantixSetup(): Promise<SetupOutcome> {
+  return invoke<SetupOutcome>("ensure_quantix_setup");
 }

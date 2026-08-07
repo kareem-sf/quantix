@@ -20,10 +20,22 @@ embed-resource = "3"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+fs4 = "1.1.0"
+rusqlite = { version = "0.40.1", features = ["bundled"] }
 tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2.4.3"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3.27.0"
 ts-rs = "12.0.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-permissions = "0.2.4"
+# wmi's broad ranges can otherwise resolve `windows` and `windows-core` to
+# incompatible minor lines. Keep both aligned with Tauri's Windows bindings.
+windows = "=0.61.3"
+windows-core = "=0.61.2"
+wmi = { version = "0.18.4", default-features = false }
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
-tempfile = "3"
