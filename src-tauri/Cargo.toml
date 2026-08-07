@@ -20,8 +20,12 @@ embed-resource = "3"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+cacache = { version = "13.1.0", default-features = false, features = ["mmap", "tokio-runtime"] }
 fs4 = "1.1.0"
-rusqlite = { version = "0.40.1", features = ["bundled"] }
+garde = { version = "0.23.0", features = ["derive"] }
+rusqlite = { version = "0.40.1", features = ["bundled", "limits"] }
+serde_json_canonicalizer = "0.3.2"
+sha2 = "0.11.0"
 tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = "2.4.3"
 serde = { version = "1", features = ["derive"] }

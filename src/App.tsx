@@ -4,6 +4,7 @@ import type { SetupIssue } from "./bindings/SetupIssue";
 import type { SetupOutcome } from "./bindings/SetupOutcome";
 import type { SetupState } from "./bindings/SetupState";
 import { ensureQuantixSetup } from "./quantixHost";
+import { TenderWorkspace } from "./TenderWorkspace";
 import "./App.css";
 
 type SetupView =
@@ -162,6 +163,10 @@ function App() {
           ) : null}
         </section>
       </main>
+
+      {outcome && (outcome.state === "ready" || outcome.state === "warning") ? (
+        <TenderWorkspace />
+      ) : null}
 
       <div className="structural-rail" aria-hidden="true" />
     </div>

@@ -14,9 +14,14 @@ use crate::QuantixHost;
 
 pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 1024 * 1024 * 1024;
 
-const INSTALLATION_SCHEMA_VERSION: i64 = 1;
+const INSTALLATION_SCHEMA_VERSION: i64 = 2;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
+const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
+    "installation.sqlite-journal",
+    "installation.sqlite-shm",
+    "installation.sqlite-wal",
+];
 const STAGED_INSTALLATION_DATABASE: &str = "installation.sqlite.staging";
 const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
     "installation.sqlite.staging-journal",
@@ -25,7 +30,14 @@ const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
 ];
 const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 1)
+           schema_version INTEGER NOT NULL CHECK (schema_version = 2)
+         )";
+const TENDER_CATALOGUE_TABLE_SQL: &str = "CREATE TABLE tender_catalogue (
+           tender_id TEXT PRIMARY KEY CHECK (length(tender_id) = 32),
+           name TEXT NOT NULL CHECK (length(CAST(name AS BLOB)) BETWEEN 1 AND 200),
+           revision INTEGER NOT NULL CHECK (revision > 0),
+           audit_event_count INTEGER NOT NULL CHECK (audit_event_count > 0),
+           audit_chain_head TEXT NOT NULL CHECK (length(audit_chain_head) = 64)
          )";
 const APPLICATION_DIRECTORIES: [&str; 9] = [
     "archives", "backups", "exports", "logs", "models", "runtimes", "staging", "tenders", "trash",
@@ -388,6 +400,9 @@ fn is_known_application_entry(name: &OsStr) -> bool {
         ]
         .iter()
         .any(|known| name == OsStr::new(known))
+        || INSTALLATION_DATABASE_COMPANIONS
+            .iter()
+            .any(|known| name == OsStr::new(known))
         || STAGED_INSTALLATION_COMPANIONS
             .iter()
             .any(|known| name == OsStr::new(known))
@@ -482,8 +497,9 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute(INSTALLATION_TABLE_SQL, [])?;
+    transaction.execute(TENDER_CATALOGUE_TABLE_SQL, [])?;
     transaction.execute(
-        "INSERT INTO installation (singleton, schema_version) VALUES (1, 1)",
+        "INSERT INTO installation (singleton, schema_version) VALUES (1, 2)",
         [],
     )?;
     transaction.pragma_update(None, "user_version", INSTALLATION_SCHEMA_VERSION)?;
@@ -575,12 +591,20 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(statement);
     if schema_objects
-        != [(
-            "table".to_owned(),
-            "installation".to_owned(),
-            "installation".to_owned(),
-            Some(INSTALLATION_TABLE_SQL.to_owned()),
-        )]
+        != [
+            (
+                "table".to_owned(),
+                "installation".to_owned(),
+                "installation".to_owned(),
+                Some(INSTALLATION_TABLE_SQL.to_owned()),
+            ),
+            (
+                "table".to_owned(),
+                "tender_catalogue".to_owned(),
+                "tender_catalogue".to_owned(),
+                Some(TENDER_CATALOGUE_TABLE_SQL.to_owned()),
+            ),
+        ]
     {
         return Ok(CatalogueStatus::Corrupt);
     }
