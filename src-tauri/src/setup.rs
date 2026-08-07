@@ -14,7 +14,7 @@ use crate::QuantixHost;
 
 pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 1024 * 1024 * 1024;
 
-const INSTALLATION_SCHEMA_VERSION: i64 = 2;
+const INSTALLATION_SCHEMA_VERSION: i64 = 3;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
@@ -30,7 +30,7 @@ const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
 ];
 const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 2)
+           schema_version INTEGER NOT NULL CHECK (schema_version = 3)
          )";
 const TENDER_CATALOGUE_TABLE_SQL: &str = "CREATE TABLE tender_catalogue (
            tender_id TEXT PRIMARY KEY CHECK (length(tender_id) = 32),
@@ -38,6 +38,14 @@ const TENDER_CATALOGUE_TABLE_SQL: &str = "CREATE TABLE tender_catalogue (
            revision INTEGER NOT NULL CHECK (revision > 0),
            audit_event_count INTEGER NOT NULL CHECK (audit_event_count > 0),
            audit_chain_head TEXT NOT NULL CHECK (length(audit_chain_head) = 64)
+         )";
+pub(crate) const RUNTIME_PREPARATION_TABLE_SQL: &str = "CREATE TABLE runtime_preparation (
+           singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+           status TEXT NOT NULL CHECK (status IN ('not_started', 'preparing', 'ready', 'failed')),
+           codex_version TEXT,
+           uv_version TEXT,
+           docling_version TEXT,
+           updated_at TEXT NOT NULL
          )";
 const APPLICATION_DIRECTORIES: [&str; 9] = [
     "archives", "backups", "exports", "logs", "models", "runtimes", "staging", "tenders", "trash",
@@ -66,7 +74,7 @@ pub trait SetupPlatform: Send + Sync {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
-#[ts(export, export_to = "../../src/bindings/")]
+#[ts(export)]
 pub enum SetupState {
     Ready,
     Warning,
@@ -78,7 +86,7 @@ pub enum SetupState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
-#[ts(export, export_to = "../../src/bindings/")]
+#[ts(export)]
 pub enum SetupIssue {
     ApplicationHomeUnavailable,
     DeviceProtectionDisabled,
@@ -94,7 +102,7 @@ pub enum SetupIssue {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export, export_to = "../../src/bindings/")]
+#[ts(export)]
 pub struct SetupOutcome {
     pub state: SetupState,
     pub setup_performed: bool,
@@ -497,9 +505,16 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute(INSTALLATION_TABLE_SQL, [])?;
+    transaction.execute(RUNTIME_PREPARATION_TABLE_SQL, [])?;
     transaction.execute(TENDER_CATALOGUE_TABLE_SQL, [])?;
     transaction.execute(
-        "INSERT INTO installation (singleton, schema_version) VALUES (1, 2)",
+        "INSERT INTO installation (singleton, schema_version) VALUES (1, 3)",
+        [],
+    )?;
+    transaction.execute(
+        "INSERT INTO runtime_preparation (
+           singleton, status, codex_version, uv_version, docling_version, updated_at
+         ) VALUES (1, 'not_started', NULL, NULL, NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
         [],
     )?;
     transaction.pragma_update(None, "user_version", INSTALLATION_SCHEMA_VERSION)?;
@@ -600,6 +615,12 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
             ),
             (
                 "table".to_owned(),
+                "runtime_preparation".to_owned(),
+                "runtime_preparation".to_owned(),
+                Some(RUNTIME_PREPARATION_TABLE_SQL.to_owned()),
+            ),
+            (
+                "table".to_owned(),
                 "tender_catalogue".to_owned(),
                 "tender_catalogue".to_owned(),
                 Some(TENDER_CATALOGUE_TABLE_SQL.to_owned()),
@@ -620,6 +641,14 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
     let row_count: i64 =
         connection.query_row("SELECT COUNT(*) FROM installation", [], |row| row.get(0))?;
     if row_count != 1 {
+        return Ok(CatalogueStatus::Corrupt);
+    }
+    let runtime_row_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM runtime_preparation WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    if runtime_row_count != 1 {
         return Ok(CatalogueStatus::Corrupt);
     }
 

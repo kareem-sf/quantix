@@ -199,6 +199,9 @@ button {
 }
 
 .status-indicator--warning,
+.status-indicator--missing_executable,
+.status-indicator--missing_model,
+.status-indicator--interrupted_preparation,
 .status-indicator--missing_capability,
 .status-indicator--authentication_required,
 .status-indicator--unsupported_version {
@@ -207,6 +210,7 @@ button {
 }
 
 .status-indicator--repair_required,
+.status-indicator--incompatible_version,
 .status-indicator--error {
   background: #d43f45;
   box-shadow: 0 0 0 6px rgb(212 63 69 / 10%);
@@ -302,6 +306,110 @@ button {
   width: min(1180px, calc(100% - 96px));
   margin: 0 auto;
   padding: 18px 0 112px;
+}
+
+.runtime-office {
+  width: min(1180px, calc(100% - 96px));
+  margin: 0 auto;
+  padding: 18px 0 88px;
+}
+
+.runtime-office__heading {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(360px, 1fr);
+  gap: 64px;
+  align-items: end;
+  padding: 46px 0 34px;
+  border-top: 1px solid #1b2d55;
+}
+
+.runtime-office__heading h2 {
+  margin: 0;
+  font-size: clamp(30px, 3vw, 44px);
+  font-weight: 710;
+  letter-spacing: -0.04em;
+  line-height: 1.05;
+}
+
+.runtime-office__heading > p {
+  margin: 0;
+  color: #46516d;
+  line-height: 1.65;
+}
+
+.runtime-status {
+  padding: clamp(28px, 3.4vw, 46px);
+  border: 1px solid #1b2d55;
+  border-radius: 4px;
+  background: #ffffff;
+}
+
+.runtime-status .status-heading h3 {
+  margin: 5px 0 0;
+  font-size: clamp(24px, 2.1vw, 32px);
+  letter-spacing: -0.025em;
+}
+
+.runtime-versions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin: 26px 0 0;
+  border: 1px solid #d8deea;
+}
+
+.runtime-versions div {
+  padding: 14px 16px;
+}
+
+.runtime-versions div + div {
+  border-left: 1px solid #d8deea;
+}
+
+.runtime-versions dt {
+  color: #65718d;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.runtime-versions dd {
+  margin: 6px 0 0;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 14px;
+}
+
+.runtime-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.runtime-actions button {
+  min-height: 46px;
+  padding: 10px 18px;
+  border: 1px solid #174fd2;
+  border-radius: 3px;
+  color: #174fd2;
+  background: #ffffff;
+  font-weight: 680;
+  cursor: pointer;
+}
+
+.runtime-actions button:focus-visible {
+  outline: 3px solid #9db9ff;
+  outline-offset: 3px;
+}
+
+.runtime-actions button:disabled {
+  color: #71809f;
+  border-color: #aeb9cc;
+  cursor: wait;
+}
+
+.runtime-actions .runtime-actions__primary {
+  color: #ffffff;
+  background: #174fd2;
 }
 
 .tender-office__heading {
@@ -553,6 +661,15 @@ button {
     width: min(640px, calc(100% - 48px));
   }
 
+  .runtime-office {
+    width: min(640px, calc(100% - 48px));
+  }
+
+  .runtime-office__heading {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+
   .tender-office__heading,
   .tender-office__layout {
     grid-template-columns: 1fr;
@@ -603,6 +720,20 @@ button {
   .tender-office {
     width: calc(100% - 36px);
     padding-bottom: 72px;
+  }
+
+  .runtime-office {
+    width: calc(100% - 36px);
+    padding-bottom: 64px;
+  }
+
+  .runtime-versions {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-versions div + div {
+    border-top: 1px solid #d8deea;
+    border-left: 0;
   }
 
   .tender-form__row {

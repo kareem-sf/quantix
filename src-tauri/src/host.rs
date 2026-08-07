@@ -1,8 +1,15 @@
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
+use tokio_util::sync::CancellationToken;
+
+use crate::process_supervisor::ProcessSupervisor;
+use crate::runtime_readiness::RuntimeLayout;
 use crate::setup::{ensure_application_home, SetupOutcome, SetupPlatform, SystemSetupPlatform};
 use crate::tender_store::{OpenTenderStores, TenderCommandError, TenderErrorCode, TenderId};
 
@@ -12,6 +19,10 @@ struct QuantixHostInner {
     setup_lock: Mutex<()>,
     catalogue_lock: Mutex<()>,
     open_tender_stores: OpenTenderStores,
+    runtime_layout: RuntimeLayout,
+    process_supervisor: ProcessSupervisor,
+    runtime_preparation: Mutex<Option<CancellationToken>>,
+    runtime_verified: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -20,13 +31,33 @@ pub struct QuantixHost {
 }
 
 impl QuantixHost {
-    pub fn new(application_home: impl AsRef<Path>) -> Self {
-        Self::with_setup_platform(application_home, Arc::new(SystemSetupPlatform))
+    pub fn new(application_home: impl AsRef<Path>, resource_directory: impl AsRef<Path>) -> Self {
+        Self::with_setup_platform_and_runtime(
+            application_home,
+            Arc::new(SystemSetupPlatform),
+            RuntimeLayout::bundled(resource_directory),
+        )
     }
 
+    #[cfg(any(test, feature = "runtime-fixture"))]
     pub fn with_setup_platform(
         application_home: impl AsRef<Path>,
         setup_platform: Arc<dyn SetupPlatform>,
+    ) -> Self {
+        let runtime_resources = application_home.as_ref().join("unbundled-resources");
+        let host = Self::with_setup_platform_and_runtime(
+            application_home,
+            setup_platform,
+            RuntimeLayout::bundled(runtime_resources),
+        );
+        host.accept_runtime_fixture();
+        host
+    }
+
+    pub fn with_setup_platform_and_runtime(
+        application_home: impl AsRef<Path>,
+        setup_platform: Arc<dyn SetupPlatform>,
+        runtime_layout: RuntimeLayout,
     ) -> Self {
         Self {
             inner: Arc::new(QuantixHostInner {
@@ -35,6 +66,10 @@ impl QuantixHost {
                 setup_lock: Mutex::new(()),
                 catalogue_lock: Mutex::new(()),
                 open_tender_stores: Mutex::new(Default::default()),
+                runtime_layout,
+                process_supervisor: ProcessSupervisor,
+                runtime_preparation: Mutex::new(None),
+                runtime_verified: AtomicBool::new(false),
             }),
         }
     }
@@ -61,6 +96,81 @@ impl QuantixHost {
 
     pub(crate) fn catalogue_lock(&self) -> &Mutex<()> {
         &self.inner.catalogue_lock
+    }
+
+    pub(crate) fn runtime_layout(&self) -> &RuntimeLayout {
+        &self.inner.runtime_layout
+    }
+
+    pub(crate) fn process_supervisor(&self) -> &ProcessSupervisor {
+        &self.inner.process_supervisor
+    }
+
+    pub(crate) fn runtime_preparation_is_active(&self) -> bool {
+        self.inner
+            .runtime_preparation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+    }
+
+    pub(crate) fn begin_runtime_preparation(&self) -> Option<CancellationToken> {
+        let mut preparation = self
+            .inner
+            .runtime_preparation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if preparation.is_some() {
+            return None;
+        }
+        let cancellation = CancellationToken::new();
+        *preparation = Some(cancellation.clone());
+        Some(cancellation)
+    }
+
+    pub(crate) fn finish_runtime_preparation(&self) {
+        *self
+            .inner
+            .runtime_preparation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+
+    pub(crate) fn cancel_active_runtime_preparation(&self) -> bool {
+        let preparation = self
+            .inner
+            .runtime_preparation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cancellation) = preparation.as_ref() {
+            cancellation.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn set_runtime_verified(&self, verified: bool) {
+        self.inner
+            .runtime_verified
+            .store(verified, Ordering::Release);
+    }
+
+    pub(crate) fn runtime_is_verified(&self) -> bool {
+        self.inner.runtime_verified.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn require_runtime_verified(&self) -> Result<(), TenderCommandError> {
+        if self.runtime_is_verified() {
+            Ok(())
+        } else {
+            Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired))
+        }
+    }
+
+    #[cfg(feature = "runtime-fixture")]
+    pub fn accept_runtime_fixture(&self) {
+        self.set_runtime_verified(true);
     }
 
     pub(crate) fn generate_tender_id(&self) -> Result<TenderId, TenderCommandError> {

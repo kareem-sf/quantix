@@ -1,10 +1,10 @@
 use std::{io, path::Path, sync::Arc};
 
 use quantix_lib::{
-    configure_tauri_builder, DeviceProtection, QuantixHost, SetupPlatform, StoragePermissions,
-    TenderSummary, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    configure_tauri_builder, DeviceProtection, QuantixHost, RuntimeLayout, SetupPlatform,
+    StoragePermissions, TenderCommandError, TenderErrorCode, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
-use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+use tauri::test::{assert_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
 
 struct ReadySetupPlatform;
 
@@ -27,36 +27,40 @@ impl SetupPlatform for ReadySetupPlatform {
 }
 
 #[test]
-fn engineer_can_create_and_list_a_tender_through_named_tauri_commands() {
+fn renderer_cannot_start_tender_work_before_runtime_verification() {
     let user_home = tempfile::tempdir().expect("temporary user home");
     let application_home = user_home.path().join(".quantix");
+    let host = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(user_home.path().join("resources")),
+    );
+    assert_eq!(
+        host.create_tender(quantix_lib::CreateTenderCommand {
+            name: "Cairo Metro Works".into(),
+        }),
+        Err(TenderCommandError {
+            code: TenderErrorCode::RuntimeRequired,
+        })
+    );
     let app = configure_tauri_builder(mock_builder())
-        .manage(QuantixHost::with_setup_platform(
-            &application_home,
-            Arc::new(ReadySetupPlatform),
-        ))
+        .manage(host)
         .build(mock_context(noop_assets()))
         .expect("test Tauri application");
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .expect("test webview");
 
-    let created = get_ipc_response(
+    assert_ipc_response(
         &webview,
         request(
             "create_tender",
             serde_json::json!({ "command": { "name": "Cairo Metro Works" } }),
         ),
-    )
-    .expect("create_tender response")
-    .deserialize::<TenderSummary>()
-    .expect("typed Tender summary");
-    let listed = get_ipc_response(&webview, request("list_tenders", serde_json::json!({})))
-        .expect("list_tenders response")
-        .deserialize::<Vec<TenderSummary>>()
-        .expect("typed Tender Catalogue");
-
-    assert_eq!(listed, vec![created]);
+        Err(TenderCommandError {
+            code: TenderErrorCode::RuntimeRequired,
+        }),
+    );
 }
 
 fn request(command: &str, body: serde_json::Value) -> tauri::webview::InvokeRequest {

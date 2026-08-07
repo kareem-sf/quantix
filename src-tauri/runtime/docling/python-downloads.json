@@ -1,0 +1,53 @@
+{
+  "cpython-3.12.13-darwin-aarch64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "aarch64",
+      "variant": null
+    },
+    "os": "darwin",
+    "libc": "none",
+    "major": 3,
+    "minor": 12,
+    "patch": 13,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260805/cpython-3.12.13%2B20260805-aarch64-apple-darwin-install_only_stripped.tar.gz",
+    "sha256": "a4b36035915038104aabee94d6f02827161da444296881fe4493cb98f70304b2",
+    "variant": null,
+    "build": "20260805"
+  },
+  "cpython-3.12.13-linux-x86_64-gnu": {
+    "name": "cpython",
+    "arch": {
+      "family": "x86_64",
+      "variant": null
+    },
+    "os": "linux",
+    "libc": "gnu",
+    "major": 3,
+    "minor": 12,
+    "patch": 13,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260805/cpython-3.12.13%2B20260805-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "sha256": "f04a55ae95e8bd352cdff8da11c344fe609ec84795d106fa91b6620366d786fe",
+    "variant": null,
+    "build": "20260805"
+  },
+  "cpython-3.12.13-windows-x86_64-none": {
+    "name": "cpython",
+    "arch": {
+      "family": "x86_64",
+      "variant": null
+    },
+    "os": "windows",
+    "libc": "none",
+    "major": 3,
+    "minor": 12,
+    "patch": 13,
+    "prerelease": "",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260805/cpython-3.12.13%2B20260805-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+    "sha256": "b304536477587bbb729322b77ac1c59bdb95706651ab2ef38cae0fec77ede00f",
+    "variant": null,
+    "build": "20260805"
+  }
+}

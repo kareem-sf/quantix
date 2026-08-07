@@ -126,7 +126,7 @@ END;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
 #[serde(deny_unknown_fields)]
-#[ts(export, export_to = "../../src/bindings/")]
+#[ts(export)]
 pub struct CreateTenderCommand {
     #[garde(length(bytes, min = 1, max = 200))]
     pub name: String,
@@ -134,7 +134,7 @@ pub struct CreateTenderCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
 #[serde(deny_unknown_fields)]
-#[ts(export, export_to = "../../src/bindings/")]
+#[ts(export)]
 pub struct ReviseTenderCommand {
     #[garde(length(bytes, min = 32, max = 32))]
     pub tender_id: String,
@@ -144,7 +144,7 @@ pub struct ReviseTenderCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
 #[serde(deny_unknown_fields)]
-#[ts(export, export_to = "../../src/bindings/")]
+#[ts(export)]
 pub struct OpenTenderCommand {
     #[garde(length(bytes, min = 32, max = 32))]
     pub tender_id: String,
@@ -152,7 +152,7 @@ pub struct OpenTenderCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
 #[serde(deny_unknown_fields)]
-#[ts(export, export_to = "../../src/bindings/")]
+#[ts(export)]
 pub struct RegisterTenderContentCommand {
     #[garde(length(bytes, min = 32, max = 32))]
     pub tender_id: String,
@@ -165,7 +165,7 @@ pub struct RegisterTenderContentCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/bindings/")]
+#[ts(export)]
 pub struct TenderSummary {
     pub tender_id: String,
     pub name: String,
@@ -175,7 +175,7 @@ pub struct TenderSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/bindings/")]
+#[ts(export)]
 pub struct ContentVersionSummary {
     pub logical_id: String,
     pub revision: u32,
@@ -185,7 +185,7 @@ pub struct ContentVersionSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/bindings/")]
+#[ts(export)]
 pub struct TenderInspection {
     pub summary: TenderSummary,
     pub content_object_count: u64,
@@ -194,17 +194,18 @@ pub struct TenderInspection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
-#[ts(export, export_to = "../../src/bindings/")]
+#[ts(export)]
 pub enum TenderErrorCode {
     IntegrityFailed,
     InvalidCommand,
     NotFound,
+    RuntimeRequired,
     SetupRequired,
     StoreUnavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export, export_to = "../../src/bindings/")]
+#[ts(export)]
 pub struct TenderCommandError {
     pub code: TenderErrorCode,
 }
@@ -627,6 +628,7 @@ impl QuantixHost {
         &self,
         command: CreateTenderCommand,
     ) -> Result<TenderSummary, TenderCommandError> {
+        self.require_runtime_verified()?;
         require_setup(self)?;
         command
             .validate()
@@ -678,6 +680,7 @@ impl QuantixHost {
         &self,
         command: ReviseTenderCommand,
     ) -> Result<TenderSummary, TenderCommandError> {
+        self.require_runtime_verified()?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         if command.validate().is_err() {
@@ -699,6 +702,7 @@ impl QuantixHost {
         &self,
         command: RegisterTenderContentCommand,
     ) -> Result<ContentVersionSummary, TenderCommandError> {
+        self.require_runtime_verified()?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         if command.validate().is_err()
@@ -717,6 +721,7 @@ impl QuantixHost {
     }
 
     pub fn inspect_tender(&self, tender_id: &str) -> Result<TenderInspection, TenderCommandError> {
+        self.require_runtime_verified()?;
         require_setup(self)?;
         let tender_id = TenderId::parse(tender_id)?;
         let store = self.tender_store(&tender_id)?;
@@ -728,6 +733,7 @@ impl QuantixHost {
     }
 
     pub fn open_tender(&self, tender_id: &str) -> Result<TenderSummary, TenderCommandError> {
+        self.require_runtime_verified()?;
         require_setup(self)?;
         let tender_id = TenderId::parse(tender_id)?;
         let store = self.tender_store(&tender_id)?;
@@ -739,6 +745,7 @@ impl QuantixHost {
     }
 
     pub fn list_tenders(&self) -> Result<Vec<TenderSummary>, TenderCommandError> {
+        self.require_runtime_verified()?;
         require_setup(self)?;
         let mut summaries = Vec::new();
         let entries =

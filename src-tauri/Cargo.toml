@@ -5,6 +5,17 @@ description = "Engineer-controlled tender office"
 authors = ["Quantix contributors"]
 edition = "2021"
 license = "Apache-2.0"
+default-run = "quantix"
+
+[features]
+runtime-fixture = []
+
+[[bin]]
+name = "quantix-runtime-fixture"
+path = "tests/support/runtime_fixture.rs"
+required-features = ["runtime-fixture"]
+test = false
+bench = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -15,6 +26,9 @@ license = "Apache-2.0"
 name = "quantix_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[profile.test]
+debug = 0
+
 [build-dependencies]
 embed-resource = "3"
 tauri-build = { version = "2", features = [] }
@@ -23,7 +37,10 @@ tauri-build = { version = "2", features = [] }
 cacache = { version = "13.1.0", default-features = false, features = ["mmap", "tokio-runtime"] }
 fs4 = "1.1.0"
 garde = { version = "0.23.0", features = ["derive"] }
+jsonschema = { version = "0.40.0", default-features = false }
+processkit = { version = "=3.2.0", default-features = false }
 rusqlite = { version = "0.40.1", features = ["bundled", "limits"] }
+semver = "1.0.27"
 serde_json_canonicalizer = "0.3.2"
 sha2 = "0.11.0"
 tauri = { version = "2", features = [] }
@@ -31,18 +48,20 @@ tauri-plugin-single-instance = "2.4.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3.27.0"
+thiserror = "2.0.16"
+tokio = { version = "1.47.1", features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7.16", features = ["rt"] }
 ts-rs = "12.0.1"
+walkdir = "2.5.0"
 
 [target.'cfg(windows)'.dependencies]
+junction = { version = "2.0.0", default-features = false }
 windows-permissions = "0.2.4"
 # wmi ranges `windows` and `windows-core` independently, so pin its pair to
 # one minor line. Tauri retains its own compatible 0.61 dependency line.
-windows = "=0.62.2"
+windows = { version = "=0.62.2", features = ["Win32_System_Threading"] }
 windows-core = "=0.62.2"
 wmi = { version = "0.18.4", default-features = false }
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
-
-[target.'cfg(windows)'.dev-dependencies]
-junction = { version = "2.0.0", default-features = false }

@@ -4,6 +4,7 @@ import type { SetupIssue } from "./bindings/SetupIssue";
 import type { SetupOutcome } from "./bindings/SetupOutcome";
 import type { SetupState } from "./bindings/SetupState";
 import { ensureQuantixSetup } from "./quantixHost";
+import { RuntimeReadinessPanel } from "./RuntimeReadinessPanel";
 import { TenderWorkspace } from "./TenderWorkspace";
 import "./App.css";
 
@@ -68,9 +69,11 @@ const issueCopy: Record<SetupIssue, string> = {
 
 function App() {
   const [setup, setSetup] = useState<SetupView>({ kind: "checking" });
+  const [runtimeReady, setRuntimeReady] = useState(false);
 
   const runSetup = useCallback(async () => {
     setSetup({ kind: "checking" });
+    setRuntimeReady(false);
 
     try {
       setSetup({ kind: "outcome", outcome: await ensureQuantixSetup() });
@@ -165,8 +168,10 @@ function App() {
       </main>
 
       {outcome && (outcome.state === "ready" || outcome.state === "warning") ? (
-        <TenderWorkspace />
+        <RuntimeReadinessPanel onReadyChange={setRuntimeReady} />
       ) : null}
+
+      {runtimeReady ? <TenderWorkspace /> : null}
 
       <div className="structural-rail" aria-hidden="true" />
     </div>

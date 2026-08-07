@@ -107,7 +107,7 @@ Rust Quantix Host
 Reuse directly:
 
 - Codex's login, model-facing agent loop, threads, turns, streaming events, native sandbox, and protocol schemas. [Codex app-server](https://learn.chatgpt.com/docs/app-server)
-- Tokio and `process-wrap` for supervised process I/O and containment; Serde, `garde`, and `jsonschema` for contracts; `rusqlite` for canonical workflow facts, as selected in [ADR 0009](../adr/0009-run-one-local-host-over-self-contained-tender-stores.md).
+- Tokio and ProcessKit for supervised process I/O and containment; Serde, `garde`, and `jsonschema` for contracts; `rusqlite` for canonical workflow facts, as selected in [ADR 0009](../adr/0009-run-one-local-host-over-self-contained-tender-stores.md).
 - Official Docling CLI for document conversion; do not turn the Docling Python environment into a general Quantix Python application host.
 
 Quantix must own:

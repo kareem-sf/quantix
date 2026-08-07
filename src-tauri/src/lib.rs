@@ -1,8 +1,13 @@
 mod host;
+mod process_supervisor;
+mod runtime_readiness;
 mod setup;
 mod tender_store;
 
 pub use host::QuantixHost;
+pub use runtime_readiness::{
+    RuntimeLayout, RuntimeReadiness, RuntimeReadinessIssue, RuntimeReadinessState,
+};
 pub use setup::{
     ensure_quantix_setup, DeviceProtection, SetupIssue, SetupOutcome, SetupPlatform, SetupState,
     StoragePermissions, MINIMUM_SETUP_FREE_SPACE_BYTES,
@@ -17,7 +22,8 @@ use tauri::Manager;
 mod tauri_commands {
     use super::{
         ensure_quantix_setup as ensure_setup, CreateTenderCommand, OpenTenderCommand, QuantixHost,
-        ReviseTenderCommand, SetupOutcome, TenderCommandError, TenderErrorCode, TenderSummary,
+        ReviseTenderCommand, RuntimeReadiness, SetupOutcome, TenderCommandError, TenderErrorCode,
+        TenderSummary,
     };
 
     #[tauri::command]
@@ -80,6 +86,25 @@ mod tauri_commands {
                 code: TenderErrorCode::StoreUnavailable,
             })?
     }
+
+    #[tauri::command]
+    pub(super) async fn inspect_runtime_readiness(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<RuntimeReadiness, &'static str> {
+        Ok(host.inner().inspect_runtime_readiness().await)
+    }
+
+    #[tauri::command]
+    pub(super) async fn repair_runtime_readiness(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<RuntimeReadiness, &'static str> {
+        Ok(host.inner().repair_runtime_readiness().await)
+    }
+
+    #[tauri::command]
+    pub(super) fn cancel_runtime_preparation(host: tauri::State<'_, QuantixHost>) -> bool {
+        host.inner().cancel_runtime_preparation()
+    }
 }
 
 pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
@@ -88,7 +113,10 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
         tauri_commands::create_tender,
         tauri_commands::list_tenders,
         tauri_commands::open_tender,
-        tauri_commands::revise_tender
+        tauri_commands::revise_tender,
+        tauri_commands::inspect_runtime_readiness,
+        tauri_commands::repair_runtime_readiness,
+        tauri_commands::cancel_runtime_preparation
     ])
 }
 
@@ -104,7 +132,8 @@ pub fn run() {
         }))
         .setup(|app| {
             let application_home = app.path().home_dir()?.join(".quantix");
-            app.manage(QuantixHost::new(application_home));
+            let resource_directory = app.path().resource_dir()?;
+            app.manage(QuantixHost::new(application_home, resource_directory));
             Ok(())
         })
         .run(tauri::generate_context!())
