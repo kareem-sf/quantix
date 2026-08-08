@@ -281,6 +281,17 @@ impl QuantixHost {
         false
     }
 
+    pub(crate) fn agent_run_is_active(&self, tender_id: &str, run_id: &str) -> bool {
+        self.inner
+            .active_agent_run
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .is_some_and(|active| {
+                active.tender_id == tender_id && active.run_id.as_deref() == Some(run_id)
+            })
+    }
+
     pub(crate) fn set_runtime_verified(&self, verified: bool) {
         self.inner
             .runtime_verified

@@ -1,10 +1,12 @@
 use std::{fs, io, path::Path, sync::Arc, time::Duration};
 
 use quantix_lib::{
-    ensure_quantix_setup, AgentRunState, CreateTenderCommand, DeviceProtection,
-    InterruptAgentRunCommand, ProviderFailureCategory, QuantixHost, RunBootstrapAgentCommand,
-    RuntimeLayout, SetupPlatform, SetupState, StoragePermissions, TenderErrorCode,
-    VerificationStatus, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    ensure_quantix_setup, AgentAccessRequestStatus, AgentAccessResolution, AgentRunState,
+    ApproveAgentAccessCommand, CreateTenderCommand, DataClassification, DeviceProtection,
+    InterruptAgentRunCommand, PermissionDenialReason, ProviderFailureCategory, QuantixHost,
+    RequestAgentAccessCommand, ResolveAgentAccessCommand, ReviseTenderCommand,
+    RunBootstrapAgentCommand, RuntimeLayout, SetupPlatform, SetupState, StoragePermissions,
+    TenderErrorCode, VerificationStatus, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 struct ReadySetupPlatform;
@@ -66,6 +68,16 @@ impl Harness {
         fs::write(self.codex.with_extension("agent-scenario"), scenario)
             .expect("write fake app-server scenario");
     }
+
+    fn database(&self) -> rusqlite::Connection {
+        rusqlite::Connection::open(
+            self.application_home
+                .join("tenders")
+                .join(&self.tender_id)
+                .join("tender.sqlite"),
+        )
+        .expect("open Tender Store database")
+    }
 }
 
 #[tokio::test]
@@ -96,8 +108,35 @@ async fn one_bootstrap_agent_turn_registers_only_a_validated_proposed_result() {
     assert_eq!(run.task.exact_inputs[0].version, 1);
     assert!(!run.task.permissions.network_allowed);
     assert!(run.task.permissions.allowed_tools.is_empty());
-    assert!(!run.task.permissions.workspace_write_allowed);
+    assert!(run.task.permissions.workspace_write_allowed);
     assert_eq!(run.task.resource_budget.provider_turns, 1);
+    assert_eq!(run.permission_grant.policy_version, 1);
+    assert_eq!(run.permission_grant.capability_catalogue_version, 1);
+    assert_eq!(run.permission_grant.work_plan_version, 1);
+    assert_eq!(run.permission_grant.profile_id, run.profile.profile_id);
+    assert_eq!(run.permission_grant.profile_version, run.profile.version);
+    assert_eq!(run.permission_grant.task_id, run.task.task_id);
+    assert_eq!(run.permission_grant.data_scopes, vec!["tender_metadata"]);
+    assert_eq!(
+        run.permission_grant.data_classifications,
+        vec![DataClassification::TenderInternal]
+    );
+    assert!(!run.permission_grant.network_allowed);
+    assert!(run.permission_grant.typed_tools.is_empty());
+    assert_eq!(run.permission_grant.data_views.len(), 1);
+    let data_view = &run.permission_grant.data_views[0];
+    assert_eq!(data_view.schema_version, 1);
+    assert_eq!(data_view.data_scope, "tender_metadata");
+    assert_eq!(
+        data_view.data_classification,
+        DataClassification::TenderInternal
+    );
+    assert_eq!(data_view.relative_path, "inputs/tender-metadata-v1.json");
+    assert_eq!(data_view.sha256.len(), 64);
+    assert_eq!(run.permission_grant.workspace.workspace_id, run.run_id);
+    assert_eq!(run.permission_grant.workspace.read_only_inputs, "inputs");
+    assert_eq!(run.permission_grant.workspace.working_area, "working");
+    assert_eq!(run.permission_grant.workspace.staged_outputs, "outputs");
     assert_eq!(run.provider_thread_ref.as_deref(), Some("thr_fixture_1"));
     assert_eq!(run.provider_turn_ref.as_deref(), Some("turn_fixture_1"));
     assert_eq!(
@@ -107,18 +146,33 @@ async fn one_bootstrap_agent_turn_registers_only_a_validated_proposed_result() {
             .collect::<Vec<_>>(),
         (1..=run.events.len() as u32).collect::<Vec<_>>()
     );
-    assert!(run
+    let denied = run
         .events
         .iter()
-        .any(|event| event.kind.as_str() == "control_request_denied"));
+        .find(|event| event.kind.as_str() == "control_request_denied")
+        .expect("Host denial is inspectable");
+    assert_eq!(denied.correlation_id.as_deref(), Some("control_fixture_1"));
+    assert_eq!(
+        denied.opaque_reference.as_deref(),
+        Some("item/commandExecution/requestApproval")
+    );
+    assert_eq!(
+        denied.denial_reason,
+        Some(PermissionDenialReason::ProhibitedAction)
+    );
     assert_eq!(run.usage.input_tokens, Some(120));
     assert_eq!(run.usage.output_tokens, Some(35));
     assert_eq!(run.usage.context_window, Some(200_000));
     let result = run.proposed_result.expect("validated Proposed result");
     assert_eq!(result.verification_status, VerificationStatus::Proposed);
+    assert_eq!(result.data_scopes, vec!["tender_metadata"]);
+    assert_eq!(
+        result.data_classification,
+        DataClassification::TenderInternal
+    );
     assert_eq!(
         result.payload_json,
-        r#"{"recommended_next_action":"Verify the imported package before detailed analysis.","summary":"The Tender is ready for controlled intake analysis."}"#
+        r#"{"recommended_next_action":"Verify the imported package before detailed analysis.","summary":"Cairo Metro Systems Tender is ready for controlled intake analysis."}"#
     );
     assert!(run.failure.is_none());
     let provider_environment =
@@ -131,6 +185,43 @@ async fn one_bootstrap_agent_turn_registers_only_a_validated_proposed_result() {
         name,
         "PATH" | "GH_TOKEN" | "GITHUB_TOKEN" | "OPENAI_API_KEY" | "AWS_SECRET_ACCESS_KEY"
     )));
+    let workspace_facts = fs::read_to_string(harness.codex.with_extension("agent-workspace"))
+        .expect("read materialized Agent Run Workspace facts");
+    let workspace_facts: serde_json::Value =
+        serde_json::from_str(&workspace_facts).expect("valid workspace facts");
+    let workspace = workspace_facts["workspace"]
+        .as_str()
+        .expect("workspace path");
+    assert!(workspace.starts_with(
+        harness
+            .application_home
+            .join("staging")
+            .to_string_lossy()
+            .as_ref()
+    ));
+    assert!(!workspace.starts_with(
+        harness
+            .application_home
+            .join("tenders")
+            .join(&harness.tender_id)
+            .to_string_lossy()
+            .as_ref()
+    ));
+    assert_eq!(workspace_facts["input_read_only"], true);
+    assert_eq!(workspace_facts["working_directory"], true);
+    assert_eq!(workspace_facts["output_directory"], true);
+    assert_eq!(
+        workspace_facts.pointer("/data_view/data_scope"),
+        Some(&serde_json::json!("tender_metadata"))
+    );
+    assert_eq!(
+        workspace_facts.pointer("/data_view/data_classification"),
+        Some(&serde_json::json!("tender_internal"))
+    );
+    assert_eq!(
+        workspace_facts.pointer("/data_view/tender/name"),
+        Some(&serde_json::json!("Cairo Metro Systems Tender"))
+    );
 
     let inspected = harness
         .host
@@ -189,6 +280,228 @@ async fn retry_creates_a_linked_run_and_a_distinct_provider_turn() {
 }
 
 #[tokio::test]
+async fn retry_materializes_the_original_tasks_exact_tender_revision() {
+    let harness = Harness::new("success");
+    let first = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("run original exact Tender revision");
+    harness
+        .host
+        .revise_tender(ReviseTenderCommand {
+            tender_id: harness.tender_id.clone(),
+            name: "Cairo Metro Systems Tender - Addendum 1".into(),
+        })
+        .expect("register current Tender revision");
+    harness.set_scenario("success-retry");
+
+    let retry = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: Some(first.run_id),
+        })
+        .await
+        .expect("retry original immutable Tender Task");
+
+    assert_eq!(retry.task.exact_inputs[0].version, 1);
+    assert_eq!(
+        retry.proposed_result.expect("retry result").payload_json,
+        r#"{"recommended_next_action":"Verify the imported package before detailed analysis.","summary":"Cairo Metro Systems Tender is ready for controlled intake analysis."}"#
+    );
+    let workspace_facts: serde_json::Value = serde_json::from_slice(
+        &fs::read(harness.codex.with_extension("agent-workspace")).expect("retry workspace facts"),
+    )
+    .expect("valid retry workspace facts");
+    assert_eq!(
+        workspace_facts.pointer("/provider_data_view/source/version"),
+        Some(&serde_json::json!(1))
+    );
+    assert_eq!(
+        workspace_facts.pointer("/provider_data_view/tender/name"),
+        Some(&serde_json::json!("Cairo Metro Systems Tender"))
+    );
+}
+
+#[tokio::test]
+async fn incompatible_cumulative_thread_exposure_starts_a_fresh_provider_thread() {
+    let harness = Harness::new("success");
+    let first = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("run initial Agent Turn");
+    harness
+        .host
+        .revise_tender(ReviseTenderCommand {
+            tender_id: harness.tender_id.clone(),
+            name: "Cairo Metro Systems Tender — Addendum 1".into(),
+        })
+        .expect("register a new exact Tender revision");
+    harness.set_scenario("success-new-thread");
+
+    let second = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("run against the changed exact input");
+
+    assert_eq!(first.provider_thread_ref.as_deref(), Some("thr_fixture_1"));
+    assert_eq!(second.provider_thread_ref.as_deref(), Some("thr_fixture_2"));
+    assert!(second
+        .events
+        .iter()
+        .any(|event| event.kind.as_str() == "thread_established"));
+    assert!(!second
+        .events
+        .iter()
+        .any(|event| event.kind.as_str() == "thread_resumed"));
+    assert_eq!(
+        second.permission_grant.data_views[0].exact_inputs[0].version,
+        2
+    );
+}
+
+#[tokio::test]
+async fn failed_remote_archive_does_not_claim_the_provider_thread_was_archived() {
+    let harness = Harness::new("success");
+    let first = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("establish original Provider Thread");
+    harness
+        .host
+        .revise_tender(ReviseTenderCommand {
+            tender_id: harness.tender_id.clone(),
+            name: "Cairo Metro Systems Tender - Addendum 1".into(),
+        })
+        .expect("make original Thread Exposure incompatible");
+    harness.set_scenario("archive-failure");
+
+    let failed = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("archive failure is a recorded Agent Run outcome");
+
+    assert_eq!(failed.state, AgentRunState::Failed, "{failed:#?}");
+    let database = harness.database();
+    let thread_status: String = database
+        .query_row(
+            "SELECT status FROM provider_threads WHERE thread_ref = ?1",
+            [first.provider_thread_ref.expect("original Provider Thread")],
+            |row| row.get(0),
+        )
+        .expect("Provider Thread status");
+    assert_eq!(thread_status, "archive_pending");
+    let archive_audits: u32 = database
+        .query_row(
+            "SELECT COUNT(*) FROM audit_events WHERE event_type = 'provider_thread_archived'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("archive audit count");
+    assert_eq!(archive_audits, 0);
+}
+
+#[tokio::test]
+async fn pending_provider_thread_archive_reconciles_after_a_post_ack_checkpoint_failure() {
+    let harness = Harness::new("success");
+    let first = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("establish original Provider Thread");
+    harness
+        .host
+        .revise_tender(ReviseTenderCommand {
+            tender_id: harness.tender_id.clone(),
+            name: "Cairo Metro Systems Tender - Addendum 1".into(),
+        })
+        .expect("make original Thread Exposure incompatible");
+    let database = harness.database();
+    database
+        .execute_batch(
+            "CREATE TRIGGER fail_archive_checkpoint
+             BEFORE UPDATE OF status ON provider_threads
+             WHEN NEW.status = 'archived'
+             BEGIN SELECT RAISE(ABORT, 'fixture checkpoint failure'); END;",
+        )
+        .expect("install one checkpoint failure");
+    harness.set_scenario("success-new-thread");
+
+    let failed = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("record post-ack checkpoint failure");
+
+    assert_eq!(failed.state, AgentRunState::Failed, "{failed:#?}");
+    let status: String = database
+        .query_row(
+            "SELECT status FROM provider_threads WHERE thread_ref = ?1",
+            [first.provider_thread_ref.expect("original Provider Thread")],
+            |row| row.get(0),
+        )
+        .expect("pending Provider Thread archive");
+    assert_eq!(status, "archive_pending");
+    database
+        .execute_batch("DROP TRIGGER fail_archive_checkpoint;")
+        .expect("remove fixture checkpoint failure");
+    harness.set_scenario("archive-already-complete");
+
+    let reconciled = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("confirm remote archive and start a fresh Provider Thread");
+
+    assert_eq!(
+        reconciled.state,
+        AgentRunState::Completed,
+        "{reconciled:#?}"
+    );
+    assert_eq!(
+        reconciled.provider_thread_ref.as_deref(),
+        Some("thr_fixture_2")
+    );
+    let archive_audits: u32 = database
+        .query_row(
+            "SELECT COUNT(*) FROM audit_events WHERE event_type = 'provider_thread_archived'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("confirmed archive audit count");
+    assert_eq!(archive_audits, 1);
+}
+
+#[tokio::test]
 async fn app_scoped_provider_resets_its_per_run_deadline_after_idle_time() {
     let harness = Harness::new("success");
     let first = harness
@@ -199,7 +512,7 @@ async fn app_scoped_provider_resets_its_per_run_deadline_after_idle_time() {
         })
         .await
         .expect("run initial Agent Turn");
-    tokio::time::sleep(Duration::from_millis(2_100)).await;
+    tokio::time::sleep(Duration::from_millis(3_100)).await;
     harness.set_scenario("success-retry");
 
     let retry = harness
@@ -316,6 +629,322 @@ async fn malformed_protocol_before_turn_acceptance_is_a_retryable_failure() {
 }
 
 #[tokio::test]
+async fn prompt_injected_provider_requests_cannot_expand_run_authority() {
+    let harness = Harness::new("hostile-control-requests");
+
+    let run = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("record Host decisions for hostile provider requests");
+
+    assert_eq!(run.state, AgentRunState::Completed, "{run:#?}");
+    let denials = run
+        .events
+        .iter()
+        .filter(|event| event.kind.as_str() == "control_request_denied")
+        .collect::<Vec<_>>();
+    assert_eq!(denials.len(), 8);
+    assert!(denials.iter().all(|event| event.correlation_id.is_some()));
+    assert!(denials
+        .iter()
+        .any(|event| { event.denial_reason == Some(PermissionDenialReason::ProhibitedAction) }));
+    assert!(denials
+        .iter()
+        .any(|event| event.denial_reason == Some(PermissionDenialReason::ToolNotGranted)));
+    assert!(denials
+        .iter()
+        .any(|event| event.denial_reason == Some(PermissionDenialReason::DefaultDeny)));
+    let mut correlations = denials
+        .iter()
+        .filter_map(|event| event.correlation_id.as_deref())
+        .collect::<Vec<_>>();
+    correlations.sort_unstable();
+    correlations.dedup();
+    assert_eq!(correlations.len(), denials.len());
+}
+
+#[tokio::test]
+async fn eitl_access_approval_is_persisted_and_expires_when_the_agent_run_ends() {
+    let harness = Harness::new("access-tool");
+    let running_host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let running_tender_id = tender_id.clone();
+    let running = tokio::spawn(async move {
+        running_host
+            .run_bootstrap_agent(RunBootstrapAgentCommand {
+                tender_id: running_tender_id,
+                retry_of_run_id: None,
+            })
+            .await
+    });
+    let active = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let run = harness
+                .host
+                .inspect_agent_runs(&tender_id)
+                .expect("inspect active Agent Run")
+                .into_iter()
+                .find(|run| run.state == AgentRunState::Running && run.provider_turn_ref.is_some());
+            if harness
+                .codex
+                .with_extension("access-tool-waiting")
+                .is_file()
+            {
+                if let Some(run) = run {
+                    break run;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("Provider Turn becomes active");
+
+    let denied_request = harness
+        .host
+        .request_agent_access(RequestAgentAccessCommand {
+            tender_id: tender_id.clone(),
+            run_id: active.run_id.clone(),
+            exact_inputs: active.permission_grant.access_ceiling.exact_inputs.clone(),
+            data_scopes: active.permission_grant.access_ceiling.data_scopes.clone(),
+            data_classifications: active
+                .permission_grant
+                .access_ceiling
+                .data_classifications
+                .clone(),
+            allowed_actions: active
+                .permission_grant
+                .access_ceiling
+                .allowed_actions
+                .clone(),
+            allowed_tools: active.permission_grant.access_ceiling.allowed_tools.clone(),
+            purpose: "Engineer chooses not to grant this valid one-run request".into(),
+            recurring: false,
+        })
+        .expect("create valid request for explicit Engineer denial");
+    let denied = harness
+        .host
+        .resolve_agent_access(ResolveAgentAccessCommand {
+            tender_id: tender_id.clone(),
+            request_id: denied_request.request.request_id.clone(),
+            run_id: active.run_id.clone(),
+            resolution: AgentAccessResolution::Deny,
+        })
+        .expect("Engineer explicitly denies valid Access Request");
+    assert_eq!(denied.status, AgentAccessRequestStatus::Denied);
+    assert_eq!(
+        denied.denial_reason,
+        Some(PermissionDenialReason::EngineerDenied)
+    );
+    assert_eq!(
+        harness
+            .host
+            .approve_agent_access(ApproveAgentAccessCommand {
+                tender_id: tender_id.clone(),
+                request_id: denied_request.request.request_id,
+                run_id: active.run_id.clone(),
+                expires_at: active.permission_grant.expires_at.clone(),
+            })
+            .expect_err("a decided request cannot later be approved")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+
+    let request = harness
+        .host
+        .request_agent_access(RequestAgentAccessCommand {
+            tender_id: tender_id.clone(),
+            run_id: active.run_id.clone(),
+            exact_inputs: active.permission_grant.access_ceiling.exact_inputs.clone(),
+            data_scopes: active.permission_grant.access_ceiling.data_scopes.clone(),
+            data_classifications: active
+                .permission_grant
+                .access_ceiling
+                .data_classifications
+                .clone(),
+            allowed_actions: active
+                .permission_grant
+                .access_ceiling
+                .allowed_actions
+                .clone(),
+            allowed_tools: active.permission_grant.access_ceiling.allowed_tools.clone(),
+            purpose: "Continue with the exact approved Tender metadata".into(),
+            recurring: false,
+        })
+        .expect("create blocked Access Request");
+    assert_eq!(request.status, AgentAccessRequestStatus::Blocked);
+    assert_eq!(
+        active.permission_grant.typed_tools,
+        Vec::new(),
+        "the Typed Tool must be absent from the immutable base grant"
+    );
+    assert_eq!(
+        request.request.allowed_tools,
+        vec!["quantix_read_tender_metadata"]
+    );
+
+    let approved = harness
+        .host
+        .approve_agent_access(ApproveAgentAccessCommand {
+            tender_id: tender_id.clone(),
+            request_id: request.request.request_id.clone(),
+            run_id: active.run_id.clone(),
+            expires_at: active.permission_grant.expires_at.clone(),
+        })
+        .expect("record EITL one-run Access Approval");
+    assert_eq!(approved.status, AgentAccessRequestStatus::Approved);
+    assert_eq!(
+        approved
+            .one_run_grant
+            .as_ref()
+            .map(|grant| grant.approved_by.as_str()),
+        Some("engineer_user")
+    );
+    assert_eq!(
+        harness
+            .host
+            .inspect_agent_runs(&tender_id)
+            .expect("inspect approved access")
+            .into_iter()
+            .find(|run| run.run_id == active.run_id)
+            .expect("active Agent Run")
+            .access_requests[1]
+            .status,
+        AgentAccessRequestStatus::Approved
+    );
+
+    fs::write(harness.codex.with_extension("access-approved"), b"approved")
+        .expect("release approved Typed Tool call");
+    let completed = running
+        .await
+        .expect("join EITL-controlled Agent Run")
+        .expect("record completed Agent Run");
+    assert_eq!(completed.state, AgentRunState::Completed, "{completed:#?}");
+    assert_eq!(
+        completed.access_requests[1].status,
+        AgentAccessRequestStatus::Expired
+    );
+    assert!(completed.events.iter().any(|event| {
+        event.correlation_id.as_deref() == Some("access_tool_before_approval")
+            && event.denial_reason == Some(PermissionDenialReason::ToolNotGranted)
+    }));
+    let tool_audits: u32 = harness
+        .database()
+        .query_row(
+            "SELECT COUNT(*) FROM audit_events
+             WHERE event_type = 'agent_typed_tool_executed'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("Typed Tool audit count");
+    assert_eq!(tool_audits, 1);
+}
+
+#[tokio::test]
+async fn engineer_can_revoke_approved_access_before_the_provider_uses_it() {
+    let harness = Harness::new("access-tool-revoked");
+    let running_host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let running_tender_id = tender_id.clone();
+    let running = tokio::spawn(async move {
+        running_host
+            .run_bootstrap_agent(RunBootstrapAgentCommand {
+                tender_id: running_tender_id,
+                retry_of_run_id: None,
+            })
+            .await
+    });
+    let active = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let run = harness
+                .host
+                .inspect_agent_runs(&tender_id)
+                .expect("inspect active Agent Run")
+                .into_iter()
+                .find(|run| run.state == AgentRunState::Running && run.provider_turn_ref.is_some());
+            if harness
+                .codex
+                .with_extension("access-tool-waiting")
+                .is_file()
+            {
+                if let Some(run) = run {
+                    break run;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("Provider Turn becomes active");
+    let request = harness
+        .host
+        .request_agent_access(RequestAgentAccessCommand {
+            tender_id: tender_id.clone(),
+            run_id: active.run_id.clone(),
+            exact_inputs: active.permission_grant.access_ceiling.exact_inputs.clone(),
+            data_scopes: active.permission_grant.access_ceiling.data_scopes.clone(),
+            data_classifications: active
+                .permission_grant
+                .access_ceiling
+                .data_classifications
+                .clone(),
+            allowed_actions: active
+                .permission_grant
+                .access_ceiling
+                .allowed_actions
+                .clone(),
+            allowed_tools: active.permission_grant.access_ceiling.allowed_tools.clone(),
+            purpose: "Read the exact Tender metadata once".into(),
+            recurring: false,
+        })
+        .expect("create one-run Access Request");
+    harness
+        .host
+        .approve_agent_access(ApproveAgentAccessCommand {
+            tender_id: tender_id.clone(),
+            request_id: request.request.request_id.clone(),
+            run_id: active.run_id.clone(),
+            expires_at: active.permission_grant.expires_at.clone(),
+        })
+        .expect("approve one-run access");
+
+    let revoked = harness
+        .host
+        .resolve_agent_access(ResolveAgentAccessCommand {
+            tender_id: tender_id.clone(),
+            request_id: request.request.request_id,
+            run_id: active.run_id,
+            resolution: AgentAccessResolution::Revoke,
+        })
+        .expect("Engineer revokes approved access");
+    assert_eq!(revoked.status, AgentAccessRequestStatus::Revoked);
+    assert_eq!(
+        revoked.denial_reason,
+        Some(PermissionDenialReason::AccessRevoked)
+    );
+    fs::write(harness.codex.with_extension("access-approved"), b"revoked")
+        .expect("release post-revocation Typed Tool call");
+
+    let completed = running
+        .await
+        .expect("join EITL-controlled Agent Run")
+        .expect("record completed Agent Run");
+    assert_eq!(completed.state, AgentRunState::Completed, "{completed:#?}");
+    assert!(completed.events.iter().any(|event| {
+        event.correlation_id.as_deref() == Some("access_tool_after_approval")
+            && event.denial_reason == Some(PermissionDenialReason::ToolNotGranted)
+    }));
+    assert_eq!(
+        completed.access_requests[0].status,
+        AgentAccessRequestStatus::Revoked
+    );
+}
+
+#[tokio::test]
 async fn malformed_protocol_after_turn_acceptance_is_indeterminate_and_quarantined() {
     let harness = Harness::new("malformed-after-turn");
 
@@ -341,10 +970,11 @@ async fn malformed_protocol_after_turn_acceptance_is_indeterminate_and_quarantin
     assert!(run.proposed_result.is_none());
     assert!(harness
         .application_home
-        .join("tenders")
-        .join(&harness.tender_id)
         .join("staging")
-        .join(format!("quarantine-agent-{}", run.run_id))
+        .join(format!(
+            "quarantine-agent-{}-{}",
+            harness.tender_id, run.run_id
+        ))
         .is_dir());
 }
 
@@ -463,6 +1093,15 @@ async fn engineer_interruption_reaches_a_terminal_interrupted_run() {
             run_id: run_id.clone(),
         })
         .expect("interrupt running Agent Run"));
+    let cancellation_facts: u32 = harness
+        .database()
+        .query_row(
+            "SELECT COUNT(*) FROM agent_run_cancellations WHERE run_id = ?1",
+            [&run_id],
+            |row| row.get(0),
+        )
+        .expect("persisted cancellation fact");
+    assert_eq!(cancellation_facts, 1);
     let run = running
         .await
         .expect("Agent Run task joins")
@@ -473,6 +1112,149 @@ async fn engineer_interruption_reaches_a_terminal_interrupted_run() {
     assert_eq!(
         run.failure.as_ref().map(|failure| failure.category),
         Some(ProviderFailureCategory::Interrupted)
+    );
+    assert!(run.proposed_result.is_none());
+}
+
+#[tokio::test]
+async fn engineer_interruption_before_turn_acceptance_discloses_no_data_view() {
+    let harness = Harness::new("hang-before-thread");
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let running = tokio::spawn(async move {
+        host.run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id,
+            retry_of_run_id: None,
+        })
+        .await
+    });
+    let run_id = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if harness.codex.with_extension("thread-waiting").is_file() {
+                if let Some(run) = harness
+                    .host
+                    .inspect_agent_runs(&harness.tender_id)
+                    .expect("inspect pre-Turn Agent Run")
+                    .into_iter()
+                    .find(|run| run.state == AgentRunState::Running)
+                {
+                    assert!(run.provider_turn_ref.is_none());
+                    break run.run_id;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("Provider Thread request becomes pending");
+
+    assert!(harness
+        .host
+        .interrupt_agent_run(InterruptAgentRunCommand {
+            tender_id: harness.tender_id.clone(),
+            run_id: run_id.clone(),
+        })
+        .expect("interrupt before Provider Turn acceptance"));
+    assert_eq!(
+        harness
+            .host
+            .request_agent_access(RequestAgentAccessCommand {
+                tender_id: harness.tender_id.clone(),
+                run_id: run_id.clone(),
+                exact_inputs: Vec::new(),
+                data_scopes: Vec::new(),
+                data_classifications: Vec::new(),
+                allowed_actions: Vec::new(),
+                allowed_tools: Vec::new(),
+                purpose: "This request must be rejected after interruption".into(),
+                recurring: false,
+            })
+            .expect_err("interrupted runs cannot create Access Requests")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let run = running
+        .await
+        .expect("Agent Run task joins")
+        .expect("interrupted Agent Run is recorded");
+
+    assert_eq!(run.state, AgentRunState::Interrupted, "{run:#?}");
+    assert!(run.provider_turn_ref.is_none());
+    assert!(!harness.codex.with_extension("agent-workspace").exists());
+}
+
+#[tokio::test]
+async fn persisted_interruption_wins_over_a_racing_provider_completion() {
+    let harness = Harness::new("complete-after-interrupt");
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let running = tokio::spawn(async move {
+        host.run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id,
+            retry_of_run_id: None,
+        })
+        .await
+    });
+    let run_id = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if harness
+                .codex
+                .with_extension("completion-race-waiting")
+                .is_file()
+            {
+                if let Some(run) = harness
+                    .host
+                    .inspect_agent_runs(&harness.tender_id)
+                    .expect("inspect racing Agent Run")
+                    .into_iter()
+                    .find(|run| run.state == AgentRunState::Running)
+                {
+                    break run.run_id;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("Provider completion race becomes active");
+
+    assert!(harness
+        .host
+        .interrupt_agent_run(InterruptAgentRunCommand {
+            tender_id: harness.tender_id.clone(),
+            run_id: run_id.clone(),
+        })
+        .expect("persist interruption before Provider completion"));
+    let run = running
+        .await
+        .expect("Agent Run task joins")
+        .expect("racing Agent Run is recorded");
+
+    assert_eq!(run.state, AgentRunState::Interrupted, "{run:#?}");
+    assert!(run.proposed_result.is_none());
+    assert_eq!(
+        run.failure.as_ref().map(|failure| failure.category),
+        Some(ProviderFailureCategory::Interrupted)
+    );
+}
+
+#[tokio::test]
+async fn provider_readiness_time_consumes_the_absolute_run_duration_budget() {
+    let harness = Harness::new("delayed-readiness");
+
+    let run = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("record absolute-duration failure");
+
+    assert_eq!(run.state, AgentRunState::Failed, "{run:#?}");
+    assert_eq!(
+        run.failure.as_ref().map(|failure| failure.category),
+        Some(ProviderFailureCategory::PermissionDenied)
     );
     assert!(run.proposed_result.is_none());
 }
@@ -565,11 +1347,98 @@ async fn host_restart_marks_an_unfinished_run_indeterminate_and_quarantines_it()
     );
     assert!(run.proposed_result.is_none());
     assert!(application_home
-        .join("tenders")
-        .join(&tender_id)
         .join("staging")
-        .join(format!("quarantine-agent-{run_id}"))
+        .join(format!("quarantine-agent-{tender_id}-{run_id}"))
         .is_dir());
+}
+
+#[tokio::test]
+async fn provider_control_denial_is_durable_across_an_abrupt_host_restart() {
+    let Harness {
+        _root,
+        application_home,
+        codex,
+        host,
+        tender_id,
+    } = Harness::new("deny-then-hang");
+    let running_host = host.clone();
+    let running_tender_id = tender_id.clone();
+    let running = tokio::spawn(async move {
+        running_host
+            .run_bootstrap_agent(RunBootstrapAgentCommand {
+                tender_id: running_tender_id,
+                retry_of_run_id: None,
+            })
+            .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !codex.with_extension("denial-waiting").is_file() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("Provider Control Request was denied before the simulated crash");
+    let run_id = host
+        .inspect_agent_runs(&tender_id)
+        .expect("inspect active denied Agent Run")
+        .into_iter()
+        .find(|run| run.state == AgentRunState::Running)
+        .expect("running Agent Run")
+        .run_id;
+
+    running.abort();
+    assert!(running
+        .await
+        .expect_err("simulate abrupt Host stop after denial")
+        .is_cancelled());
+    drop(host);
+
+    let resources = codex
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .expect("fixture resources")
+        .to_path_buf();
+    let restarted = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(resources),
+    );
+    restarted.accept_runtime_fixture();
+    let run = restarted
+        .inspect_agent_runs(&tender_id)
+        .expect("reconcile denied Agent Run")
+        .into_iter()
+        .find(|run| run.run_id == run_id)
+        .expect("reconciled Agent Run");
+
+    let denial = run
+        .events
+        .iter()
+        .find(|event| event.kind.as_str() == "control_request_denied")
+        .expect("crash-durable Provider Control Request denial");
+    assert_eq!(denial.correlation_id.as_deref(), Some("control_fixture_1"));
+    assert_eq!(
+        denial.denial_reason,
+        Some(PermissionDenialReason::ProhibitedAction)
+    );
+    let database = rusqlite::Connection::open(
+        application_home
+            .join("tenders")
+            .join(&tender_id)
+            .join("tender.sqlite"),
+    )
+    .expect("open reconciled Tender Store");
+    let denial_audits: u32 = database
+        .query_row(
+            "SELECT COUNT(*) FROM audit_events
+             WHERE event_type = 'provider_control_request_denied'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("denial audit count");
+    assert_eq!(denial_audits, 1);
 }
 
 #[tokio::test]
@@ -639,10 +1508,8 @@ async fn host_restart_before_turn_acceptance_is_a_retryable_failure() {
     assert!(failure.retry_safe);
     assert!(run.provider_turn_ref.is_none());
     assert!(!application_home
-        .join("tenders")
-        .join(&tender_id)
         .join("staging")
-        .join(format!("quarantine-agent-{run_id}"))
+        .join(format!("quarantine-agent-{tender_id}-{run_id}"))
         .exists());
 }
 

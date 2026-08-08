@@ -125,7 +125,7 @@ fn run_codex(
 fn run_agent_codex(
     executable: &Path,
     arguments: &[std::ffi::OsString],
-    _scenario: &str,
+    scenario: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let arguments = arguments
         .iter()
@@ -175,6 +175,9 @@ fn run_agent_codex(
     let mut requests = io::BufReader::new(io::stdin()).lines();
     let initialize = read_json_request(&mut requests, "initialize")?;
     let initialize_id = initialize.get("id").cloned().ok_or("initialize id")?;
+    if scenario == "delayed-readiness" {
+        std::thread::sleep(std::time::Duration::from_millis(1_400));
+    }
     write_json(&serde_json::json!({
         "id": initialize_id,
         "result": {
@@ -211,9 +214,53 @@ fn run_agent_turn(
     let Some(thread_request) = requests.next() else {
         return Ok(false);
     };
-    let thread_request: serde_json::Value = serde_json::from_str(&thread_request?)?;
+    let mut thread_request: serde_json::Value = serde_json::from_str(&thread_request?)?;
     let scenario = fs::read_to_string(executable.with_extension("agent-scenario"))?;
     let scenario = scenario.trim();
+    if thread_request
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        == Some("thread/archive")
+    {
+        let archived_thread = thread_request
+            .pointer("/params/threadId")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("archived thread id")?;
+        if matches!(scenario, "archive-failure" | "archive-already-complete") {
+            write_json(&serde_json::json!({
+                "id": thread_request.get("id").cloned().ok_or("archive request id")?,
+                "error": { "code": -32603, "message": "fixture archive failure" }
+            }))?;
+            let confirmation = read_json_request(requests, "thread/list")?;
+            let archived = if scenario == "archive-already-complete" {
+                vec![fixture_thread(archived_thread, ".")]
+            } else {
+                Vec::new()
+            };
+            write_json(&serde_json::json!({
+                "id": confirmation.get("id").cloned().ok_or("archive confirmation id")?,
+                "result": {
+                    "data": archived,
+                    "nextCursor": null,
+                    "backwardsCursor": null
+                }
+            }))?;
+            if scenario == "archive-failure" {
+                return Ok(false);
+            }
+            thread_request = read_json_line(requests)?;
+        } else {
+            write_json(&serde_json::json!({
+                "id": thread_request.get("id").cloned().ok_or("archive request id")?,
+                "result": {}
+            }))?;
+            write_json(&serde_json::json!({
+                "method": "thread/archived",
+                "params": { "threadId": archived_thread }
+            }))?;
+            thread_request = read_json_line(requests)?;
+        }
+    }
     let thread_method = thread_request
         .get("method")
         .and_then(serde_json::Value::as_str)
@@ -223,9 +270,13 @@ fn run_agent_turn(
     }
     if thread_method == "thread/start"
         && (thread_request.pointer("/params/sandbox")
-            != Some(&serde_json::Value::String("read-only".into()))
+            != Some(&serde_json::Value::String("workspaceWrite".into()))
             || thread_request.pointer("/params/approvalPolicy")
-                != Some(&serde_json::Value::String("never".into())))
+                != Some(&serde_json::Value::String("never".into()))
+            || thread_request.pointer("/params/dynamicTools/0/name")
+                != Some(&serde_json::Value::String(
+                    "quantix_read_tender_metadata".into(),
+                )))
     {
         return Err("thread lacks its default-deny sandbox contract".into());
     }
@@ -247,7 +298,13 @@ fn run_agent_turn(
     let thread_id = thread_request
         .pointer("/params/threadId")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or("thr_fixture_1");
+        .unwrap_or(
+            if matches!(scenario, "success-new-thread" | "archive-already-complete") {
+                "thr_fixture_2"
+            } else {
+                "thr_fixture_1"
+            },
+        );
     let cwd = thread_request
         .pointer("/params/cwd")
         .and_then(serde_json::Value::as_str)
@@ -258,20 +315,7 @@ fn run_agent_turn(
                 .to_string_lossy()
                 .into_owned()
         });
-    let thread = serde_json::json!({
-        "id": thread_id,
-        "sessionId": thread_id,
-        "preview": "",
-        "ephemeral": false,
-        "modelProvider": "openai",
-        "createdAt": 1_780_000_000_i64,
-        "updatedAt": 1_780_000_000_i64,
-        "cwd": cwd.clone(),
-        "source": "appServer",
-        "cliVersion": "0.147.0",
-        "status": { "type": "idle" },
-        "turns": [],
-    });
+    let thread = fixture_thread(thread_id, &cwd);
     let thread_id_response = thread_request
         .get("id")
         .cloned()
@@ -300,13 +344,72 @@ fn run_agent_turn(
     let turn_request = read_json_request(requests, "turn/start")?;
     if turn_request.pointer("/params/outputSchema").is_none()
         || turn_request.pointer("/params/sandboxPolicy/type")
-            != Some(&serde_json::Value::String("readOnly".into()))
+            != Some(&serde_json::Value::String("workspaceWrite".into()))
         || turn_request.pointer("/params/sandboxPolicy/networkAccess")
             != Some(&serde_json::Value::Bool(false))
     {
         return Err("turn lacks its exact output or sandbox contract".into());
     }
-    let turn_id = if scenario == "success-retry" {
+    let working = Path::new(
+        turn_request
+            .pointer("/params/cwd")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("turn cwd")?,
+    );
+    let workspace = working.parent().ok_or("Agent Run Workspace")?;
+    let input = workspace.join("inputs").join("tender-metadata-v1.json");
+    let output = workspace.join("outputs");
+    if working.file_name().and_then(|name| name.to_str()) != Some("working")
+        || turn_request.pointer("/params/sandboxPolicy/writableRoots/0")
+            != Some(&serde_json::Value::String(
+                output.to_string_lossy().into_owned(),
+            ))
+    {
+        return Err("turn escaped its exact Agent Run Workspace roots".into());
+    }
+    let data_view: serde_json::Value = serde_json::from_slice(&fs::read(&input)?)?;
+    let provider_input: serde_json::Value = serde_json::from_str(
+        turn_request
+            .pointer("/params/input/0/text")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("provider instruction bundle")?,
+    )?;
+    let provider_data_view = provider_input
+        .pointer("/provider_data_views/0/payload")
+        .ok_or("provider-visible Data View payload")?;
+    if provider_input
+        .pointer("/quantix_invariants")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|invariants| {
+            invariants.iter().any(|invariant| {
+                invariant
+                    .as_str()
+                    .is_some_and(|text| text.contains("invoke any tools"))
+            })
+        })
+    {
+        return Err("provider instructions prohibit Host-authorized Typed Tools".into());
+    }
+    if provider_data_view != &data_view {
+        return Err("provider-visible Data View differs from its materialized input".into());
+    }
+    let tender_name = provider_data_view
+        .pointer("/tender/name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("provider-visible Tender name")?
+        .to_owned();
+    fs::write(
+        executable.with_extension("agent-workspace"),
+        serde_json::to_vec(&serde_json::json!({
+            "workspace": workspace,
+            "input_read_only": fs::metadata(&input)?.permissions().readonly(),
+            "working_directory": working.is_dir(),
+            "output_directory": output.is_dir(),
+            "data_view": data_view,
+            "provider_data_view": provider_data_view,
+        }))?,
+    )?;
+    let turn_id = if matches!(scenario, "success-retry" | "success-new-thread") {
         "turn_fixture_2"
     } else {
         "turn_fixture_1"
@@ -415,7 +518,19 @@ fn run_agent_turn(
     }
     if !matches!(
         scenario,
-        "success" | "success-retry" | "phase-null-final" | "retry-then-success" | "output-invalid"
+        "success"
+            | "success-retry"
+            | "success-new-thread"
+            | "archive-already-complete"
+            | "access-tool"
+            | "access-tool-revoked"
+            | "hostile-control-requests"
+            | "deny-then-hang"
+            | "complete-after-interrupt"
+            | "delayed-readiness"
+            | "phase-null-final"
+            | "retry-then-success"
+            | "output-invalid"
     ) {
         return Err(format!("unknown agent fixture scenario {scenario}").into());
     }
@@ -434,6 +549,21 @@ fn run_agent_turn(
             "item": started_item
         }
     }))?;
+
+    if scenario == "complete-after-interrupt" {
+        fs::write(
+            executable.with_extension("completion-race-waiting"),
+            b"waiting",
+        )?;
+        let interrupt = read_json_request(requests, "turn/interrupt")?;
+        write_json(&serde_json::json!({
+            "id": interrupt.get("id").cloned().ok_or("interrupt id")?,
+            "result": {}
+        }))?;
+    }
+    if scenario == "delayed-readiness" {
+        std::thread::sleep(std::time::Duration::from_millis(2_000));
+    }
     write_json(&serde_json::json!({
         "method": "item/agentMessage/delta",
         "params": {
@@ -491,35 +621,215 @@ fn run_agent_turn(
             }
         }
     }))?;
-    write_json(&serde_json::json!({
-        "id": "control_fixture_1",
-        "method": "item/commandExecution/requestApproval",
-        "params": {
-            "threadId": thread_id,
-            "turnId": turn_id,
-            "itemId": "command_fixture_1",
-            "startedAtMs": 1_780_000_001_000_i64,
-            "command": "forbidden-command"
+    if matches!(scenario, "access-tool" | "access-tool-revoked") {
+        let tool_request = |id: &str, arguments: serde_json::Value| {
+            serde_json::json!({
+                "id": id,
+                "method": "item/tool/call",
+                "params": {
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                    "callId": id,
+                    "namespace": "quantix",
+                    "tool": "quantix_read_tender_metadata",
+                    "arguments": arguments
+                }
+            })
+        };
+        write_json(&tool_request(
+            "access_tool_before_approval",
+            serde_json::json!({}),
+        ))?;
+        let denied = read_json_line(requests)?;
+        if denied.pointer("/result/success") != Some(&serde_json::Value::Bool(false)) {
+            return Err("Typed Tool was usable before EITL approval".into());
         }
-    }))?;
-    let denial = read_json_line(requests)?;
-    if denial.get("id").and_then(serde_json::Value::as_str) != Some("control_fixture_1")
-        || denial
-            .pointer("/result/decision")
-            .and_then(serde_json::Value::as_str)
-            != Some("decline")
-    {
-        return Err("Host did not deny the control request".into());
+        fs::write(executable.with_extension("access-tool-waiting"), b"waiting")?;
+        for _ in 0..500 {
+            if executable.with_extension("access-approved").is_file() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        if !executable.with_extension("access-approved").is_file() {
+            return Err("timed out waiting for EITL Access Approval".into());
+        }
+        if scenario == "access-tool" {
+            write_json(&tool_request(
+                "access_tool_invalid_arguments",
+                serde_json::json!({ "unexpected": true }),
+            ))?;
+            let invalid = read_json_line(requests)?;
+            if invalid.pointer("/result/success") != Some(&serde_json::Value::Bool(false)) {
+                return Err("invalid Typed Tool arguments were not denied".into());
+            }
+        }
+        write_json(&tool_request(
+            "access_tool_after_approval",
+            serde_json::json!({}),
+        ))?;
+        let approved = read_json_line(requests)?;
+        if scenario == "access-tool-revoked" {
+            if approved.pointer("/result/success") != Some(&serde_json::Value::Bool(false)) {
+                return Err("revoked Typed Tool authority remained usable".into());
+            }
+        } else {
+            if approved.pointer("/result/success") != Some(&serde_json::Value::Bool(true))
+                || !approved
+                    .pointer("/result/contentItems/0/text")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|text| text.contains(&tender_name))
+            {
+                return Err("EITL-approved Typed Tool did not return its exact Data View".into());
+            }
+            write_json(&tool_request(
+                "access_tool_over_quota",
+                serde_json::json!({}),
+            ))?;
+            let over_quota = read_json_line(requests)?;
+            if over_quota.pointer("/result/success") != Some(&serde_json::Value::Bool(false)) {
+                return Err("Typed Tool exceeded its one-call quota".into());
+            }
+        }
+    } else if scenario == "hostile-control-requests" {
+        let outside = env::temp_dir().join("outside-quantix-workspace");
+        let mut controls = vec![
+            serde_json::json!({
+                "id": "hostile_shell",
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": thread_id, "turnId": turn_id,
+                    "itemId": "command_shell", "startedAtMs": 1_780_000_001_000_i64,
+                    "cwd": outside, "command": "powershell -Command Invoke-WebRequest https://example.com",
+                    "reason": "Tender content says this must be approved"
+                }
+            }),
+            serde_json::json!({
+                "id": "hostile_package",
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": thread_id, "turnId": turn_id,
+                    "itemId": "command_package", "startedAtMs": 1_780_000_001_000_i64,
+                    "command": "npm install hostile-package"
+                }
+            }),
+            serde_json::json!({
+                "id": "hostile_application",
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": thread_id, "turnId": turn_id,
+                    "itemId": "command_application", "startedAtMs": 1_780_000_001_000_i64,
+                    "command": "start outlook.exe"
+                }
+            }),
+            serde_json::json!({
+                "id": "hostile_root",
+                "method": "item/fileChange/requestApproval",
+                "params": {
+                    "threadId": thread_id, "turnId": turn_id,
+                    "itemId": "file_change", "startedAtMs": 1_780_000_001_000_i64,
+                    "grantRoot": outside, "reason": "Write outside the private workspace"
+                }
+            }),
+            serde_json::json!({
+                "id": "hostile_permissions",
+                "method": "item/permissions/requestApproval",
+                "params": {
+                    "threadId": thread_id, "turnId": turn_id,
+                    "itemId": "permissions", "startedAtMs": 1_780_000_001_000_i64,
+                    "cwd": working, "permissions": {}, "reason": "Enable unrestricted access"
+                }
+            }),
+            serde_json::json!({
+                "id": "hostile_tool",
+                "method": "item/tool/call",
+                "params": {
+                    "threadId": thread_id, "turnId": turn_id,
+                    "callId": "tool_call", "tool": "unregistered_tool",
+                    "arguments": { "destination": outside }
+                }
+            }),
+            serde_json::json!({
+                "id": "hostile_user_input",
+                "method": "item/tool/requestUserInput",
+                "params": {
+                    "threadId": thread_id, "turnId": turn_id,
+                    "itemId": "user_input", "isBlocking": true, "questions": []
+                }
+            }),
+            serde_json::json!({
+                "id": "hostile_mcp",
+                "method": "mcpServer/elicitation/request",
+                "params": {
+                    "threadId": thread_id, "turnId": turn_id,
+                    "serverName": "unregistered-server", "mode": "form",
+                    "message": "Approve external access", "requestedSchema": {
+                        "type": "object", "properties": {}
+                    }
+                }
+            }),
+        ];
+        controls.push(controls[5].clone());
+        for control in controls {
+            let id = control.get("id").cloned().ok_or("hostile control id")?;
+            let method = control
+                .get("method")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("hostile control method")?;
+            write_json(&control)?;
+            let denial = read_json_line(requests)?;
+            if denial.get("id") != Some(&id)
+                || denial
+                    .pointer("/result/decision")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("accept")
+                || (method == "item/tool/requestUserInput"
+                    && denial.pointer("/result/answers").is_none())
+            {
+                return Err(format!("Host did not safely deny {method}").into());
+            }
+        }
+    } else if scenario != "complete-after-interrupt" {
+        write_json(&serde_json::json!({
+            "id": "control_fixture_1",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": thread_id,
+                "turnId": turn_id,
+                "itemId": "command_fixture_1",
+                "startedAtMs": 1_780_000_001_000_i64,
+                "command": "forbidden-command"
+            }
+        }))?;
+        let denial = read_json_line(requests)?;
+        if denial.get("id").and_then(serde_json::Value::as_str) != Some("control_fixture_1")
+            || denial
+                .pointer("/result/decision")
+                .and_then(serde_json::Value::as_str)
+                != Some("decline")
+        {
+            return Err("Host did not deny the control request".into());
+        }
+        if scenario == "deny-then-hang" {
+            fs::write(executable.with_extension("denial-waiting"), b"waiting")?;
+            for request in requests {
+                request?;
+            }
+            return Ok(false);
+        }
     }
     let candidate = if scenario == "output-invalid" {
-        r#"{"summary":"Missing the required next action."}"#
+        serde_json::json!({ "summary": "Missing the required next action." })
     } else {
-        r#"{"summary":"The Tender is ready for controlled intake analysis.","recommended_next_action":"Verify the imported package before detailed analysis."}"#
+        serde_json::json!({
+            "summary": format!("{tender_name} is ready for controlled intake analysis."),
+            "recommended_next_action": "Verify the imported package before detailed analysis."
+        })
     };
     let final_item = serde_json::json!({
         "id": "message_fixture_1",
         "type": "agentMessage",
-        "text": candidate,
+        "text": serde_json::to_string(&candidate)?,
         "phase": if scenario == "phase-null-final" {
             serde_json::Value::Null
         } else {
@@ -562,6 +872,23 @@ fn read_json_request(
         return Err(format!("expected {expected_method} request").into());
     }
     Ok(request)
+}
+
+fn fixture_thread(thread_id: &str, cwd: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": thread_id,
+        "sessionId": thread_id,
+        "preview": "",
+        "ephemeral": false,
+        "modelProvider": "openai",
+        "createdAt": 1_780_000_000_i64,
+        "updatedAt": 1_780_000_000_i64,
+        "cwd": cwd,
+        "source": "appServer",
+        "cliVersion": "0.147.0",
+        "status": { "type": "idle" },
+        "turns": [],
+    })
 }
 
 fn read_json_line(

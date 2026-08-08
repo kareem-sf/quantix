@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 4;
+const TENDER_SCHEMA_VERSION: i64 = 6;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -230,16 +230,28 @@ CREATE TABLE provider_threads (
   profile_id TEXT NOT NULL,
   profile_version INTEGER NOT NULL CHECK (profile_version > 0),
   thread_ref TEXT NOT NULL UNIQUE,
-  status TEXT NOT NULL CHECK (status IN ('active', 'archived')),
+  status TEXT NOT NULL CHECK (status IN ('active', 'archive_pending', 'archived')),
   created_at TEXT NOT NULL,
   archived_at TEXT,
-  PRIMARY KEY (profile_id, profile_version),
+  PRIMARY KEY (thread_ref),
   FOREIGN KEY (profile_id, profile_version)
     REFERENCES agent_profile_versions(profile_id, version),
   CHECK (
-    (status = 'active' AND archived_at IS NULL)
+    (status IN ('active', 'archive_pending') AND archived_at IS NULL)
     OR (status = 'archived' AND archived_at IS NOT NULL)
   )
+);
+CREATE UNIQUE INDEX provider_threads_one_active_profile_version
+ON provider_threads(profile_id, profile_version)
+WHERE status IN ('active', 'archive_pending');
+CREATE TABLE provider_thread_exposures (
+  thread_ref TEXT NOT NULL,
+  run_id TEXT NOT NULL UNIQUE,
+  exposure_json TEXT NOT NULL CHECK (json_valid(exposure_json)),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (thread_ref, run_id),
+  FOREIGN KEY (thread_ref) REFERENCES provider_threads(thread_ref),
+  FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
 );
 CREATE TABLE agent_runs (
   run_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -248,6 +260,7 @@ CREATE TABLE agent_runs (
   profile_id TEXT NOT NULL,
   profile_version INTEGER NOT NULL CHECK (profile_version > 0),
   retry_of_run_id TEXT,
+  permission_grant_json TEXT NOT NULL CHECK (json_valid(permission_grant_json)),
   status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'interrupted', 'failed', 'indeterminate')),
   provider_thread_ref TEXT,
   provider_turn_ref TEXT,
@@ -269,6 +282,62 @@ CREATE TABLE agent_runs (
       AND failure_json IS NOT NULL)
   )
 );
+CREATE TABLE agent_access_requests (
+  request_id TEXT PRIMARY KEY CHECK (length(request_id) = 32),
+  run_id TEXT NOT NULL,
+  request_json TEXT NOT NULL CHECK (json_valid(request_json)),
+  status TEXT NOT NULL CHECK (status IN ('blocked', 'approved', 'denied', 'superseded')),
+  decision_json TEXT CHECK (decision_json IS NULL OR json_valid(decision_json)),
+  denial_reason TEXT CHECK (denial_reason IS NULL OR denial_reason IN (
+    'default_deny', 'prohibited_action', 'grant_expired', 'secret_data',
+    'outside_ceiling', 'work_plan_amendment_required', 'tool_not_granted',
+    'thread_exposure_incompatible', 'engineer_denied', 'superseded'
+  )),
+  requested_at TEXT NOT NULL,
+  decided_at TEXT,
+  FOREIGN KEY (run_id) REFERENCES agent_runs(run_id),
+  CHECK (
+    (status = 'blocked' AND decision_json IS NULL AND denial_reason IS NULL
+      AND decided_at IS NULL)
+    OR (status = 'approved' AND decision_json IS NOT NULL AND denial_reason IS NULL
+      AND decided_at IS NOT NULL)
+    OR (status = 'denied' AND decision_json IS NULL AND denial_reason IS NOT NULL
+      AND decided_at IS NOT NULL)
+    OR (status = 'superseded' AND decision_json IS NULL AND denial_reason = 'superseded'
+      AND decided_at IS NOT NULL)
+  )
+);
+CREATE TABLE agent_access_revocations (
+  request_id TEXT PRIMARY KEY,
+  reason TEXT NOT NULL CHECK (reason IN ('engineer_revoked', 'run_interrupted')),
+  revoked_by TEXT NOT NULL,
+  revoked_at TEXT NOT NULL,
+  FOREIGN KEY (request_id) REFERENCES agent_access_requests(request_id)
+);
+CREATE TABLE agent_run_cancellations (
+  run_id TEXT PRIMARY KEY,
+  requested_by TEXT NOT NULL,
+  requested_at TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
+);
+CREATE TABLE agent_tool_call_reservations (
+  run_id TEXT NOT NULL,
+  correlation_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  approval_id TEXT NOT NULL,
+  authorized_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, correlation_id),
+  FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
+);
+CREATE TABLE agent_tool_call_results (
+  run_id TEXT NOT NULL,
+  correlation_id TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
+  completed_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, correlation_id),
+  FOREIGN KEY (run_id, correlation_id)
+    REFERENCES agent_tool_call_reservations(run_id, correlation_id)
+);
 CREATE TABLE provider_events (
   run_id TEXT NOT NULL,
   sequence INTEGER NOT NULL CHECK (sequence > 0),
@@ -277,16 +346,34 @@ CREATE TABLE provider_events (
     'usage_observed', 'control_request_denied', 'warning', 'terminal'
   )),
   summary TEXT NOT NULL,
+  correlation_id TEXT,
+  request_fingerprint TEXT,
+  denial_reason TEXT CHECK (denial_reason IS NULL OR denial_reason IN (
+    'default_deny', 'prohibited_action', 'grant_expired', 'secret_data',
+    'outside_ceiling', 'work_plan_amendment_required', 'tool_not_granted',
+    'thread_exposure_incompatible', 'engineer_denied', 'superseded', 'access_revoked'
+  )),
   opaque_reference TEXT,
   created_at TEXT NOT NULL,
   PRIMARY KEY (run_id, sequence),
-  FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
+  FOREIGN KEY (run_id) REFERENCES agent_runs(run_id),
+  CHECK (
+    (kind = 'control_request_denied' AND correlation_id IS NOT NULL
+      AND length(request_fingerprint) = 64 AND denial_reason IS NOT NULL)
+    OR (kind != 'control_request_denied' AND correlation_id IS NULL
+      AND request_fingerprint IS NULL AND denial_reason IS NULL)
+  )
 );
+CREATE UNIQUE INDEX provider_control_denials_one_correlation
+ON provider_events(run_id, correlation_id)
+WHERE kind = 'control_request_denied';
 CREATE TABLE proposed_agent_results (
   result_id TEXT PRIMARY KEY CHECK (length(result_id) = 32),
   run_id TEXT NOT NULL UNIQUE,
   verification_status TEXT NOT NULL CHECK (verification_status = 'proposed'),
   payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+  data_scopes_json TEXT NOT NULL CHECK (json_valid(data_scopes_json)),
+  data_classification TEXT NOT NULL CHECK (data_classification IN ('tender_internal', 'sensitive')),
   created_at TEXT NOT NULL,
   FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
 );
@@ -458,13 +545,16 @@ BEGIN
 END;
 CREATE TRIGGER provider_threads_only_archive
 BEFORE UPDATE ON provider_threads
-WHEN OLD.status != 'active'
-  OR NEW.status != 'archived'
-  OR NEW.profile_id != OLD.profile_id
+WHEN NEW.profile_id != OLD.profile_id
   OR NEW.profile_version != OLD.profile_version
   OR NEW.thread_ref != OLD.thread_ref
   OR NEW.created_at != OLD.created_at
-  OR NEW.archived_at IS NULL
+  OR NOT (
+    (OLD.status = 'active' AND NEW.status = 'archive_pending'
+      AND NEW.archived_at IS NULL)
+    OR (OLD.status = 'archive_pending' AND NEW.status = 'archived'
+      AND NEW.archived_at IS NOT NULL)
+  )
 BEGIN
   SELECT RAISE(ABORT, 'Provider Threads are immutable except for archival');
 END;
@@ -472,6 +562,16 @@ CREATE TRIGGER provider_threads_no_delete
 BEFORE DELETE ON provider_threads
 BEGIN
   SELECT RAISE(ABORT, 'Provider Threads are immutable');
+END;
+CREATE TRIGGER provider_thread_exposures_no_update
+BEFORE UPDATE ON provider_thread_exposures
+BEGIN
+  SELECT RAISE(ABORT, 'Provider Thread exposures are immutable');
+END;
+CREATE TRIGGER provider_thread_exposures_no_delete
+BEFORE DELETE ON provider_thread_exposures
+BEGIN
+  SELECT RAISE(ABORT, 'Provider Thread exposures are immutable');
 END;
 CREATE TRIGGER agent_runs_terminal_facts_no_rewrite
 BEFORE UPDATE ON agent_runs
@@ -482,6 +582,7 @@ WHEN OLD.status != 'running'
   OR NEW.profile_id != OLD.profile_id
   OR NEW.profile_version != OLD.profile_version
   OR NEW.retry_of_run_id IS NOT OLD.retry_of_run_id
+  OR NEW.permission_grant_json != OLD.permission_grant_json
   OR NEW.started_at != OLD.started_at
   OR (
     NEW.status = 'running'
@@ -512,6 +613,62 @@ CREATE TRIGGER agent_runs_no_delete
 BEFORE DELETE ON agent_runs
 BEGIN
   SELECT RAISE(ABORT, 'Agent Runs are immutable');
+END;
+CREATE TRIGGER agent_access_requests_only_decide
+BEFORE UPDATE ON agent_access_requests
+WHEN OLD.status != 'blocked'
+  OR NEW.request_id != OLD.request_id
+  OR NEW.run_id != OLD.run_id
+  OR NEW.request_json != OLD.request_json
+  OR NEW.requested_at != OLD.requested_at
+  OR NEW.status NOT IN ('approved', 'denied', 'superseded')
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Access Requests are immutable except for one decision');
+END;
+CREATE TRIGGER agent_access_requests_no_delete
+BEFORE DELETE ON agent_access_requests
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Access Requests are immutable');
+END;
+CREATE TRIGGER agent_access_revocations_no_update
+BEFORE UPDATE ON agent_access_revocations
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Access Revocations are immutable');
+END;
+CREATE TRIGGER agent_access_revocations_no_delete
+BEFORE DELETE ON agent_access_revocations
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Access Revocations are immutable');
+END;
+CREATE TRIGGER agent_run_cancellations_no_update
+BEFORE UPDATE ON agent_run_cancellations
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Run cancellations are immutable');
+END;
+CREATE TRIGGER agent_run_cancellations_no_delete
+BEFORE DELETE ON agent_run_cancellations
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Run cancellations are immutable');
+END;
+CREATE TRIGGER agent_tool_call_reservations_no_update
+BEFORE UPDATE ON agent_tool_call_reservations
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Tool Call reservations are immutable');
+END;
+CREATE TRIGGER agent_tool_call_reservations_no_delete
+BEFORE DELETE ON agent_tool_call_reservations
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Tool Call reservations are immutable');
+END;
+CREATE TRIGGER agent_tool_call_results_no_update
+BEFORE UPDATE ON agent_tool_call_results
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Tool Call results are immutable');
+END;
+CREATE TRIGGER agent_tool_call_results_no_delete
+BEFORE DELETE ON agent_tool_call_results
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Tool Call results are immutable');
 END;
 CREATE TRIGGER provider_events_no_update
 BEFORE UPDATE ON provider_events

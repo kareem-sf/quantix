@@ -1,8 +1,8 @@
 use serde_json::json;
 
 use super::{
-    AgentProfileVersionView, AgentResourceBudget, AgentRunPermissions, AgentTaskInputReference,
-    TenderTaskView, PROVIDER_TIMEOUT,
+    permissions::TENDER_METADATA_TOOL_NAME, AgentProfileVersionView, AgentResourceBudget,
+    AgentRunPermissions, AgentTaskInputReference, DataClassification, TenderTaskView,
 };
 
 pub(crate) fn bootstrap_profile(profile_id: String) -> AgentProfileVersionView {
@@ -40,7 +40,10 @@ pub(crate) fn bootstrap_task(
         output_contract_json: profile.output_contract_json.clone(),
         review_policy: profile.review_policy.clone(),
         deadline,
-        permissions: profile.permissions.clone(),
+        permissions: AgentRunPermissions {
+            allowed_tools: Vec::new(),
+            ..profile.permissions.clone()
+        },
         resource_budget: profile.resource_budget.clone(),
     }
 }
@@ -48,17 +51,22 @@ pub(crate) fn bootstrap_task(
 fn bootstrap_permissions() -> AgentRunPermissions {
     AgentRunPermissions {
         data_scopes: vec!["tender_metadata".into()],
+        data_classifications: vec![DataClassification::TenderInternal],
         allowed_actions: vec!["propose_intake_readiness".into()],
-        allowed_tools: Vec::new(),
+        allowed_tools: vec![TENDER_METADATA_TOOL_NAME.into()],
         network_allowed: false,
-        workspace_write_allowed: false,
+        workspace_write_allowed: true,
     }
 }
 
 fn bootstrap_resource_budget() -> AgentResourceBudget {
+    #[cfg(feature = "runtime-fixture")]
+    let duration_seconds = 3;
+    #[cfg(not(feature = "runtime-fixture"))]
+    let duration_seconds = super::PROVIDER_TIMEOUT.as_secs() as u32;
     AgentResourceBudget {
         provider_turns: 1,
-        duration_seconds: PROVIDER_TIMEOUT.as_secs() as u32,
+        duration_seconds,
         output_bytes: 16 * 1024,
     }
 }

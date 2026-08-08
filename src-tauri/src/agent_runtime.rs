@@ -8,6 +8,7 @@ use std::{
 };
 
 use garde::Validate;
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
@@ -21,11 +22,22 @@ use crate::{
 
 mod bootstrap_profile;
 mod codex_protocol;
+pub(crate) mod permissions;
 pub(crate) use bootstrap_profile::{bootstrap_profile, bootstrap_task};
 use codex_protocol::{
-    handle_control_request, handle_notification, outcome_unknown, parse_wire_message,
-    process_failure, protocol_failure, provider_instruction_bundle, read_expected_response,
-    response_result, validate_candidate, validate_schema, write_rpc, NotificationOutcome,
+    dynamic_tool_specs, execute_typed_tool, handle_control_request, handle_notification,
+    outcome_unknown, parse_wire_message, process_failure, protocol_failure,
+    provider_instruction_bundle, read_expected_response, response_result,
+    typed_tool_arguments_are_valid, typed_tool_is_known, validate_candidate, validate_schema,
+    write_rpc, ControlRequestContext, ControlRequestLedger, NotificationOutcome,
+};
+use permissions::permission_duration;
+pub use permissions::{
+    approve_one_run_access, AccessApproval, AccessRequest, AgentAccessRequestStatus,
+    AgentAccessRequestView, AgentAccessResolution, AgentRunWorkspaceManifest, DataClassification,
+    DataViewManifest, OneRunAccessGrant, PermissionCeiling, PermissionDenialReason,
+    PermissionGrant, ThreadExposureSet, ToolIdempotency, ToolSideEffectClass, TypedToolDefinition,
+    TypedToolQuota,
 };
 
 #[cfg(not(feature = "runtime-fixture"))]
@@ -52,6 +64,58 @@ pub struct InterruptAgentRunCommand {
     pub tender_id: String,
     #[garde(length(bytes, min = 32, max = 32))]
     pub run_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct RequestAgentAccessCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub run_id: String,
+    #[garde(skip)]
+    pub exact_inputs: Vec<AgentTaskInputReference>,
+    #[garde(skip)]
+    pub data_scopes: Vec<String>,
+    #[garde(skip)]
+    pub data_classifications: Vec<DataClassification>,
+    #[garde(skip)]
+    pub allowed_actions: Vec<String>,
+    #[garde(skip)]
+    pub allowed_tools: Vec<String>,
+    #[garde(length(bytes, min = 1, max = 500))]
+    pub purpose: String,
+    #[garde(skip)]
+    pub recurring: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ApproveAgentAccessCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub request_id: String,
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub run_id: String,
+    #[garde(length(bytes, min = 20, max = 40))]
+    pub expires_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ResolveAgentAccessCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub request_id: String,
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub run_id: String,
+    #[garde(skip)]
+    pub resolution: AgentAccessResolution,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -122,6 +186,7 @@ pub struct AgentTaskInputReference {
 #[ts(export)]
 pub struct AgentRunPermissions {
     pub data_scopes: Vec<String>,
+    pub data_classifications: Vec<DataClassification>,
     pub allowed_actions: Vec<String>,
     pub allowed_tools: Vec<String>,
     pub network_allowed: bool,
@@ -200,6 +265,9 @@ pub struct ProviderEvent {
     pub sequence: u32,
     pub kind: ProviderEventKind,
     pub summary: String,
+    pub correlation_id: Option<String>,
+    pub request_fingerprint: Option<String>,
+    pub denial_reason: Option<PermissionDenialReason>,
     pub opaque_reference: Option<String>,
 }
 
@@ -226,6 +294,7 @@ pub enum ProviderFailureCategory {
     OutputInvalid,
     Interrupted,
     OutcomeUnknown,
+    PermissionDenied,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -259,6 +328,8 @@ pub struct ProposedAgentResult {
     pub result_id: String,
     pub verification_status: VerificationStatus,
     pub payload_json: String,
+    pub data_scopes: Vec<String>,
+    pub data_classification: DataClassification,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -269,6 +340,8 @@ pub struct AgentRunInspection {
     pub state: AgentRunState,
     pub profile: AgentProfileVersionView,
     pub task: TenderTaskView,
+    pub permission_grant: PermissionGrant,
+    pub access_requests: Vec<AgentAccessRequestView>,
     pub provider_thread_ref: Option<String>,
     pub provider_turn_ref: Option<String>,
     pub events: Vec<ProviderEvent>,
@@ -284,7 +357,9 @@ pub(crate) struct PreparedAgentRun {
     pub run_id: String,
     pub profile: AgentProfileVersionView,
     pub task: TenderTaskView,
+    pub permission_grant: PermissionGrant,
     pub provider_thread_ref: Option<String>,
+    pub provider_thread_to_archive: Option<String>,
     pub workspace: PathBuf,
 }
 
@@ -292,6 +367,9 @@ pub(crate) struct PreparedAgentRun {
 pub(crate) struct PendingProviderEvent {
     pub kind: ProviderEventKind,
     pub summary: String,
+    pub correlation_id: Option<String>,
+    pub request_fingerprint: Option<String>,
+    pub denial_reason: Option<PermissionDenialReason>,
     pub opaque_reference: Option<String>,
 }
 
@@ -300,8 +378,23 @@ impl PendingProviderEvent {
         Self {
             kind,
             summary: summary.to_owned(),
+            correlation_id: None,
+            request_fingerprint: None,
+            denial_reason: None,
             opaque_reference: opaque_reference.map(str::to_owned),
         }
+    }
+
+    fn with_control_denial(
+        mut self,
+        correlation_id: String,
+        request_fingerprint: String,
+        denial_reason: PermissionDenialReason,
+    ) -> Self {
+        self.correlation_id = Some(correlation_id);
+        self.request_fingerprint = Some(request_fingerprint);
+        self.denial_reason = Some(denial_reason);
+        self
     }
 }
 
@@ -318,6 +411,17 @@ pub(crate) struct ProviderExecution {
 
 struct ActiveAgentRunGuard {
     host: QuantixHost,
+}
+
+type TurnAcceptedCallback = dyn FnOnce(&str) -> Result<(), ProviderFailure> + Send;
+type TurnDeniedCallback = dyn FnMut(&PendingProviderEvent) -> Result<(), ProviderFailure> + Send;
+type TurnToolCallCallback =
+    dyn FnMut(&str, &str, &Value) -> Result<Option<String>, ProviderFailure> + Send;
+
+struct RunCallbacks {
+    on_accepted: Box<TurnAcceptedCallback>,
+    on_denied: Box<TurnDeniedCallback>,
+    on_tool_call: Box<TurnToolCallCallback>,
 }
 
 impl Drop for ActiveAgentRunGuard {
@@ -381,6 +485,75 @@ impl QuantixHost {
         Ok(runs)
     }
 
+    pub fn request_agent_access(
+        &self,
+        command: RequestAgentAccessCommand,
+    ) -> Result<AgentAccessRequestView, TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        if !valid_identifier(&command.run_id)
+            || !self.agent_run_is_active(tender_id.as_str(), &command.run_id)
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let store = self.tender_store(&tender_id)?;
+        let request = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .create_agent_access_request(&tender_id, command)?;
+        Ok(request)
+    }
+
+    pub fn approve_agent_access(
+        &self,
+        command: ApproveAgentAccessCommand,
+    ) -> Result<AgentAccessRequestView, TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        if !valid_identifier(&command.request_id) || !valid_identifier(&command.run_id) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let run_is_active = self.agent_run_is_active(tender_id.as_str(), &command.run_id);
+        let store = self.tender_store(&tender_id)?;
+        let decision = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .approve_agent_access_request(&tender_id, command, run_is_active)?;
+        Ok(decision)
+    }
+
+    pub fn resolve_agent_access(
+        &self,
+        command: ResolveAgentAccessCommand,
+    ) -> Result<AgentAccessRequestView, TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        if !valid_identifier(&command.request_id)
+            || !valid_identifier(&command.run_id)
+            || !self.agent_run_is_active(tender_id.as_str(), &command.run_id)
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let store = self.tender_store(&tender_id)?;
+        let decision = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .resolve_agent_access_request(&tender_id, command)?;
+        Ok(decision)
+    }
+
     pub fn interrupt_agent_run(
         &self,
         command: InterruptAgentRunCommand,
@@ -388,11 +561,22 @@ impl QuantixHost {
         command
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-        TenderId::parse(&command.tender_id)?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
         if !valid_identifier(&command.run_id) {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        Ok(self.cancel_active_agent_run(&command.tender_id, &command.run_id))
+        if !self.agent_run_is_active(tender_id.as_str(), &command.run_id) {
+            return Ok(false);
+        }
+        let store = self.tender_store(&tender_id)?;
+        let recorded = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .request_agent_run_interruption(&tender_id, &command.run_id)?;
+        if !recorded {
+            return Ok(false);
+        }
+        Ok(self.cancel_active_agent_run(tender_id.as_str(), &command.run_id))
     }
 }
 
@@ -403,24 +587,48 @@ async fn execute_provider_turn(
     cancellation: CancellationToken,
 ) -> ProviderExecution {
     let started = Instant::now();
+    if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
+        return execution;
+    }
     let mut provider_slot = host.agent_provider().lock().await;
+    if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
+        return execution;
+    }
     if provider_slot.is_none() {
-        let provider = match CodexProvider::readiness(
-            host.process_supervisor(),
-            host.runtime_layout().codex_executable(),
-            host.application_home(),
-        )
-        .await
-        {
+        let provider = match tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => {
+                return interrupted_execution(started);
+            }
+            provider = CodexProvider::readiness(
+                host.process_supervisor(),
+                host.runtime_layout().codex_executable(),
+                host.application_home(),
+            ) => provider,
+        } {
             Ok(provider) => provider,
             Err(failure) => return failed_execution(failure, started),
         };
         *provider_slot = Some(provider);
     }
+    if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
+        shutdown_provider(&mut provider_slot).await;
+        return execution;
+    }
+    let operation_limit = match permission_duration(&prepared.permission_grant, Timestamp::now()) {
+        Ok(duration) if !duration.is_zero() => duration,
+        _ => {
+            shutdown_provider(&mut provider_slot).await;
+            return failed_execution(permission_failure(), started);
+        }
+    };
+    let operation_deadline = Instant::now()
+        .checked_add(operation_limit)
+        .unwrap_or_else(Instant::now);
     match provider_slot
         .as_mut()
         .expect("provider initialized above")
-        .begin_run(&prepared.task)
+        .begin_run(operation_limit)
     {
         Ok(()) => {}
         Err(failure) => {
@@ -428,12 +636,59 @@ async fn execute_provider_turn(
             return failed_execution(failure, started);
         }
     }
-    let (thread_ref, resumed) = match provider_slot
-        .as_mut()
-        .expect("provider initialized above")
-        .establish_or_resume_thread(&prepared.workspace, prepared.provider_thread_ref.as_deref())
-        .await
-    {
+    if let Some(thread_ref) = prepared.provider_thread_to_archive.as_deref() {
+        let archive_result = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => {
+                shutdown_provider(&mut provider_slot).await;
+                return interrupted_execution(started);
+            }
+            result = provider_slot
+                .as_mut()
+                .expect("provider initialized above")
+                .archive_thread(thread_ref) => result,
+        };
+        if let Err(failure) = archive_result {
+            shutdown_provider(&mut provider_slot).await;
+            return failed_execution(failure, started);
+        }
+        if store
+            .lock()
+            .map_err(|_| ())
+            .and_then(|mut store| {
+                store
+                    .checkpoint_provider_thread_archived(prepared, thread_ref)
+                    .map_err(|_| ())
+            })
+            .is_err()
+        {
+            shutdown_provider(&mut provider_slot).await;
+            return failed_execution(process_failure(false), started);
+        }
+    }
+    if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
+        shutdown_provider(&mut provider_slot).await;
+        return execution;
+    }
+    let working_area = prepared
+        .workspace
+        .join(&prepared.permission_grant.workspace.working_area);
+    let thread_result = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => {
+            shutdown_provider(&mut provider_slot).await;
+            return interrupted_execution(started);
+        }
+        result = provider_slot
+            .as_mut()
+            .expect("provider initialized above")
+            .establish_or_resume_thread(
+                &working_area,
+                &prepared.permission_grant,
+                prepared.provider_thread_ref.as_deref(),
+            ) => result,
+    };
+    let (thread_ref, resumed) = match thread_result {
         Ok(thread) => thread,
         Err(failure) => {
             shutdown_provider(&mut provider_slot).await;
@@ -453,30 +708,104 @@ async fn execute_provider_turn(
         shutdown_provider(&mut provider_slot).await;
         return failed_execution(process_failure(false), started);
     }
+    if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
+        shutdown_provider(&mut provider_slot).await;
+        return execution;
+    }
     let checkpoint_store = Arc::clone(store);
+    let denial_store = Arc::clone(store);
+    let tool_store = Arc::clone(store);
     let run_id = prepared.run_id.clone();
+    let denial_run_id = prepared.run_id.clone();
+    let tool_run_id = prepared.run_id.clone();
+    let tool_prepared = prepared.clone();
+    let remaining_operation = operation_deadline.saturating_duration_since(Instant::now());
+    if remaining_operation.is_zero() {
+        shutdown_provider(&mut provider_slot).await;
+        return failed_execution(permission_failure(), started);
+    }
     let mut execution = provider_slot
         .as_mut()
         .expect("provider remains available")
-        .run_turn(prepared, &thread_ref, cancellation, move |turn_ref| {
-            checkpoint_store
-                .lock()
-                .map_err(|_| outcome_unknown())?
-                .checkpoint_agent_turn(&run_id, turn_ref)
-                .map_err(|_| outcome_unknown())
-        })
+        .run_turn(
+            prepared,
+            &thread_ref,
+            remaining_operation,
+            cancellation,
+            RunCallbacks {
+                on_accepted: Box::new(move |turn_ref| {
+                    checkpoint_store
+                        .lock()
+                        .map_err(|_| outcome_unknown())?
+                        .checkpoint_agent_turn(&run_id, turn_ref)
+                        .map_err(|_| outcome_unknown())
+                }),
+                on_denied: Box::new(move |event| {
+                    denial_store
+                        .lock()
+                        .map_err(|_| outcome_unknown())?
+                        .checkpoint_agent_control_denial(&denial_run_id, event)
+                        .map_err(|_| outcome_unknown())
+                }),
+                on_tool_call: Box::new(move |correlation_id, tool_name, arguments| {
+                    if !typed_tool_is_known(tool_name) {
+                        return Ok(None);
+                    }
+                    if !typed_tool_arguments_are_valid(tool_name, arguments)? {
+                        return Ok(None);
+                    }
+                    let authorized = tool_store
+                        .lock()
+                        .map_err(|_| outcome_unknown())?
+                        .authorize_agent_typed_tool(&tool_run_id, correlation_id, tool_name)
+                        .map_err(|_| outcome_unknown())?;
+                    if !authorized {
+                        return Ok(None);
+                    }
+                    match execute_typed_tool(&tool_prepared, tool_name, arguments) {
+                        Ok(output) => {
+                            tool_store
+                                .lock()
+                                .map_err(|_| outcome_unknown())?
+                                .record_agent_typed_tool_execution(
+                                    &tool_run_id,
+                                    correlation_id,
+                                    tool_name,
+                                    true,
+                                )
+                                .map_err(|_| outcome_unknown())?;
+                            Ok(Some(output))
+                        }
+                        Err(failure) => {
+                            tool_store
+                                .lock()
+                                .map_err(|_| outcome_unknown())?
+                                .record_agent_typed_tool_execution(
+                                    &tool_run_id,
+                                    correlation_id,
+                                    tool_name,
+                                    false,
+                                )
+                                .map_err(|_| outcome_unknown())?;
+                            Err(failure)
+                        }
+                    }
+                }),
+            },
+        )
         .await;
     execution.provider_thread_ref = Some(thread_ref.clone());
     execution.usage.elapsed_milliseconds =
         Some(started.elapsed().as_millis().try_into().unwrap_or(u64::MAX));
-    if execution.state == AgentRunState::Indeterminate
-        || execution.failure.as_ref().is_some_and(|failure| {
-            matches!(
-                failure.category,
-                ProviderFailureCategory::ProtocolInvalid | ProviderFailureCategory::ProcessFailed
-            )
-        })
-    {
+    if matches!(
+        execution.state,
+        AgentRunState::Interrupted | AgentRunState::Indeterminate
+    ) || execution.failure.as_ref().is_some_and(|failure| {
+        matches!(
+            failure.category,
+            ProviderFailureCategory::ProtocolInvalid | ProviderFailureCategory::ProcessFailed
+        )
+    }) {
         shutdown_provider(&mut provider_slot).await;
     }
     execution
@@ -507,6 +836,72 @@ fn failed_execution(failure: ProviderFailure, started: Instant) -> ProviderExecu
         failure: Some(failure),
         candidate_payload_json: None,
     }
+}
+
+fn interrupted_execution(started: Instant) -> ProviderExecution {
+    ProviderExecution {
+        state: AgentRunState::Interrupted,
+        provider_thread_ref: None,
+        provider_turn_ref: None,
+        events: vec![PendingProviderEvent::new(
+            ProviderEventKind::Terminal,
+            "Agent Run interrupted before Provider Turn acceptance",
+            None,
+        )],
+        usage: ProviderUsage {
+            elapsed_milliseconds: Some(
+                started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+            ),
+            ..ProviderUsage::default()
+        },
+        failure: Some(interruption_failure()),
+        candidate_payload_json: None,
+    }
+}
+
+fn run_cancellation_requested(
+    store: &Arc<Mutex<TenderStore>>,
+    prepared: &PreparedAgentRun,
+    cancellation: &CancellationToken,
+) -> Result<bool, TenderCommandError> {
+    if cancellation.is_cancelled() {
+        return Ok(true);
+    }
+    store
+        .lock()
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+        .agent_run_cancellation_requested(&prepared.run_id)
+}
+
+fn cancellation_checkpoint(
+    store: &Arc<Mutex<TenderStore>>,
+    prepared: &PreparedAgentRun,
+    cancellation: &CancellationToken,
+    started: Instant,
+) -> Option<ProviderExecution> {
+    match run_cancellation_requested(store, prepared, cancellation) {
+        Ok(false) => None,
+        Ok(true) => Some(interrupted_execution(started)),
+        Err(_) => Some(failed_execution(process_failure(false), started)),
+    }
+}
+
+fn interruption_failure() -> ProviderFailure {
+    ProviderFailure::new(
+        ProviderFailureCategory::Interrupted,
+        false,
+        "Start a new Agent Run only if the Tender Task still requires this work.",
+        Some("The Engineer User interrupted the Agent Run."),
+    )
+}
+
+fn permission_failure() -> ProviderFailure {
+    ProviderFailure::new(
+        ProviderFailureCategory::PermissionDenied,
+        false,
+        "Create a new Agent Run with a current Permission Grant.",
+        Some("The Agent Run Permission Grant expired."),
+    )
 }
 
 pub(crate) struct CodexProvider {
@@ -548,6 +943,7 @@ impl CodexProvider {
                         "version": env!("CARGO_PKG_VERSION"),
                     },
                     "capabilities": {
+                        "experimentalApi": true,
                         "optOutNotificationMethods": [
                             "item/agentMessage/delta",
                             "item/reasoning/summaryTextDelta",
@@ -579,6 +975,7 @@ impl CodexProvider {
     async fn establish_or_resume_thread(
         &mut self,
         workspace: &Path,
+        grant: &PermissionGrant,
         existing_thread_ref: Option<&str>,
     ) -> Result<(String, bool), ProviderFailure> {
         let workspace = workspace.to_string_lossy().into_owned();
@@ -591,13 +988,15 @@ impl CodexProvider {
                 true,
             )
         } else {
+            let dynamic_tools = dynamic_tool_specs(grant)?;
             (
                 "thread/start",
                 json!({
                     "cwd": workspace,
                     "approvalPolicy": "never",
-                    "sandbox": "read-only",
+                    "sandbox": "workspaceWrite",
                     "serviceName": "quantix"
+                    ,"dynamicTools": dynamic_tools
                 }),
                 "v2/ThreadStartResponse",
                 false,
@@ -618,26 +1017,33 @@ impl CodexProvider {
         Ok((thread_ref.to_owned(), resumed))
     }
 
-    fn begin_run(&mut self, task: &TenderTaskView) -> Result<(), ProviderFailure> {
+    fn begin_run(&mut self, operation_limit: Duration) -> Result<(), ProviderFailure> {
         self.conversation_mut()?
             .begin_operation(
-                Duration::from_secs(task.resource_budget.duration_seconds.into()),
+                operation_limit,
                 PROVIDER_OUTPUT_LIMIT,
                 PROVIDER_OUTPUT_LIMIT,
             )
             .map_err(|_| process_failure(false))
     }
 
-    async fn run_turn<F>(
+    async fn run_turn(
         &mut self,
         prepared: &PreparedAgentRun,
         thread_ref: &str,
+        operation_limit: Duration,
         cancellation: CancellationToken,
-        on_accepted: F,
-    ) -> ProviderExecution
-    where
-        F: FnOnce(&str) -> Result<(), ProviderFailure>,
-    {
+        callbacks: RunCallbacks,
+    ) -> ProviderExecution {
+        if cancellation.is_cancelled() {
+            return interrupted_execution(Instant::now());
+        }
+        let RunCallbacks {
+            on_accepted,
+            mut on_denied,
+            mut on_tool_call,
+        } = callbacks;
+        let operation_started = Instant::now();
         let output_schema: Value = match serde_json::from_str(&prepared.task.output_contract_json) {
             Ok(schema) => schema,
             Err(_) => return failed_execution(protocol_failure(false), Instant::now()),
@@ -650,34 +1056,45 @@ impl CodexProvider {
             Ok(conversation) => conversation,
             Err(failure) => return failed_execution(failure, Instant::now()),
         };
-        if write_rpc(
-            conversation,
-            &json!({
-                "method": "turn/start",
-                "id": 2,
-                "params": {
-                    "threadId": thread_ref,
-                    "input": [{ "type": "text", "text": instruction_bundle }],
-                    "cwd": prepared.workspace,
-                    "approvalPolicy": "never",
-                    "sandboxPolicy": {
-                        "type": "readOnly",
-                        "networkAccess": false,
-                    },
-                    "outputSchema": output_schema,
-                }
-            }),
-        )
-        .await
-        .is_err()
-        {
+        let turn_start = json!({
+            "method": "turn/start",
+            "id": 2,
+            "params": {
+                "threadId": thread_ref,
+                "input": [{ "type": "text", "text": instruction_bundle }],
+                "cwd": prepared.workspace.join(&prepared.permission_grant.workspace.working_area),
+                "approvalPolicy": "never",
+                "sandboxPolicy": {
+                    "type": "workspaceWrite",
+                    "networkAccess": false,
+                    "writableRoots": [
+                        prepared.workspace.join(&prepared.permission_grant.workspace.staged_outputs)
+                    ],
+                },
+                "outputSchema": output_schema,
+            }
+        });
+        let write_result = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => {
+                return interrupted_execution(operation_started);
+            }
+            result = write_rpc(conversation, &turn_start) => result,
+        };
+        if write_result.is_err() {
             return failed_execution(process_failure(false), Instant::now());
         }
-        let turn_response =
-            match read_expected_response(conversation, &json!(2), "v2/TurnStartResponse").await {
-                Ok(response) => response,
-                Err(failure) => return failed_execution(failure, Instant::now()),
-            };
+        let turn_start_id = json!(2);
+        let turn_response = match tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => {
+                return interrupted_execution(operation_started);
+            }
+            response = read_expected_response(conversation, &turn_start_id, "v2/TurnStartResponse") => response,
+        } {
+            Ok(response) => response,
+            Err(failure) => return failed_execution(failure, Instant::now()),
+        };
         let turn_ref = match turn_response
             .pointer("/turn/id")
             .and_then(Value::as_str)
@@ -712,8 +1129,10 @@ impl CodexProvider {
         };
         let mut interrupt_sent = false;
         let mut final_candidate = None;
+        let mut control_requests = ControlRequestLedger::default();
         loop {
             let line = tokio::select! {
+                biased;
                 _ = cancellation.cancelled(), if !interrupt_sent => {
                     if Self::interrupt(conversation, thread_ref, &turn_ref).await.is_err() {
                         execution.state = AgentRunState::Indeterminate;
@@ -728,8 +1147,13 @@ impl CodexProvider {
             let line = match line {
                 Ok(line) => line,
                 Err(_) => {
-                    execution.state = AgentRunState::Indeterminate;
-                    execution.failure = Some(outcome_unknown());
+                    if operation_started.elapsed() >= operation_limit {
+                        execution.state = AgentRunState::Failed;
+                        execution.failure = Some(permission_failure());
+                    } else {
+                        execution.state = AgentRunState::Indeterminate;
+                        execution.failure = Some(outcome_unknown());
+                    }
                     break;
                 }
             };
@@ -763,9 +1187,21 @@ impl CodexProvider {
                 }
             };
             if message.get("id").is_some() {
-                if handle_control_request(conversation, &message, &mut execution)
-                    .await
-                    .is_err()
+                if handle_control_request(
+                    conversation,
+                    &message,
+                    ControlRequestContext {
+                        grant: &prepared.permission_grant,
+                        expected_thread_ref: thread_ref,
+                        expected_turn_ref: &turn_ref,
+                        expired: operation_started.elapsed() >= operation_limit,
+                        ledger: &mut control_requests,
+                        on_denied: &mut on_denied,
+                        on_tool_call: &mut on_tool_call,
+                    },
+                )
+                .await
+                .is_err()
                 {
                     execution.state = AgentRunState::Indeterminate;
                     execution.failure = Some(protocol_failure(true));
@@ -843,7 +1279,6 @@ impl CodexProvider {
         .map_err(|_| outcome_unknown())
     }
 
-    #[allow(dead_code)]
     async fn archive_thread(&mut self, thread_ref: &str) -> Result<(), ProviderFailure> {
         let conversation = self.conversation_mut()?;
         write_rpc(
@@ -856,9 +1291,56 @@ impl CodexProvider {
         )
         .await
         .map_err(|_| process_failure(false))?;
-        read_expected_response(conversation, &json!(4), "v2/ThreadArchiveResponse")
+        if read_expected_response(conversation, &json!(4), "v2/ThreadArchiveResponse")
             .await
-            .map(|_| ())
+            .is_ok()
+        {
+            return Ok(());
+        }
+        Self::confirm_thread_archived(conversation, thread_ref).await
+    }
+
+    async fn confirm_thread_archived(
+        conversation: &mut SupervisedConversation,
+        thread_ref: &str,
+    ) -> Result<(), ProviderFailure> {
+        let mut cursor: Option<String> = None;
+        for page in 0_u32..100 {
+            let id = json!(5 + page);
+            write_rpc(
+                conversation,
+                &json!({
+                    "method": "thread/list",
+                    "id": id,
+                    "params": {
+                        "archived": true,
+                        "cursor": cursor,
+                        "limit": 100
+                    }
+                }),
+            )
+            .await
+            .map_err(|_| outcome_unknown())?;
+            let result = read_expected_response(conversation, &id, "v2/ThreadListResponse").await?;
+            let threads = result
+                .get("data")
+                .and_then(Value::as_array)
+                .ok_or_else(|| protocol_failure(false))?;
+            if threads
+                .iter()
+                .any(|thread| thread.get("id").and_then(Value::as_str) == Some(thread_ref))
+            {
+                return Ok(());
+            }
+            cursor = result
+                .get("nextCursor")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Err(protocol_failure(false))
     }
 
     async fn shutdown(&mut self) -> Result<(), ProcessError> {
