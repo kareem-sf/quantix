@@ -61,7 +61,7 @@ fn bootstrap_permissions() -> AgentRunPermissions {
 
 fn bootstrap_resource_budget() -> AgentResourceBudget {
     #[cfg(feature = "runtime-fixture")]
-    let duration_seconds = 3;
+    let duration_seconds = 8;
     #[cfg(not(feature = "runtime-fixture"))]
     let duration_seconds = super::PROVIDER_TIMEOUT.as_secs() as u32;
     AgentResourceBudget {

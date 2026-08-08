@@ -45,7 +45,7 @@ const stateCopy: Record<
   authentication_required: {
     title: "Codex sign-in required",
     summary:
-      "Connect an eligible Codex subscription before tender work begins.",
+      "Open Codex and sign in with ChatGPT before tender work begins. Quantix uses the Codex-managed session and never asks for an API key or credentials.",
   },
   interrupted_preparation: {
     title: "Preparation was interrupted",
@@ -75,9 +75,9 @@ const issueCopy: Record<RuntimeReadinessIssue, string> = {
   docling_models_missing:
     "One or more approved Docling model files are missing.",
   codex_authentication_required:
-    "Sign in to Codex with the Engineer's subscription.",
+    "Open Codex, sign in with the Engineer User's ChatGPT subscription, then check again.",
   codex_subscription_required:
-    "The connected Codex account is not a subscription account.",
+    "Codex is signed in without an eligible ChatGPT subscription. Connect the Engineer User's subscription in Codex, then check again.",
   runtime_preparation_active: "Runtime preparation is already in progress.",
   runtime_preparation_interrupted: "The previous preparation did not complete.",
   runtime_preparation_failed:

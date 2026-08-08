@@ -2,26 +2,24 @@ use std::{
     ffi::OsString,
     fs,
     path::{Component, Path, PathBuf},
-    sync::OnceLock,
     time::Duration,
 };
 
 use rusqlite::{params, Connection, TransactionBehavior};
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 use walkdir::WalkDir;
 
 use crate::{
+    agent_runtime::{CodexReadiness, CODEX_PROTOCOL_SCHEMA, CODEX_VERSION},
     process_supervisor::{ProcessOutput, ProcessSpec, ProcessSupervisor, ProcessTermination},
     setup::SetupState,
     QuantixHost,
 };
 
-const CODEX_VERSION: &str = "0.147.0";
 const UV_VERSION: &str = "0.12.2";
 const DOCLING_VERSION: &str = "2.118.0";
 const PYTHON_VERSION: &str = "3.12.13";
@@ -29,7 +27,6 @@ const RUNTIME_PROVENANCE_SCHEMA: u32 = 2;
 const DOCLING_MANIFEST_SCHEMA: u32 = 2;
 const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 const ENVIRONMENT_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
-const CODEX_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 const PREPARATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const MODEL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const SMOKE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -45,24 +42,6 @@ const DOCLING_MODEL_PROFILE: [&str; 5] = [
     "picture_classifier",
     "rapidocr",
 ];
-const SUPPORTED_CHATGPT_PLANS: [&str; 13] = [
-    "go",
-    "plus",
-    "pro",
-    "prolite",
-    "team",
-    "self_serve_business_prolite",
-    "self_serve_business_usage_based",
-    "business",
-    "ent26",
-    "enterprise_cbp_automation",
-    "enterprise_cbp_usage_based",
-    "enterprise",
-    "edu",
-];
-pub(crate) const CODEX_PROTOCOL_SCHEMA: &str =
-    include_str!("../runtime/codex_app_server_protocol.schemas.json");
-
 #[derive(Debug, Clone)]
 pub struct RuntimeLayout {
     runtime_resources: PathBuf,
@@ -545,26 +524,26 @@ impl QuantixHost {
                 true,
             );
         }
-        match probe_codex_account(self.process_supervisor(), &codex, cancellation).await {
-            Ok(CodexAccount::ChatGpt) => RuntimeReadiness::with_versions(
+        match self.inspect_codex_subscription(cancellation).await {
+            CodexReadiness::Ready => RuntimeReadiness::with_versions(
                 RuntimeReadinessState::Ready,
                 Vec::new(),
                 &versions,
                 false,
             ),
-            Ok(CodexAccount::SignedOut) => RuntimeReadiness::with_versions(
+            CodexReadiness::AuthenticationRequired => RuntimeReadiness::with_versions(
                 RuntimeReadinessState::AuthenticationRequired,
                 vec![RuntimeReadinessIssue::CodexAuthenticationRequired],
                 &versions,
                 false,
             ),
-            Ok(CodexAccount::Other) => RuntimeReadiness::with_versions(
+            CodexReadiness::SubscriptionRequired => RuntimeReadiness::with_versions(
                 RuntimeReadinessState::AuthenticationRequired,
                 vec![RuntimeReadinessIssue::CodexSubscriptionRequired],
                 &versions,
                 false,
             ),
-            Err(_) => RuntimeReadiness::with_versions(
+            CodexReadiness::Unavailable => RuntimeReadiness::with_versions(
                 RuntimeReadinessState::RepairRequired,
                 vec![RuntimeReadinessIssue::RuntimeProbeFailed],
                 &versions,
@@ -1096,191 +1075,6 @@ async fn run_checked(
     }
 }
 
-enum CodexAccount {
-    ChatGpt,
-    SignedOut,
-    Other,
-}
-
-struct CodexProtocolSchemas {
-    initialize: jsonschema::Validator,
-    account: jsonschema::Validator,
-}
-
-static CODEX_SCHEMAS: OnceLock<Option<CodexProtocolSchemas>> = OnceLock::new();
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CodexSuccessResponse {
-    id: u64,
-    result: serde_json::Value,
-}
-
-async fn probe_codex_account(
-    supervisor: &ProcessSupervisor,
-    codex: &Path,
-    cancellation: CancellationToken,
-) -> Result<CodexAccount, RuntimeError> {
-    let initialize = serde_json::to_vec(&json!({
-        "method": "initialize",
-        "id": 0,
-        "params": {
-            "clientInfo": {
-                "name": "quantix",
-                "title": "Quantix",
-                "version": env!("CARGO_PKG_VERSION"),
-            }
-        }
-    }))
-    .map_err(|_| RuntimeError::InvalidOutput)?;
-    let initialized = serde_json::to_vec(&json!({ "method": "initialized", "params": {} }))
-        .map_err(|_| RuntimeError::InvalidOutput)?;
-    let account_read = serde_json::to_vec(&json!({
-        "method": "account/read",
-        "id": 1,
-        "params": { "refreshToken": false }
-    }))
-    .map_err(|_| RuntimeError::InvalidOutput)?;
-    let mut conversation = supervisor
-        .start_conversation(
-            ProcessSpec {
-                executable: codex.to_path_buf(),
-                arguments: os_arguments(&["app-server", "--listen", "stdio://"]),
-                current_directory: codex.parent().map(Path::to_path_buf),
-                environment: Vec::new(),
-                inherit_environment: true,
-                stdin: Vec::new(),
-                timeout: CODEX_PROBE_TIMEOUT,
-                stdout_limit: PROBE_OUTPUT_LIMIT,
-                stderr_limit: PROBE_OUTPUT_LIMIT,
-            },
-            cancellation,
-        )
-        .await
-        .map_err(|_| RuntimeError::ProcessFailed)?;
-    let interaction = async {
-        write_jsonl(&mut conversation, &initialize).await?;
-        let response = parse_codex_response(
-            conversation
-                .read_line()
-                .await
-                .map_err(|_| RuntimeError::ProcessFailed)?,
-            0,
-        )?;
-        let schemas = codex_protocol_schemas()?;
-        if !schemas.initialize.is_valid(&response.result) {
-            return Err(RuntimeError::InvalidOutput);
-        }
-
-        write_jsonl(&mut conversation, &initialized).await?;
-        write_jsonl(&mut conversation, &account_read).await?;
-        let response = parse_codex_response(
-            conversation
-                .read_line()
-                .await
-                .map_err(|_| RuntimeError::ProcessFailed)?,
-            1,
-        )?;
-        if !schemas.account.is_valid(&response.result) {
-            return Err(RuntimeError::InvalidOutput);
-        }
-        let account = response
-            .result
-            .get("account")
-            .ok_or(RuntimeError::InvalidOutput)?;
-        if account.is_null() {
-            return Ok(CodexAccount::SignedOut);
-        }
-        match account.get("type").and_then(serde_json::Value::as_str) {
-            Some("chatgpt")
-                if account
-                    .get("planType")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|plan| SUPPORTED_CHATGPT_PLANS.contains(&plan)) =>
-            {
-                Ok(CodexAccount::ChatGpt)
-            }
-            Some("chatgpt") => Ok(CodexAccount::Other),
-            Some(_) => Ok(CodexAccount::Other),
-            None => Err(RuntimeError::InvalidOutput),
-        }
-    }
-    .await;
-    let abort_reason = interaction.is_err().then(|| {
-        conversation
-            .failure_termination()
-            .unwrap_or(ProcessTermination::Cancelled)
-    });
-    let terminal = conversation
-        .finish(abort_reason)
-        .await
-        .map_err(|_| RuntimeError::ProcessFailed)?;
-    match interaction {
-        Err(error) => Err(error),
-        Ok(account)
-            if terminal.termination == ProcessTermination::Exited
-                && terminal.exit_code == Some(0) =>
-        {
-            Ok(account)
-        }
-        Ok(_) => Err(RuntimeError::ProcessFailed),
-    }
-}
-
-async fn write_jsonl(
-    conversation: &mut crate::process_supervisor::SupervisedConversation,
-    message: &[u8],
-) -> Result<(), RuntimeError> {
-    conversation
-        .write(message)
-        .await
-        .map_err(|_| RuntimeError::ProcessFailed)?;
-    conversation
-        .write(b"\n")
-        .await
-        .map_err(|_| RuntimeError::ProcessFailed)
-}
-
-fn parse_codex_response(
-    bytes: Vec<u8>,
-    expected_id: u64,
-) -> Result<CodexSuccessResponse, RuntimeError> {
-    let response: CodexSuccessResponse =
-        serde_json::from_slice(&bytes).map_err(|_| RuntimeError::InvalidOutput)?;
-    if response.id != expected_id {
-        return Err(RuntimeError::InvalidOutput);
-    }
-    Ok(response)
-}
-
-fn codex_protocol_schemas() -> Result<&'static CodexProtocolSchemas, RuntimeError> {
-    CODEX_SCHEMAS
-        .get_or_init(|| {
-            let schema: serde_json::Value = serde_json::from_str(CODEX_PROTOCOL_SCHEMA).ok()?;
-            Some(CodexProtocolSchemas {
-                initialize: codex_schema_validator(&schema, "#/definitions/InitializeResponse")?,
-                account: codex_schema_validator(&schema, "#/definitions/v2/GetAccountResponse")?,
-            })
-        })
-        .as_ref()
-        .ok_or(RuntimeError::InvalidOutput)
-}
-
-fn codex_schema_validator(
-    schema: &serde_json::Value,
-    definition: &str,
-) -> Option<jsonschema::Validator> {
-    let mut schema = schema.clone();
-    schema.as_object_mut()?.insert(
-        "$ref".to_owned(),
-        serde_json::Value::String(definition.to_owned()),
-    );
-    jsonschema::options()
-        .with_draft(jsonschema::Draft::Draft7)
-        .build(&schema)
-        .ok()
-}
-
 fn build_model_manifest(
     models: &Path,
     environment: &Path,
@@ -1736,7 +1530,7 @@ mod tests {
         let valid = tempfile::tempdir().expect("smoke output directory");
         fs::write(
             valid.path().join("readiness.json"),
-            serde_json::to_vec(&json!({
+            serde_json::to_vec(&serde_json::json!({
                 "schema_name": "DoclingDocument",
                 "name": "readiness",
                 "origin": { "mimetype": "application/pdf" },

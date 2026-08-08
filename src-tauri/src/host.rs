@@ -310,7 +310,7 @@ impl QuantixHost {
         }
     }
 
-    #[cfg(feature = "runtime-fixture")]
+    #[cfg(any(test, feature = "runtime-fixture"))]
     pub fn accept_runtime_fixture(&self) {
         self.set_runtime_verified(true);
     }

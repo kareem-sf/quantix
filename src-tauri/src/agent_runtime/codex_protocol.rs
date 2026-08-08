@@ -8,16 +8,15 @@ use std::{
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::{
-    process_supervisor::{ProcessError, SupervisedConversation},
-    runtime_readiness::CODEX_PROTOCOL_SCHEMA,
-};
+use crate::process_supervisor::{ProcessError, SupervisedConversation};
 
 use super::{
+    chatgpt_subscription_is_supported,
     permissions::{bootstrap_tool_catalogue, deny_provider_control_request},
     AgentRunState, DataClassification, PendingProviderEvent, PermissionGrant, PreparedAgentRun,
-    ProviderEventKind, ProviderExecution, ProviderFailure, ProviderFailureCategory, ProviderUsage,
-    PROVIDER_OUTPUT_LIMIT,
+    ProviderEventKind, ProviderExecution, ProviderFailure, ProviderFailureCategory,
+    ProviderRateLimit, ProviderRateLimitState, ProviderRateLimitWindow, ProviderUsage,
+    CODEX_PROTOCOL_SCHEMA, PROVIDER_OUTPUT_LIMIT,
 };
 
 pub(super) fn dynamic_tool_specs(grant: &PermissionGrant) -> Result<Vec<Value>, ProviderFailure> {
@@ -103,10 +102,32 @@ pub(super) fn handle_notification(
         "thread/tokenUsage/updated" => {
             validate_schema("v2/ThreadTokenUsageUpdatedNotification", params)?;
             require_turn(params, expected_turn_ref)?;
+            let rate_limit = execution.usage.rate_limit.take();
             execution.usage = provider_usage(params)?;
+            execution.usage.rate_limit = rate_limit;
             execution.events.push(PendingProviderEvent::new(
                 ProviderEventKind::UsageObserved,
                 "Provider usage observed",
+                None,
+            ));
+        }
+        "account/updated" => {
+            validate_schema("v2/AccountUpdatedNotification", params)?;
+            let auth_mode = params.get("authMode").and_then(Value::as_str);
+            let plan_type = params.get("planType").and_then(Value::as_str);
+            if !chatgpt_subscription_is_supported(auth_mode, plan_type) {
+                execution.state = AgentRunState::Indeterminate;
+                execution.failure = Some(account_state_loss_outcome_unknown(auth_mode));
+                return Ok(NotificationOutcome::Terminal);
+            }
+        }
+        "account/rateLimits/updated" => {
+            validate_schema("v2/AccountRateLimitsUpdatedNotification", params)?;
+            let rate_limit = normalize_rate_limit(params, execution.usage.rate_limit.as_ref())?;
+            execution.usage.rate_limit = Some(rate_limit);
+            execution.events.push(PendingProviderEvent::new(
+                ProviderEventKind::RateLimitObserved,
+                "Codex subscription capacity observed",
                 None,
             ));
         }
@@ -123,17 +144,19 @@ pub(super) fn handle_notification(
             require_turn(params, expected_turn_ref)?;
             let failure = normalize_turn_error(params);
             if failure.category == ProviderFailureCategory::RateLimited {
-                execution.usage.rate_limit_reached = Some("usage_limit_exceeded".into());
+                let observed = execution.usage.rate_limit.take();
+                execution.usage.rate_limit = Some(ProviderRateLimit {
+                    state: ProviderRateLimitState::Exhausted,
+                    primary: observed.as_ref().and_then(|limit| limit.primary.clone()),
+                    secondary: observed.and_then(|limit| limit.secondary),
+                });
             }
             if params.get("willRetry").and_then(Value::as_bool) == Some(true) {
-                execution.events.push(PendingProviderEvent::new(
-                    ProviderEventKind::Warning,
-                    "Provider reported a recoverable error and will retry",
-                    None,
-                ));
-            } else {
-                execution.failure = Some(failure);
+                execution.state = AgentRunState::Indeterminate;
+                execution.failure = Some(outcome_unknown());
+                return Ok(NotificationOutcome::Terminal);
             }
+            execution.failure = Some(failure);
         }
         "turn/completed" => {
             validate_schema("v2/TurnCompletedNotification", params)?;
@@ -162,6 +185,66 @@ pub(super) fn handle_notification(
         _ => {}
     }
     Ok(NotificationOutcome::Continue)
+}
+
+fn normalize_rate_limit(
+    params: &Value,
+    existing: Option<&ProviderRateLimit>,
+) -> Result<ProviderRateLimit, ProviderFailure> {
+    let snapshot = params
+        .get("rateLimits")
+        .ok_or_else(|| protocol_failure(false))?;
+    let exhausted = existing.is_some_and(|limit| limit.state == ProviderRateLimitState::Exhausted)
+        || !snapshot
+            .get("rateLimitReachedType")
+            .is_none_or(Value::is_null)
+        || snapshot.get("spendControlReached").and_then(Value::as_bool) == Some(true);
+    Ok(ProviderRateLimit {
+        state: if exhausted {
+            ProviderRateLimitState::Exhausted
+        } else {
+            ProviderRateLimitState::Available
+        },
+        primary: normalize_rate_limit_window(
+            snapshot.get("primary"),
+            existing.and_then(|limit| limit.primary.as_ref()),
+        )?,
+        secondary: normalize_rate_limit_window(
+            snapshot.get("secondary"),
+            existing.and_then(|limit| limit.secondary.as_ref()),
+        )?,
+    })
+}
+
+fn normalize_rate_limit_window(
+    window: Option<&Value>,
+    existing: Option<&ProviderRateLimitWindow>,
+) -> Result<Option<ProviderRateLimitWindow>, ProviderFailure> {
+    let Some(window) = window.filter(|value| !value.is_null()) else {
+        return Ok(existing.cloned());
+    };
+    let used_percent = window
+        .get("usedPercent")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| protocol_failure(false))?;
+    let window_minutes = window
+        .get("windowDurationMins")
+        .filter(|value| !value.is_null())
+        .map(|value| value.as_u64().ok_or_else(|| protocol_failure(false)))
+        .transpose()?
+        .or_else(|| existing.and_then(|window| window.window_minutes));
+    let resets_at_epoch_seconds = window
+        .get("resetsAt")
+        .filter(|value| !value.is_null())
+        .map(|value| value.as_i64().ok_or_else(|| protocol_failure(false)))
+        .transpose()?
+        .or_else(|| existing.and_then(|window| window.resets_at_epoch_seconds));
+    Ok(Some(ProviderRateLimitWindow {
+        used_percent,
+        window_minutes,
+        resets_at_epoch_seconds,
+    }))
 }
 
 pub(super) async fn handle_control_request(
@@ -203,8 +286,16 @@ pub(super) async fn handle_control_request(
         let params = message
             .get("params")
             .ok_or_else(|| protocol_failure(true))?;
+        let turn_matches = if method == "mcpServer/elicitation/request" {
+            params
+                .get("turnId")
+                .filter(|turn_id| !turn_id.is_null())
+                .is_none_or(|turn_id| turn_id.as_str() == Some(context.expected_turn_ref))
+        } else {
+            params.get("turnId").and_then(Value::as_str) == Some(context.expected_turn_ref)
+        };
         if params.get("threadId").and_then(Value::as_str) != Some(context.expected_thread_ref)
-            || params.get("turnId").and_then(Value::as_str) != Some(context.expected_turn_ref)
+            || !turn_matches
         {
             return Err(protocol_failure(true));
         }
@@ -461,7 +552,7 @@ pub(super) async fn read_expected_response(
             .map_err(|_| process_failure(false))?;
         let message = parse_wire_message(&line)?;
         if message.get("id") == Some(expected_id) && message.get("method").is_none() {
-            return response_result(&message, definition);
+            return response_result(&message, definition, false);
         }
         if message.get("id").is_none() && message.get("method").is_some() {
             validate_schema("ServerNotification", &message)?;
@@ -471,15 +562,25 @@ pub(super) async fn read_expected_response(
     }
 }
 
-pub(super) fn response_result(message: &Value, definition: &str) -> Result<Value, ProviderFailure> {
-    let object = message.as_object().ok_or_else(|| protocol_failure(false))?;
+pub(super) fn response_result(
+    message: &Value,
+    definition: &str,
+    turn_accepted: bool,
+) -> Result<Value, ProviderFailure> {
+    let object = message
+        .as_object()
+        .ok_or_else(|| protocol_failure(turn_accepted))?;
+    if object.contains_key("error") {
+        validate_schema("JSONRPCError", message)?;
+        return Err(normalize_rpc_error(message, turn_accepted));
+    }
     if object.len() != 2 || !object.contains_key("id") || !object.contains_key("result") {
-        return Err(protocol_failure(false));
+        return Err(protocol_failure(turn_accepted));
     }
     let result = object
         .get("result")
         .cloned()
-        .ok_or_else(|| protocol_failure(false))?;
+        .ok_or_else(|| protocol_failure(turn_accepted))?;
     validate_schema(definition, &result)?;
     Ok(result)
 }
@@ -494,7 +595,7 @@ pub(super) fn parse_wire_message(line: &[u8]) -> Result<Value, ProviderFailure> 
         || object.keys().any(|key| {
             !matches!(
                 key.as_str(),
-                "id" | "method" | "params" | "result" | "error" | "trace"
+                "id" | "method" | "params" | "result" | "error" | "trace" | "emittedAtMs"
             )
         })
     {
@@ -614,35 +715,76 @@ fn provider_usage(params: &Value) -> Result<ProviderUsage, ProviderFailure> {
             .pointer("/tokenUsage/modelContextWindow")
             .and_then(Value::as_u64),
         elapsed_milliseconds: None,
-        rate_limit_reached: None,
+        rate_limit: None,
     })
+}
+
+fn normalize_rpc_error(message: &Value, turn_accepted: bool) -> ProviderFailure {
+    match codex_error_info(message.get("error")) {
+        Some("unauthorized") => authentication_lost_failure(),
+        Some("usageLimitExceeded" | "serverOverloaded") => rate_limit_failure(),
+        _ => process_failure(turn_accepted),
+    }
 }
 
 fn normalize_turn_error(params: &Value) -> ProviderFailure {
     let error = params
         .get("error")
         .or_else(|| params.pointer("/turn/error"));
-    let rate_limited = error
-        .and_then(|value| value.get("codexErrorInfo"))
-        .is_some_and(|value| {
-            value.as_str() == Some("usageLimitExceeded")
-                || value.as_str() == Some("serverOverloaded")
-        });
-    if rate_limited {
-        ProviderFailure::new(
-            ProviderFailureCategory::RateLimited,
-            true,
-            "Wait for Codex capacity to recover, then create a linked retry.",
-            Some("Codex reported a usage or capacity limit."),
-        )
-    } else {
-        ProviderFailure::new(
+    match codex_error_info(error) {
+        Some("unauthorized") => authentication_lost_failure(),
+        Some("usageLimitExceeded" | "serverOverloaded") => rate_limit_failure(),
+        _ => ProviderFailure::new(
             ProviderFailureCategory::ProcessFailed,
             true,
             "Inspect provider readiness before creating a linked retry.",
             Some("Codex reported a failed Provider Turn."),
-        )
+        ),
     }
+}
+
+fn codex_error_info(error: Option<&Value>) -> Option<&str> {
+    error.and_then(|value| {
+        value
+            .get("codexErrorInfo")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                value
+                    .pointer("/data/codexErrorInfo")
+                    .and_then(Value::as_str)
+            })
+    })
+}
+
+fn authentication_lost_failure() -> ProviderFailure {
+    ProviderFailure::new(
+        ProviderFailureCategory::AuthenticationRequired,
+        true,
+        "Reconnect the Engineer User's Codex-managed ChatGPT subscription before creating a linked retry.",
+        Some("Codex-managed ChatGPT authentication was lost during the Provider Turn."),
+    )
+}
+
+fn account_state_loss_outcome_unknown(auth_mode: Option<&str>) -> ProviderFailure {
+    ProviderFailure::new(
+        ProviderFailureCategory::OutcomeUnknown,
+        false,
+        "Reconnect an eligible Codex-managed ChatGPT subscription and resolve the quarantined Agent Run before retrying.",
+        Some(if auth_mode.is_none() {
+            "Codex-managed ChatGPT authentication was lost before the accepted Provider Turn reported a terminal outcome."
+        } else {
+            "The active Codex account stopped reporting an eligible ChatGPT subscription before the accepted Provider Turn reported a terminal outcome."
+        }),
+    )
+}
+
+fn rate_limit_failure() -> ProviderFailure {
+    ProviderFailure::new(
+        ProviderFailureCategory::RateLimited,
+        true,
+        "Wait for Codex capacity to recover, then create a linked retry.",
+        Some("Codex reported a usage or capacity limit."),
+    )
 }
 
 fn require_turn(params: &Value, expected: &str) -> Result<(), ProviderFailure> {

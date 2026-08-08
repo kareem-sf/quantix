@@ -13,6 +13,7 @@
     "format": "prettier --write . && cargo fmt --manifest-path src-tauri/Cargo.toml",
     "format:check": "prettier --check . && cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "preview": "vite preview",
+    "smoke:codex": "cargo test --manifest-path src-tauri/Cargo.toml --lib agent_runtime::tests::codex_subscription_live_smoke -- --ignored --exact",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml --target-dir src-tauri/target/tests --features runtime-fixture",
     "verify": "npm run format:check && npm run check && npm test",
     "tauri": "tauri"

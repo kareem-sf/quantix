@@ -39,6 +39,7 @@ Domain documentation uses the single-context layout. See `docs/agents/domain.md`
 - Check formatting without changing files: `npm run format:check`
 - Run TypeScript typechecking and Rust clippy: `npm run check`
 - Run deterministic tests and regenerate Rust-owned TypeScript DTOs: `npm test`
+- Check the Engineer's existing Codex login locally (explicit opt-in): `npm run smoke:codex`
 - Build the production renderer: `npm run build`
 - Build the native desktop package: `npm run build:desktop`
 - Run the development verification gate without building: `npm run verify`

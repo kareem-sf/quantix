@@ -144,6 +144,31 @@ async fn readiness_reports_each_engineer_actionable_runtime_state() {
     assert_eq!(ready.codex_version.as_deref(), Some("0.147.0"));
     assert_eq!(ready.uv_version.as_deref(), Some("0.12.2"));
     assert_eq!(ready.docling_version.as_deref(), Some("2.118.0"));
+    let confirmed_ready = harness.host.inspect_runtime_readiness().await;
+    assert_eq!(confirmed_ready.state, RuntimeReadinessState::Ready);
+    assert_eq!(
+        fs::read_to_string(
+            harness
+                .runtime_bin
+                .join(executable_name("codex"))
+                .with_extension("probe-start-count"),
+        )
+        .expect("read Codex app-server start count"),
+        "1",
+        "runtime checks must reuse the one app-scoped Codex process",
+    );
+    let codex_environment = fs::read_to_string(
+        harness
+            .runtime_bin
+            .join(executable_name("codex"))
+            .with_extension("probe-environment"),
+    )
+    .expect("read restricted Codex probe environment");
+    assert!(codex_environment.lines().any(|name| name == "CODEX_HOME"));
+    assert!(!codex_environment.lines().any(|name| matches!(
+        name,
+        "PATH" | "GH_TOKEN" | "GITHUB_TOKEN" | "OPENAI_API_KEY" | "AWS_SECRET_ACCESS_KEY"
+    )));
 
     let unexpected_model = harness
         .application_home

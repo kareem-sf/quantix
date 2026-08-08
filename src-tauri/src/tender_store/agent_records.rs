@@ -480,13 +480,7 @@ impl TenderStore {
                 ],
             )
             .map_err(sql_error)?;
-        let sequence: u32 = transaction
-            .query_row(
-                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM provider_events WHERE run_id = ?1",
-                [&prepared.run_id],
-                |row| row.get(0),
-            )
-            .map_err(sql_error)?;
+        let sequence = next_provider_event_sequence(&transaction, &prepared.run_id)?;
         insert_event(
             &transaction,
             &prepared.run_id,
@@ -588,13 +582,7 @@ impl TenderStore {
         {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
-        let sequence: u32 = transaction
-            .query_row(
-                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM provider_events WHERE run_id = ?1",
-                [run_id],
-                |row| row.get(0),
-            )
-            .map_err(sql_error)?;
+        let sequence = next_provider_event_sequence(&transaction, run_id)?;
         insert_event(
             &transaction,
             run_id,
@@ -609,6 +597,84 @@ impl TenderStore {
             },
             &created_at,
         )?;
+        transaction.commit().map_err(sql_error)
+    }
+
+    pub(crate) fn checkpoint_agent_turn_requested(
+        &mut self,
+        run_id: &str,
+    ) -> Result<(), TenderCommandError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let request_is_valid: bool = transaction
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM agent_runs
+                   WHERE run_id = ?1 AND status = 'running'
+                     AND provider_thread_ref IS NOT NULL AND provider_turn_ref IS NULL
+                 )",
+                [run_id],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if !request_is_valid {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let created_at = sqlite_timestamp(&transaction)?;
+        let sequence = next_provider_event_sequence(&transaction, run_id)?;
+        insert_event(
+            &transaction,
+            run_id,
+            sequence,
+            PendingProviderEvent {
+                kind: ProviderEventKind::TurnRequested,
+                summary: "Provider Turn requested".into(),
+                correlation_id: None,
+                request_fingerprint: None,
+                denial_reason: None,
+                opaque_reference: None,
+            },
+            &created_at,
+        )?;
+        transaction.commit().map_err(sql_error)
+    }
+
+    pub(crate) fn checkpoint_agent_provider_event(
+        &mut self,
+        run_id: &str,
+        event: &PendingProviderEvent,
+        usage: &ProviderUsage,
+    ) -> Result<(), TenderCommandError> {
+        if !matches!(
+            event.kind,
+            ProviderEventKind::UsageObserved
+                | ProviderEventKind::RateLimitObserved
+                | ProviderEventKind::Warning
+                | ProviderEventKind::Terminal
+        ) {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let usage_json = canonical_json(usage)?;
+        if transaction
+            .execute(
+                "UPDATE agent_runs SET usage_json = ?2
+                 WHERE run_id = ?1 AND status = 'running'",
+                params![run_id, usage_json],
+            )
+            .map_err(sql_error)?
+            != 1
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let created_at = sqlite_timestamp(&transaction)?;
+        let sequence = next_provider_event_sequence(&transaction, run_id)?;
+        insert_event(&transaction, run_id, sequence, event.clone(), &created_at)?;
         transaction.commit().map_err(sql_error)
     }
 
@@ -663,13 +729,7 @@ impl TenderStore {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
         let created_at = sqlite_timestamp(&transaction)?;
-        let sequence: u32 = transaction
-            .query_row(
-                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM provider_events WHERE run_id = ?1",
-                [run_id],
-                |row| row.get(0),
-            )
-            .map_err(sql_error)?;
+        let sequence = next_provider_event_sequence(&transaction, run_id)?;
         insert_event(&transaction, run_id, sequence, event.clone(), &created_at)?;
         append_audit_event(
             &transaction,
@@ -1099,6 +1159,26 @@ impl TenderStore {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(sql_error)?;
+        let sequence = next_provider_event_sequence(&transaction, run_id)?;
+        insert_event(
+            &transaction,
+            run_id,
+            sequence,
+            PendingProviderEvent {
+                kind: ProviderEventKind::ControlRequestResolved,
+                summary: if succeeded {
+                    "Host Tool Call completed"
+                } else {
+                    "Host Tool Call failed"
+                }
+                .into(),
+                correlation_id: Some(correlation_id.into()),
+                request_fingerprint: None,
+                denial_reason: None,
+                opaque_reference: Some(tool_name.into()),
+            },
+            &completed_at,
+        )?;
         append_audit_event(
             &transaction,
             &tender_id,
@@ -1461,13 +1541,23 @@ impl TenderStore {
             let mut statement = self
                 .connection
                 .prepare(
-                    "SELECT run_id, provider_turn_ref FROM agent_runs
+                    "SELECT agent_runs.run_id, agent_runs.provider_turn_ref,
+                            EXISTS(
+                              SELECT 1 FROM provider_events
+                              WHERE provider_events.run_id = agent_runs.run_id
+                                AND provider_events.kind = 'turn_requested'
+                            )
+                     FROM agent_runs
                      WHERE status = 'running' ORDER BY run_sequence",
                 )
                 .map_err(sql_error)?;
             let runs = statement
                 .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, bool>(2)?,
+                    ))
                 })
                 .map_err(sql_error)?
                 .collect::<rusqlite::Result<Vec<_>>>()
@@ -1477,7 +1567,7 @@ impl TenderStore {
         if runs.is_empty() {
             return Ok(());
         }
-        for (run_id, turn_ref) in &runs {
+        for (run_id, turn_ref, turn_requested) in &runs {
             if run_id.len() != 32 {
                 return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
             }
@@ -1491,7 +1581,7 @@ impl TenderStore {
                 &self.root,
                 &workspace,
                 run_id,
-                if turn_ref.is_some() {
+                if turn_ref.is_some() || *turn_requested {
                     AgentRunState::Indeterminate
                 } else {
                     AgentRunState::Failed
@@ -1511,19 +1601,19 @@ impl TenderStore {
             .map_err(sql_error)?;
         let completed_at = sqlite_timestamp(&transaction)?;
         let usage_json = canonical_json(&ProviderUsage::default())?;
-        for (run_id, turn_ref) in runs {
-            let accepted = turn_ref.is_some();
-            let state = if accepted {
+        for (run_id, turn_ref, turn_requested) in runs {
+            let outcome_uncertain = turn_ref.is_some() || turn_requested;
+            let state = if outcome_uncertain {
                 AgentRunState::Indeterminate
             } else {
                 AgentRunState::Failed
             };
-            let failure = if accepted {
+            let failure = if outcome_uncertain {
                 ProviderFailure::new(
                     ProviderFailureCategory::OutcomeUnknown,
                     false,
                     "Resolve the quarantined Agent Run before retrying.",
-                    Some("The Host restarted after the Provider Turn was accepted but before its outcome was established."),
+                    Some("The Host restarted after Provider Turn dispatch began but before its acceptance or outcome was established."),
                 )
             } else {
                 ProviderFailure::new(
@@ -1537,7 +1627,7 @@ impl TenderStore {
             if transaction
                 .execute(
                     "UPDATE agent_runs
-                     SET status = ?2, usage_json = ?3, failure_json = ?4,
+                     SET status = ?2, usage_json = COALESCE(usage_json, ?3), failure_json = ?4,
                          completed_at = ?5
                      WHERE run_id = ?1 AND status = 'running'",
                     params![
@@ -1553,20 +1643,14 @@ impl TenderStore {
             {
                 return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
             }
-            let sequence: u32 = transaction
-                .query_row(
-                    "SELECT COALESCE(MAX(sequence), 0) + 1 FROM provider_events WHERE run_id = ?1",
-                    [&run_id],
-                    |row| row.get(0),
-                )
-                .map_err(sql_error)?;
+            let sequence = next_provider_event_sequence(&transaction, &run_id)?;
             insert_event(
                 &transaction,
                 &run_id,
                 sequence,
                 PendingProviderEvent {
                     kind: ProviderEventKind::Terminal,
-                    summary: if accepted {
+                    summary: if outcome_uncertain {
                         "Agent Run outcome became indeterminate after Host restart".into()
                     } else {
                         "Agent Run failed safely before Provider Turn acceptance".into()
@@ -1581,7 +1665,7 @@ impl TenderStore {
             append_audit_event(
                 &transaction,
                 tender_id.as_str(),
-                if accepted {
+                if outcome_uncertain {
                     "agent_run_indeterminate"
                 } else {
                     "agent_run_failed"
@@ -2041,6 +2125,19 @@ fn load_thread_exposure(
         cumulative.merge(&parse_canonical_json(&exposure)?);
     }
     Ok(cumulative)
+}
+
+fn next_provider_event_sequence(
+    transaction: &rusqlite::Transaction<'_>,
+    run_id: &str,
+) -> Result<u32, TenderCommandError> {
+    transaction
+        .query_row(
+            "SELECT COALESCE(MAX(sequence), 0) + 1 FROM provider_events WHERE run_id = ?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)
 }
 
 fn insert_event(

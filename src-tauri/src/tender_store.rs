@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 6;
+const TENDER_SCHEMA_VERSION: i64 = 7;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -273,7 +273,7 @@ CREATE TABLE agent_runs (
     REFERENCES agent_profile_versions(profile_id, version),
   FOREIGN KEY (retry_of_run_id) REFERENCES agent_runs(run_id),
   CHECK (
-    (status = 'running' AND completed_at IS NULL AND usage_json IS NULL AND failure_json IS NULL)
+    (status = 'running' AND completed_at IS NULL AND failure_json IS NULL)
     OR
     (status = 'completed' AND completed_at IS NOT NULL AND provider_thread_ref IS NOT NULL
       AND provider_turn_ref IS NOT NULL AND failure_json IS NULL)
@@ -342,8 +342,10 @@ CREATE TABLE provider_events (
   run_id TEXT NOT NULL,
   sequence INTEGER NOT NULL CHECK (sequence > 0),
   kind TEXT NOT NULL CHECK (kind IN (
-    'run_started', 'thread_established', 'thread_resumed', 'turn_started',
-    'usage_observed', 'control_request_denied', 'warning', 'terminal'
+    'run_started', 'thread_established', 'thread_resumed', 'turn_requested',
+    'turn_started',
+    'usage_observed', 'rate_limit_observed', 'control_request_resolved',
+    'control_request_denied', 'warning', 'terminal'
   )),
   summary TEXT NOT NULL,
   correlation_id TEXT,
@@ -360,13 +362,16 @@ CREATE TABLE provider_events (
   CHECK (
     (kind = 'control_request_denied' AND correlation_id IS NOT NULL
       AND length(request_fingerprint) = 64 AND denial_reason IS NOT NULL)
-    OR (kind != 'control_request_denied' AND correlation_id IS NULL
+    OR (kind = 'control_request_resolved' AND correlation_id IS NOT NULL
+      AND request_fingerprint IS NULL AND denial_reason IS NULL)
+    OR (kind NOT IN ('control_request_denied', 'control_request_resolved')
+      AND correlation_id IS NULL
       AND request_fingerprint IS NULL AND denial_reason IS NULL)
   )
 );
-CREATE UNIQUE INDEX provider_control_denials_one_correlation
+CREATE UNIQUE INDEX provider_control_requests_one_correlation
 ON provider_events(run_id, correlation_id)
-WHERE kind = 'control_request_denied';
+WHERE correlation_id IS NOT NULL;
 CREATE TABLE proposed_agent_results (
   result_id TEXT PRIMARY KEY CHECK (length(result_id) = 32),
   run_id TEXT NOT NULL UNIQUE,
@@ -587,8 +592,7 @@ WHEN OLD.status != 'running'
   OR (
     NEW.status = 'running'
     AND (
-      NEW.usage_json IS NOT NULL
-      OR NEW.failure_json IS NOT NULL
+      NEW.failure_json IS NOT NULL
       OR NEW.completed_at IS NOT NULL
       OR (OLD.provider_thread_ref IS NOT NULL
           AND NEW.provider_thread_ref IS NOT OLD.provider_thread_ref)

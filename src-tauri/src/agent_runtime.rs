@@ -1,7 +1,6 @@
 use std::{
-    env,
     ffi::OsString,
-    fs,
+    fs, io,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -45,6 +44,25 @@ const PROVIDER_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg(feature = "runtime-fixture")]
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(2);
 const PROVIDER_OUTPUT_LIMIT: usize = 1024 * 1024;
+const PROVIDER_READINESS_TIMEOUT: Duration = Duration::from_secs(20);
+pub(crate) const CODEX_VERSION: &str = "0.147.0";
+pub(crate) const CODEX_PROTOCOL_SCHEMA: &str =
+    include_str!("../runtime/codex_app_server_protocol.schemas.json");
+const SUPPORTED_CHATGPT_PLANS: [&str; 13] = [
+    "go",
+    "plus",
+    "pro",
+    "prolite",
+    "team",
+    "self_serve_business_prolite",
+    "self_serve_business_usage_based",
+    "business",
+    "ent26",
+    "enterprise_cbp_automation",
+    "enterprise_cbp_usage_based",
+    "enterprise",
+    "edu",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
 #[serde(deny_unknown_fields)]
@@ -223,8 +241,11 @@ pub enum ProviderEventKind {
     RunStarted,
     ThreadEstablished,
     ThreadResumed,
+    TurnRequested,
     TurnStarted,
     UsageObserved,
+    RateLimitObserved,
+    ControlRequestResolved,
     ControlRequestDenied,
     Warning,
     Terminal,
@@ -236,8 +257,11 @@ impl ProviderEventKind {
             Self::RunStarted => "run_started",
             Self::ThreadEstablished => "thread_established",
             Self::ThreadResumed => "thread_resumed",
+            Self::TurnRequested => "turn_requested",
             Self::TurnStarted => "turn_started",
             Self::UsageObserved => "usage_observed",
+            Self::RateLimitObserved => "rate_limit_observed",
+            Self::ControlRequestResolved => "control_request_resolved",
             Self::ControlRequestDenied => "control_request_denied",
             Self::Warning => "warning",
             Self::Terminal => "terminal",
@@ -249,8 +273,11 @@ impl ProviderEventKind {
             "run_started" => Ok(Self::RunStarted),
             "thread_established" => Ok(Self::ThreadEstablished),
             "thread_resumed" => Ok(Self::ThreadResumed),
+            "turn_requested" => Ok(Self::TurnRequested),
             "turn_started" => Ok(Self::TurnStarted),
             "usage_observed" => Ok(Self::UsageObserved),
+            "rate_limit_observed" => Ok(Self::RateLimitObserved),
+            "control_request_resolved" => Ok(Self::ControlRequestResolved),
             "control_request_denied" => Ok(Self::ControlRequestDenied),
             "warning" => Ok(Self::Warning),
             "terminal" => Ok(Self::Terminal),
@@ -281,13 +308,39 @@ pub struct ProviderUsage {
     pub total_tokens: Option<u64>,
     pub context_window: Option<u64>,
     pub elapsed_milliseconds: Option<u64>,
-    pub rate_limit_reached: Option<String>,
+    pub rate_limit: Option<ProviderRateLimit>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ProviderRateLimitState {
+    Available,
+    Exhausted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ProviderRateLimitWindow {
+    pub used_percent: u32,
+    pub window_minutes: Option<u64>,
+    pub resets_at_epoch_seconds: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ProviderRateLimit {
+    pub state: ProviderRateLimitState,
+    pub primary: Option<ProviderRateLimitWindow>,
+    pub secondary: Option<ProviderRateLimitWindow>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum ProviderFailureCategory {
+    AuthenticationRequired,
+    SubscriptionRequired,
     ProtocolInvalid,
     ProcessFailed,
     RateLimited,
@@ -414,12 +467,17 @@ struct ActiveAgentRunGuard {
 }
 
 type TurnAcceptedCallback = dyn FnOnce(&str) -> Result<(), ProviderFailure> + Send;
+type TurnRequestedCallback = dyn FnOnce() -> Result<(), ProviderFailure> + Send;
+type TurnEventCallback =
+    dyn FnMut(&PendingProviderEvent, &ProviderUsage) -> Result<(), ProviderFailure> + Send;
 type TurnDeniedCallback = dyn FnMut(&PendingProviderEvent) -> Result<(), ProviderFailure> + Send;
 type TurnToolCallCallback =
     dyn FnMut(&str, &str, &Value) -> Result<Option<String>, ProviderFailure> + Send;
 
 struct RunCallbacks {
+    on_requested: Box<TurnRequestedCallback>,
     on_accepted: Box<TurnAcceptedCallback>,
+    on_event: Box<TurnEventCallback>,
     on_denied: Box<TurnDeniedCallback>,
     on_tool_call: Box<TurnToolCallCallback>,
 }
@@ -578,6 +636,62 @@ impl QuantixHost {
         }
         Ok(self.cancel_active_agent_run(tender_id.as_str(), &command.run_id))
     }
+
+    pub(crate) async fn inspect_codex_subscription(
+        &self,
+        cancellation: CancellationToken,
+    ) -> CodexReadiness {
+        match self.try_inspect_codex_subscription(cancellation).await {
+            Ok(()) => CodexReadiness::Ready,
+            Err(failure) if failure.category == ProviderFailureCategory::AuthenticationRequired => {
+                CodexReadiness::AuthenticationRequired
+            }
+            Err(failure) if failure.category == ProviderFailureCategory::SubscriptionRequired => {
+                CodexReadiness::SubscriptionRequired
+            }
+            Err(_) => CodexReadiness::Unavailable,
+        }
+    }
+
+    async fn try_inspect_codex_subscription(
+        &self,
+        cancellation: CancellationToken,
+    ) -> Result<(), ProviderFailure> {
+        let mut provider_slot = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Err(readiness_interruption_failure()),
+            provider_slot = self.agent_provider().lock() => provider_slot,
+        };
+        if provider_slot.is_none() {
+            let provider = CodexProvider::readiness(
+                self.process_supervisor(),
+                self.runtime_layout().codex_executable(),
+                self.application_home(),
+                cancellation.clone(),
+            )
+            .await;
+            if cancellation.is_cancelled() {
+                if let Ok(mut provider) = provider {
+                    let _ = provider.shutdown().await;
+                }
+                return Err(readiness_interruption_failure());
+            }
+            *provider_slot = Some(provider?);
+            return Ok(());
+        }
+        let readiness = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => Err(readiness_interruption_failure()),
+            readiness = provider_slot
+                .as_mut()
+                .expect("provider remains available")
+                .refresh_readiness() => readiness,
+        };
+        if readiness.is_err() {
+            shutdown_provider(&mut provider_slot).await;
+        }
+        readiness
+    }
 }
 
 async fn execute_provider_turn(
@@ -604,6 +718,7 @@ async fn execute_provider_turn(
                 host.process_supervisor(),
                 host.runtime_layout().codex_executable(),
                 host.application_home(),
+                cancellation.clone(),
             ) => provider,
         } {
             Ok(provider) => provider,
@@ -712,10 +827,14 @@ async fn execute_provider_turn(
         shutdown_provider(&mut provider_slot).await;
         return execution;
     }
+    let requested_store = Arc::clone(store);
     let checkpoint_store = Arc::clone(store);
+    let event_store = Arc::clone(store);
     let denial_store = Arc::clone(store);
     let tool_store = Arc::clone(store);
+    let requested_run_id = prepared.run_id.clone();
     let run_id = prepared.run_id.clone();
+    let event_run_id = prepared.run_id.clone();
     let denial_run_id = prepared.run_id.clone();
     let tool_run_id = prepared.run_id.clone();
     let tool_prepared = prepared.clone();
@@ -733,11 +852,25 @@ async fn execute_provider_turn(
             remaining_operation,
             cancellation,
             RunCallbacks {
+                on_requested: Box::new(move || {
+                    requested_store
+                        .lock()
+                        .map_err(|_| process_failure(false))?
+                        .checkpoint_agent_turn_requested(&requested_run_id)
+                        .map_err(|_| process_failure(false))
+                }),
                 on_accepted: Box::new(move |turn_ref| {
                     checkpoint_store
                         .lock()
                         .map_err(|_| outcome_unknown())?
                         .checkpoint_agent_turn(&run_id, turn_ref)
+                        .map_err(|_| outcome_unknown())
+                }),
+                on_event: Box::new(move |event, usage| {
+                    event_store
+                        .lock()
+                        .map_err(|_| outcome_unknown())?
+                        .checkpoint_agent_provider_event(&event_run_id, event, usage)
                         .map_err(|_| outcome_unknown())
                 }),
                 on_denied: Box::new(move |event| {
@@ -803,7 +936,10 @@ async fn execute_provider_turn(
     ) || execution.failure.as_ref().is_some_and(|failure| {
         matches!(
             failure.category,
-            ProviderFailureCategory::ProtocolInvalid | ProviderFailureCategory::ProcessFailed
+            ProviderFailureCategory::AuthenticationRequired
+                | ProviderFailureCategory::SubscriptionRequired
+                | ProviderFailureCategory::ProtocolInvalid
+                | ProviderFailureCategory::ProcessFailed
         )
     }) {
         shutdown_provider(&mut provider_slot).await;
@@ -825,6 +961,32 @@ fn failed_execution(failure: ProviderFailure, started: Instant) -> ProviderExecu
         events: vec![PendingProviderEvent::new(
             ProviderEventKind::Terminal,
             "Agent Run failed before a Provider Turn completed",
+            None,
+        )],
+        usage: ProviderUsage {
+            elapsed_milliseconds: Some(
+                started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+            ),
+            ..ProviderUsage::default()
+        },
+        failure: Some(failure),
+        candidate_payload_json: None,
+    }
+}
+
+fn indeterminate_execution(
+    thread_ref: &str,
+    turn_ref: Option<String>,
+    failure: ProviderFailure,
+    started: Instant,
+) -> ProviderExecution {
+    ProviderExecution {
+        state: AgentRunState::Indeterminate,
+        provider_thread_ref: Some(thread_ref.to_owned()),
+        provider_turn_ref: turn_ref,
+        events: vec![PendingProviderEvent::new(
+            ProviderEventKind::Terminal,
+            "Provider Turn acceptance or outcome is indeterminate",
             None,
         )],
         usage: ProviderUsage {
@@ -895,6 +1057,15 @@ fn interruption_failure() -> ProviderFailure {
     )
 }
 
+fn readiness_interruption_failure() -> ProviderFailure {
+    ProviderFailure::new(
+        ProviderFailureCategory::Interrupted,
+        false,
+        "Check Codex subscription readiness again when preparation resumes.",
+        Some("Codex subscription readiness was interrupted."),
+    )
+}
+
 fn permission_failure() -> ProviderFailure {
     ProviderFailure::new(
         ProviderFailureCategory::PermissionDenied,
@@ -902,6 +1073,86 @@ fn permission_failure() -> ProviderFailure {
         "Create a new Agent Run with a current Permission Grant.",
         Some("The Agent Run Permission Grant expired."),
     )
+}
+
+fn authentication_failure() -> ProviderFailure {
+    ProviderFailure::new(
+        ProviderFailureCategory::AuthenticationRequired,
+        true,
+        "Connect the Engineer User's Codex-managed ChatGPT subscription, then retry.",
+        Some("Codex-managed ChatGPT authentication is required."),
+    )
+}
+
+fn subscription_failure() -> ProviderFailure {
+    ProviderFailure::new(
+        ProviderFailureCategory::SubscriptionRequired,
+        true,
+        "Connect an eligible Codex-managed ChatGPT subscription, then retry.",
+        Some("The active Codex account is not an eligible ChatGPT subscription."),
+    )
+}
+
+fn turn_acceptance_unknown() -> ProviderFailure {
+    ProviderFailure::new(
+        ProviderFailureCategory::OutcomeUnknown,
+        false,
+        "Resolve the quarantined Agent Run before retrying.",
+        Some("The Provider Turn may have started, but its identity and outcome could not be established."),
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CodexReadiness {
+    Ready,
+    AuthenticationRequired,
+    SubscriptionRequired,
+    Unavailable,
+}
+
+fn chatgpt_subscription_is_supported(account_type: Option<&str>, plan_type: Option<&str>) -> bool {
+    account_type == Some("chatgpt")
+        && plan_type.is_some_and(|plan| SUPPORTED_CHATGPT_PLANS.contains(&plan))
+}
+
+fn codex_user_agent_is_supported(user_agent: &str) -> bool {
+    let server_identity = user_agent
+        .split_once(" (")
+        .map_or(user_agent, |(identity, _)| identity);
+    server_identity
+        .rsplit_once('/')
+        .is_some_and(|(product, version)| !product.is_empty() && version == CODEX_VERSION)
+}
+
+fn controlled_codex_environment(application_home: &Path) -> io::Result<Vec<(OsString, OsString)>> {
+    let engineer_home = application_home.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Application Home must have an Engineer home parent",
+        )
+    })?;
+    let staging = application_home.join("staging").join("provider-codex");
+    fs::create_dir_all(&staging)?;
+    let codex_home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| engineer_home.join(".codex"));
+    let mut environment = vec![
+        (OsString::from("CODEX_HOME"), codex_home.into_os_string()),
+        (OsString::from("HOME"), engineer_home.as_os_str().to_owned()),
+        (
+            OsString::from("USERPROFILE"),
+            engineer_home.as_os_str().to_owned(),
+        ),
+        (OsString::from("TEMP"), staging.clone().into_os_string()),
+        (OsString::from("TMP"), staging.clone().into_os_string()),
+        (OsString::from("TMPDIR"), staging.into_os_string()),
+    ];
+    for name in ["SystemRoot", "WINDIR"] {
+        if let Some(value) = std::env::var_os(name) {
+            environment.push((OsString::from(name), value));
+        }
+    }
+    Ok(environment)
 }
 
 pub(crate) struct CodexProvider {
@@ -913,6 +1164,7 @@ impl CodexProvider {
         supervisor: &crate::process_supervisor::ProcessSupervisor,
         executable: PathBuf,
         process_directory: &Path,
+        cancellation: CancellationToken,
     ) -> Result<Self, ProviderFailure> {
         let mut conversation = supervisor
             .start_conversation(
@@ -920,19 +1172,45 @@ impl CodexProvider {
                     executable,
                     arguments: restricted_codex_arguments(),
                     current_directory: Some(process_directory.to_path_buf()),
-                    environment: restricted_codex_environment(process_directory)?,
+                    environment: controlled_codex_environment(process_directory)
+                        .map_err(|_| process_failure(false))?,
                     inherit_environment: false,
                     stdin: Vec::new(),
                     timeout: PROVIDER_TIMEOUT,
                     stdout_limit: PROVIDER_OUTPUT_LIMIT,
                     stderr_limit: PROVIDER_OUTPUT_LIMIT,
                 },
-                CancellationToken::new(),
+                cancellation,
             )
             .await
             .map_err(|_| process_failure(false))?;
+        if let Err(failure) = Self::initialize(&mut conversation).await {
+            let termination = conversation
+                .failure_termination()
+                .unwrap_or(ProcessTermination::Cancelled);
+            let _ = conversation.finish(Some(termination)).await;
+            return Err(failure);
+        }
+        Ok(Self {
+            conversation: Some(conversation),
+        })
+    }
+
+    async fn refresh_readiness(&mut self) -> Result<(), ProviderFailure> {
+        let conversation = self.conversation_mut()?;
+        conversation
+            .begin_operation(
+                PROVIDER_READINESS_TIMEOUT,
+                PROVIDER_OUTPUT_LIMIT,
+                PROVIDER_OUTPUT_LIMIT,
+            )
+            .map_err(|_| process_failure(false))?;
+        Self::verify_subscription(conversation).await
+    }
+
+    async fn initialize(conversation: &mut SupervisedConversation) -> Result<(), ProviderFailure> {
         write_rpc(
-            &mut conversation,
+            conversation,
             &json!({
                 "method": "initialize",
                 "id": 0,
@@ -957,19 +1235,97 @@ impl CodexProvider {
         .await
         .map_err(|_| process_failure(false))?;
         let response =
-            read_expected_response(&mut conversation, &json!(0), "InitializeResponse").await?;
-        if response.get("userAgent").and_then(Value::as_str).is_none() {
+            read_expected_response(conversation, &json!(0), "InitializeResponse").await?;
+        if !response
+            .get("userAgent")
+            .and_then(Value::as_str)
+            .is_some_and(codex_user_agent_is_supported)
+        {
             return Err(protocol_failure(false));
         }
         write_rpc(
-            &mut conversation,
+            conversation,
             &json!({ "method": "initialized", "params": {} }),
         )
         .await
         .map_err(|_| process_failure(false))?;
-        Ok(Self {
-            conversation: Some(conversation),
-        })
+        Self::verify_subscription(conversation).await
+    }
+
+    async fn verify_subscription(
+        conversation: &mut SupervisedConversation,
+    ) -> Result<(), ProviderFailure> {
+        write_rpc(
+            conversation,
+            &json!({
+                "method": "account/read",
+                "id": 1,
+                "params": { "refreshToken": true }
+            }),
+        )
+        .await
+        .map_err(|_| process_failure(false))?;
+        let account =
+            read_expected_response(conversation, &json!(1), "v2/GetAccountResponse").await?;
+        let account_type = account.pointer("/account/type").and_then(Value::as_str);
+        if account_type.is_none() {
+            return Err(authentication_failure());
+        }
+        let plan_type = account.pointer("/account/planType").and_then(Value::as_str);
+        if !chatgpt_subscription_is_supported(account_type, plan_type) {
+            return Err(subscription_failure());
+        }
+        let mut cursor: Option<String> = None;
+        for page in 0_u32..100 {
+            let id = json!(2 + page);
+            write_rpc(
+                conversation,
+                &json!({
+                    "method": "model/list",
+                    "id": id,
+                    "params": {
+                        "cursor": cursor,
+                        "limit": 100,
+                        "includeHidden": false
+                    }
+                }),
+            )
+            .await
+            .map_err(|_| process_failure(false))?;
+            let models = read_expected_response(conversation, &id, "v2/ModelListResponse").await?;
+            let has_usable_model =
+                models
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .is_some_and(|models| {
+                        models.iter().any(|model| {
+                            model.get("hidden").and_then(Value::as_bool) == Some(false)
+                                && model
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|id| !id.is_empty())
+                                && model
+                                    .get("inputModalities")
+                                    .and_then(Value::as_array)
+                                    .is_none_or(|modalities| {
+                                        modalities
+                                            .iter()
+                                            .any(|value| value.as_str() == Some("text"))
+                                    })
+                        })
+                    });
+            if has_usable_model {
+                return Ok(());
+            }
+            cursor = models
+                .get("nextCursor")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Err(protocol_failure(false))
     }
 
     async fn establish_or_resume_thread(
@@ -1039,7 +1395,9 @@ impl CodexProvider {
             return interrupted_execution(Instant::now());
         }
         let RunCallbacks {
+            on_requested,
             on_accepted,
+            mut on_event,
             mut on_denied,
             mut on_tool_call,
         } = callbacks;
@@ -1074,26 +1432,51 @@ impl CodexProvider {
                 "outputSchema": output_schema,
             }
         });
+        if let Err(failure) = on_requested() {
+            return failed_execution(failure, operation_started);
+        }
         let write_result = tokio::select! {
             biased;
             _ = cancellation.cancelled() => {
-                return interrupted_execution(operation_started);
+                return indeterminate_execution(
+                    thread_ref,
+                    None,
+                    turn_acceptance_unknown(),
+                    operation_started,
+                );
             }
             result = write_rpc(conversation, &turn_start) => result,
         };
         if write_result.is_err() {
-            return failed_execution(process_failure(false), Instant::now());
+            return indeterminate_execution(
+                thread_ref,
+                None,
+                turn_acceptance_unknown(),
+                operation_started,
+            );
         }
         let turn_start_id = json!(2);
         let turn_response = match tokio::select! {
             biased;
             _ = cancellation.cancelled() => {
-                return interrupted_execution(operation_started);
+                return indeterminate_execution(
+                    thread_ref,
+                    None,
+                    turn_acceptance_unknown(),
+                    operation_started,
+                );
             }
             response = read_expected_response(conversation, &turn_start_id, "v2/TurnStartResponse") => response,
         } {
             Ok(response) => response,
-            Err(failure) => return failed_execution(failure, Instant::now()),
+            Err(_) => {
+                return indeterminate_execution(
+                    thread_ref,
+                    None,
+                    turn_acceptance_unknown(),
+                    operation_started,
+                )
+            }
         };
         let turn_ref = match turn_response
             .pointer("/turn/id")
@@ -1101,22 +1484,17 @@ impl CodexProvider {
             .filter(|value| !value.is_empty())
         {
             Some(turn_ref) => turn_ref.to_owned(),
-            None => return failed_execution(protocol_failure(false), Instant::now()),
+            None => {
+                return indeterminate_execution(
+                    thread_ref,
+                    None,
+                    turn_acceptance_unknown(),
+                    operation_started,
+                )
+            }
         };
         if let Err(failure) = on_accepted(&turn_ref) {
-            return ProviderExecution {
-                state: AgentRunState::Indeterminate,
-                provider_thread_ref: Some(thread_ref.to_owned()),
-                provider_turn_ref: Some(turn_ref),
-                events: vec![PendingProviderEvent::new(
-                    ProviderEventKind::Terminal,
-                    "Provider Turn outcome is indeterminate",
-                    None,
-                )],
-                usage: ProviderUsage::default(),
-                failure: Some(failure),
-                candidate_payload_json: None,
-            };
+            return indeterminate_execution(thread_ref, Some(turn_ref), failure, operation_started);
         }
         let mut execution = ProviderExecution {
             state: AgentRunState::Running,
@@ -1167,7 +1545,7 @@ impl CodexProvider {
             };
             if message.get("id").is_some() && message.get("method").is_none() {
                 if message.get("id") == Some(&json!(3)) {
-                    if response_result(&message, "v2/TurnInterruptResponse").is_err() {
+                    if response_result(&message, "v2/TurnInterruptResponse", true).is_err() {
                         execution.state = AgentRunState::Indeterminate;
                         execution.failure = Some(protocol_failure(true));
                         break;
@@ -1214,20 +1592,27 @@ impl CodexProvider {
                 execution.failure = Some(protocol_failure(true));
                 break;
             }
-            match handle_notification(
+            let outcome = match handle_notification(
                 method,
                 message.get("params").unwrap_or(&Value::Null),
                 &turn_ref,
                 &mut execution,
                 &mut final_candidate,
             ) {
-                Ok(NotificationOutcome::Continue) => {}
-                Ok(NotificationOutcome::Terminal) => break,
+                Ok(outcome) => outcome,
                 Err(_) => {
                     execution.state = AgentRunState::Indeterminate;
                     execution.failure = Some(protocol_failure(true));
                     break;
                 }
+            };
+            if stream_provider_events(&mut execution, &mut on_event).is_err() {
+                execution.state = AgentRunState::Indeterminate;
+                execution.failure = Some(outcome_unknown());
+                break;
+            }
+            if matches!(outcome, NotificationOutcome::Terminal) {
+                break;
             }
         }
         let provider_terminal_state = execution.state;
@@ -1400,34 +1785,18 @@ fn restricted_codex_arguments() -> Vec<OsString> {
     arguments
 }
 
-fn restricted_codex_environment(
-    application_home: &Path,
-) -> Result<Vec<(OsString, OsString)>, ProviderFailure> {
-    let engineer_home = application_home
-        .parent()
-        .ok_or_else(|| process_failure(false))?;
-    let codex_home = env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| engineer_home.join(".codex"));
-    let temporary = application_home.join("staging").join("provider-codex");
-    fs::create_dir_all(&temporary).map_err(|_| process_failure(false))?;
-    let mut environment = vec![
-        (OsString::from("CODEX_HOME"), codex_home.into_os_string()),
-        (
-            OsString::from("HOME"),
-            engineer_home.as_os_str().to_os_string(),
-        ),
-        (
-            OsString::from("USERPROFILE"),
-            engineer_home.as_os_str().to_os_string(),
-        ),
-        (OsString::from("TEMP"), temporary.as_os_str().to_os_string()),
-        (OsString::from("TMP"), temporary.into_os_string()),
-    ];
-    if let Some(system_root) = env::var_os("SYSTEMROOT") {
-        environment.push((OsString::from("SYSTEMROOT"), system_root));
+fn stream_provider_events(
+    execution: &mut ProviderExecution,
+    on_event: &mut TurnEventCallback,
+) -> Result<(), ProviderFailure> {
+    let events = std::mem::take(&mut execution.events);
+    for event in events {
+        if let Err(failure) = on_event(&event, &execution.usage) {
+            execution.events.push(event);
+            return Err(failure);
+        }
     }
-    Ok(environment)
+    Ok(())
 }
 
 fn valid_identifier(value: &str) -> bool {
@@ -1435,4 +1804,41 @@ fn valid_identifier(value: &str) -> bool {
         && value
             .chars()
             .all(|character| character.is_ascii_digit() || matches!(character, 'a'..='f'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "explicitly contacts the Engineer User's local Codex app-server"]
+    async fn codex_subscription_live_smoke() {
+        let home_variable = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        let engineer_home = std::env::var_os(home_variable)
+            .map(PathBuf::from)
+            .expect("the Engineer User home directory must be available");
+        let application_home = engineer_home.join(".quantix");
+        let executable = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("runtime")
+            .join("bin")
+            .join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        assert!(
+            executable.is_file(),
+            "prepare the pinned Codex runtime before running the live smoke check"
+        );
+
+        let supervisor = crate::process_supervisor::ProcessSupervisor;
+        let mut provider = CodexProvider::readiness(
+            &supervisor,
+            executable,
+            &application_home,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_or_else(|failure| panic!("Codex subscription is not ready: {failure:?}"));
+        provider
+            .shutdown()
+            .await
+            .expect("the Codex app-server must shut down cleanly");
+    }
 }

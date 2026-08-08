@@ -54,72 +54,130 @@ fn run_codex(
             fs::read_to_string(agent_scenario)?.trim(),
         );
     }
+    let start_count_path = executable.with_extension("probe-start-count");
+    let start_count = fs::read_to_string(&start_count_path)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or("Codex probe start count overflow")?;
+    fs::write(&start_count_path, start_count.to_string())?;
+    let mut environment = env::vars_os()
+        .filter_map(|(name, _)| name.into_string().ok())
+        .collect::<Vec<_>>();
+    environment.sort();
+    fs::write(
+        executable.with_extension("probe-environment"),
+        environment.join("\n"),
+    )?;
     let mut requests = io::BufReader::new(io::stdin()).lines();
-    let initialize = requests.next().ok_or("missing initialize request")??;
-    if !initialize.contains("\"method\":\"initialize\"")
-        || initialize.contains("\"method\":\"account/read\"")
-    {
-        return Err("invalid initialize sequence".into());
-    }
-    println!(
-        "{}",
-        serde_json::json!({
-            "id": 0,
-            "result": {
-                "codexHome": executable.parent().ok_or("missing fixture parent")?,
-                "userAgent": "fixture",
-                "platformFamily": if cfg!(windows) { "windows" } else { "unix" },
-                "platformOs": env::consts::OS,
-            }
-        })
-    );
-    io::stdout().flush()?;
-    let initialized = requests
-        .next()
-        .ok_or("missing initialized notification")??;
-    let account_read = requests.next().ok_or("missing account/read request")??;
-    if !initialized.contains("\"method\":\"initialized\"")
-        || !account_read.contains("\"method\":\"account/read\"")
-    {
-        return Err("invalid post-initialize sequence".into());
-    }
-    let probe_delay = executable.with_extension("probe-delay");
-    if probe_delay.is_file() {
-        fs::write(executable.with_extension("probe-ready"), b"ready")?;
-        let milliseconds = fs::read_to_string(probe_delay)?.trim().parse()?;
-        std::thread::sleep(std::time::Duration::from_millis(milliseconds));
-    }
-    match fs::read_to_string(executable.with_extension("auth"))?.trim() {
-        "chatgpt" => println!(
-            "{}",
-            serde_json::json!({
-                "id": 1,
-                "result": {
-                    "account": {
-                        "type": "chatgpt",
-                        "email": null,
-                        "planType": fs::read_to_string(executable.with_extension("plan"))?.trim(),
-                    },
-                    "requiresOpenaiAuth": true,
-                }
-            })
-        ),
-        "none" => println!(
-            "{{\"id\":1,\"result\":{{\"account\":null,\"requiresOpenaiAuth\":true}}}}"
-        ),
-        "apikey" => println!(
-            "{{\"id\":1,\"result\":{{\"account\":{{\"type\":\"apiKey\"}},\"requiresOpenaiAuth\":true}}}}"
-        ),
-        "malformed" => println!("not-json"),
-        "mixed" => {
-            println!("not-json");
-            println!(
-                "{{\"id\":1,\"result\":{{\"account\":{{\"type\":\"chatgpt\",\"email\":null,\"planType\":\"plus\"}},\"requiresOpenaiAuth\":true}}}}"
-            );
+    let initialize = read_json_request(&mut requests, "initialize")?;
+    write_json(&serde_json::json!({
+        "id": initialize.get("id").cloned().ok_or("initialize id")?,
+        "result": {
+            "codexHome": executable.parent().ok_or("missing fixture parent")?,
+            "userAgent": "quantix/0.147.0 (fixture; runtime-readiness) (quantix; 0.1.0)",
+            "platformFamily": if cfg!(windows) { "windows" } else { "unix" },
+            "platformOs": env::consts::OS,
         }
-        state => return Err(format!("unknown auth fixture state {state}").into()),
+    }))?;
+    let initialized = read_json_line(&mut requests)?;
+    if initialized
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        != Some("initialized")
+    {
+        return Err("missing initialized notification".into());
     }
-    Ok(())
+    loop {
+        let Some(account_read) = requests.next() else {
+            return Ok(());
+        };
+        let account_read: serde_json::Value = serde_json::from_str(&account_read?)?;
+        if account_read
+            .get("method")
+            .and_then(serde_json::Value::as_str)
+            != Some("account/read")
+        {
+            return Err("expected account/read request".into());
+        }
+        if account_read.pointer("/params/refreshToken") != Some(&serde_json::Value::Bool(true)) {
+            return Err("Codex readiness did not request a managed-auth refresh".into());
+        }
+        let account_id = account_read
+            .get("id")
+            .cloned()
+            .ok_or("account request id")?;
+        let probe_delay = executable.with_extension("probe-delay");
+        if probe_delay.is_file() {
+            fs::write(executable.with_extension("probe-ready"), b"ready")?;
+            let milliseconds = fs::read_to_string(probe_delay)?.trim().parse()?;
+            std::thread::sleep(std::time::Duration::from_millis(milliseconds));
+        }
+        let auth = fs::read_to_string(executable.with_extension("auth"))?;
+        let auth = auth.trim();
+        let plan = fs::read_to_string(executable.with_extension("plan"))?;
+        let plan = plan.trim();
+        let account = match auth {
+            "chatgpt" => serde_json::json!({
+                "type": "chatgpt",
+                "email": null,
+                "planType": plan,
+            }),
+            "none" => serde_json::Value::Null,
+            "apikey" => serde_json::json!({ "type": "apiKey" }),
+            "malformed" => {
+                println!("not-json");
+                io::stdout().flush()?;
+                return Ok(());
+            }
+            "mixed" => {
+                println!("not-json");
+                write_json(&serde_json::json!({
+                    "id": account_id,
+                    "result": {
+                        "account": {
+                            "type": "chatgpt",
+                            "email": null,
+                            "planType": "plus"
+                        },
+                        "requiresOpenaiAuth": true
+                    }
+                }))?;
+                return Ok(());
+            }
+            state => return Err(format!("unknown auth fixture state {state}").into()),
+        };
+        write_json(&serde_json::json!({
+            "id": account_id,
+            "result": { "account": account, "requiresOpenaiAuth": true }
+        }))?;
+        if auth != "chatgpt" || !matches!(plan, "go" | "plus") {
+            continue;
+        }
+        let model_list = read_json_request(&mut requests, "model/list")?;
+        write_json(&serde_json::json!({
+            "id": model_list.get("id").cloned().ok_or("model list request id")?,
+            "result": {
+                "data": [{
+                    "id": "gpt-5.6-terra",
+                    "model": "gpt-5.6-terra",
+                    "displayName": "GPT-5.6 Terra",
+                    "description": "Fixture Codex model",
+                    "hidden": false,
+                    "defaultReasoningEffort": "medium",
+                    "supportedReasoningEfforts": [{
+                        "reasoningEffort": "medium",
+                        "description": "Fixture reasoning effort"
+                    }],
+                    "inputModalities": ["text"],
+                    "supportsPersonality": true,
+                    "isDefault": true
+                }],
+                "nextCursor": null
+            }
+        }))?;
+    }
 }
 
 fn run_agent_codex(
@@ -182,7 +240,11 @@ fn run_agent_codex(
         "id": initialize_id,
         "result": {
             "codexHome": executable.parent().ok_or("missing fixture parent")?,
-            "userAgent": "quantix-agent-fixture/0.147.0",
+            "userAgent": if scenario == "unsupported-provider-version" {
+                "Codex Desktop/0.146.0 (fixture; agent-runtime) (quantix; 0.1.0)"
+            } else {
+                "Codex Desktop/0.147.0 (fixture; agent-runtime) (quantix; 0.1.0)"
+            },
             "platformFamily": if cfg!(windows) { "windows" } else { "unix" },
             "platformOs": env::consts::OS,
         }
@@ -199,9 +261,104 @@ fn run_agent_codex(
         "method": "account/updated",
         "params": { "authMode": null, "planType": null }
     }))?;
+    let account_read = read_json_request(&mut requests, "account/read")?;
+    if account_read.pointer("/params/refreshToken") != Some(&serde_json::Value::Bool(true)) {
+        return Err("Codex readiness did not request a managed-auth refresh".into());
+    }
+    if scenario == "account-auth-error" {
+        write_json(&serde_json::json!({
+            "id": account_read.get("id").cloned().ok_or("account request id")?,
+            "error": {
+                "code": -32000,
+                "message": "fixture expired access token",
+                "data": { "codexErrorInfo": "unauthorized" }
+            }
+        }))?;
+        for request in requests {
+            request?;
+        }
+        return Ok(());
+    }
+    let account = match scenario {
+        "signed-out" => serde_json::Value::Null,
+        "api-key" => serde_json::json!({ "type": "apiKey" }),
+        _ => serde_json::json!({
+            "type": "chatgpt",
+            "email": null,
+            "planType": "plus"
+        }),
+    };
+    write_json(&serde_json::json!({
+        "id": account_read.get("id").cloned().ok_or("account request id")?,
+        "result": {
+            "account": account,
+            "requiresOpenaiAuth": true
+        }
+    }))?;
+    if matches!(scenario, "signed-out" | "api-key") {
+        for request in requests {
+            request?;
+        }
+        return Ok(());
+    }
+    let usable_model = serde_json::json!({
+        "id": "gpt-5.6-terra",
+        "model": "gpt-5.6-terra",
+        "displayName": "GPT-5.6 Terra",
+        "description": "Fixture Codex model",
+        "hidden": false,
+        "defaultReasoningEffort": "medium",
+        "supportedReasoningEfforts": [{
+            "reasoningEffort": "medium",
+            "description": "Fixture reasoning effort"
+        }],
+        "inputModalities": ["text"],
+        "supportsPersonality": true,
+        "isDefault": true
+    });
+    let model_list = read_json_request(&mut requests, "model/list")?;
+    let first_page = if matches!(scenario, "missing-capability" | "model-second-page") {
+        Vec::new()
+    } else {
+        vec![usable_model.clone()]
+    };
+    write_json(&serde_json::json!({
+        "id": model_list.get("id").cloned().ok_or("model list request id")?,
+        "result": {
+            "data": first_page,
+            "nextCursor": if scenario == "model-second-page" { Some("models-2") } else { None }
+        }
+    }))?;
+    if scenario == "missing-capability" {
+        for request in requests {
+            request?;
+        }
+        return Ok(());
+    }
+    if scenario == "model-second-page" {
+        let second_page = read_json_request(&mut requests, "model/list")?;
+        if second_page
+            .pointer("/params/cursor")
+            .and_then(serde_json::Value::as_str)
+            != Some("models-2")
+        {
+            return Err("Codex model pagination did not use the returned cursor".into());
+        }
+        write_json(&serde_json::json!({
+            "id": second_page.get("id").cloned().ok_or("second model list request id")?,
+            "result": { "data": [usable_model], "nextCursor": null }
+        }))?;
+    }
 
+    let mut thread_count = 0_u32;
+    let mut turn_count = 0_u32;
     loop {
-        if !run_agent_turn(executable, &mut requests)? {
+        if !run_agent_turn(
+            executable,
+            &mut requests,
+            &mut thread_count,
+            &mut turn_count,
+        )? {
             return Ok(());
         }
     }
@@ -210,6 +367,8 @@ fn run_agent_codex(
 fn run_agent_turn(
     executable: &Path,
     requests: &mut impl Iterator<Item = io::Result<String>>,
+    thread_count: &mut u32,
+    turn_count: &mut u32,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let Some(thread_request) = requests.next() else {
         return Ok(false);
@@ -295,16 +454,24 @@ fn run_agent_turn(
     if scenario == "process-failure-before-turn" {
         return Err("fixture provider process failure".into());
     }
-    let thread_id = thread_request
+    let new_thread_id;
+    let thread_id = if let Some(existing) = thread_request
         .pointer("/params/threadId")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or(
-            if matches!(scenario, "success-new-thread" | "archive-already-complete") {
-                "thr_fixture_2"
-            } else {
-                "thr_fixture_1"
-            },
-        );
+    {
+        existing
+    } else {
+        *thread_count = thread_count
+            .checked_add(1)
+            .ok_or("fixture thread count overflow")?;
+        let sequence = if matches!(scenario, "success-new-thread" | "archive-already-complete") {
+            2
+        } else {
+            *thread_count
+        };
+        new_thread_id = format!("thr_fixture_{sequence}");
+        &new_thread_id
+    };
     let cwd = thread_request
         .pointer("/params/cwd")
         .and_then(serde_json::Value::as_str)
@@ -409,11 +576,10 @@ fn run_agent_turn(
             "provider_data_view": provider_data_view,
         }))?,
     )?;
-    let turn_id = if matches!(scenario, "success-retry" | "success-new-thread") {
-        "turn_fixture_2"
-    } else {
-        "turn_fixture_1"
-    };
+    *turn_count = turn_count
+        .checked_add(1)
+        .ok_or("fixture turn count overflow")?;
+    let turn_id = format!("turn_fixture_{turn_count}");
     let turn_request_id = turn_request.get("id").cloned().ok_or("turn request id")?;
     let running_turn = serde_json::json!({
         "id": turn_id,
@@ -424,6 +590,22 @@ fn run_agent_turn(
         "completedAt": null,
         "durationMs": null,
     });
+    if matches!(
+        scenario,
+        "turn-start-response-lost" | "hang-after-turn-request"
+    ) {
+        fs::write(
+            executable.with_extension("turn-accepted-without-response"),
+            turn_id.as_bytes(),
+        )?;
+        if scenario == "hang-after-turn-request" {
+            for request in requests {
+                request?;
+            }
+            return Ok(false);
+        }
+        return Err("fixture lost turn/start response after acceptance".into());
+    }
     write_json(&serde_json::json!({
         "id": turn_request_id,
         "result": { "turn": running_turn }
@@ -432,6 +614,59 @@ fn run_agent_turn(
         "method": "turn/started",
         "params": { "threadId": thread_id, "turn": running_turn }
     }))?;
+    if matches!(
+        scenario,
+        "auth-notification-loss" | "subscription-notification-loss"
+    ) {
+        write_json(&serde_json::json!({
+            "method": "account/updated",
+            "params": if scenario == "auth-notification-loss" {
+                serde_json::json!({ "authMode": null, "planType": null })
+            } else {
+                serde_json::json!({ "authMode": "chatgpt", "planType": null })
+            }
+        }))?;
+        for request in requests {
+            request?;
+        }
+        return Ok(false);
+    }
+    if matches!(
+        scenario,
+        "rate-limit-update-success" | "rate-limited" | "usage-stream"
+    ) {
+        write_json(&serde_json::json!({
+            "method": "account/rateLimits/updated",
+            "params": {
+                "rateLimits": {
+                    "limitId": "codex",
+                    "limitName": null,
+                    "planType": "plus",
+                    "primary": {
+                        "usedPercent": 100,
+                        "windowDurationMins": 15,
+                        "resetsAt": 1_780_000_900_i64
+                    },
+                    "secondary": null,
+                    "credits": null,
+                    "individualLimit": null,
+                    "rateLimitReachedType": "rate_limit_reached",
+                    "spendControlReached": false
+                }
+            }
+        }))?;
+        write_json(&serde_json::json!({
+            "method": "account/rateLimits/updated",
+            "params": {
+                "rateLimits": {
+                    "primary": { "usedPercent": 100 },
+                    "secondary": null,
+                    "rateLimitReachedType": null,
+                    "spendControlReached": null
+                }
+            }
+        }))?;
+    }
 
     if scenario == "hang" {
         fs::write(executable.with_extension("turn-waiting"), b"waiting")?;
@@ -479,6 +714,40 @@ fn run_agent_turn(
         }
         return Ok(false);
     }
+    if scenario == "auth-loss" {
+        let error = serde_json::json!({
+            "message": "fixture authentication expired",
+            "codexErrorInfo": "unauthorized"
+        });
+        write_json(&serde_json::json!({
+            "method": "error",
+            "params": {
+                "threadId": thread_id,
+                "turnId": turn_id,
+                "willRetry": false,
+                "error": error.clone()
+            }
+        }))?;
+        write_json(&serde_json::json!({
+            "method": "turn/completed",
+            "params": {
+                "threadId": thread_id,
+                "turn": {
+                    "id": turn_id,
+                    "status": "failed",
+                    "items": [],
+                    "error": error,
+                    "startedAt": 1_780_000_001_i64,
+                    "completedAt": 1_780_000_002_i64,
+                    "durationMs": 1000
+                }
+            }
+        }))?;
+        for request in requests {
+            request?;
+        }
+        return Ok(false);
+    }
     if scenario == "interrupt" {
         let interrupt = read_json_request(requests, "turn/interrupt")?;
         if interrupt
@@ -488,7 +757,7 @@ fn run_agent_turn(
             || interrupt
                 .pointer("/params/turnId")
                 .and_then(serde_json::Value::as_str)
-                != Some(turn_id)
+                != Some(turn_id.as_str())
         {
             return Err("interrupt targeted the wrong Provider Turn".into());
         }
@@ -530,6 +799,9 @@ fn run_agent_turn(
             | "delayed-readiness"
             | "phase-null-final"
             | "retry-then-success"
+            | "rate-limit-update-success"
+            | "model-second-page"
+            | "usage-stream"
             | "output-invalid"
     ) {
         return Err(format!("unknown agent fixture scenario {scenario}").into());
@@ -562,7 +834,7 @@ fn run_agent_turn(
         }))?;
     }
     if scenario == "delayed-readiness" {
-        std::thread::sleep(std::time::Duration::from_millis(2_000));
+        std::thread::sleep(std::time::Duration::from_millis(7_000));
     }
     write_json(&serde_json::json!({
         "method": "item/agentMessage/delta",
@@ -621,6 +893,43 @@ fn run_agent_turn(
             }
         }
     }))?;
+    if scenario == "usage-stream" {
+        let interrupt = read_json_request(requests, "turn/interrupt")?;
+        if interrupt
+            .pointer("/params/threadId")
+            .and_then(serde_json::Value::as_str)
+            != Some(thread_id)
+            || interrupt
+                .pointer("/params/turnId")
+                .and_then(serde_json::Value::as_str)
+                != Some(turn_id.as_str())
+        {
+            return Err("streaming fixture interruption targeted the wrong Provider Turn".into());
+        }
+        write_json(&serde_json::json!({
+            "id": interrupt.get("id").cloned().ok_or("interrupt id")?,
+            "result": {}
+        }))?;
+        write_json(&serde_json::json!({
+            "method": "turn/completed",
+            "params": {
+                "threadId": thread_id,
+                "turn": {
+                    "id": turn_id,
+                    "status": "interrupted",
+                    "items": [],
+                    "error": null,
+                    "startedAt": 1_780_000_001_i64,
+                    "completedAt": 1_780_000_002_i64,
+                    "durationMs": 1000
+                }
+            }
+        }))?;
+        for request in requests {
+            request?;
+        }
+        return Ok(false);
+    }
     if matches!(scenario, "access-tool" | "access-tool-revoked") {
         let tool_request = |id: &str, arguments: serde_json::Value| {
             serde_json::json!({
@@ -761,7 +1070,7 @@ fn run_agent_turn(
                 "id": "hostile_mcp",
                 "method": "mcpServer/elicitation/request",
                 "params": {
-                    "threadId": thread_id, "turnId": turn_id,
+                    "threadId": thread_id,
                     "serverName": "unregistered-server", "mode": "form",
                     "message": "Approve external access", "requestedSchema": {
                         "type": "object", "properties": {}
@@ -899,7 +1208,17 @@ fn read_json_line(
 }
 
 fn write_json(value: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
-    println!("{}", serde_json::to_string(value)?);
+    let mut value = value.clone();
+    if value.get("method").is_some() && value.get("id").is_none() {
+        value
+            .as_object_mut()
+            .ok_or("fixture JSONL message must be an object")?
+            .insert(
+                "emittedAtMs".into(),
+                serde_json::json!(1_780_000_000_000_i64),
+            );
+    }
+    println!("{}", serde_json::to_string(&value)?);
     io::stdout().flush()?;
     Ok(())
 }
