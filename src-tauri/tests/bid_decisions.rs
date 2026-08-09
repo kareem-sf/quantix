@@ -4,17 +4,20 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use quantix_lib::{
-    ensure_quantix_setup, AgentProfileStatus, AgentRunState, BidDecisionApprovalDecision,
+    ensure_quantix_setup, ActivateTenderProductionCommand, AgentProfileStatus,
+    AgentRunRecoveryDisposition, AgentRunState, BidDecisionApprovalDecision,
     BidDecisionPackageInspection, BidDecisionPackageReviewOutcome, BidRecommendationOutcome,
     ComplianceDisposition, ComplianceDispositionUpdate, ComposeTenderOfficeCommand,
     CreateBidDecisionPackageCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
     DecideBidDecisionPackageCommand, DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
     DeviceProtection, ImportTenderPackageCommand, InspectBidDecisionApprovalHistoryCommand,
     InvalidateBidDecisionApprovalCommand, ManagerCapabilityDemandInput, ParseSourceArtifactCommand,
-    ProviderFailureCategory, QuantixHost, ResolveBidDecisionReturnReworkCommand,
+    ProductionTaskState, ProviderFailureCategory, QuantixHost,
+    ResolveBidDecisionReturnReworkCommand, ResolveIndeterminateAgentRunCommand,
     ReviseTenderCommand, ReviseWorkPlanProposalCommand, RunBidDecisionPackageReviewCommand,
-    RunTenderRecordExtractionCommand, RuntimeLayout, SetupPlatform, SetupState, StoragePermissions,
-    TenderErrorCode, TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase,
+    RunBootstrapAgentCommand, RunProductionTaskCommand, RunTenderRecordExtractionCommand,
+    RuntimeLayout, SetupPlatform, SetupState, StoragePermissions, TenderErrorCode,
+    TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase,
     TenderRecordEngineerDecisionKind, TenderRecordInspection, TenderRecordKind,
     TenderRecordVersionReference, WorkPlanDecision, WorkPlanRevisionAction,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
@@ -464,8 +467,21 @@ async fn manager_team_actions_create_validated_proposal_versions_and_visible_gap
         .iter()
         .filter(|binding| binding.archetype == "tender_office_coordinator")
         .all(|binding| {
+            let capability = binding.profile.capabilities.first().map(String::as_str);
+            let owned_scope = match capability {
+                Some("tender_coordination") => Some("tender_coordination"),
+                Some("query_rfi_control") => Some("tender_queries"),
+                _ => None,
+            };
             binding.profile.capabilities.len() == 1
-                && binding.profile.permissions.data_scopes.len() == 1
+                && owned_scope.is_some_and(|scope| {
+                    binding
+                        .profile
+                        .permissions
+                        .data_scopes
+                        .iter()
+                        .any(|candidate| candidate == scope)
+                })
                 && binding.profile.permissions.allowed_actions.len() == 1
         }));
     assert_eq!(
@@ -491,7 +507,18 @@ async fn manager_team_actions_create_validated_proposal_versions_and_visible_gap
         .find(|binding| binding.profile.identity == "Tender Coordination and Query Lead")
         .expect("recombined Coordinator");
     assert_eq!(recombined.profile.capabilities.len(), 2);
-    assert_eq!(recombined.profile.permissions.data_scopes.len(), 2);
+    assert!(recombined
+        .profile
+        .permissions
+        .data_scopes
+        .iter()
+        .any(|scope| scope == "tender_coordination"));
+    assert!(recombined
+        .profile
+        .permissions
+        .data_scopes
+        .iter()
+        .any(|scope| scope == "tender_queries"));
     assert_eq!(
         combined.workstreams[0].deadlines,
         first.workstreams[0].deadlines
@@ -747,7 +774,7 @@ async fn exact_work_plan_approval_enforces_conflicts_staleness_gaps_and_one_deci
     assert!(approved
         .profiles
         .iter()
-        .all(|binding| binding.status == AgentProfileStatus::Active));
+        .all(|binding| binding.status == AgentProfileStatus::Proposed));
     assert_eq!(
         harness
             .host
@@ -1215,6 +1242,1183 @@ async fn ready_package(harness: &Harness) -> BidDecisionPackageInspection {
         .package
 }
 
+#[tokio::test]
+async fn active_production_materializes_only_the_exact_approved_plan_and_ready_frontier() {
+    let harness = Harness::new("record-extraction");
+    let (approved, production) = active_production(&harness).await;
+
+    assert_eq!(production.plan_id, approved.plan_id);
+    assert_eq!(production.plan_version, approved.version);
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect Active Production lifecycle")
+            .lifecycle_phase,
+        TenderLifecyclePhase::ActiveProduction
+    );
+    assert_eq!(production.tasks.len(), approved.tasks.len());
+    assert!(production
+        .tasks
+        .iter()
+        .any(|task| task.state == ProductionTaskState::Ready));
+    assert!(production
+        .tasks
+        .iter()
+        .any(|task| task.state == ProductionTaskState::Blocked));
+    assert!(production.tasks.iter().all(|task| {
+        task.plan_manifest_sha256 == approved.manifest_sha256
+            && task.run_ids.is_empty()
+            && task.registered_outputs.is_empty()
+    }));
+    assert!(harness
+        .host
+        .inspect_current_work_plan(&harness.tender_id)
+        .expect("inspect activated Work Plan")
+        .expect("Work Plan")
+        .profiles
+        .iter()
+        .all(|binding| binding.status == AgentProfileStatus::Active));
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open active Tender Store");
+    let mut statement = connection
+        .prepare(
+            "SELECT profile_id FROM agent_profile_heads
+             WHERE status = 'active' ORDER BY profile_id",
+        )
+        .expect("prepare active profile inventory");
+    let active_profile_ids = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("query active profile inventory")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("read active profile inventory");
+    let mut approved_profile_ids = approved
+        .profiles
+        .iter()
+        .map(|binding| binding.profile.profile_id.clone())
+        .collect::<Vec<_>>();
+    approved_profile_ids.sort();
+    assert_eq!(active_profile_ids, approved_profile_ids);
+    drop(statement);
+    drop(connection);
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close activated Tender");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("inspect Active Production integrity");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+}
+
+#[tokio::test]
+async fn coordinator_runs_only_ready_tasks_and_handoffs_registered_outputs() {
+    let harness = Harness::new("record-extraction");
+    let (_, mut production) = active_production(&harness).await;
+    let target_key = production
+        .tasks
+        .iter()
+        .find(|task| !task.task.dependencies.is_empty())
+        .expect("dependent production task")
+        .task
+        .task_key
+        .clone();
+    assert_eq!(
+        harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: production
+                    .tasks
+                    .iter()
+                    .find(|task| task.task.task_key == target_key)
+                    .expect("target")
+                    .production_task_id
+                    .clone(),
+            })
+            .await
+            .expect_err("blocked dependency cannot be scheduled")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+
+    harness.set_agent_scenario("production-task");
+    while production
+        .tasks
+        .iter()
+        .find(|task| task.task.task_key == target_key)
+        .expect("target")
+        .state
+        != ProductionTaskState::Ready
+    {
+        let ready = production
+            .tasks
+            .iter()
+            .find(|task| task.state == ProductionTaskState::Ready)
+            .expect("ready dependency frontier");
+        let mut completed = harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: ready.production_task_id.clone(),
+            })
+            .await
+            .expect("run ready dependency");
+        if completed.task.state == ProductionTaskState::ReviewReady {
+            completed = harness
+                .host
+                .run_production_task(RunProductionTaskCommand {
+                    tender_id: harness.tender_id.clone(),
+                    production_task_id: ready.production_task_id.clone(),
+                })
+                .await
+                .expect("independently review ready dependency output");
+        }
+        assert_eq!(
+            completed.run.state,
+            AgentRunState::Completed,
+            "{:#?}; fixture={}",
+            completed.run,
+            fs::read_to_string(harness.codex.with_extension("fixture-error"))
+                .unwrap_or_else(|_| "none".into())
+        );
+        assert_eq!(completed.task.state, ProductionTaskState::Completed);
+        assert_eq!(completed.task.registered_outputs.len(), 1);
+        production = harness
+            .host
+            .inspect_tender_production(&harness.tender_id)
+            .expect("inspect production frontier")
+            .expect("active production");
+    }
+
+    let target = production
+        .tasks
+        .iter()
+        .find(|task| task.task.task_key == target_key)
+        .expect("ready target");
+    let mut completed = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: target.production_task_id.clone(),
+        })
+        .await
+        .expect("run exact ready target");
+    let author_exact_inputs = completed.run.task.exact_inputs.clone();
+    if completed.task.state == ProductionTaskState::ReviewReady {
+        completed = harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: target.production_task_id.clone(),
+            })
+            .await
+            .expect("independently review exact ready target output");
+    }
+    assert_eq!(completed.task.state, ProductionTaskState::Completed);
+    assert!(author_exact_inputs.iter().any(|input| {
+        input.kind == "production_task_output"
+            && target.task.dependencies.contains(&input.reference)
+    }));
+}
+
+#[tokio::test]
+async fn coordinator_automatically_schedules_author_and_independent_review_turns() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    assert!(production
+        .tasks
+        .iter()
+        .any(|task| task.state == ProductionTaskState::Ready));
+
+    harness.set_agent_scenario("production-task-multiplex-auto");
+    harness
+        .host
+        .schedule_tender_production(&harness.tender_id)
+        .await
+        .expect("Coordinator schedules the exact ready frontier");
+
+    let completed = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect automatically scheduled production")
+        .expect("active production");
+    assert!(
+        harness
+            .codex
+            .with_extension("production-multiplex-observed")
+            .is_file(),
+        "the Coordinator used the bounded two-role frontier when capacity permitted"
+    );
+    assert!(
+        completed
+            .tasks
+            .iter()
+            .all(|task| task.state == ProductionTaskState::Completed),
+        "{completed:#?}"
+    );
+    assert!(completed.tasks.iter().all(|task| {
+        task.registered_outputs.len() == 1
+            && task.task.review_profile_id.as_ref().map_or_else(
+                || task.run_ids.len() == 1,
+                |_| {
+                    task.run_ids.len() == 2
+                        && task.registered_outputs[0].run_id
+                            != task.registered_outputs[0].reviewer_run_id
+                },
+            )
+    }));
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close fully completed production");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify fully completed production");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+}
+
+#[tokio::test]
+async fn unsupported_review_outcomes_fail_without_output_and_can_retry() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let task = production
+        .tasks
+        .iter()
+        .find(|task| {
+            task.state == ProductionTaskState::Ready && task.task.review_profile_id.is_some()
+        })
+        .expect("review-bearing ready task");
+    harness.set_agent_scenario("production-task-review-rework");
+
+    let authored = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .await
+        .expect("author exact production candidate");
+    assert_eq!(authored.task.state, ProductionTaskState::ReviewReady);
+    let result = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .await
+        .expect("reject an unsupported review outcome without publishing output");
+
+    assert_eq!(result.run.state, AgentRunState::Failed);
+    assert_eq!(result.task.state, ProductionTaskState::Failed);
+    assert_eq!(result.task.run_ids.len(), 2);
+    assert!(result.task.registered_outputs.is_empty());
+    assert!(result
+        .run
+        .failure
+        .as_ref()
+        .is_some_and(|failure| failure.retry_safe));
+
+    harness.set_agent_scenario("production-task");
+    let retried = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .await
+        .expect("retry the exact failed reviewer turn");
+    assert_eq!(retried.run.state, AgentRunState::Completed);
+    assert_eq!(retried.task.state, ProductionTaskState::Completed);
+    assert_eq!(retried.task.run_ids.len(), 3);
+    assert_eq!(retried.task.registered_outputs.len(), 1);
+    assert_eq!(
+        retried.run.retry_of_run_id.as_deref(),
+        Some(result.run.run_id.as_str())
+    );
+}
+
+#[tokio::test]
+async fn independent_ready_profiles_overlap_within_the_host_concurrency_ceiling() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let ready = production
+        .tasks
+        .iter()
+        .filter(|task| task.state == ProductionTaskState::Ready)
+        .take(2)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ready.len(),
+        2,
+        "the plan exposes a bounded parallel frontier"
+    );
+    assert_ne!(ready[0].task.profile_id, ready[1].task.profile_id);
+
+    let process_start_count = fs::read_to_string(harness.codex.with_extension("agent-start-count"))
+        .expect("read provider process count before overlap");
+    assert_eq!(process_start_count, "1");
+    harness.set_agent_scenario("production-task-multiplex");
+    let first_host = harness.host.clone();
+    let first_tender = harness.tender_id.clone();
+    let first_task = ready[0].production_task_id.clone();
+    let first = tokio::spawn(async move {
+        first_host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: first_tender,
+                production_task_id: first_task,
+            })
+            .await
+    });
+    wait_for_fixture_path(&harness.codex.with_extension("production-a-waiting")).await;
+
+    let second_host = harness.host.clone();
+    let second_tender = harness.tender_id.clone();
+    let second_task = ready[1].production_task_id.clone();
+    let second = tokio::spawn(async move {
+        second_host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: second_tender,
+                production_task_id: second_task,
+            })
+            .await
+    });
+    wait_for_fixture_path(&harness.codex.with_extension("production-b-waiting")).await;
+    assert_eq!(
+        fs::read_to_string(harness.codex.with_extension("agent-start-count"))
+            .expect("read provider process count during overlap"),
+        process_start_count,
+        "overlapping role turns share one supervised app-server process"
+    );
+    let overlapping = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect overlapping production")
+        .expect("active production");
+    assert_eq!(
+        overlapping
+            .tasks
+            .iter()
+            .filter(|task| task.state == ProductionTaskState::Running)
+            .count(),
+        2
+    );
+
+    fs::write(
+        harness.codex.with_extension("production-a-release"),
+        b"release",
+    )
+    .expect("release first production run");
+    fs::write(
+        harness.codex.with_extension("production-b-release"),
+        b"release",
+    )
+    .expect("release second production run");
+    assert_eq!(
+        first
+            .await
+            .expect("join first run")
+            .expect("first run")
+            .run
+            .state,
+        AgentRunState::Completed
+    );
+    assert_eq!(
+        second
+            .await
+            .expect("join second run")
+            .expect("second run")
+            .run
+            .state,
+        AgentRunState::Completed
+    );
+}
+
+#[tokio::test]
+async fn production_cancellation_and_output_budget_failure_are_terminal_without_outputs() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let first = production
+        .tasks
+        .iter()
+        .find(|task| task.state == ProductionTaskState::Ready)
+        .expect("first ready production task");
+    harness.set_agent_scenario("production-task-delayed-a");
+    let run_host = harness.host.clone();
+    let run_tender = harness.tender_id.clone();
+    let production_task_id = first.production_task_id.clone();
+    let running = tokio::spawn(async move {
+        run_host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: run_tender,
+                production_task_id,
+            })
+            .await
+    });
+    wait_for_fixture_path(&harness.codex.with_extension("production-a-waiting")).await;
+    let running_view = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect cancellable production")
+        .expect("active production");
+    let running_task = running_view
+        .tasks
+        .iter()
+        .find(|task| task.production_task_id == first.production_task_id)
+        .expect("running task");
+    let run_id = running_task
+        .run_ids
+        .last()
+        .expect("running Agent Run")
+        .clone();
+    assert!(harness
+        .host
+        .interrupt_agent_run(quantix_lib::InterruptAgentRunCommand {
+            tender_id: harness.tender_id.clone(),
+            run_id,
+        })
+        .expect("request interruption"));
+    let cancelled = running
+        .await
+        .expect("join cancelled run")
+        .expect("terminal cancelled run");
+    assert_eq!(cancelled.run.state, AgentRunState::Interrupted);
+    assert_eq!(cancelled.task.state, ProductionTaskState::Cancelled);
+    assert!(cancelled.task.registered_outputs.is_empty());
+    harness.set_agent_scenario("production-task");
+    let cancelled_retry_author = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: first.production_task_id.clone(),
+        })
+        .await
+        .expect("create a linked retry for the cancelled production task");
+    assert_eq!(
+        cancelled_retry_author.task.state,
+        ProductionTaskState::ReviewReady
+    );
+    let cancelled_retry = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: first.production_task_id.clone(),
+        })
+        .await
+        .expect("independently review the linked retry output");
+    assert_eq!(cancelled_retry.run.state, AgentRunState::Completed);
+    assert_eq!(cancelled_retry.task.state, ProductionTaskState::Completed);
+    assert_eq!(cancelled_retry.task.run_ids.len(), 3);
+    assert_eq!(
+        cancelled_retry_author.run.retry_of_run_id.as_deref(),
+        Some(cancelled.run.run_id.as_str())
+    );
+
+    let next = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect remaining frontier")
+        .expect("active production")
+        .tasks
+        .into_iter()
+        .find(|task| task.state == ProductionTaskState::Ready)
+        .expect("another ready task");
+    harness.set_agent_scenario("production-task-output-over-budget");
+    let failed = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: next.production_task_id,
+        })
+        .await
+        .expect("terminalize output budget failure");
+    assert_eq!(failed.run.state, AgentRunState::Failed);
+    assert_eq!(failed.task.state, ProductionTaskState::Failed);
+    assert!(failed.task.registered_outputs.is_empty());
+    assert_eq!(
+        failed.run.failure.as_ref().map(|failure| failure.category),
+        Some(ProviderFailureCategory::OutputInvalid)
+    );
+    assert!(failed
+        .run
+        .failure
+        .as_ref()
+        .is_some_and(|failure| failure.retry_safe));
+    harness.set_agent_scenario("production-task");
+    let failed_retry = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: Some(failed.run.run_id.clone()),
+        })
+        .await
+        .expect("route the common Agent Run retry through the production scheduler");
+    assert_eq!(failed_retry.state, AgentRunState::Completed);
+    assert_eq!(
+        failed_retry.retry_of_run_id.as_deref(),
+        Some(failed.run.run_id.as_str())
+    );
+    let retried = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect retried production")
+        .expect("active production")
+        .tasks
+        .into_iter()
+        .find(|task| task.production_task_id == failed.task.production_task_id)
+        .expect("retried production task");
+    assert_eq!(retried.state, ProductionTaskState::Completed);
+    assert_eq!(retried.run_ids.len(), 3);
+    assert_eq!(retried.registered_outputs.len(), 1);
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close retried production before cold integrity");
+    let cold_host =
+        QuantixHost::with_setup_platform(&harness.application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&cold_host).state, SetupState::Ready);
+    let integrity = cold_host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("inspect linked production retries after cold reopen");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+}
+
+#[tokio::test]
+async fn restart_reconciles_an_accepted_production_turn_without_replaying_it() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let ready = production
+        .tasks
+        .iter()
+        .find(|task| task.state == ProductionTaskState::Ready)
+        .expect("ready production task");
+    harness.set_agent_scenario("production-task-delayed-a");
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let production_task_id = ready.production_task_id.clone();
+    let running = tokio::spawn(async move {
+        host.run_production_task(RunProductionTaskCommand {
+            tender_id,
+            production_task_id,
+        })
+        .await
+    });
+    wait_for_fixture_path(&harness.codex.with_extension("production-a-waiting")).await;
+    running.abort();
+    assert!(running
+        .await
+        .expect_err("simulate abrupt Host stop")
+        .is_cancelled());
+    for attempt in 0..200 {
+        match harness.host.close_tender(&harness.tender_id) {
+            Ok(()) => break,
+            Err(error) if error.code == TenderErrorCode::StoreUnavailable && attempt < 199 => {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            Err(error) => panic!("close interrupted cached Tender: {error:?}"),
+        }
+    }
+
+    let cold_host =
+        QuantixHost::with_setup_platform(&harness.application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&cold_host).state, SetupState::Ready);
+    let reopened = cold_host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("reconcile interrupted production")
+        .expect("preserved production activation");
+    let reconciled = reopened
+        .tasks
+        .iter()
+        .find(|task| task.production_task_id == ready.production_task_id)
+        .expect("reconciled task");
+    assert_eq!(reconciled.state, ProductionTaskState::Indeterminate);
+    assert!(reconciled.registered_outputs.is_empty());
+    assert_eq!(
+        reconciled.run_ids.len(),
+        1,
+        "restart never replays the turn"
+    );
+}
+
+#[tokio::test]
+async fn indeterminate_production_requires_an_engineer_disposition_before_linked_retry() {
+    let harness = Harness::new("record-extraction");
+    let (approved, production) = active_production(&harness).await;
+    let accepted = harness
+        .host
+        .inspect_current_bid_decision_package(&harness.tender_id)
+        .expect("inspect accepted package")
+        .expect("accepted package remains current")
+        .approval
+        .expect("accepted package has an Approval Record");
+    let ready = production
+        .tasks
+        .iter()
+        .find(|task| task.state == ProductionTaskState::Ready)
+        .expect("ready production task");
+    harness.set_agent_scenario("production-task-malformed-after-turn");
+    let indeterminate = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: ready.production_task_id.clone(),
+        })
+        .await
+        .expect("terminalize the unknown production outcome");
+    assert_eq!(indeterminate.run.state, AgentRunState::Indeterminate);
+    assert_eq!(indeterminate.task.state, ProductionTaskState::Indeterminate);
+
+    let changed_profile = approved
+        .profiles
+        .iter()
+        .find(|binding| binding.profile.profile_id == ready.task.profile_id)
+        .expect("profile bound to indeterminate task");
+    let blocked_amendment = harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: approved.plan_id.clone(),
+            base_version: approved.version,
+            actions: vec![WorkPlanRevisionAction::RenameProfile {
+                profile_id: changed_profile.profile.profile_id.clone(),
+                identity: "Unknown Outcome Must Be Resolved".into(),
+            }],
+        })
+        .expect_err("unknown production outcome blocks a superseding amendment");
+    assert_eq!(blocked_amendment.code, TenderErrorCode::InvalidCommand);
+    let blocked_retry = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: ready.production_task_id.clone(),
+        })
+        .await
+        .expect_err("unknown outcome cannot be retried without Engineer disposition");
+    assert_eq!(blocked_retry.code, TenderErrorCode::InvalidCommand);
+
+    harness
+        .host
+        .resolve_indeterminate_agent_run(ResolveIndeterminateAgentRunCommand {
+            tender_id: harness.tender_id.clone(),
+            run_id: indeterminate.run.run_id.clone(),
+            disposition: AgentRunRecoveryDisposition::RetryTask,
+            rationale: "The Engineer confirmed that the exact production task still requires a linked retry."
+                .into(),
+        })
+        .expect("authorize exactly one linked retry");
+    assert_eq!(
+        harness
+            .host
+            .invalidate_bid_decision_approval(InvalidateBidDecisionApprovalCommand {
+                tender_id: harness.tender_id.clone(),
+                approval_id: accepted.approval_id,
+                approval_sha256: accepted.approval_sha256,
+                material_change_summary:
+                    "A pending recovery cannot be stranded by lifecycle invalidation.".into(),
+                affected_areas: vec!["production_recovery".into()],
+            })
+            .expect_err("an exact pending retry blocks approval invalidation")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let denial_payload: String = rusqlite::Connection::open(database)
+        .expect("open Tender Store for invalidation audit")
+        .query_row(
+            "SELECT payload_json FROM audit_events
+             WHERE event_type = 'bid_decision_approval_invalidation_denied'
+             ORDER BY sequence DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("inspect pending-retry invalidation denial");
+    let denial_payload: Value =
+        serde_json::from_str(&denial_payload).expect("parse invalidation denial audit");
+    assert_eq!(
+        denial_payload["change"]["reason"],
+        Value::String("production_recovery_retry_pending".into())
+    );
+    let audit_before_change_denial = harness
+        .host
+        .open_tender(&harness.tender_id)
+        .expect("inspect audit before pending-retry change denial")
+        .audit_event_count;
+    assert_eq!(
+        harness
+            .host
+            .revise_tender(ReviseTenderCommand {
+                tender_id: harness.tender_id.clone(),
+                name: "Material change must wait for production recovery".into(),
+            })
+            .expect_err("material change intake cannot strand an authorized production retry")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect audited pending-retry change denial")
+            .audit_event_count,
+        audit_before_change_denial + 1
+    );
+    harness.set_agent_scenario("production-task");
+    let retry = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: Some(indeterminate.run.run_id.clone()),
+        })
+        .await
+        .expect("run the Engineer-authorized linked production retry");
+    assert_eq!(retry.state, AgentRunState::Completed);
+    assert_eq!(
+        retry.retry_of_run_id.as_deref(),
+        Some(indeterminate.run.run_id.as_str())
+    );
+    let recovered = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect recovered production task")
+        .expect("active production")
+        .tasks
+        .into_iter()
+        .find(|task| task.production_task_id == ready.production_task_id)
+        .expect("recovered task");
+    assert_eq!(recovered.state, ProductionTaskState::Completed);
+    assert_eq!(recovered.run_ids.len(), 3);
+    assert_eq!(recovered.registered_outputs.len(), 1);
+}
+
+#[tokio::test]
+async fn stale_production_recovery_can_close_but_cannot_authorize_a_retry() {
+    let harness = Harness::new("record-extraction");
+    let records = harness.extract_records().await;
+    harness.verify_records(&records, false);
+    let mut evidence = records
+        .iter()
+        .flat_map(|record| record.fields.iter().flat_map(|field| field.evidence.iter()))
+        .map(|evidence| evidence.reference.clone())
+        .collect::<Vec<_>>();
+    evidence.sort_by(|left, right| {
+        left.artifact_id
+            .cmp(&right.artifact_id)
+            .then_with(|| left.version.cmp(&right.version))
+            .then_with(|| left.ordinal.cmp(&right.ordinal))
+    });
+    evidence.dedup_by(|left, right| {
+        left.artifact_id == right.artifact_id
+            && left.version == right.version
+            && left.ordinal == right.ordinal
+    });
+    harness.set_agent_scenario("record-extraction-extra-characteristic");
+    harness
+        .host
+        .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id: harness.tender_id.clone(),
+            evidence,
+            authorities: Vec::new(),
+        })
+        .await
+        .expect("publish a proposed non-gating Project Characteristic");
+    let current_records = inspect_all_records(&harness.host, &harness.tender_id);
+    let newly_decidable = current_records
+        .iter()
+        .find(|record| record.stable_key == "late_project_characteristic")
+        .expect("proposed Project Characteristic")
+        .clone();
+    let package = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+            disposition_updates: complete_dispositions(&current_records),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("create package with a proposed non-gating characteristic");
+    harness.set_agent_scenario("bid-package-review");
+    let package = harness
+        .host
+        .run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id.clone(),
+            version: package.version,
+        })
+        .await
+        .expect("review exact package")
+        .package;
+    let accepted = harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact package");
+    let plan = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose exact Work Plan");
+    let approved = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: plan.plan_id,
+            version: plan.version,
+            decision: WorkPlanDecision::Approve,
+            rationale: "Approve the exact production plan for recovery ordering coverage.".into(),
+        })
+        .expect("approve exact Work Plan");
+    let production = harness
+        .host
+        .activate_tender_production(ActivateTenderProductionCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: approved.plan_id,
+            plan_version: approved.version,
+            plan_manifest_sha256: approved.manifest_sha256,
+        })
+        .expect("activate exact production plan");
+    let ready = production
+        .tasks
+        .iter()
+        .find(|task| task.state == ProductionTaskState::Ready)
+        .expect("ready production task");
+    harness.set_agent_scenario("production-task-malformed-after-turn");
+    let indeterminate = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: ready.production_task_id.clone(),
+        })
+        .await
+        .expect("terminalize the unknown production outcome");
+    assert_eq!(indeterminate.run.state, AgentRunState::Indeterminate);
+
+    harness
+        .host
+        .decide_tender_record(DecideTenderRecordCommand {
+            tender_id: harness.tender_id.clone(),
+            record_id: newly_decidable.record_id,
+            version: newly_decidable.version,
+            decision: TenderRecordEngineerDecisionKind::Verify,
+            rationale: "Verify a same-version record while production recovery is unresolved."
+                .into(),
+        })
+        .expect("register a dependency change before the recovery disposition");
+    harness
+        .host
+        .invalidate_bid_decision_approval(InvalidateBidDecisionApprovalCommand {
+            tender_id: harness.tender_id.clone(),
+            approval_id: accepted.approval.approval_id,
+            approval_sha256: accepted.approval.approval_sha256,
+            material_change_summary:
+                "A same-version verified characteristic changes the exact production basis.".into(),
+            affected_areas: vec!["project_characteristics".into()],
+        })
+        .expect("invalidate the stale basis before resolving the unknown production outcome");
+    assert_eq!(
+        harness
+            .host
+            .resolve_indeterminate_agent_run(ResolveIndeterminateAgentRunCommand {
+                tender_id: harness.tender_id.clone(),
+                run_id: indeterminate.run.run_id.clone(),
+                disposition: AgentRunRecoveryDisposition::RetryTask,
+                rationale: "Attempt to retry work whose exact package basis is now stale.".into(),
+            })
+            .expect_err("a stale production basis cannot receive an immutable retry disposition")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let closed = harness
+        .host
+        .resolve_indeterminate_agent_run(ResolveIndeterminateAgentRunCommand {
+            tender_id: harness.tender_id.clone(),
+            run_id: indeterminate.run.run_id,
+            disposition: AgentRunRecoveryDisposition::CloseTask,
+            rationale: "Close the uncertain stale task so change assessment can proceed.".into(),
+        })
+        .expect("close the stale uncertain task");
+    assert_eq!(closed.disposition, AgentRunRecoveryDisposition::CloseTask);
+}
+
+#[tokio::test]
+async fn each_multiplexed_indeterminate_run_can_receive_its_own_disposition() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let ready = production
+        .tasks
+        .iter()
+        .filter(|task| task.state == ProductionTaskState::Ready)
+        .take(2)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ready.len(),
+        2,
+        "two independent tasks form the ready frontier"
+    );
+    harness.set_agent_scenario("production-task-malformed-after-turn");
+    let first = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: ready[0].production_task_id.clone(),
+        })
+        .await
+        .expect("record the first unknown outcome");
+    let second = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: ready[1].production_task_id.clone(),
+        })
+        .await
+        .expect("record the second unknown outcome");
+    assert_eq!(first.run.state, AgentRunState::Indeterminate);
+    assert_eq!(second.run.state, AgentRunState::Indeterminate);
+
+    harness
+        .host
+        .resolve_indeterminate_agent_run(ResolveIndeterminateAgentRunCommand {
+            tender_id: harness.tender_id.clone(),
+            run_id: first.run.run_id,
+            disposition: AgentRunRecoveryDisposition::RetryTask,
+            rationale: "Authorize one attributable retry for the first exact task.".into(),
+        })
+        .expect("resolve the first unknown outcome");
+    let closed = harness
+        .host
+        .resolve_indeterminate_agent_run(ResolveIndeterminateAgentRunCommand {
+            tender_id: harness.tender_id.clone(),
+            run_id: second.run.run_id,
+            disposition: AgentRunRecoveryDisposition::CloseTask,
+            rationale: "Close the separate second uncertain task without replay.".into(),
+        })
+        .expect("another pending retry cannot block this independent disposition");
+    assert_eq!(closed.disposition, AgentRunRecoveryDisposition::CloseTask);
+}
+
+#[tokio::test]
+async fn material_authority_change_requires_an_exact_approved_work_plan_amendment() {
+    let harness = Harness::new("record-extraction");
+    let (approved, production) = active_production(&harness).await;
+    let initial_task = production
+        .tasks
+        .iter()
+        .find(|task| task.state == ProductionTaskState::Ready)
+        .expect("ready task whose profile will be versioned");
+    let changed_profile = approved
+        .profiles
+        .iter()
+        .find(|binding| binding.profile.profile_id == initial_task.task.profile_id)
+        .expect("exact profile bound to the ready task");
+    harness.set_agent_scenario("production-task");
+    let initial_run = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: initial_task.production_task_id.clone(),
+        })
+        .await
+        .expect("establish the prior profile version thread");
+    assert!(initial_run.run.provider_thread_ref.is_some());
+    let amendment = harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: approved.plan_id.clone(),
+            base_version: approved.version,
+            actions: vec![WorkPlanRevisionAction::RenameProfile {
+                profile_id: changed_profile.profile.profile_id.clone(),
+                identity: "Lead Tender Office Coordinator".into(),
+            }],
+        })
+        .expect("publish immutable Work Plan Amendment");
+    assert_eq!(amendment.version, approved.version + 1);
+    assert!(amendment.approval.is_none());
+    let amended_profile = amendment
+        .profiles
+        .iter()
+        .find(|binding| binding.profile.profile_id == changed_profile.profile.profile_id)
+        .expect("amended immutable profile version");
+    assert_eq!(
+        amended_profile.profile.version,
+        changed_profile.profile.version + 1
+    );
+    assert!(amendment
+        .profiles
+        .iter()
+        .all(|binding| binding.status == AgentProfileStatus::Proposed));
+    assert!(harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect suspended prior activation")
+        .expect("prior activation")
+        .tasks
+        .iter()
+        .filter(|task| task.state != ProductionTaskState::Completed)
+        .all(|task| task.state == ProductionTaskState::Suspended));
+    assert_eq!(
+        harness
+            .host
+            .activate_tender_production(ActivateTenderProductionCommand {
+                tender_id: harness.tender_id.clone(),
+                plan_id: amendment.plan_id.clone(),
+                plan_version: amendment.version,
+                plan_manifest_sha256: amendment.manifest_sha256.clone(),
+            })
+            .expect_err("an unapproved amendment cannot activate")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let approved_amendment = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: amendment.plan_id.clone(),
+            version: amendment.version,
+            decision: WorkPlanDecision::Approve,
+            rationale: "Approve the exact bounded authority amendment.".into(),
+        })
+        .expect("approve exact Work Plan Amendment");
+    let reactivated = harness
+        .host
+        .activate_tender_production(ActivateTenderProductionCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: approved_amendment.plan_id.clone(),
+            plan_version: approved_amendment.version,
+            plan_manifest_sha256: approved_amendment.manifest_sha256.clone(),
+        })
+        .expect("activate approved Work Plan Amendment");
+    assert!(reactivated.active);
+    assert_ne!(reactivated.activation_id, production.activation_id);
+    assert!(reactivated.tasks.iter().all(|task| {
+        task.task.profile_version
+            == approved_amendment
+                .profiles
+                .iter()
+                .find(|binding| binding.profile.profile_id == task.task.profile_id)
+                .expect("amended exact profile")
+                .profile
+                .version
+    }));
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(&database).expect("open amended Tender Store");
+    let new_version_thread_count: u32 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM provider_threads
+             WHERE profile_id = ?1 AND profile_version = ?2",
+            rusqlite::params![
+                amended_profile.profile.profile_id,
+                amended_profile.profile.version
+            ],
+            |row| row.get(0),
+        )
+        .expect("inspect thread exposure after profile versioning");
+    assert_eq!(new_version_thread_count, 0);
+    drop(connection);
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close amended production before cold integrity");
+    let cold_host =
+        QuantixHost::with_setup_platform(&harness.application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&cold_host).state, SetupState::Ready);
+    let integrity = cold_host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("inspect amended production after cold reopen");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+}
+
+async fn wait_for_fixture_path(path: &Path) {
+    for _ in 0..1_000 {
+        if path.is_file() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    panic!("fixture did not reach {}", path.display());
+}
+
+async fn active_production(
+    harness: &Harness,
+) -> (
+    quantix_lib::WorkPlanProposalInspection,
+    quantix_lib::TenderProductionInspection,
+) {
+    let package = ready_package(harness).await;
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact package");
+    let plan = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose exact Work Plan");
+    let approved = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: plan.plan_id,
+            version: plan.version,
+            decision: WorkPlanDecision::Approve,
+            rationale: "Approve the exact bounded production plan.".into(),
+        })
+        .expect("approve exact Work Plan");
+    assert!(approved
+        .profiles
+        .iter()
+        .all(|binding| binding.status == AgentProfileStatus::Proposed));
+
+    let production = harness
+        .host
+        .activate_tender_production(ActivateTenderProductionCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: approved.plan_id.clone(),
+            plan_version: approved.version,
+            plan_manifest_sha256: approved.manifest_sha256.clone(),
+        })
+        .expect("activate exact approved Work Plan");
+    (approved, production)
+}
+
 fn approval_command(
     harness: &Harness,
     package: &BidDecisionPackageInspection,
@@ -1498,7 +2702,16 @@ async fn material_change_invalidates_proceed_and_reopens_an_exact_successor_path
     assert!(approved_plan
         .profiles
         .iter()
-        .all(|binding| binding.status == AgentProfileStatus::Active));
+        .all(|binding| binding.status == AgentProfileStatus::Proposed));
+    harness
+        .host
+        .activate_tender_production(ActivateTenderProductionCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: approved_plan.plan_id.clone(),
+            plan_version: approved_plan.version,
+            plan_manifest_sha256: approved_plan.manifest_sha256.clone(),
+        })
+        .expect("activate exact initial Work Plan");
     let audit_before_unproven_invalidation = harness
         .host
         .open_tender(&harness.tender_id)
@@ -1554,6 +2767,41 @@ async fn material_change_invalidates_proceed_and_reopens_an_exact_successor_path
         })
         .await
         .expect("an exact material dependency can be registered after Proceed");
+    let stale_production = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect stale Active Production")
+        .expect("Active Production remains attributable until invalidation");
+    let ready_task = stale_production
+        .tasks
+        .iter()
+        .find(|task| task.state == ProductionTaskState::Ready)
+        .expect("ready task from the stale plan");
+    let audit_before_schedule_denial = harness
+        .host
+        .open_tender(&harness.tender_id)
+        .expect("inspect audit before stale scheduling denial")
+        .audit_event_count;
+    assert_eq!(
+        harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: ready_task.production_task_id.clone(),
+            })
+            .await
+            .expect_err("stale Work Plan dependencies must block new production work")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect audited stale scheduling denial")
+            .audit_event_count,
+        audit_before_schedule_denial + 1
+    );
     let invalidated = harness
         .host
         .invalidate_bid_decision_approval(InvalidateBidDecisionApprovalCommand {
@@ -1588,6 +2836,18 @@ async fn material_change_invalidates_proceed_and_reopens_an_exact_successor_path
         .profiles
         .iter()
         .all(|binding| binding.status == AgentProfileStatus::Suspended));
+    let suspended_production = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect suspended production")
+        .expect("historical production remains inspectable");
+    assert!(!suspended_production.active);
+    assert!(suspended_production.tasks.iter().all(|task| matches!(
+        task.state,
+        ProductionTaskState::Completed
+            | ProductionTaskState::Indeterminate
+            | ProductionTaskState::Suspended
+    )));
     assert_eq!(
         harness
             .host
@@ -1697,7 +2957,7 @@ async fn material_change_invalidates_proceed_and_reopens_an_exact_successor_path
     assert!(reapproved_plan
         .profiles
         .iter()
-        .all(|binding| binding.status == AgentProfileStatus::Active));
+        .all(|binding| binding.status == AgentProfileStatus::Proposed));
 
     harness
         .host

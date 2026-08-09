@@ -12,9 +12,10 @@ use crate::agent_runtime::{
         permission_duration, BootstrapGrantRequest,
     },
     AccessApproval, AccessRequest, AgentAccessRequestStatus, AgentAccessRequestView,
-    AgentProfileStatus, AgentProfileVersionView, AgentRunInspection, AgentRunRecoveryDecision,
-    AgentRunRecoveryDisposition, AgentRunState, ApproveAgentAccessCommand, BootstrapAuthority,
-    BootstrapRole, BootstrapTeamMember, DataClassification, PendingProviderEvent, PermissionGrant,
+    AgentProfileStatus, AgentProfileVersionView, AgentRunActivity, AgentRunHistoryItem,
+    AgentRunHistoryPage, AgentRunInspection, AgentRunRecoveryDecision, AgentRunRecoveryDisposition,
+    AgentRunState, AgentRunSummary, ApproveAgentAccessCommand, BootstrapAuthority, BootstrapRole,
+    BootstrapTeamMember, DataClassification, PendingProviderEvent, PermissionGrant,
     PreparedAgentRun, ProposedAgentResult, ProviderEvent, ProviderEventKind, ProviderExecution,
     ProviderFailure, ProviderFailureCategory, ProviderUsage, RequestAgentAccessCommand,
     ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand, TenderTaskView,
@@ -25,6 +26,9 @@ use super::bid_decisions::{
     bid_decision_package_review_target_is_current, bid_decision_package_review_target_is_open,
     publish_bid_decision_package_review, BidDecisionPackageReviewCandidate,
     BID_PACKAGE_REVIEW_CAPABILITY,
+};
+use super::production_scheduler::{
+    finish_production_task, production_task_for_run, work_plan_package_dependencies_are_current,
 };
 use super::tender_records::{
     publish_tender_record_candidates, publish_tender_record_review,
@@ -82,7 +86,20 @@ impl TenderStore {
         &mut self,
         tender_id: &TenderId,
         retry_of_run_id: Option<&str>,
+        subscription_capacity_exhausted: bool,
     ) -> Result<PreparedAgentRun, TenderCommandError> {
+        if let Some(retry_of_run_id) = retry_of_run_id {
+            if let Some(production_task_id) =
+                production_task_for_run(&self.connection, retry_of_run_id)?
+            {
+                return self.prepare_production_task_run(
+                    tender_id,
+                    &production_task_id,
+                    Some(retry_of_run_id),
+                    subscription_capacity_exhausted,
+                );
+            }
+        }
         self.require_pre_bid_writable()?;
         let run_id = random_identifier(&self.connection)?;
         let application_home = self
@@ -728,7 +745,9 @@ impl TenderStore {
         if transaction
             .execute(
                 "UPDATE agent_runs
-                 SET status = ?2, provider_thread_ref = ?3, provider_turn_ref = ?4,
+                 SET status = ?2,
+                     provider_thread_ref = COALESCE(?3, provider_thread_ref),
+                     provider_turn_ref = COALESCE(?4, provider_turn_ref),
                      usage_json = ?5, failure_json = ?6, completed_at = ?7
                  WHERE run_id = ?1 AND status = 'running'",
                 params![
@@ -768,6 +787,7 @@ impl TenderStore {
                 &completed_at,
             )?;
         }
+        let production_payload = execution.candidate_payload_json.clone();
         let result_id = if let Some(payload_json) = execution.candidate_payload_json {
             ensure_canonical_value(&payload_json)?;
             let result_id = random_identifier(&transaction)?;
@@ -832,6 +852,15 @@ impl TenderStore {
                 &completed_at,
             )?;
         }
+        finish_production_task(
+            &transaction,
+            tender_id,
+            &prepared.run_id,
+            &prepared.task.task_id,
+            execution.state,
+            production_payload.as_deref(),
+            &completed_at,
+        )?;
         append_audit_event(
             &transaction,
             tender_id.as_str(),
@@ -1642,8 +1671,34 @@ impl TenderStore {
         tender_id: &TenderId,
         command: ResolveIndeterminateAgentRunCommand,
     ) -> Result<AgentRunRecoveryDecision, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        self.require_storage_writable()?;
         let rationale = command.rationale.trim().to_owned();
+        if command.disposition == AgentRunRecoveryDisposition::RetryTask
+            && production_task_for_run(&self.connection, &command.run_id)?.is_some()
+        {
+            let plan_basis: Option<(String, u32)> = self
+                .connection
+                .query_row(
+                    "SELECT activations.plan_id, activations.plan_version
+                     FROM production_task_attempts AS attempts
+                     JOIN production_activations AS activations
+                       ON activations.activation_id = (
+                         SELECT activation_id FROM production_tasks
+                         WHERE production_task_id = attempts.production_task_id
+                       )
+                     JOIN agent_runs AS runs ON runs.task_id = attempts.task_id
+                     WHERE runs.run_id = ?1",
+                    [&command.run_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(sql_error)?;
+            let (plan_id, plan_version) = plan_basis
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            if !work_plan_package_dependencies_are_current(self, &plan_id, plan_version)? {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1920,6 +1975,216 @@ impl TenderStore {
 
     pub(crate) fn inspect_agent_runs(&self) -> Result<Vec<AgentRunInspection>, TenderCommandError> {
         self.inspect_agent_runs_with_check(&mut || Ok(()))
+    }
+
+    pub(crate) fn inspect_agent_run_history(
+        &self,
+        before_sequence: Option<u64>,
+        limit: u32,
+    ) -> Result<AgentRunHistoryPage, TenderCommandError> {
+        if !(1..=4).contains(&limit) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let before_sequence = before_sequence
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let total_count: i64 = self
+            .connection
+            .query_row("SELECT COUNT(*) FROM agent_runs", [], |row| row.get(0))
+            .map_err(sql_error)?;
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT run_sequence, run_id
+                 FROM agent_runs
+                 WHERE (?1 IS NULL OR run_sequence < ?1)
+                 ORDER BY run_sequence DESC
+                 LIMIT ?2",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map(params![before_sequence, i64::from(limit) + 1], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(sql_error)?;
+        let mut references = Vec::with_capacity(limit as usize + 1);
+        for row in rows {
+            let (sequence, run_id) = row.map_err(sql_error)?;
+            references.push((
+                u64::try_from(sequence)
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+                run_id,
+            ));
+        }
+        let has_older = references.len() > limit as usize;
+        references.truncate(limit as usize);
+        let next_before_sequence = has_older
+            .then(|| references.last().map(|(sequence, _)| *sequence))
+            .flatten();
+        let items = references
+            .into_iter()
+            .map(|(run_sequence, run_id)| {
+                Ok(AgentRunHistoryItem {
+                    run_sequence,
+                    run: self.inspect_agent_run_summary(&run_id)?,
+                })
+            })
+            .collect::<Result<Vec<_>, TenderCommandError>>()?;
+        Ok(AgentRunHistoryPage {
+            items,
+            next_before_sequence,
+            total_count: u64::try_from(total_count)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+        })
+    }
+
+    pub(crate) fn inspect_agent_run_activity(
+        &self,
+    ) -> Result<AgentRunActivity, TenderCommandError> {
+        let (run_count, event_count, running_count): (i64, i64, i64) = self
+            .connection
+            .query_row(
+                "SELECT
+                   (SELECT COUNT(*) FROM agent_runs),
+                   (SELECT COUNT(*) FROM provider_events),
+                   (SELECT COUNT(*) FROM agent_runs WHERE status = 'running')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(sql_error)?;
+        Ok(AgentRunActivity {
+            run_count: u64::try_from(run_count)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            event_count: u64::try_from(event_count)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            running_count: u64::try_from(running_count)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+        })
+    }
+
+    fn inspect_agent_run_summary(
+        &self,
+        run_id: &str,
+    ) -> Result<AgentRunSummary, TenderCommandError> {
+        let row: Option<RawAgentRun> = self
+            .connection
+            .query_row(
+                "SELECT task_id, profile_id, profile_version, retry_of_run_id,
+                        permission_grant_json, status,
+                        provider_thread_ref, provider_turn_ref, usage_json, failure_json,
+                        started_at, completed_at
+                 FROM agent_runs WHERE run_id = ?1",
+                [run_id],
+                |row| {
+                    Ok(RawAgentRun {
+                        task_id: row.get(0)?,
+                        profile_id: row.get(1)?,
+                        profile_version: row.get(2)?,
+                        retry_of_run_id: row.get(3)?,
+                        permission_grant_json: row.get(4)?,
+                        status: row.get(5)?,
+                        provider_thread_ref: row.get(6)?,
+                        provider_turn_ref: row.get(7)?,
+                        usage_json: row.get(8)?,
+                        failure_json: row.get(9)?,
+                        started_at: row.get(10)?,
+                        completed_at: row.get(11)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let row = row.ok_or_else(|| TenderCommandError::new(TenderErrorCode::NotFound))?;
+        let state = AgentRunState::parse(&row.status)?;
+        let profile = load_profile(
+            &self.connection,
+            (row.profile_id.clone(), row.profile_version),
+        )?;
+        let usage = row
+            .usage_json
+            .as_deref()
+            .map(parse_canonical_json)
+            .transpose()?
+            .unwrap_or_default();
+        let failure = row
+            .failure_json
+            .as_deref()
+            .map(parse_canonical_json)
+            .transpose()?;
+        let (has_proposed_result, has_linked_retry): (bool, bool) = self
+            .connection
+            .query_row(
+                "SELECT
+                   EXISTS(SELECT 1 FROM proposed_agent_results WHERE run_id = ?1),
+                   EXISTS(SELECT 1 FROM agent_runs WHERE retry_of_run_id = ?1)",
+                [run_id],
+                |result| Ok((result.get(0)?, result.get(1)?)),
+            )
+            .map_err(sql_error)?;
+        if (state == AgentRunState::Completed) != has_proposed_result
+            || (state == AgentRunState::Running
+                && (failure.is_some() || row.completed_at.is_some()))
+            || (state != AgentRunState::Running && row.completed_at.is_none())
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let recovery_decision = self
+            .connection
+            .query_row(
+                "SELECT disposition, rationale, decided_by, decided_at
+                 FROM agent_run_recovery_dispositions WHERE run_id = ?1",
+                [run_id],
+                |decision| {
+                    Ok((
+                        decision.get::<_, String>(0)?,
+                        decision.get::<_, String>(1)?,
+                        decision.get::<_, String>(2)?,
+                        decision.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(sql_error)?
+            .map(|(disposition, rationale, decided_by, decided_at)| {
+                Ok(AgentRunRecoveryDecision {
+                    run_id: run_id.to_owned(),
+                    disposition: AgentRunRecoveryDisposition::parse(&disposition)?,
+                    rationale,
+                    decided_by,
+                    decided_at,
+                })
+            })
+            .transpose()?;
+        if recovery_decision.is_some() && state != AgentRunState::Indeterminate {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let linked_retry_supported = profile_supports_linked_retry(&profile);
+        if recovery_decision.as_ref().is_some_and(|decision| {
+            decision.disposition == AgentRunRecoveryDisposition::RetryTask
+                && !linked_retry_supported
+        }) {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        Ok(AgentRunSummary {
+            run_id: run_id.to_owned(),
+            retry_of_run_id: row.retry_of_run_id,
+            has_linked_retry,
+            linked_retry_supported,
+            state,
+            profile_identity: profile.identity,
+            profile_profession: profile.profession,
+            profile_version: profile.version,
+            task_id: row.task_id,
+            provider_thread_ref: row.provider_thread_ref,
+            provider_turn_ref: row.provider_turn_ref,
+            usage,
+            failure,
+            has_proposed_result,
+            recovery_decision,
+            started_at: row.started_at,
+            completed_at: row.completed_at,
+        })
     }
 
     pub(crate) fn inspect_agent_runs_with_check(

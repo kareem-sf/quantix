@@ -34,6 +34,7 @@ use crate::{setup::SetupState, QuantixHost};
 mod agent_records;
 pub(crate) mod backups;
 mod bid_decisions;
+mod production_scheduler;
 mod team_composer;
 mod tender_records;
 
@@ -59,6 +60,11 @@ pub use bid_decisions::{
     ManagerCapabilityDemandInput, ResolveBidDecisionReturnReworkCommand, ResourceImplication,
     ReviewFindingSeverity, RunBidDecisionPackageReviewCommand, TenderRecordVersionReference,
 };
+pub use production_scheduler::{
+    ActivateTenderProductionCommand, ProductionTaskInspection, ProductionTaskOutput,
+    ProductionTaskRunResult, ProductionTaskState, RunProductionTaskCommand,
+    TenderProductionInspection,
+};
 pub use team_composer::{
     ComposeTenderOfficeCommand, DecideWorkPlanProposalCommand, ReviseWorkPlanProposalCommand,
     WorkPlanApprovalRecord, WorkPlanCapabilityGap, WorkPlanDecision, WorkPlanProfileBinding,
@@ -81,7 +87,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 13;
+const TENDER_SCHEMA_VERSION: i64 = 14;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -92,7 +98,7 @@ CREATE TABLE tender (
   tender_id TEXT NOT NULL UNIQUE,
   current_revision INTEGER NOT NULL CHECK (current_revision > 0),
   lifecycle_phase TEXT NOT NULL CHECK (lifecycle_phase IN (
-    'intake', 'bid_decision', 'tender_planning', 'declined'
+    'intake', 'bid_decision', 'tender_planning', 'active_production', 'declined'
   )),
   created_at TEXT NOT NULL
 );
@@ -650,7 +656,9 @@ CREATE TABLE bid_decision_approval_invalidations (
   changed_records_json TEXT NOT NULL CHECK (json_valid(changed_records_json)),
   invalidated_by TEXT NOT NULL CHECK (invalidated_by = 'engineer_user'),
   acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
-  lifecycle_before TEXT NOT NULL CHECK (lifecycle_before = 'tender_planning'),
+  lifecycle_before TEXT NOT NULL CHECK (lifecycle_before IN (
+    'tender_planning', 'active_production'
+  )),
   lifecycle_after TEXT NOT NULL CHECK (lifecycle_after = 'bid_decision'),
   manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
   manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
@@ -706,6 +714,62 @@ CREATE TABLE work_plan_approvals (
   UNIQUE (plan_id, plan_version),
   FOREIGN KEY (plan_id, plan_version)
     REFERENCES work_plan_versions(plan_id, version)
+);
+CREATE TABLE production_activations (
+  activation_id TEXT PRIMARY KEY CHECK (length(activation_id) = 32),
+  plan_id TEXT NOT NULL,
+  plan_version INTEGER NOT NULL CHECK (plan_version > 0),
+  plan_manifest_sha256 TEXT NOT NULL CHECK (length(plan_manifest_sha256) = 64),
+  status TEXT NOT NULL CHECK (status IN ('active', 'suspended', 'superseded')),
+  activated_by TEXT NOT NULL CHECK (activated_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+  created_at TEXT NOT NULL,
+  UNIQUE (plan_id, plan_version),
+  FOREIGN KEY (plan_id, plan_version)
+    REFERENCES work_plan_versions(plan_id, version)
+);
+CREATE UNIQUE INDEX production_activations_one_active
+ON production_activations(status) WHERE status = 'active';
+CREATE TABLE production_tasks (
+  production_task_id TEXT PRIMARY KEY CHECK (length(production_task_id) = 32),
+  activation_id TEXT NOT NULL,
+  task_key TEXT NOT NULL CHECK (length(CAST(task_key AS BLOB)) BETWEEN 1 AND 200),
+  task_definition_json TEXT NOT NULL CHECK (json_valid(task_definition_json)),
+  task_definition_sha256 TEXT NOT NULL CHECK (length(task_definition_sha256) = 64),
+  task_id TEXT UNIQUE,
+  status TEXT NOT NULL CHECK (status IN (
+    'blocked', 'ready', 'running', 'review_ready', 'reviewing', 'completed', 'failed', 'cancelled',
+    'indeterminate', 'suspended'
+  )),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (activation_id, task_key),
+  FOREIGN KEY (activation_id) REFERENCES production_activations(activation_id),
+  FOREIGN KEY (task_id) REFERENCES tender_tasks(task_id)
+);
+CREATE TABLE production_task_attempts (
+  production_task_id TEXT NOT NULL,
+  attempt_number INTEGER NOT NULL CHECK (attempt_number BETWEEN 1 AND 8),
+  attempt_kind TEXT NOT NULL CHECK (attempt_kind IN ('author', 'review')),
+  task_id TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (production_task_id, attempt_number),
+  FOREIGN KEY (production_task_id) REFERENCES production_tasks(production_task_id),
+  FOREIGN KEY (task_id) REFERENCES tender_tasks(task_id)
+);
+CREATE TABLE production_task_outputs (
+  output_id TEXT PRIMARY KEY CHECK (length(output_id) = 32),
+  production_task_id TEXT NOT NULL UNIQUE,
+  run_id TEXT NOT NULL UNIQUE,
+  reviewer_run_id TEXT NOT NULL UNIQUE,
+  payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+  payload_sha256 TEXT NOT NULL CHECK (length(payload_sha256) = 64),
+  data_scopes_json TEXT NOT NULL CHECK (json_valid(data_scopes_json)),
+  data_classifications_json TEXT NOT NULL CHECK (json_valid(data_classifications_json)),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (production_task_id) REFERENCES production_tasks(production_task_id),
+  FOREIGN KEY (run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (reviewer_run_id) REFERENCES agent_runs(run_id)
 );
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
@@ -1201,6 +1265,48 @@ BEFORE DELETE ON work_plan_approvals
 BEGIN
   SELECT RAISE(ABORT, 'Work Plan Approvals are immutable');
 END;
+CREATE TRIGGER production_activations_identity_immutable
+BEFORE UPDATE OF activation_id, plan_id, plan_version, plan_manifest_sha256,
+                 activated_by, acting_role, created_at ON production_activations
+BEGIN
+  SELECT RAISE(ABORT, 'Production Activation identity is immutable');
+END;
+CREATE TRIGGER production_activations_no_delete
+BEFORE DELETE ON production_activations
+BEGIN
+  SELECT RAISE(ABORT, 'Production Activations cannot be deleted');
+END;
+CREATE TRIGGER production_tasks_definition_immutable
+BEFORE UPDATE OF production_task_id, activation_id, task_key,
+                 task_definition_json, task_definition_sha256, created_at ON production_tasks
+BEGIN
+  SELECT RAISE(ABORT, 'Production Task definitions are immutable');
+END;
+CREATE TRIGGER production_tasks_no_delete
+BEFORE DELETE ON production_tasks
+BEGIN
+  SELECT RAISE(ABORT, 'Production Tasks cannot be deleted');
+END;
+CREATE TRIGGER production_task_attempts_no_update
+BEFORE UPDATE ON production_task_attempts
+BEGIN
+  SELECT RAISE(ABORT, 'Production Task Attempts are immutable');
+END;
+CREATE TRIGGER production_task_attempts_no_delete
+BEFORE DELETE ON production_task_attempts
+BEGIN
+  SELECT RAISE(ABORT, 'Production Task Attempts cannot be deleted');
+END;
+CREATE TRIGGER production_task_outputs_no_update
+BEFORE UPDATE ON production_task_outputs
+BEGIN
+  SELECT RAISE(ABORT, 'Production Task Outputs are immutable');
+END;
+CREATE TRIGGER production_task_outputs_no_delete
+BEFORE DELETE ON production_task_outputs
+BEGIN
+  SELECT RAISE(ABORT, 'Production Task Outputs are immutable');
+END;
 CREATE TRIGGER audit_events_no_update
 BEFORE UPDATE ON audit_events
 BEGIN
@@ -1273,6 +1379,7 @@ pub enum TenderLifecyclePhase {
     Intake,
     BidDecision,
     TenderPlanning,
+    ActiveProduction,
     Declined,
 }
 
@@ -1282,6 +1389,7 @@ impl TenderLifecyclePhase {
             Self::Intake => "intake",
             Self::BidDecision => "bid_decision",
             Self::TenderPlanning => "tender_planning",
+            Self::ActiveProduction => "active_production",
             Self::Declined => "declined",
         }
     }
@@ -1291,6 +1399,7 @@ impl TenderLifecyclePhase {
             "intake" => Ok(Self::Intake),
             "bid_decision" => Ok(Self::BidDecision),
             "tender_planning" => Ok(Self::TenderPlanning),
+            "active_production" => Ok(Self::ActiveProduction),
             "declined" => Ok(Self::Declined),
             _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
         }
@@ -1732,6 +1841,9 @@ impl TenderStore {
         store
             .reconcile_interrupted_agent_runs(expected_tender_id)
             .map_err(recovery_required_if_integrity)?;
+        store
+            .reconcile_interrupted_production_tasks(expected_tender_id)
+            .map_err(recovery_required_if_integrity)?;
         verify_audit_chain(&store.connection).map_err(recovery_required_if_integrity)?;
         if inspect_referenced_content(&store.connection, &store.root.join("content"))?.is_some()
             || !store.semantic_manifests_are_valid()?
@@ -1985,6 +2097,9 @@ impl TenderStore {
         if !self.work_plan_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
+        if !self.production_manifests_are_valid_with_check(check)? {
+            return Ok(false);
+        }
         let mut statement = self
             .connection
             .prepare(
@@ -2108,7 +2223,32 @@ impl TenderStore {
                     |row| row.get::<_, bool>(0),
                 )
                 .map_err(sql_error)?;
-        if lifecycle_phase != TenderLifecyclePhase::Declined && !successor_pending {
+        let recovery_retry_pending: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM production_tasks AS tasks
+                   JOIN production_task_attempts AS attempts
+                     ON attempts.production_task_id = tasks.production_task_id
+                    AND attempts.task_id = tasks.task_id
+                   JOIN agent_runs AS runs ON runs.task_id = attempts.task_id
+                   JOIN agent_run_recovery_dispositions AS dispositions
+                     ON dispositions.run_id = runs.run_id
+                    AND dispositions.disposition = 'retry_task'
+                   WHERE tasks.status = 'indeterminate'
+                     AND NOT EXISTS(
+                       SELECT 1 FROM agent_runs AS retries
+                       WHERE retries.retry_of_run_id = runs.run_id
+                     )
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if lifecycle_phase != TenderLifecyclePhase::Declined
+            && !successor_pending
+            && !recovery_retry_pending
+        {
             return Ok(());
         }
         let transaction = self
@@ -2131,7 +2271,9 @@ impl TenderStore {
             json!({
                 "command": "material_change_intake",
                 "lifecycle_phase": lifecycle_phase,
-                "reason": if successor_pending {
+                "reason": if recovery_retry_pending {
+                    "production_recovery_retry_pending"
+                } else if successor_pending {
                     "material_change_successor_pending"
                 } else {
                     "lifecycle_closed"

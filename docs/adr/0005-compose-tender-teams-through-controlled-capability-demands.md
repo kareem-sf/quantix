@@ -4,7 +4,7 @@ Quantix v0 uses a host-controlled Team Composer to map exact Project Fingerprint
 
 ## Consequences
 
-- Creating a Tender activates only the restricted Bootstrap Team: Tender Office Coordinator, Document Controller, Tender Analyst, and Independent Reviewer. After a Proceed Bid Decision, Work Plan Approval activates those core profiles plus the mandatory Cost Estimator and every approved conditional specialist.
+- Creating a Tender activates only the restricted Bootstrap Team: Tender Office Coordinator, Document Controller, Tender Analyst, and Independent Reviewer. After a Proceed Bid Decision, Work Plan Approval authorizes an explicit Active Production transition that activates exactly those core profiles plus the mandatory Cost Estimator and every approved conditional specialist; approval alone does not start production work.
 - Each Tender-scoped Agent Profile represents one coherent professional role with operational traits, an exact immutable version, and one persistent provider thread. Compatible Capabilities may be combined, but independence, permission, qualification, or workload boundaries force separate profiles.
 - Team Composer may specialize approved Capability Catalogue components into project-specific roles. An unsupported need becomes a visible Capability Gap and blocks affected work instead of producing a fictional expert.
 - Every Tender Task has one accountable Agent Profile version, an evidence or policy trigger, exact inputs, dependencies, permissions, budget, output contract, and review policy. Contributors work through registered child tasks rather than shared mutable work.

@@ -382,6 +382,19 @@ fn run_agent_turn(
     let mut thread_request: serde_json::Value = serde_json::from_str(&thread_request?)?;
     let scenario = fs::read_to_string(executable.with_extension("agent-scenario"))?;
     let scenario = scenario.trim();
+    if matches!(
+        scenario,
+        "production-task-multiplex" | "production-task-multiplex-auto"
+    ) {
+        return run_multiplexed_production_turns(
+            executable,
+            requests,
+            thread_request,
+            thread_count,
+            turn_count,
+            scenario == "production-task-multiplex-auto",
+        );
+    }
     if thread_request
         .get("method")
         .and_then(serde_json::Value::as_str)
@@ -435,7 +448,8 @@ fn run_agent_turn(
     }
     let is_record_scenario = scenario.starts_with("record-extraction")
         || scenario.starts_with("record-review")
-        || scenario.starts_with("bid-package-review");
+        || scenario.starts_with("bid-package-review")
+        || scenario.starts_with("production-task");
     let dynamic_tools_are_exact = if is_record_scenario {
         thread_request
             .pointer("/params/dynamicTools")
@@ -486,7 +500,15 @@ fn run_agent_turn(
         } else {
             *thread_count
         };
-        new_thread_id = format!("thr_fixture_{sequence}");
+        new_thread_id = if scenario.starts_with("production-task") {
+            format!(
+                "thr_fixture_{}_{}",
+                scenario.replace('-', "_"),
+                thread_count
+            )
+        } else {
+            format!("thr_fixture_{sequence}")
+        };
         &new_thread_id
     };
     let cwd = thread_request
@@ -882,6 +904,11 @@ fn run_agent_turn(
             | "bid-package-review"
             | "bid-package-review-failed"
             | "bid-package-review-delayed"
+            | "production-task"
+            | "production-task-delayed-a"
+            | "production-task-delayed-b"
+            | "production-task-output-over-budget"
+            | "production-task-review-rework"
     ) {
         return Err(format!("unknown agent fixture scenario {scenario}").into());
     }
@@ -1206,6 +1233,27 @@ fn run_agent_turn(
             return Ok(false);
         }
     }
+    if let Some(suffix) = scenario.strip_prefix("production-task-delayed-") {
+        fs::write(
+            executable.with_extension(format!("production-{suffix}-waiting")),
+            b"waiting",
+        )?;
+        for _ in 0..2_000 {
+            if executable
+                .with_extension(format!("production-{suffix}-release"))
+                .is_file()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        if !executable
+            .with_extension(format!("production-{suffix}-release"))
+            .is_file()
+        {
+            return Err("timed out waiting to release production output".into());
+        }
+    }
     let candidate = if scenario == "output-invalid" {
         serde_json::json!({ "summary": "Missing the required next action." })
     } else if scenario == "record-extraction-delayed" {
@@ -1387,6 +1435,41 @@ fn run_agent_turn(
         })
     } else if scenario == "bid-package-review" {
         serde_json::json!({ "outcome": "passed", "findings": [] })
+    } else if scenario == "production-task-output-over-budget" {
+        serde_json::json!({
+            "evidence_references": (0..256)
+                .map(|_| "x".repeat(1_100))
+                .collect::<Vec<_>>(),
+            "gaps": [],
+            "summary": "Output deliberately exceeds the exact task byte budget."
+        })
+    } else if scenario == "production-task-review-rework"
+        && provider_data_view
+            .get("review_candidate")
+            .is_some_and(|candidate| !candidate.is_null())
+    {
+        serde_json::json!({
+            "verdict": "requires_rework",
+            "findings": ["The exact candidate does not satisfy the approved review policy."]
+        })
+    } else if scenario.starts_with("production-task")
+        && provider_data_view
+            .get("review_candidate")
+            .is_some_and(|candidate| !candidate.is_null())
+    {
+        serde_json::json!({ "verdict": "satisfied", "findings": [] })
+    } else if scenario.starts_with("production-task") {
+        serde_json::json!({
+            "evidence_references": provider_data_view
+                .get("dependency_outputs")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|output| output.get("payload_sha256").cloned())
+                .collect::<Vec<_>>(),
+            "gaps": [],
+            "summary": format!("Completed the exact bounded production task for {tender_name}.")
+        })
     } else {
         serde_json::json!({
             "summary": format!("{tender_name} is ready for controlled intake analysis."),
@@ -1427,6 +1510,244 @@ fn run_agent_turn(
             }
         }
     }))?;
+    Ok(true)
+}
+
+fn run_multiplexed_production_turns(
+    executable: &Path,
+    requests: &mut impl Iterator<Item = io::Result<String>>,
+    first_thread_request: serde_json::Value,
+    thread_count: &mut u32,
+    turn_count: &mut u32,
+    automatic: bool,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let automatic_batch = if automatic {
+        let path = executable.with_extension("production-auto-batch");
+        let batch = fs::read_to_string(&path)
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(0);
+        fs::write(path, batch.saturating_add(1).to_string())?;
+        batch
+    } else {
+        0
+    };
+    let target_turns = if automatic && !matches!(automatic_batch, 0 | 3) {
+        1
+    } else {
+        2
+    };
+    let mut turns = Vec::new();
+    let mut threads = Vec::new();
+    let mut next_request = Some(first_thread_request);
+    while turns.len() < target_turns {
+        let request = match next_request.take() {
+            Some(request) => request,
+            None => read_json_line(requests)?,
+        };
+        match request.get("method").and_then(serde_json::Value::as_str) {
+            Some("thread/archive") => {
+                let archived_thread = request
+                    .pointer("/params/threadId")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or("multiplexed archived thread id")?;
+                write_json(&serde_json::json!({
+                    "id": request.get("id").cloned().ok_or("archive request id")?,
+                    "result": {}
+                }))?;
+                write_json(&serde_json::json!({
+                    "method": "thread/archived",
+                    "params": { "threadId": archived_thread }
+                }))?;
+            }
+            Some(method @ ("thread/start" | "thread/resume")) => {
+                if threads.len() >= 2
+                    || (method == "thread/start"
+                        && (request.pointer("/params/sandbox")
+                            != Some(&serde_json::Value::String("workspaceWrite".into()))
+                            || request.pointer("/params/approvalPolicy")
+                                != Some(&serde_json::Value::String("never".into()))
+                            || !request
+                                .pointer("/params/dynamicTools")
+                                .and_then(serde_json::Value::as_array)
+                                .is_some_and(Vec::is_empty)))
+                {
+                    return Err(
+                        "multiplexed production thread lacks its exact sandbox contract".into(),
+                    );
+                }
+                let suffix = ["a", "b"][threads.len()];
+                let thread_id = if method == "thread/resume" {
+                    request
+                        .pointer("/params/threadId")
+                        .and_then(serde_json::Value::as_str)
+                        .ok_or("multiplexed resumed thread id")?
+                        .to_owned()
+                } else {
+                    *thread_count = thread_count
+                        .checked_add(1)
+                        .ok_or("fixture thread count overflow")?;
+                    format!("thr_fixture_production_multiplex_{thread_count}")
+                };
+                let cwd = request
+                    .pointer("/params/cwd")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| ".".into());
+                let thread = fixture_thread(&thread_id, &cwd);
+                write_json(&serde_json::json!({
+                    "id": request.get("id").cloned().ok_or("thread request id")?,
+                    "result": {
+                        "approvalPolicy": "never",
+                        "approvalsReviewer": "user",
+                        "cwd": cwd,
+                        "model": "gpt-5.6-terra",
+                        "modelProvider": "openai",
+                        "reasoningEffort": "medium",
+                        "sandbox": { "type": "readOnly", "networkAccess": false },
+                        "thread": thread.clone()
+                    }
+                }))?;
+                write_json(&serde_json::json!({
+                    "method": "thread/started",
+                    "params": { "thread": thread }
+                }))?;
+                threads.push((suffix, thread_id));
+            }
+            Some("turn/start") => {
+                if request.pointer("/params/outputSchema").is_none()
+                    || request.pointer("/params/sandboxPolicy/type")
+                        != Some(&serde_json::Value::String("workspaceWrite".into()))
+                    || request.pointer("/params/sandboxPolicy/networkAccess")
+                        != Some(&serde_json::Value::Bool(false))
+                {
+                    return Err(
+                        "multiplexed production turn lacks its exact output contract".into(),
+                    );
+                }
+                let thread_id = request
+                    .pointer("/params/threadId")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or("multiplexed turn thread")?;
+                let suffix = threads
+                    .iter()
+                    .find(|(_, candidate)| candidate == thread_id)
+                    .map(|(suffix, _)| *suffix)
+                    .ok_or("multiplexed turn used an unknown thread")?;
+                if turns
+                    .iter()
+                    .any(|(_, candidate, _, _)| candidate == thread_id)
+                {
+                    return Err("multiplexed thread received more than one turn".into());
+                }
+                *turn_count = turn_count
+                    .checked_add(1)
+                    .ok_or("fixture turn count overflow")?;
+                let turn_id = format!("turn_fixture_production_multiplex_{turn_count}");
+                let running_turn = serde_json::json!({
+                    "id": turn_id,
+                    "status": "inProgress",
+                    "items": [],
+                    "error": null,
+                    "startedAt": 1_780_000_001_i64,
+                    "completedAt": null,
+                    "durationMs": null
+                });
+                write_json(&serde_json::json!({
+                    "id": request.get("id").cloned().ok_or("turn request id")?,
+                    "result": { "turn": running_turn }
+                }))?;
+                write_json(&serde_json::json!({
+                    "method": "turn/started",
+                    "params": { "threadId": thread_id, "turn": running_turn }
+                }))?;
+                fs::write(
+                    executable.with_extension(format!("production-{suffix}-waiting")),
+                    b"waiting",
+                )?;
+                let provider_input: serde_json::Value = serde_json::from_str(
+                    request
+                        .pointer("/params/input/0/text")
+                        .and_then(serde_json::Value::as_str)
+                        .ok_or("multiplexed provider instruction bundle")?,
+                )?;
+                let review = provider_input
+                    .pointer("/provider_data_views/0/payload/review_candidate")
+                    .is_some_and(|candidate| !candidate.is_null());
+                turns.push((suffix, thread_id.to_owned(), turn_id, review));
+            }
+            _ => return Err("unexpected multiplexed production request".into()),
+        }
+    }
+    if automatic && target_turns == 2 {
+        fs::write(
+            executable.with_extension("production-multiplex-observed"),
+            b"two independent turns",
+        )?;
+    }
+
+    for (suffix, _, _, _) in &turns {
+        if automatic {
+            continue;
+        }
+        for _ in 0..2_000 {
+            if executable
+                .with_extension(format!("production-{suffix}-release"))
+                .is_file()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        if !executable
+            .with_extension(format!("production-{suffix}-release"))
+            .is_file()
+        {
+            return Err("timed out waiting to release multiplexed production output".into());
+        }
+    }
+
+    for (suffix, thread_id, turn_id, review) in turns {
+        let candidate = if review {
+            serde_json::json!({ "verdict": "satisfied", "findings": [] })
+        } else {
+            serde_json::json!({
+                "evidence_references": [],
+                "gaps": [],
+                "summary": format!("Completed multiplexed production task {suffix}.")
+            })
+        };
+        let final_item = serde_json::json!({
+            "id": format!("message_fixture_{suffix}"),
+            "type": "agentMessage",
+            "text": serde_json::to_string(&candidate)?,
+            "phase": "final_answer"
+        });
+        write_json(&serde_json::json!({
+            "method": "item/completed",
+            "params": {
+                "threadId": thread_id,
+                "turnId": turn_id,
+                "completedAtMs": 1_780_000_002_000_i64,
+                "item": final_item.clone()
+            }
+        }))?;
+        write_json(&serde_json::json!({
+            "method": "turn/completed",
+            "params": {
+                "threadId": thread_id,
+                "turn": {
+                    "id": turn_id,
+                    "status": "completed",
+                    "items": [final_item],
+                    "error": null,
+                    "startedAt": 1_780_000_001_i64,
+                    "completedAt": 1_780_000_002_i64,
+                    "durationMs": 1000
+                }
+            }
+        }))?;
+    }
     Ok(true)
 }
 

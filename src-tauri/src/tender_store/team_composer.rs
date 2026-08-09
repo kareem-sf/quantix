@@ -579,6 +579,18 @@ impl TenderStore {
             command.actions.as_slice(),
             [WorkPlanRevisionAction::RebasePackageBasis]
         );
+        let production_amendment = !rebase_package_basis
+            && self
+                .connection
+                .query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM production_activations
+                       WHERE plan_id = ?1 AND plan_version = ?2 AND status = 'active'
+                     )",
+                    params![command.plan_id, command.base_version],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(sql_error)?;
         let base = self
             .inspect_current_work_plan(budget)?
             .filter(|plan| {
@@ -588,9 +600,10 @@ impl TenderStore {
                         !plan.current
                     } else {
                         plan.current
-                            && plan.approval.as_ref().is_none_or(|approval| {
-                                approval.decision != WorkPlanDecision::Approve
-                            })
+                            && (production_amendment
+                                || plan.approval.as_ref().is_none_or(|approval| {
+                                    approval.decision != WorkPlanDecision::Approve
+                                }))
                     }
             })
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand));
@@ -680,7 +693,7 @@ impl TenderStore {
                    SELECT 1 FROM work_plan_heads JOIN tender ON tender.singleton = 1
                    WHERE work_plan_heads.plan_id = ?1
                      AND work_plan_heads.current_version = ?2
-                     AND tender.lifecycle_phase = 'tender_planning'
+                     AND tender.lifecycle_phase IN ('tender_planning', 'active_production')
                  ), EXISTS(
                    SELECT 1 FROM work_plan_approvals
                    WHERE plan_id = ?1 AND plan_version = ?2 AND decision = 'approve'
@@ -693,7 +706,7 @@ impl TenderStore {
             ensure_exact_accepted_package_still_current(&transaction, &package).is_ok();
         if !head_exact
             || !replacement_exact
-            || (!rebase_package_basis && prior_approved)
+            || (!rebase_package_basis && prior_approved && !production_amendment)
             || command.base_version as usize >= MAX_PLAN_VERSIONS
         {
             append_work_plan_denial(
@@ -710,6 +723,92 @@ impl TenderStore {
         }
         let created_at = sqlite_timestamp(&transaction)?;
         let mut profiles = base.profiles;
+        if production_amendment {
+            let active_or_unresolved: Option<String> = transaction
+                .query_row(
+                    "SELECT CASE
+                       WHEN EXISTS(
+                         SELECT 1 FROM production_tasks AS tasks
+                         JOIN production_activations AS activations
+                           ON activations.activation_id = tasks.activation_id
+                         WHERE activations.plan_id = ?1 AND activations.plan_version = ?2
+                            AND activations.status = 'active'
+                            AND tasks.status IN ('running', 'reviewing')
+                       ) THEN 'active_production_run'
+                       WHEN EXISTS(
+                         SELECT 1 FROM production_tasks AS tasks
+                         JOIN production_activations AS activations
+                           ON activations.activation_id = tasks.activation_id
+                         JOIN production_task_attempts AS attempts
+                           ON attempts.production_task_id = tasks.production_task_id
+                          AND attempts.task_id = tasks.task_id
+                         JOIN agent_runs AS runs ON runs.task_id = attempts.task_id
+                         WHERE activations.plan_id = ?1 AND activations.plan_version = ?2
+                           AND activations.status = 'active' AND tasks.status = 'indeterminate'
+                           AND NOT EXISTS (
+                             SELECT 1 FROM agent_run_recovery_dispositions AS dispositions
+                             WHERE dispositions.run_id = runs.run_id
+                               AND dispositions.disposition = 'close_task'
+                           )
+                       ) THEN 'indeterminate_production_task'
+                       ELSE NULL END",
+                    params![command.plan_id, command.base_version],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            if let Some(reason) = active_or_unresolved {
+                append_work_plan_denial(
+                    &transaction,
+                    tender_id,
+                    package.tender_revision,
+                    "revise_work_plan_proposal",
+                    Some(&command.plan_id),
+                    Some(command.base_version),
+                    &reason,
+                )?;
+                transaction.commit().map_err(sql_error)?;
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            transaction
+                .execute(
+                    "UPDATE production_activations SET status = 'suspended'
+                     WHERE plan_id = ?1 AND plan_version = ?2 AND status = 'active'",
+                    params![command.plan_id, command.base_version],
+                )
+                .map_err(sql_error)?;
+            transaction
+                .execute(
+                    "UPDATE production_tasks SET status = 'suspended', updated_at = ?3
+                     WHERE activation_id IN (
+                       SELECT activation_id FROM production_activations
+                       WHERE plan_id = ?1 AND plan_version = ?2 AND status = 'suspended'
+                      ) AND status IN ('blocked', 'ready', 'review_ready', 'failed', 'cancelled', 'indeterminate')",
+                    params![command.plan_id, command.base_version, created_at],
+                )
+                .map_err(sql_error)?;
+            for binding in &mut profiles {
+                transaction
+                    .execute(
+                        "UPDATE agent_profile_heads SET status = 'proposed'
+                         WHERE profile_id = ?1 AND current_version = ?2 AND status = 'active'",
+                        params![binding.profile.profile_id, binding.profile.version],
+                    )
+                    .map_err(sql_error)?;
+                binding.status = AgentProfileStatus::Proposed;
+            }
+            if transaction
+                .execute(
+                    "UPDATE tender SET lifecycle_phase = 'tender_planning'
+                     WHERE singleton = 1 AND tender_id = ?1
+                       AND lifecycle_phase = 'active_production'",
+                    [tender_id.as_str()],
+                )
+                .map_err(sql_error)?
+                != 1
+            {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+        }
         if rebase_package_basis {
             for binding in &mut profiles {
                 if transaction
@@ -1028,30 +1127,6 @@ impl TenderStore {
                 ],
             )
             .map_err(sql_error)?;
-        if command.decision == WorkPlanDecision::Approve {
-            transaction
-                .execute(
-                    "UPDATE agent_profile_heads SET status = 'retired'
-                     WHERE status = 'proposed'",
-                    [],
-                )
-                .map_err(sql_error)?;
-            for binding in &proposal.profiles {
-                budget.check()?;
-                if transaction
-                    .execute(
-                        "UPDATE agent_profile_heads
-                         SET current_version = ?2, status = 'active'
-                         WHERE profile_id = ?1",
-                        params![binding.profile.profile_id, binding.profile.version],
-                    )
-                    .map_err(sql_error)?
-                    != 1
-                {
-                    return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-                }
-            }
-        }
         append_audit_event(
             &transaction,
             tender_id.as_str(),
@@ -1106,7 +1181,7 @@ impl TenderStore {
         transaction.commit().map_err(sql_error)
     }
 
-    fn inspect_work_plan_version(
+    pub(super) fn inspect_work_plan_version(
         &self,
         plan_id: &str,
         version: u32,
@@ -1153,7 +1228,7 @@ impl TenderStore {
                    JOIN tender ON tender.singleton = 1
                    WHERE work_plan_heads.plan_id = ?1
                      AND work_plan_heads.current_version = ?2
-                     AND tender.lifecycle_phase = 'tender_planning'
+                     AND tender.lifecycle_phase IN ('tender_planning', 'active_production')
                  )",
                 params![plan_id, version, row.0, row.1],
                 |value| value.get::<_, bool>(0),
@@ -1583,18 +1658,30 @@ impl TenderStore {
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
         let current_package = current_package
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let expected_status = if current_decision == Some(WorkPlanDecision::Approve)
+        let production_status: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT status FROM production_activations
+                 WHERE plan_id = ?1 AND plan_version = ?2",
+                params![head_plan_id, head_version],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let approved_package_invalidated = current_decision == Some(WorkPlanDecision::Approve)
             && accepted_package_is_invalidated(
                 &self.connection,
                 &current_package.0,
                 current_package.1,
-            )? {
-            AgentProfileStatus::Suspended
-        } else if current_decision == Some(WorkPlanDecision::Approve) {
-            AgentProfileStatus::Active
-        } else {
-            AgentProfileStatus::Proposed
-        };
+            )?;
+        let expected_status =
+            if approved_package_invalidated || production_status.as_deref() == Some("suspended") {
+                AgentProfileStatus::Suspended
+            } else if production_status.as_deref() == Some("active") {
+                AgentProfileStatus::Active
+            } else {
+                AgentProfileStatus::Proposed
+            };
         for binding in &current_profiles {
             check()?;
             let (head_profile_version, head_status): (u32, String) = self
@@ -1687,7 +1774,10 @@ fn accepted_current_package(
         .inspect_current_bid_decision_package()?
         .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
     if !package.current
-        || package.lifecycle_phase != TenderLifecyclePhase::TenderPlanning
+        || !matches!(
+            package.lifecycle_phase,
+            TenderLifecyclePhase::TenderPlanning | TenderLifecyclePhase::ActiveProduction
+        )
         || package.approval.as_ref().map(|approval| approval.decision)
             != Some(BidDecisionApprovalDecision::Accept)
     {
@@ -2166,7 +2256,7 @@ fn ensure_exact_proceed_still_current(
                 AND approvals.package_version = heads.current_version
                 AND approvals.decision = 'accept'
                WHERE tender.singleton = 1
-                 AND tender.lifecycle_phase = 'tender_planning'
+                     AND tender.lifecycle_phase IN ('tender_planning', 'active_production')
                  AND NOT EXISTS (
                    SELECT 1 FROM bid_decision_approval_invalidations
                    WHERE approval_id = approvals.approval_id
@@ -2203,7 +2293,7 @@ fn ensure_exact_accepted_package_still_current(
                 AND approvals.package_version = heads.current_version
                 AND approvals.decision = 'accept'
                WHERE tender.singleton = 1
-                 AND tender.lifecycle_phase = 'tender_planning'
+                 AND tender.lifecycle_phase IN ('tender_planning', 'active_production')
                  AND NOT EXISTS (
                    SELECT 1 FROM bid_decision_approval_invalidations
                    WHERE approval_id = approvals.approval_id
@@ -3169,13 +3259,10 @@ fn capability_scope(capability: &str) -> Option<String> {
 fn permissions_for_capabilities(
     capabilities: &[String],
 ) -> Result<AgentRunPermissions, TenderCommandError> {
-    let mut scopes = capabilities
-        .iter()
-        .map(|capability| {
-            capability_scope(capability)
-                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut scopes = Vec::new();
+    for capability in capabilities {
+        scopes.extend(capability_read_scopes(capability)?);
+    }
     scopes.sort();
     scopes.dedup();
     let mut data_classifications = scopes
@@ -3190,10 +3277,16 @@ fn permissions_for_capabilities(
         .collect::<Vec<_>>();
     data_classifications.sort_by_key(|classification| format!("{classification:?}"));
     data_classifications.dedup();
-    let allowed_actions = scopes
+    let mut allowed_actions = capabilities
         .iter()
-        .map(|scope| format!("produce_{scope}_output"))
-        .collect();
+        .map(|capability| {
+            capability_scope(capability)
+                .map(|scope| format!("produce_{scope}_output"))
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    allowed_actions.sort();
+    allowed_actions.dedup();
     Ok(AgentRunPermissions {
         data_scopes: scopes,
         data_classifications,
@@ -3202,6 +3295,36 @@ fn permissions_for_capabilities(
         network_allowed: false,
         workspace_write_allowed: true,
     })
+}
+
+fn capability_read_scopes(capability: &str) -> Result<Vec<String>, TenderCommandError> {
+    let own = capability_scope(capability)
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+    let mut scopes = vec![own];
+    if let Some(reviewed) = capability.strip_prefix("review_") {
+        scopes.extend(capability_read_scopes(reviewed)?);
+    } else {
+        match capability {
+            "tender_analysis" | "query_rfi_control" => scopes.push("tender_sources".into()),
+            "cost_estimation"
+            | "programme_planning"
+            | "contracts_review"
+            | "procurement_analysis"
+            | "technical_review" => {
+                scopes.push("tender_analysis".into());
+                scopes.push("tender_sources".into());
+            }
+            "independent_review" => {
+                scopes.push("commercial_estimate".into());
+                scopes.push("tender_analysis".into());
+                scopes.push("tender_sources".into());
+            }
+            _ => {}
+        }
+    }
+    scopes.sort();
+    scopes.dedup();
+    Ok(scopes)
 }
 
 fn apply_capability_contract(

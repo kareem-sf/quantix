@@ -9,7 +9,9 @@ use std::{
 
 use tokio_util::sync::CancellationToken;
 
-use crate::agent_runtime::CodexProvider;
+use crate::agent_runtime::{
+    CodexProvider, ProviderRateLimit, ProviderRateLimitState, ProviderUsage,
+};
 use crate::process_supervisor::ProcessSupervisor;
 use crate::runtime_readiness::RuntimeLayout;
 use crate::setup::{ensure_application_home, SetupOutcome, SetupPlatform, SystemSetupPlatform};
@@ -31,14 +33,17 @@ struct QuantixHostInner {
     process_supervisor: ProcessSupervisor,
     runtime_preparation: Mutex<Option<CancellationToken>>,
     active_parses: Mutex<HashMap<ParseTargetKey, CancellationToken>>,
-    active_agent_run: Mutex<Option<ActiveAgentRun>>,
+    active_agent_runs: Mutex<HashMap<String, ActiveAgentRun>>,
+    production_schedulers: Mutex<HashSet<String>>,
     agent_provider: tokio::sync::Mutex<Option<CodexProvider>>,
+    provider_rate_limit: Mutex<Option<ProviderRateLimit>>,
     runtime_verified: AtomicBool,
 }
 
 struct ActiveAgentRun {
     tender_id: String,
     run_id: Option<String>,
+    production: bool,
     cancellation: CancellationToken,
 }
 
@@ -108,8 +113,10 @@ impl QuantixHost {
                 process_supervisor: ProcessSupervisor,
                 runtime_preparation: Mutex::new(None),
                 active_parses: Mutex::new(HashMap::new()),
-                active_agent_run: Mutex::new(None),
+                active_agent_runs: Mutex::new(HashMap::new()),
+                production_schedulers: Mutex::new(HashSet::new()),
                 agent_provider: tokio::sync::Mutex::new(None),
+                provider_rate_limit: Mutex::new(None),
                 runtime_verified: AtomicBool::new(false),
             }),
         }
@@ -194,6 +201,63 @@ impl QuantixHost {
 
     pub(crate) fn agent_provider(&self) -> &tokio::sync::Mutex<Option<CodexProvider>> {
         &self.inner.agent_provider
+    }
+
+    pub(crate) fn observe_provider_usage(&self, usage: &ProviderUsage) {
+        if let Some(rate_limit) = usage.rate_limit.as_ref() {
+            *self
+                .inner
+                .provider_rate_limit
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(rate_limit.clone());
+        }
+    }
+
+    pub(crate) fn provider_subscription_capacity_is_exhausted(&self) -> bool {
+        let rate_limit = self
+            .inner
+            .provider_rate_limit
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let Some(rate_limit) = rate_limit else {
+            return false;
+        };
+        if rate_limit.state == ProviderRateLimitState::Available {
+            return false;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| i64::try_from(duration.as_secs()).ok());
+        let Some(now) = now else {
+            return true;
+        };
+        let reset_times = [rate_limit.primary.as_ref(), rate_limit.secondary.as_ref()]
+            .into_iter()
+            .flatten()
+            .map(|window| window.resets_at_epoch_seconds)
+            .collect::<Vec<_>>();
+        reset_times.is_empty()
+            || reset_times
+                .into_iter()
+                .any(|reset_at| reset_at.is_none_or(|reset_at| reset_at > now))
+    }
+
+    pub(crate) fn claim_production_scheduler(&self, tender_id: &str) -> bool {
+        self.inner
+            .production_schedulers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(tender_id.to_owned())
+    }
+
+    pub(crate) fn release_production_scheduler(&self, tender_id: &str) {
+        self.inner
+            .production_schedulers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(tender_id);
     }
 
     pub(crate) fn runtime_preparation_is_active(&self) -> bool {
@@ -282,52 +346,67 @@ impl QuantixHost {
     pub(crate) fn begin_active_agent_run(
         &self,
         tender_id: &str,
-    ) -> Result<CancellationToken, TenderCommandError> {
+        production: bool,
+    ) -> Result<(String, CancellationToken), TenderCommandError> {
         let mut active = self
             .inner
-            .active_agent_run
+            .active_agent_runs
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
-        if active.is_some() {
+        if (production && (active.len() >= 2 || active.values().any(|run| !run.production)))
+            || (!production && !active.is_empty())
+        {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
+        let lease_id = (1..=2)
+            .map(|sequence| format!("agent-run-lease-{sequence}"))
+            .find(|candidate| !active.contains_key(candidate))
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         let cancellation = CancellationToken::new();
-        *active = Some(ActiveAgentRun {
-            tender_id: tender_id.to_owned(),
-            run_id: None,
-            cancellation: cancellation.clone(),
-        });
-        Ok(cancellation)
+        active.insert(
+            lease_id.clone(),
+            ActiveAgentRun {
+                tender_id: tender_id.to_owned(),
+                run_id: None,
+                production,
+                cancellation: cancellation.clone(),
+            },
+        );
+        Ok((lease_id, cancellation))
     }
 
-    pub(crate) fn identify_active_agent_run(&self, run_id: &str) -> Result<(), TenderCommandError> {
+    pub(crate) fn identify_active_agent_run(
+        &self,
+        lease_id: &str,
+        run_id: &str,
+    ) -> Result<(), TenderCommandError> {
         let mut active = self
             .inner
-            .active_agent_run
+            .active_agent_runs
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
         let active = active
-            .as_mut()
+            .get_mut(lease_id)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
         active.run_id = Some(run_id.to_owned());
         Ok(())
     }
 
-    pub(crate) fn finish_active_agent_run(&self) {
-        *self
-            .inner
-            .active_agent_run
+    pub(crate) fn finish_active_agent_run(&self, lease_id: &str) {
+        self.inner
+            .active_agent_runs
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(lease_id);
     }
 
     pub(crate) fn cancel_active_agent_run(&self, tender_id: &str, run_id: &str) -> bool {
         let active = self
             .inner
-            .active_agent_run
+            .active_agent_runs
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(active) = active.as_ref() {
+        for active in active.values() {
             if active.tender_id == tender_id && active.run_id.as_deref() == Some(run_id) {
                 active.cancellation.cancel();
                 return true;
@@ -338,13 +417,11 @@ impl QuantixHost {
 
     pub(crate) fn agent_run_is_active(&self, tender_id: &str, run_id: &str) -> bool {
         self.inner
-            .active_agent_run
+            .active_agent_runs
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ref()
-            .is_some_and(|active| {
-                active.tender_id == tender_id && active.run_id.as_deref() == Some(run_id)
-            })
+            .values()
+            .any(|active| active.tender_id == tender_id && active.run_id.as_deref() == Some(run_id))
     }
 
     pub(crate) fn set_runtime_verified(&self, verified: bool) {
@@ -393,5 +470,41 @@ impl QuantixHost {
             }
         }
         Err(TenderCommandError::new(TenderErrorCode::StoreUnavailable))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_runtime::{ProviderRateLimitWindow, ProviderUsage};
+
+    #[test]
+    fn provider_subscription_capacity_is_shared_at_the_host_boundary() {
+        let root = tempfile::tempdir().expect("temporary application home");
+        let host = QuantixHost::new(root.path(), root.path());
+        host.observe_provider_usage(&ProviderUsage {
+            rate_limit: Some(ProviderRateLimit {
+                state: ProviderRateLimitState::Exhausted,
+                primary: Some(ProviderRateLimitWindow {
+                    used_percent: 100,
+                    window_minutes: Some(5),
+                    resets_at_epoch_seconds: None,
+                }),
+                secondary: None,
+            }),
+            ..ProviderUsage::default()
+        });
+
+        assert!(host.provider_subscription_capacity_is_exhausted());
+
+        host.observe_provider_usage(&ProviderUsage {
+            rate_limit: Some(ProviderRateLimit {
+                state: ProviderRateLimitState::Available,
+                primary: None,
+                secondary: None,
+            }),
+            ..ProviderUsage::default()
+        });
+        assert!(!host.provider_subscription_capacity_is_exhausted());
     }
 }

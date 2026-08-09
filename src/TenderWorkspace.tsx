@@ -61,6 +61,7 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
   const [busy, setBusy] = useState(false);
   const [commandFailed, setCommandFailed] = useState(false);
   const [tenderStateVersion, setTenderStateVersion] = useState(0);
+  const [productionScheduling, setProductionScheduling] = useState(false);
   const reportCommandFailure = useCallback(() => setCommandFailed(true), []);
   const reportTenderStateChange = useCallback(
     () => setTenderStateVersion((version) => version + 1),
@@ -536,6 +537,8 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                 tenderId={selected.tender_id}
                 runtimeReady={runtimeReady}
                 reportCommandFailure={reportCommandFailure}
+                refreshToken={tenderStateVersion}
+                productionScheduling={productionScheduling}
               />
               <section
                 className="document-register"
@@ -682,6 +685,8 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                 runtimeReady={runtimeReady}
                 reportCommandFailure={reportCommandFailure}
                 refreshToken={tenderStateVersion}
+                onTenderStateChange={reportTenderStateChange}
+                onProductionSchedulingChange={setProductionScheduling}
               />
             </>
           ) : recovery ? (

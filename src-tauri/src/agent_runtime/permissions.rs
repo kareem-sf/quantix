@@ -369,6 +369,19 @@ pub(crate) struct PreBidDataGrantRequest<'a> {
     pub payload: &'a Value,
 }
 
+pub(crate) struct PlannedTaskGrantRequest<'a> {
+    pub run_id: &'a str,
+    pub grant_id: String,
+    pub application_home: &'a Path,
+    pub tender_id: &'a str,
+    pub work_plan_version: u32,
+    pub profile: &'a AgentProfileVersionView,
+    pub task: &'a TenderTaskView,
+    pub issued_at: &'a str,
+    pub expires_at: &'a str,
+    pub payload: &'a Value,
+}
+
 pub(crate) fn derive_bootstrap_grant(
     request: BootstrapGrantRequest<'_>,
 ) -> Result<(PermissionGrant, PathBuf), TenderCommandError> {
@@ -614,6 +627,120 @@ pub(crate) fn derive_pre_bid_data_grant(
     }
 }
 
+pub(crate) fn derive_planned_task_grant(
+    request: PlannedTaskGrantRequest<'_>,
+) -> Result<(PermissionGrant, PathBuf), TenderCommandError> {
+    let permissions = &request.task.permissions;
+    if request.work_plan_version == 0
+        || request.profile.profile_id != request.task.profile_id
+        || request.profile.version != request.task.profile_version
+        || request.profile.permissions != *permissions
+        || request.profile.resource_budget != request.task.resource_budget
+        || request.task.resource_budget.provider_turns != 1
+        || request.task.resource_budget.duration_seconds == 0
+        || request.task.resource_budget.duration_seconds > 120
+        || request.task.resource_budget.output_bytes == 0
+        || request.task.resource_budget.output_bytes > 256 * 1024
+        || permissions.data_scopes.is_empty()
+        || permissions.data_classifications.is_empty()
+        || permissions.allowed_actions.is_empty()
+        || !permissions.allowed_tools.is_empty()
+        || permissions.network_allowed
+        || !permissions.workspace_write_allowed
+        || permissions
+            .data_classifications
+            .contains(&DataClassification::Secret)
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let workspace = request
+        .application_home
+        .join("staging")
+        .join(format!("agent-{}-{}", request.tender_id, request.run_id));
+    let inputs = workspace.join("inputs");
+    let working = workspace.join("working");
+    let outputs = workspace.join("outputs");
+    fs::create_dir(&workspace).map_err(store_unavailable)?;
+    let materialized = (|| {
+        fs::create_dir(&inputs).map_err(store_unavailable)?;
+        fs::create_dir(&working).map_err(store_unavailable)?;
+        fs::create_dir(&outputs).map_err(store_unavailable)?;
+        let payload = serde_json_canonicalizer::to_string(request.payload)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?
+            .into_bytes();
+        if payload.len() > 4 * 1024 * 1024 {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let relative_path = "inputs/tender-metadata-v1.json";
+        let path = workspace.join(relative_path);
+        fs::write(&path, &payload).map_err(store_unavailable)?;
+        let mut file_permissions = fs::metadata(&path)
+            .map_err(store_unavailable)?
+            .permissions();
+        file_permissions.set_readonly(true);
+        fs::set_permissions(&path, file_permissions).map_err(store_unavailable)?;
+        let view = DataViewManifest {
+            view_id: format!("production-task-{}", request.task.task_id),
+            schema_version: 1,
+            relative_path: relative_path.into(),
+            sha256: Sha256::digest(&payload)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+            data_scope: permissions.data_scopes.join("+"),
+            data_classification: *permissions
+                .data_classifications
+                .iter()
+                .max()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?,
+            exact_inputs: request.task.exact_inputs.clone(),
+        };
+        let mut grant = PermissionGrant {
+            grant_id: request.grant_id,
+            policy_version: PERMISSION_POLICY_VERSION,
+            capability_catalogue_version: CAPABILITY_CATALOGUE_VERSION,
+            work_plan_version: request.work_plan_version,
+            profile_id: request.profile.profile_id.clone(),
+            profile_version: request.profile.version,
+            task_id: request.task.task_id.clone(),
+            purpose: request.task.objective.clone(),
+            data_scopes: permissions.data_scopes.clone(),
+            data_classifications: permissions.data_classifications.clone(),
+            allowed_actions: permissions.allowed_actions.clone(),
+            typed_tools: Vec::new(),
+            network_allowed: false,
+            workspace_write_allowed: true,
+            data_views: vec![view],
+            thread_exposure: ThreadExposureSet::default(),
+            workspace: AgentRunWorkspaceManifest {
+                workspace_id: request.run_id.into(),
+                read_only_inputs: "inputs".into(),
+                working_area: "working".into(),
+                staged_outputs: "outputs".into(),
+            },
+            access_ceiling: PermissionCeiling {
+                exact_inputs: request.task.exact_inputs.clone(),
+                data_scopes: permissions.data_scopes.clone(),
+                data_classifications: permissions.data_classifications.clone(),
+                allowed_actions: permissions.allowed_actions.clone(),
+                allowed_tools: Vec::new(),
+            },
+            resource_budget: request.task.resource_budget.clone(),
+            issued_at: request.issued_at.into(),
+            expires_at: request.expires_at.into(),
+        };
+        grant.thread_exposure = ThreadExposureSet::from_grant(&grant);
+        Ok(grant)
+    })();
+    match materialized {
+        Ok(grant) => Ok((grant, workspace)),
+        Err(error) => {
+            let _ = fs::remove_dir_all(&workspace);
+            Err(error)
+        }
+    }
+}
+
 fn intersect_strings(
     sources: &[&AgentRunPermissions],
     select: impl Fn(&AgentRunPermissions) -> &Vec<String>,
@@ -759,7 +886,7 @@ fn parse_utc_timestamp(value: &str) -> Result<Timestamp, PermissionDenialReason>
 }
 
 fn action_is_permitted_by_policy(action: &str) -> bool {
-    matches!(action, PROPOSE_INTAKE_ACTION)
+    action == PROPOSE_INTAKE_ACTION || action.starts_with("produce_")
 }
 
 pub fn approve_one_run_access(

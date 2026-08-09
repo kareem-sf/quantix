@@ -24,7 +24,8 @@ use crate::{
         CreateBidDecisionPackageCommand, CreateTenderEngineerEntryCommand,
         DecideBidDecisionPackageCommand, DecideTenderRecordCommand,
         InspectBidDecisionApprovalHistoryCommand, InvalidateBidDecisionApprovalCommand,
-        ResolveBidDecisionReturnReworkCommand, RunBidDecisionPackageReviewCommand,
+        ProductionTaskRunResult, ProductionTaskState, ResolveBidDecisionReturnReworkCommand,
+        RunBidDecisionPackageReviewCommand, RunProductionTaskCommand,
         RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, TenderCommandError,
         TenderErrorCode, TenderId, TenderRecordAuthority, TenderRecordDecisionResult,
         TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult, TenderStore,
@@ -33,15 +34,14 @@ use crate::{
 };
 
 mod bootstrap_profile;
+mod codex_actor;
 mod codex_protocol;
 pub(crate) mod permissions;
 pub(crate) use bootstrap_profile::{bootstrap_profile, bootstrap_task};
+pub(crate) use codex_actor::CodexProvider;
 use codex_protocol::{
-    dynamic_tool_specs, execute_typed_tool, handle_control_request, handle_notification,
-    outcome_unknown, parse_wire_message, process_failure, protocol_failure,
-    provider_instruction_bundle, read_expected_response, response_result,
-    typed_tool_arguments_are_valid, typed_tool_is_known, validate_candidate, validate_schema,
-    write_rpc, ControlRequestContext, ControlRequestLedger, NotificationOutcome,
+    execute_typed_tool, outcome_unknown, process_failure, protocol_failure, read_expected_response,
+    typed_tool_arguments_are_valid, typed_tool_is_known, write_rpc,
 };
 use permissions::permission_duration;
 pub use permissions::{
@@ -91,6 +91,28 @@ pub struct RunBootstrapAgentCommand {
 #[serde(deny_unknown_fields)]
 #[ts(export)]
 pub struct InterruptAgentRunCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct InspectAgentRunHistoryCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
+    #[garde(skip)]
+    pub before_sequence: Option<u64>,
+    #[garde(range(min = 1, max = 4))]
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct InspectAgentRunCommand {
     #[garde(length(bytes, min = 32, max = 32))]
     pub tender_id: String,
     #[garde(length(bytes, min = 32, max = 32))]
@@ -554,6 +576,51 @@ pub struct AgentRunInspection {
     pub completed_at: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AgentRunHistoryItem {
+    pub run_sequence: u64,
+    pub run: AgentRunSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AgentRunHistoryPage {
+    pub items: Vec<AgentRunHistoryItem>,
+    pub next_before_sequence: Option<u64>,
+    pub total_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AgentRunActivity {
+    pub run_count: u64,
+    pub event_count: u64,
+    pub running_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AgentRunSummary {
+    pub run_id: String,
+    pub retry_of_run_id: Option<String>,
+    pub has_linked_retry: bool,
+    pub linked_retry_supported: bool,
+    pub state: AgentRunState,
+    pub profile_identity: String,
+    pub profile_profession: String,
+    pub profile_version: u32,
+    pub task_id: String,
+    pub provider_thread_ref: Option<String>,
+    pub provider_turn_ref: Option<String>,
+    pub usage: ProviderUsage,
+    pub failure: Option<ProviderFailure>,
+    pub has_proposed_result: bool,
+    pub recovery_decision: Option<AgentRunRecoveryDecision>,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedAgentRun {
     pub run_id: String,
@@ -613,6 +680,7 @@ pub(crate) struct ProviderExecution {
 
 struct ActiveAgentRunGuard {
     host: QuantixHost,
+    lease_id: String,
 }
 
 type TurnAcceptedCallback = dyn FnOnce(&str) -> Result<(), ProviderFailure> + Send;
@@ -622,8 +690,12 @@ type TurnEventCallback =
 type TurnDeniedCallback = dyn FnMut(&PendingProviderEvent) -> Result<(), ProviderFailure> + Send;
 type TurnToolCallCallback =
     dyn FnMut(&str, &str, &Value) -> Result<Option<String>, ProviderFailure> + Send;
+type ThreadArchivedCallback = dyn FnOnce(&str) -> Result<(), ProviderFailure> + Send;
+type ThreadEstablishedCallback = dyn FnOnce(&str, bool) -> Result<(), ProviderFailure> + Send;
 
 struct RunCallbacks {
+    on_thread_archived: Box<ThreadArchivedCallback>,
+    on_thread_established: Box<ThreadEstablishedCallback>,
     on_requested: Box<TurnRequestedCallback>,
     on_accepted: Box<TurnAcceptedCallback>,
     on_event: Box<TurnEventCallback>,
@@ -633,7 +705,7 @@ struct RunCallbacks {
 
 impl Drop for ActiveAgentRunGuard {
     fn drop(&mut self) {
-        self.host.finish_active_agent_run();
+        self.host.finish_active_agent_run(&self.lease_id);
     }
 }
 
@@ -670,14 +742,21 @@ impl QuantixHost {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
 
-        let cancellation = self.begin_active_agent_run(tender_id.as_str())?;
-        let _active = ActiveAgentRunGuard { host: self.clone() };
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        let _active = ActiveAgentRunGuard {
+            host: self.clone(),
+            lease_id: lease_id.clone(),
+        };
         let store = self.tender_store(&tender_id)?;
         let prepared = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-            .prepare_bootstrap_agent_run(&tender_id, command.retry_of_run_id.as_deref())?;
-        self.identify_active_agent_run(&prepared.run_id)?;
+            .prepare_bootstrap_agent_run(
+                &tender_id,
+                command.retry_of_run_id.as_deref(),
+                self.provider_subscription_capacity_is_exhausted(),
+            )?;
+        self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
 
         let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
         store
@@ -688,7 +767,189 @@ impl QuantixHost {
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .inspect_agent_run(&prepared.run_id)?;
+        let production_task = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .production_task_and_state_for_run(&prepared.run_id)?;
+        let production_retry = production_task.is_some();
+        drop(_active);
+        if let Some((production_task_id, ProductionTaskState::ReviewReady)) = production_task {
+            self.run_production_task_attempt(&tender_id, &production_task_id)
+                .await?;
+        }
+        if production_retry {
+            self.start_production_scheduler(tender_id.as_str().to_owned());
+        }
         Ok(inspection)
+    }
+
+    pub async fn run_production_task(
+        &self,
+        command: RunProductionTaskCommand,
+    ) -> Result<ProductionTaskRunResult, TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        self.run_production_task_attempt(&tender_id, &command.production_task_id)
+            .await
+    }
+
+    async fn run_production_task_attempt(
+        &self,
+        tender_id: &TenderId,
+        production_task_id: &str,
+    ) -> Result<ProductionTaskRunResult, TenderCommandError> {
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), true)?;
+        let _active = ActiveAgentRunGuard {
+            host: self.clone(),
+            lease_id: lease_id.clone(),
+        };
+        let store = self.tender_store(tender_id)?;
+        let prepared = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .prepare_production_task_run(
+                tender_id,
+                production_task_id,
+                None,
+                self.provider_subscription_capacity_is_exhausted(),
+            )?;
+        self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
+        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let mut store = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        store.complete_agent_run(tender_id, &prepared, execution)?;
+        let run = store.inspect_agent_run(&prepared.run_id)?;
+        let budget = BidPackageOperationBudget::for_tender(tender_id);
+        let production = store
+            .inspect_tender_production(budget)?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let task = production
+            .tasks
+            .into_iter()
+            .find(|task| task.production_task_id == production_task_id)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        Ok(ProductionTaskRunResult { run, task })
+    }
+
+    pub(crate) fn start_production_scheduler(&self, tender_id: String) {
+        let host = self.clone();
+        tokio::spawn(async move {
+            let _ = host.schedule_tender_production(&tender_id).await;
+        });
+    }
+
+    pub async fn schedule_tender_production(
+        &self,
+        tender_id: &str,
+    ) -> Result<(), TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        TenderId::parse(tender_id)?;
+        if !self.claim_production_scheduler(tender_id) {
+            return Ok(());
+        }
+        let result = self.schedule_ready_production_tasks(tender_id).await;
+        self.release_production_scheduler(tender_id);
+        result
+    }
+
+    async fn schedule_ready_production_tasks(
+        &self,
+        tender_id: &str,
+    ) -> Result<(), TenderCommandError> {
+        loop {
+            if self.provider_subscription_capacity_is_exhausted() {
+                return Ok(());
+            }
+            let production = self.inspect_tender_production(tender_id)?;
+            let Some(production) = production.filter(|production| production.active) else {
+                return Ok(());
+            };
+            let mut scheduled_profiles = Vec::with_capacity(2);
+            let mut schedulable = Vec::with_capacity(2);
+            for task in production.tasks.into_iter().filter(|task| {
+                matches!(
+                    task.state,
+                    ProductionTaskState::Ready | ProductionTaskState::ReviewReady
+                )
+            }) {
+                let profile_id = if task.state == ProductionTaskState::ReviewReady {
+                    task.task
+                        .review_profile_id
+                        .as_ref()
+                        .unwrap_or(&task.task.profile_id)
+                } else {
+                    &task.task.profile_id
+                };
+                if scheduled_profiles
+                    .iter()
+                    .any(|profile| profile == profile_id)
+                {
+                    continue;
+                }
+                scheduled_profiles.push(profile_id.clone());
+                schedulable.push(task.production_task_id);
+                if schedulable.len() == 2 {
+                    break;
+                }
+            }
+            if schedulable.is_empty() {
+                return Ok(());
+            }
+            let mut tasks = tokio::task::JoinSet::new();
+            let first_production_task_id = schedulable[0].clone();
+            for (index, production_task_id) in schedulable.into_iter().enumerate() {
+                if index == 1 {
+                    let mut first_turn_accepted = false;
+                    for _ in 0..400 {
+                        first_turn_accepted = self
+                            .production_task_turn_accepted(tender_id, &first_production_task_id)?;
+                        if first_turn_accepted {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                    if !first_turn_accepted {
+                        break;
+                    }
+                }
+                let host = self.clone();
+                let tender_id = tender_id.to_owned();
+                tasks.spawn(async move {
+                    host.run_production_task(RunProductionTaskCommand {
+                        tender_id,
+                        production_task_id,
+                    })
+                    .await
+                });
+            }
+            let mut progressed = false;
+            while let Some(result) = tasks.join_next().await {
+                progressed |= result.is_ok_and(|result| result.is_ok());
+            }
+            if !progressed {
+                return Ok(());
+            }
+        }
+    }
+
+    fn production_task_turn_accepted(
+        &self,
+        tender_id: &str,
+        production_task_id: &str,
+    ) -> Result<bool, TenderCommandError> {
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let accepted = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .production_task_turn_accepted(production_task_id)?;
+        Ok(accepted)
     }
 
     pub async fn run_tender_record_extraction(
@@ -701,8 +962,11 @@ impl QuantixHost {
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         let tender_id = TenderId::parse(&command.tender_id)?;
-        let cancellation = self.begin_active_agent_run(tender_id.as_str())?;
-        let _active = ActiveAgentRunGuard { host: self.clone() };
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        let _active = ActiveAgentRunGuard {
+            host: self.clone(),
+            lease_id: lease_id.clone(),
+        };
         let store = self.tender_store(&tender_id)?;
         let prepared = store
             .lock()
@@ -712,7 +976,7 @@ impl QuantixHost {
                 &command.evidence,
                 &command.authorities,
             )?;
-        self.identify_active_agent_run(&prepared.run_id)?;
+        self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
 
         let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
         let mut store = store
@@ -738,14 +1002,17 @@ impl QuantixHost {
         if !valid_identifier(&command.record_id) {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        let cancellation = self.begin_active_agent_run(tender_id.as_str())?;
-        let _active = ActiveAgentRunGuard { host: self.clone() };
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        let _active = ActiveAgentRunGuard {
+            host: self.clone(),
+            lease_id: lease_id.clone(),
+        };
         let store = self.tender_store(&tender_id)?;
         let prepared = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .prepare_tender_record_review_run(&tender_id, &command.record_id, command.version)?;
-        self.identify_active_agent_run(&prepared.run_id)?;
+        self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
         let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
         let mut store = store
             .lock()
@@ -972,8 +1239,11 @@ impl QuantixHost {
         if !valid_identifier(&command.package_id) {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        let cancellation = self.begin_active_agent_run(tender_id.as_str())?;
-        let _active = ActiveAgentRunGuard { host: self.clone() };
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        let _active = ActiveAgentRunGuard {
+            host: self.clone(),
+            lease_id: lease_id.clone(),
+        };
         let store = self.tender_store(&tender_id)?;
         let prepared = store
             .lock()
@@ -983,7 +1253,7 @@ impl QuantixHost {
                 &command.package_id,
                 command.version,
             )?;
-        self.identify_active_agent_run(&prepared.run_id)?;
+        self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
         let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
         let mut store = store
             .lock()
@@ -1007,6 +1277,54 @@ impl QuantixHost {
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .inspect_agent_runs()?;
         Ok(runs)
+    }
+
+    pub fn inspect_agent_run_history(
+        &self,
+        command: InspectAgentRunHistoryCommand,
+    ) -> Result<AgentRunHistoryPage, TenderCommandError> {
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let page = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .inspect_agent_run_history(command.before_sequence, command.limit)?;
+        Ok(page)
+    }
+
+    pub fn inspect_agent_run(
+        &self,
+        command: InspectAgentRunCommand,
+    ) -> Result<AgentRunInspection, TenderCommandError> {
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let run = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .inspect_agent_run(&command.run_id)?;
+        Ok(run)
+    }
+
+    pub fn inspect_agent_run_activity(
+        &self,
+        tender_id: &str,
+    ) -> Result<AgentRunActivity, TenderCommandError> {
+        require_setup(self)?;
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let activity = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .inspect_agent_run_activity()?;
+        Ok(activity)
     }
 
     pub fn resolve_indeterminate_agent_run(
@@ -1157,7 +1475,7 @@ impl QuantixHost {
             )
             .await;
             if cancellation.is_cancelled() {
-                if let Ok(mut provider) = provider {
+                if let Ok(provider) = provider {
                     let _ = provider.shutdown().await;
                 }
                 return Err(readiness_interruption_failure());
@@ -1165,16 +1483,21 @@ impl QuantixHost {
             *provider_slot = Some(provider?);
             return Ok(());
         }
+        let provider = provider_slot
+            .as_ref()
+            .expect("provider remains available")
+            .clone();
+        drop(provider_slot);
         let readiness = tokio::select! {
             biased;
             _ = cancellation.cancelled() => Err(readiness_interruption_failure()),
-            readiness = provider_slot
-                .as_mut()
-                .expect("provider remains available")
-                .refresh_readiness() => readiness,
+            readiness = provider.refresh_readiness() => readiness,
         };
         if readiness.is_err() {
-            shutdown_provider(&mut provider_slot).await;
+            let mut provider_slot = self.agent_provider().lock().await;
+            *provider_slot = None;
+            drop(provider_slot);
+            let _ = provider.shutdown().await;
         }
         readiness
     }
@@ -1190,132 +1513,42 @@ async fn execute_provider_turn(
     if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
         return execution;
     }
-    let mut provider_slot = host.agent_provider().lock().await;
-    if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
-        return execution;
-    }
-    if provider_slot.is_none() {
-        let provider = match tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => {
-                return interrupted_execution(started);
-            }
-            provider = CodexProvider::readiness(
+    let provider = {
+        let mut provider_slot = host.agent_provider().lock().await;
+        if provider_slot.is_none() {
+            let provider = match CodexProvider::readiness(
                 host.process_supervisor(),
                 host.runtime_layout().codex_executable(),
                 host.application_home(),
                 cancellation.clone(),
-            ) => provider,
-        } {
-            Ok(provider) => provider,
-            Err(failure) => return failed_execution(failure, started),
-        };
-        *provider_slot = Some(provider);
-    }
+            )
+            .await
+            {
+                Ok(provider) => provider,
+                Err(failure) => return failed_execution(failure, started),
+            };
+            *provider_slot = Some(provider);
+        }
+        provider_slot
+            .as_ref()
+            .expect("provider initialized above")
+            .clone()
+    };
     if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
-        shutdown_provider(&mut provider_slot).await;
         return execution;
     }
     let operation_limit = match permission_duration(&prepared.permission_grant, Timestamp::now()) {
         Ok(duration) if !duration.is_zero() => duration,
-        _ => {
-            shutdown_provider(&mut provider_slot).await;
-            return failed_execution(permission_failure(), started);
-        }
+        _ => return failed_execution(permission_failure(), started),
     };
-    let operation_deadline = Instant::now()
-        .checked_add(operation_limit)
-        .unwrap_or_else(Instant::now);
-    match provider_slot
-        .as_mut()
-        .expect("provider initialized above")
-        .begin_run(operation_limit)
-    {
-        Ok(()) => {}
-        Err(failure) => {
-            shutdown_provider(&mut provider_slot).await;
-            return failed_execution(failure, started);
-        }
-    }
-    if let Some(thread_ref) = prepared.provider_thread_to_archive.as_deref() {
-        let archive_result = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => {
-                shutdown_provider(&mut provider_slot).await;
-                return interrupted_execution(started);
-            }
-            result = provider_slot
-                .as_mut()
-                .expect("provider initialized above")
-                .archive_thread(thread_ref) => result,
-        };
-        if let Err(failure) = archive_result {
-            shutdown_provider(&mut provider_slot).await;
-            return failed_execution(failure, started);
-        }
-        if store
-            .lock()
-            .map_err(|_| ())
-            .and_then(|mut store| {
-                store
-                    .checkpoint_provider_thread_archived(prepared, thread_ref)
-                    .map_err(|_| ())
-            })
-            .is_err()
-        {
-            shutdown_provider(&mut provider_slot).await;
-            return failed_execution(process_failure(false), started);
-        }
-    }
-    if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
-        shutdown_provider(&mut provider_slot).await;
-        return execution;
-    }
-    let working_area = prepared
-        .workspace
-        .join(&prepared.permission_grant.workspace.working_area);
-    let thread_result = tokio::select! {
-        biased;
-        _ = cancellation.cancelled() => {
-            shutdown_provider(&mut provider_slot).await;
-            return interrupted_execution(started);
-        }
-        result = provider_slot
-            .as_mut()
-            .expect("provider initialized above")
-            .establish_or_resume_thread(
-                &working_area,
-                &prepared.permission_grant,
-                prepared.provider_thread_ref.as_deref(),
-            ) => result,
-    };
-    let (thread_ref, resumed) = match thread_result {
-        Ok(thread) => thread,
-        Err(failure) => {
-            shutdown_provider(&mut provider_slot).await;
-            return failed_execution(failure, started);
-        }
-    };
-    if store
-        .lock()
-        .map_err(|_| ())
-        .and_then(|mut store| {
-            store
-                .checkpoint_agent_thread(prepared, &thread_ref, resumed)
-                .map_err(|_| ())
-        })
-        .is_err()
-    {
-        shutdown_provider(&mut provider_slot).await;
-        return failed_execution(process_failure(false), started);
-    }
-    if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
-        shutdown_provider(&mut provider_slot).await;
-        return execution;
-    }
+    let archive_store = Arc::clone(store);
+    let archive_prepared = prepared.clone();
+    let thread_store = Arc::clone(store);
+    let thread_prepared = prepared.clone();
     let requested_store = Arc::clone(store);
     let checkpoint_store = Arc::clone(store);
     let event_store = Arc::clone(store);
+    let event_host = host.clone();
     let denial_store = Arc::clone(store);
     let tool_store = Arc::clone(store);
     let requested_run_id = prepared.run_id.clone();
@@ -1324,20 +1557,26 @@ async fn execute_provider_turn(
     let denial_run_id = prepared.run_id.clone();
     let tool_run_id = prepared.run_id.clone();
     let tool_prepared = prepared.clone();
-    let remaining_operation = operation_deadline.saturating_duration_since(Instant::now());
-    if remaining_operation.is_zero() {
-        shutdown_provider(&mut provider_slot).await;
-        return failed_execution(permission_failure(), started);
-    }
-    let mut execution = provider_slot
-        .as_mut()
-        .expect("provider remains available")
+    let mut execution = provider
         .run_turn(
-            prepared,
-            &thread_ref,
-            remaining_operation,
+            prepared.clone(),
+            operation_limit,
             cancellation,
             RunCallbacks {
+                on_thread_archived: Box::new(move |thread_ref| {
+                    archive_store
+                        .lock()
+                        .map_err(|_| process_failure(false))?
+                        .checkpoint_provider_thread_archived(&archive_prepared, thread_ref)
+                        .map_err(|_| process_failure(false))
+                }),
+                on_thread_established: Box::new(move |thread_ref, resumed| {
+                    thread_store
+                        .lock()
+                        .map_err(|_| process_failure(false))?
+                        .checkpoint_agent_thread(&thread_prepared, thread_ref, resumed)
+                        .map_err(|_| process_failure(false))
+                }),
                 on_requested: Box::new(move || {
                     requested_store
                         .lock()
@@ -1353,6 +1592,7 @@ async fn execute_provider_turn(
                         .map_err(|_| outcome_unknown())
                 }),
                 on_event: Box::new(move |event, usage| {
+                    event_host.observe_provider_usage(usage);
                     event_store
                         .lock()
                         .map_err(|_| outcome_unknown())?
@@ -1413,30 +1653,16 @@ async fn execute_provider_turn(
             },
         )
         .await;
-    execution.provider_thread_ref = Some(thread_ref.clone());
+    host.observe_provider_usage(&execution.usage);
     execution.usage.elapsed_milliseconds =
         Some(started.elapsed().as_millis().try_into().unwrap_or(u64::MAX));
-    if matches!(
-        execution.state,
-        AgentRunState::Interrupted | AgentRunState::Indeterminate
-    ) || execution.failure.as_ref().is_some_and(|failure| {
-        matches!(
-            failure.category,
-            ProviderFailureCategory::AuthenticationRequired
-                | ProviderFailureCategory::SubscriptionRequired
-                | ProviderFailureCategory::ProtocolInvalid
-                | ProviderFailureCategory::ProcessFailed
-        )
-    }) {
-        shutdown_provider(&mut provider_slot).await;
+    if provider.is_closed() {
+        let mut provider_slot = host.agent_provider().lock().await;
+        if provider_slot.as_ref().is_some_and(CodexProvider::is_closed) {
+            *provider_slot = None;
+        }
     }
     execution
-}
-
-async fn shutdown_provider(provider_slot: &mut Option<CodexProvider>) {
-    if let Some(mut provider) = provider_slot.take() {
-        let _ = provider.shutdown().await;
-    }
 }
 
 fn failed_execution(failure: ProviderFailure, started: Instant) -> ProviderExecution {
@@ -1641,12 +1867,12 @@ fn controlled_codex_environment(application_home: &Path) -> io::Result<Vec<(OsSt
     Ok(environment)
 }
 
-pub(crate) struct CodexProvider {
+pub(super) struct CodexProviderProcess {
     conversation: Option<SupervisedConversation>,
 }
 
-impl CodexProvider {
-    async fn readiness(
+impl CodexProviderProcess {
+    pub(super) async fn readiness(
         supervisor: &crate::process_supervisor::ProcessSupervisor,
         executable: PathBuf,
         process_directory: &Path,
@@ -1682,7 +1908,7 @@ impl CodexProvider {
         })
     }
 
-    async fn refresh_readiness(&mut self) -> Result<(), ProviderFailure> {
+    pub(super) async fn refresh_readiness(&mut self) -> Result<(), ProviderFailure> {
         let conversation = self.conversation_mut()?;
         conversation
             .begin_operation(
@@ -1814,407 +2040,7 @@ impl CodexProvider {
         Err(protocol_failure(false))
     }
 
-    async fn establish_or_resume_thread(
-        &mut self,
-        workspace: &Path,
-        grant: &PermissionGrant,
-        existing_thread_ref: Option<&str>,
-    ) -> Result<(String, bool), ProviderFailure> {
-        let workspace = workspace.to_string_lossy().into_owned();
-        let conversation = self.conversation_mut()?;
-        let (method, params, definition, resumed) = if let Some(thread_ref) = existing_thread_ref {
-            (
-                "thread/resume",
-                json!({ "threadId": thread_ref, "excludeTurns": true }),
-                "v2/ThreadResumeResponse",
-                true,
-            )
-        } else {
-            let dynamic_tools = dynamic_tool_specs(grant)?;
-            (
-                "thread/start",
-                json!({
-                    "cwd": workspace,
-                    "approvalPolicy": "never",
-                    "sandbox": "workspaceWrite",
-                    "serviceName": "quantix"
-                    ,"dynamicTools": dynamic_tools
-                }),
-                "v2/ThreadStartResponse",
-                false,
-            )
-        };
-        write_rpc(
-            conversation,
-            &json!({ "method": method, "id": 1, "params": params }),
-        )
-        .await
-        .map_err(|_| process_failure(false))?;
-        let result = read_expected_response(conversation, &json!(1), definition).await?;
-        let thread_ref = result
-            .pointer("/thread/id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| protocol_failure(false))?;
-        Ok((thread_ref.to_owned(), resumed))
-    }
-
-    fn begin_run(&mut self, operation_limit: Duration) -> Result<(), ProviderFailure> {
-        self.conversation_mut()?
-            .begin_operation(
-                operation_limit,
-                PROVIDER_OUTPUT_LIMIT,
-                PROVIDER_OUTPUT_LIMIT,
-            )
-            .map_err(|_| process_failure(false))
-    }
-
-    async fn run_turn(
-        &mut self,
-        prepared: &PreparedAgentRun,
-        thread_ref: &str,
-        operation_limit: Duration,
-        cancellation: CancellationToken,
-        callbacks: RunCallbacks,
-    ) -> ProviderExecution {
-        if cancellation.is_cancelled() {
-            return interrupted_execution(Instant::now());
-        }
-        let RunCallbacks {
-            on_requested,
-            on_accepted,
-            mut on_event,
-            mut on_denied,
-            mut on_tool_call,
-        } = callbacks;
-        let operation_started = Instant::now();
-        let output_schema: Value = match serde_json::from_str(&prepared.task.output_contract_json) {
-            Ok(schema) => schema,
-            Err(_) => return failed_execution(protocol_failure(false), Instant::now()),
-        };
-        let instruction_bundle = match provider_instruction_bundle(prepared) {
-            Ok(bundle) => bundle,
-            Err(failure) => return failed_execution(failure, Instant::now()),
-        };
-        let conversation = match self.conversation_mut() {
-            Ok(conversation) => conversation,
-            Err(failure) => return failed_execution(failure, Instant::now()),
-        };
-        let turn_start = json!({
-            "method": "turn/start",
-            "id": 2,
-            "params": {
-                "threadId": thread_ref,
-                "input": [{ "type": "text", "text": instruction_bundle }],
-                "cwd": prepared.workspace.join(&prepared.permission_grant.workspace.working_area),
-                "approvalPolicy": "never",
-                "sandboxPolicy": {
-                    "type": "workspaceWrite",
-                    "networkAccess": false,
-                    "writableRoots": [
-                        prepared.workspace.join(&prepared.permission_grant.workspace.staged_outputs)
-                    ],
-                },
-                "outputSchema": output_schema,
-            }
-        });
-        if let Err(failure) = on_requested() {
-            return failed_execution(failure, operation_started);
-        }
-        let write_result = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => {
-                return indeterminate_execution(
-                    thread_ref,
-                    None,
-                    turn_acceptance_unknown(),
-                    operation_started,
-                );
-            }
-            result = write_rpc(conversation, &turn_start) => result,
-        };
-        if write_result.is_err() {
-            return indeterminate_execution(
-                thread_ref,
-                None,
-                turn_acceptance_unknown(),
-                operation_started,
-            );
-        }
-        let turn_start_id = json!(2);
-        let turn_response = match tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => {
-                return indeterminate_execution(
-                    thread_ref,
-                    None,
-                    turn_acceptance_unknown(),
-                    operation_started,
-                );
-            }
-            response = read_expected_response(conversation, &turn_start_id, "v2/TurnStartResponse") => response,
-        } {
-            Ok(response) => response,
-            Err(_) => {
-                return indeterminate_execution(
-                    thread_ref,
-                    None,
-                    turn_acceptance_unknown(),
-                    operation_started,
-                )
-            }
-        };
-        let turn_ref = match turn_response
-            .pointer("/turn/id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-        {
-            Some(turn_ref) => turn_ref.to_owned(),
-            None => {
-                return indeterminate_execution(
-                    thread_ref,
-                    None,
-                    turn_acceptance_unknown(),
-                    operation_started,
-                )
-            }
-        };
-        if let Err(failure) = on_accepted(&turn_ref) {
-            return indeterminate_execution(thread_ref, Some(turn_ref), failure, operation_started);
-        }
-        let mut execution = ProviderExecution {
-            state: AgentRunState::Running,
-            provider_thread_ref: Some(thread_ref.to_owned()),
-            provider_turn_ref: Some(turn_ref.clone()),
-            events: Vec::new(),
-            usage: ProviderUsage::default(),
-            failure: None,
-            candidate_payload_json: None,
-        };
-        let mut interrupt_sent = false;
-        let mut final_candidate = None;
-        let mut control_requests = ControlRequestLedger::default();
-        loop {
-            let line = tokio::select! {
-                biased;
-                _ = cancellation.cancelled(), if !interrupt_sent => {
-                    if Self::interrupt(conversation, thread_ref, &turn_ref).await.is_err() {
-                        execution.state = AgentRunState::Indeterminate;
-                        execution.failure = Some(outcome_unknown());
-                        break;
-                    }
-                    interrupt_sent = true;
-                    continue;
-                }
-                line = conversation.read_line() => line,
-            };
-            let line = match line {
-                Ok(line) => line,
-                Err(_) => {
-                    if operation_started.elapsed() >= operation_limit {
-                        execution.state = AgentRunState::Failed;
-                        execution.failure = Some(permission_failure());
-                    } else {
-                        execution.state = AgentRunState::Indeterminate;
-                        execution.failure = Some(outcome_unknown());
-                    }
-                    break;
-                }
-            };
-            let message = match parse_wire_message(&line) {
-                Ok(message) => message,
-                Err(_) => {
-                    execution.state = AgentRunState::Indeterminate;
-                    execution.failure = Some(protocol_failure(true));
-                    break;
-                }
-            };
-            if message.get("id").is_some() && message.get("method").is_none() {
-                if message.get("id") == Some(&json!(3)) {
-                    if response_result(&message, "v2/TurnInterruptResponse", true).is_err() {
-                        execution.state = AgentRunState::Indeterminate;
-                        execution.failure = Some(protocol_failure(true));
-                        break;
-                    }
-                    continue;
-                }
-                execution.state = AgentRunState::Indeterminate;
-                execution.failure = Some(protocol_failure(true));
-                break;
-            }
-            let method = match message.get("method").and_then(Value::as_str) {
-                Some(method) => method,
-                None => {
-                    execution.state = AgentRunState::Indeterminate;
-                    execution.failure = Some(protocol_failure(true));
-                    break;
-                }
-            };
-            if message.get("id").is_some() {
-                if handle_control_request(
-                    conversation,
-                    &message,
-                    ControlRequestContext {
-                        grant: &prepared.permission_grant,
-                        expected_thread_ref: thread_ref,
-                        expected_turn_ref: &turn_ref,
-                        expired: operation_started.elapsed() >= operation_limit,
-                        ledger: &mut control_requests,
-                        on_denied: &mut on_denied,
-                        on_tool_call: &mut on_tool_call,
-                    },
-                )
-                .await
-                .is_err()
-                {
-                    execution.state = AgentRunState::Indeterminate;
-                    execution.failure = Some(protocol_failure(true));
-                    break;
-                }
-                continue;
-            }
-            if validate_schema("ServerNotification", &message).is_err() {
-                execution.state = AgentRunState::Indeterminate;
-                execution.failure = Some(protocol_failure(true));
-                break;
-            }
-            let outcome = match handle_notification(
-                method,
-                message.get("params").unwrap_or(&Value::Null),
-                &turn_ref,
-                &mut execution,
-                &mut final_candidate,
-            ) {
-                Ok(outcome) => outcome,
-                Err(_) => {
-                    execution.state = AgentRunState::Indeterminate;
-                    execution.failure = Some(protocol_failure(true));
-                    break;
-                }
-            };
-            if stream_provider_events(&mut execution, &mut on_event).is_err() {
-                execution.state = AgentRunState::Indeterminate;
-                execution.failure = Some(outcome_unknown());
-                break;
-            }
-            if matches!(outcome, NotificationOutcome::Terminal) {
-                break;
-            }
-        }
-        let provider_terminal_state = execution.state;
-        if execution.state == AgentRunState::Completed {
-            match validate_candidate(
-                final_candidate.as_deref(),
-                &output_schema,
-                prepared.task.resource_budget.output_bytes,
-            ) {
-                Ok(payload) => execution.candidate_payload_json = Some(payload),
-                Err(failure) => {
-                    execution.state = AgentRunState::Failed;
-                    execution.failure = Some(failure);
-                }
-            }
-        }
-        execution.events.push(PendingProviderEvent::new(
-            ProviderEventKind::Terminal,
-            match provider_terminal_state {
-                AgentRunState::Completed => "Provider Turn completed",
-                AgentRunState::Interrupted => "Provider Turn interrupted",
-                AgentRunState::Failed => "Provider Turn failed",
-                AgentRunState::Indeterminate => "Provider Turn outcome is indeterminate",
-                AgentRunState::Running => "Provider Turn ended without a terminal outcome",
-            },
-            Some(&turn_ref),
-        ));
-        if execution.state == AgentRunState::Running {
-            execution.state = AgentRunState::Indeterminate;
-            execution.failure = Some(outcome_unknown());
-        }
-        execution
-    }
-
-    async fn interrupt(
-        conversation: &mut SupervisedConversation,
-        thread_ref: &str,
-        turn_ref: &str,
-    ) -> Result<(), ProviderFailure> {
-        write_rpc(
-            conversation,
-            &json!({
-                "method": "turn/interrupt",
-                "id": 3,
-                "params": { "threadId": thread_ref, "turnId": turn_ref }
-            }),
-        )
-        .await
-        .map_err(|_| outcome_unknown())
-    }
-
-    async fn archive_thread(&mut self, thread_ref: &str) -> Result<(), ProviderFailure> {
-        let conversation = self.conversation_mut()?;
-        write_rpc(
-            conversation,
-            &json!({
-                "method": "thread/archive",
-                "id": 4,
-                "params": { "threadId": thread_ref }
-            }),
-        )
-        .await
-        .map_err(|_| process_failure(false))?;
-        if read_expected_response(conversation, &json!(4), "v2/ThreadArchiveResponse")
-            .await
-            .is_ok()
-        {
-            return Ok(());
-        }
-        Self::confirm_thread_archived(conversation, thread_ref).await
-    }
-
-    async fn confirm_thread_archived(
-        conversation: &mut SupervisedConversation,
-        thread_ref: &str,
-    ) -> Result<(), ProviderFailure> {
-        let mut cursor: Option<String> = None;
-        for page in 0_u32..100 {
-            let id = json!(5 + page);
-            write_rpc(
-                conversation,
-                &json!({
-                    "method": "thread/list",
-                    "id": id,
-                    "params": {
-                        "archived": true,
-                        "cursor": cursor,
-                        "limit": 100
-                    }
-                }),
-            )
-            .await
-            .map_err(|_| outcome_unknown())?;
-            let result = read_expected_response(conversation, &id, "v2/ThreadListResponse").await?;
-            let threads = result
-                .get("data")
-                .and_then(Value::as_array)
-                .ok_or_else(|| protocol_failure(false))?;
-            if threads
-                .iter()
-                .any(|thread| thread.get("id").and_then(Value::as_str) == Some(thread_ref))
-            {
-                return Ok(());
-            }
-            cursor = result
-                .get("nextCursor")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            if cursor.is_none() {
-                break;
-            }
-        }
-        Err(protocol_failure(false))
-    }
-
-    async fn shutdown(&mut self) -> Result<(), ProcessError> {
+    pub(super) async fn shutdown(&mut self) -> Result<(), ProcessError> {
         let conversation = self
             .conversation
             .take()
@@ -2228,7 +2054,9 @@ impl CodexProvider {
         }
     }
 
-    fn conversation_mut(&mut self) -> Result<&mut SupervisedConversation, ProviderFailure> {
+    pub(super) fn conversation_mut(
+        &mut self,
+    ) -> Result<&mut SupervisedConversation, ProviderFailure> {
         self.conversation
             .as_mut()
             .ok_or_else(|| process_failure(false))
@@ -2314,7 +2142,7 @@ mod tests {
         );
 
         let supervisor = crate::process_supervisor::ProcessSupervisor;
-        let mut provider = CodexProvider::readiness(
+        let provider = CodexProvider::readiness(
             &supervisor,
             executable,
             &application_home,

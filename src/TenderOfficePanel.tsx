@@ -10,10 +10,14 @@ import {
 import type { WorkPlanDecision } from "./bindings/WorkPlanDecision";
 import type { WorkPlanProposalInspection } from "./bindings/WorkPlanProposalInspection";
 import type { WorkPlanRevisionAction } from "./bindings/WorkPlanRevisionAction";
+import type { TenderProductionInspection } from "./bindings/TenderProductionInspection";
 import {
+  activateTenderProduction,
   composeTenderOffice,
   decideWorkPlanProposal,
   inspectCurrentWorkPlan,
+  inspectTenderProduction,
+  interruptAgentRun,
   reviseWorkPlanProposal,
 } from "./quantixHost";
 
@@ -22,6 +26,8 @@ interface TenderOfficePanelProps {
   runtimeReady: boolean;
   reportCommandFailure: () => void;
   refreshToken: number;
+  onTenderStateChange: () => void;
+  onProductionSchedulingChange: (active: boolean) => void;
 }
 
 type RevisionKind =
@@ -39,8 +45,12 @@ export function TenderOfficePanel({
   runtimeReady,
   reportCommandFailure,
   refreshToken,
+  onTenderStateChange,
+  onProductionSchedulingChange,
 }: TenderOfficePanelProps) {
   const [plan, setPlan] = useState<WorkPlanProposalInspection | null>();
+  const [production, setProduction] =
+    useState<TenderProductionInspection | null>();
   const [busy, setBusy] = useState(false);
   const [revisionKind, setRevisionKind] = useState<RevisionKind>("rename");
   const [profileId, setProfileId] = useState("");
@@ -61,8 +71,14 @@ export function TenderOfficePanel({
   const loadPlan = useCallback(async () => {
     const request = ++requestSequence.current;
     try {
-      const next = await inspectCurrentWorkPlan(tenderId);
-      if (request === requestSequence.current) setPlan(next);
+      const [next, nextProduction] = await Promise.all([
+        inspectCurrentWorkPlan(tenderId),
+        inspectTenderProduction(tenderId),
+      ]);
+      if (request === requestSequence.current) {
+        setPlan(next);
+        setProduction(nextProduction);
+      }
     } catch {
       if (request === requestSequence.current) reportCommandFailure();
     }
@@ -74,6 +90,31 @@ export function TenderOfficePanel({
       requestSequence.current += 1;
     };
   }, [loadPlan, refreshToken]);
+
+  useEffect(() => {
+    if (
+      !production?.active ||
+      !production.tasks.some((task) =>
+        ["ready", "running", "review_ready", "reviewing"].includes(task.state),
+      )
+    ) {
+      return;
+    }
+    const interval = window.setInterval(() => void loadPlan(), 500);
+    return () => window.clearInterval(interval);
+  }, [loadPlan, production]);
+
+  const productionScheduling = Boolean(
+    production?.active &&
+    production.tasks.some((task) =>
+      ["ready", "running", "review_ready", "reviewing"].includes(task.state),
+    ),
+  );
+
+  useEffect(() => {
+    onProductionSchedulingChange(productionScheduling);
+    return () => onProductionSchedulingChange(false);
+  }, [onProductionSchedulingChange, productionScheduling]);
 
   const selectedProfile = useMemo(
     () =>
@@ -202,10 +243,47 @@ export function TenderOfficePanel({
     });
   };
 
+  const activate = async () => {
+    if (!plan) return;
+    setBusy(true);
+    try {
+      const next = await activateTenderProduction(
+        tenderId,
+        plan.plan_id,
+        plan.version,
+        plan.manifest_sha256,
+      );
+      setProduction(next);
+      onTenderStateChange();
+      await loadPlan();
+    } catch {
+      reportCommandFailure();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelTask = async (runId: string) => {
+    try {
+      await interruptAgentRun(tenderId, runId);
+      onTenderStateChange();
+    } catch {
+      reportCommandFailure();
+    }
+  };
+
   const rebaseRequired = plan?.current === false;
+  const productionMatchesPlan = Boolean(
+    plan &&
+    production?.active &&
+    production.plan_id === plan.plan_id &&
+    production.plan_version === plan.version &&
+    production.plan_manifest_sha256 === plan.manifest_sha256,
+  );
   const revisionClosed = rebaseRequired
     ? revisionKind !== "rebase"
-    : !plan?.current || plan.approval?.decision === "approve";
+    : !plan?.current ||
+      (plan.approval?.decision === "approve" && !productionMatchesPlan);
   const approvalBlocked =
     !plan?.current ||
     plan.approval !== null ||
@@ -409,6 +487,68 @@ export function TenderOfficePanel({
               ))}
             </ul>
           </div>
+
+          {plan.approval?.decision === "approve" && !productionMatchesPlan ? (
+            <div className="bid-review" role="status">
+              <h5>Active Production boundary</h5>
+              <p>
+                Approval fixes authority, but no profile or task becomes Active
+                until this exact manifest is activated.
+              </p>
+              <button
+                type="button"
+                onClick={() => void activate()}
+                disabled={busy || !runtimeReady || !plan.current}
+              >
+                Activate exact Work Plan
+              </button>
+            </div>
+          ) : null}
+
+          {production ? (
+            <div className="bid-record-bindings tender-office__production">
+              <h5>
+                {production.active
+                  ? "Active Production"
+                  : "Production suspended"}
+              </h5>
+              <p className="record-identity">
+                Activation {production.activation_id} · Work Plan v
+                {production.plan_version}
+              </p>
+              <ul>
+                {production.tasks.map((productionTask) => {
+                  const runId =
+                    productionTask.run_ids[productionTask.run_ids.length - 1];
+                  return (
+                    <li key={productionTask.production_task_id}>
+                      <strong>{humanize(productionTask.task.task_key)}</strong>{" "}
+                      · {humanize(productionTask.state)} · profile{" "}
+                      {productionTask.task.profile_id.slice(0, 12)} v
+                      {productionTask.task.profile_version} · dependencies{" "}
+                      {productionTask.task.dependencies.join(", ") || "none"} ·{" "}
+                      {productionTask.run_ids.length} run(s) ·{" "}
+                      {productionTask.registered_outputs.length} registered
+                      output(s){" "}
+                      {productionTask.state === "ready" ||
+                      productionTask.state === "review_ready" ? (
+                        <span>Coordinator scheduling automatically</span>
+                      ) : (productionTask.state === "running" ||
+                          productionTask.state === "reviewing") &&
+                        runId ? (
+                        <button
+                          type="button"
+                          onClick={() => void cancelTask(runId)}
+                        >
+                          Cancel run
+                        </button>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : null}
           <div className="bid-record-bindings">
             <h5>Exact task and review bindings</h5>
             <ul>

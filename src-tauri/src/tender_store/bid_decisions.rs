@@ -1400,7 +1400,20 @@ impl TenderStore {
             .connection
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE status = 'running')
-                        OR EXISTS(SELECT 1 FROM parse_attempts WHERE status = 'running')",
+                        OR EXISTS(SELECT 1 FROM parse_attempts WHERE status = 'running')
+                        OR EXISTS(
+                          SELECT 1 FROM production_tasks AS tasks
+                          JOIN production_task_attempts AS attempts
+                            ON attempts.production_task_id = tasks.production_task_id
+                           AND attempts.task_id = tasks.task_id
+                          JOIN agent_runs AS runs ON runs.task_id = attempts.task_id
+                          WHERE tasks.status = 'indeterminate'
+                            AND NOT EXISTS (
+                              SELECT 1 FROM agent_run_recovery_dispositions AS dispositions
+                              WHERE dispositions.run_id = runs.run_id
+                                AND dispositions.disposition = 'close_task'
+                            )
+                        )",
                 [],
                 |row| row.get(0),
             )
@@ -1505,7 +1518,22 @@ impl TenderStore {
         let active_execution: bool = transaction
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE status = 'running')
-                        OR EXISTS(SELECT 1 FROM parse_attempts WHERE status = 'running')",
+                        OR EXISTS(SELECT 1 FROM parse_attempts WHERE status = 'running')
+                        OR EXISTS(
+                          SELECT 1 FROM production_tasks AS tasks
+                          JOIN production_task_attempts AS attempts
+                            ON attempts.production_task_id = tasks.production_task_id
+                           AND attempts.task_id = tasks.task_id
+                          JOIN agent_runs AS runs ON runs.task_id = attempts.task_id
+                          JOIN agent_run_recovery_dispositions AS dispositions
+                            ON dispositions.run_id = runs.run_id
+                           AND dispositions.disposition = 'retry_task'
+                          WHERE tasks.status = 'indeterminate'
+                            AND NOT EXISTS(
+                              SELECT 1 FROM agent_runs AS retries
+                              WHERE retries.retry_of_run_id = runs.run_id
+                            )
+                        )",
                 [],
                 |row| row.get(0),
             )
@@ -1886,18 +1914,48 @@ impl TenderStore {
                 |row| row.get(0),
             )
             .map_err(sql_error)?;
+        let recovery_retry_pending: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM production_tasks AS tasks
+                   JOIN production_task_attempts AS attempts
+                     ON attempts.production_task_id = tasks.production_task_id
+                    AND attempts.task_id = tasks.task_id
+                   JOIN agent_runs AS runs ON runs.task_id = attempts.task_id
+                   JOIN agent_run_recovery_dispositions AS dispositions
+                     ON dispositions.run_id = runs.run_id
+                    AND dispositions.disposition = 'retry_task'
+                   WHERE tasks.status = 'indeterminate'
+                     AND NOT EXISTS(
+                       SELECT 1 FROM agent_runs AS retries
+                       WHERE retries.retry_of_run_id = runs.run_id
+                     )
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
         if approval.decision != BidDecisionApprovalDecision::Accept
             || approval.approval_sha256 != command.approval_sha256
             || approval.invalidation.is_some()
             || current_head != Some((approval.package_id.clone(), approval.package_version))
-            || lifecycle_phase != TenderLifecyclePhase::TenderPlanning
+            || !matches!(
+                lifecycle_phase,
+                TenderLifecyclePhase::TenderPlanning | TenderLifecyclePhase::ActiveProduction
+            )
             || active_execution
+            || recovery_retry_pending
             || !valid_material_change_record_count(&changed_records)
         {
             self.record_bid_decision_invalidation_denial(
                 tender_id,
                 command,
-                "invalidation_guard_failed",
+                if recovery_retry_pending {
+                    "production_recovery_retry_pending"
+                } else {
+                    "invalidation_guard_failed"
+                },
             )?;
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
@@ -1918,13 +1976,27 @@ impl TenderStore {
                      AND approvals.approval_sha256 = ?2
                      AND approvals.decision = 'accept'
                      AND tender.tender_id = ?3
-                     AND tender.lifecycle_phase = 'tender_planning'
+                     AND tender.lifecycle_phase IN ('tender_planning', 'active_production')
                  ) AND NOT EXISTS(
                    SELECT 1 FROM bid_decision_approval_invalidations WHERE approval_id = ?1
                  ) AND NOT EXISTS(
                    SELECT 1 FROM agent_runs WHERE status = 'running'
                  ) AND NOT EXISTS(
                    SELECT 1 FROM parse_attempts WHERE status = 'running'
+                 ) AND NOT EXISTS(
+                   SELECT 1 FROM production_tasks AS tasks
+                   JOIN production_task_attempts AS attempts
+                     ON attempts.production_task_id = tasks.production_task_id
+                    AND attempts.task_id = tasks.task_id
+                   JOIN agent_runs AS runs ON runs.task_id = attempts.task_id
+                   JOIN agent_run_recovery_dispositions AS dispositions
+                     ON dispositions.run_id = runs.run_id
+                    AND dispositions.disposition = 'retry_task'
+                   WHERE tasks.status = 'indeterminate'
+                     AND NOT EXISTS(
+                       SELECT 1 FROM agent_runs AS retries
+                       WHERE retries.retry_of_run_id = runs.run_id
+                     )
                  )",
                 params![
                     command.approval_id,
@@ -1957,7 +2029,7 @@ impl TenderStore {
             invalidated_by: "engineer_user".into(),
             invalidation_id: invalidation_id.clone(),
             lifecycle_after: TenderLifecyclePhase::BidDecision,
-            lifecycle_before: TenderLifecyclePhase::TenderPlanning,
+            lifecycle_before: lifecycle_phase,
             material_change_summary: material_change_summary.clone(),
             schema_version: 1,
         };
@@ -1976,7 +2048,7 @@ impl TenderStore {
                    manifest_sha256, created_at
                  ) VALUES (
                    ?1, ?2, ?3, ?4, ?5, ?6, 'engineer_user', 'tendering_manager',
-                   'tender_planning', 'bid_decision', ?7, ?8, ?9
+                   ?7, 'bid_decision', ?8, ?9, ?10
                  )",
                 params![
                     invalidation_id,
@@ -1985,6 +2057,7 @@ impl TenderStore {
                     material_change_summary,
                     canonical_json(&affected_areas)?,
                     canonical_json(&changed_records)?,
+                    lifecycle_phase.as_str(),
                     manifest_json,
                     manifest_sha256,
                     created_at,
@@ -2013,11 +2086,28 @@ impl TenderStore {
                 [],
             )
             .map_err(sql_error)?;
+        transaction
+            .execute(
+                "UPDATE production_activations SET status = 'suspended'
+                 WHERE status = 'active'",
+                [],
+            )
+            .map_err(sql_error)?;
+        transaction
+            .execute(
+                "UPDATE production_tasks SET status = 'suspended', updated_at = ?1
+                 WHERE status IN ('blocked', 'ready', 'review_ready', 'failed', 'cancelled')
+                   AND activation_id IN (
+                     SELECT activation_id FROM production_activations WHERE status = 'suspended'
+                   )",
+                [&created_at],
+            )
+            .map_err(sql_error)?;
         if transaction
             .execute(
                 "UPDATE tender SET lifecycle_phase = 'bid_decision'
                  WHERE singleton = 1 AND tender_id = ?1
-                   AND lifecycle_phase = 'tender_planning'",
+                   AND lifecycle_phase IN ('tender_planning', 'active_production')",
                 [tender_id.as_str()],
             )
             .map_err(sql_error)?
@@ -2854,7 +2944,10 @@ fn load_approval_invalidation(
         || manifest.created_at != created_at
         || invalidated_by != "engineer_user"
         || acting_role != "tendering_manager"
-        || lifecycle_before != TenderLifecyclePhase::TenderPlanning
+        || !matches!(
+            lifecycle_before,
+            TenderLifecyclePhase::TenderPlanning | TenderLifecyclePhase::ActiveProduction
+        )
         || lifecycle_after != TenderLifecyclePhase::BidDecision
         || material_change_summary.trim() != material_change_summary
         || material_change_summary.is_empty()
@@ -4977,7 +5070,7 @@ impl TenderStore {
             expected_hash.clone_from(&approval.approval_sha256);
             previous_version = approval.package_version;
         }
-        let expected_lifecycle = approvals.last().map_or_else(
+        let mut expected_lifecycle = approvals.last().map_or_else(
             || {
                 if package_count == 0 {
                     TenderLifecyclePhase::Intake
@@ -4993,6 +5086,20 @@ impl TenderStore {
                 }
             },
         );
+        if expected_lifecycle == TenderLifecyclePhase::TenderPlanning
+            && self
+                .connection
+                .query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM production_activations WHERE status = 'active'
+                     )",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(sql_error)?
+        {
+            expected_lifecycle = TenderLifecyclePhase::ActiveProduction;
+        }
         if let Some(terminal) = approvals.last().filter(|approval| {
             approval.invalidation.is_none()
                 && matches!(

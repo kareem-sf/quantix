@@ -3,12 +3,12 @@ use std::{fs, io, path::Path, sync::Arc, time::Duration};
 use quantix_lib::{
     ensure_quantix_setup, AgentAccessRequestStatus, AgentAccessResolution,
     AgentRunRecoveryDisposition, AgentRunState, ApproveAgentAccessCommand, CreateTenderCommand,
-    DataClassification, DeviceProtection, InterruptAgentRunCommand, PermissionDenialReason,
-    ProviderEventKind, ProviderFailureCategory, ProviderRateLimitState, QuantixHost,
-    RequestAgentAccessCommand, ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand,
-    ReviseTenderCommand, RunBootstrapAgentCommand, RuntimeLayout, SetupPlatform, SetupState,
-    StoragePermissions, TenderErrorCode, TenderIntegrityIssue, TenderIntegrityState,
-    VerificationStatus, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    DataClassification, DeviceProtection, InspectAgentRunCommand, InspectAgentRunHistoryCommand,
+    InterruptAgentRunCommand, PermissionDenialReason, ProviderEventKind, ProviderFailureCategory,
+    ProviderRateLimitState, QuantixHost, RequestAgentAccessCommand, ResolveAgentAccessCommand,
+    ResolveIndeterminateAgentRunCommand, ReviseTenderCommand, RunBootstrapAgentCommand,
+    RuntimeLayout, SetupPlatform, SetupState, StoragePermissions, TenderErrorCode,
+    TenderIntegrityIssue, TenderIntegrityState, VerificationStatus, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 struct ReadySetupPlatform;
@@ -450,6 +450,46 @@ async fn retry_creates_a_linked_run_and_a_distinct_provider_turn() {
         "1",
         "linked runs must share one app-scoped app-server process"
     );
+    let latest = harness
+        .host
+        .inspect_agent_run_history(InspectAgentRunHistoryCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 1,
+        })
+        .expect("inspect bounded latest Agent Run page");
+    assert_eq!(latest.total_count, 2);
+    assert_eq!(latest.items.len(), 1);
+    assert_eq!(latest.items[0].run.run_id, retry.run_id);
+    let older = harness
+        .host
+        .inspect_agent_run_history(InspectAgentRunHistoryCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: latest.next_before_sequence,
+            limit: 1,
+        })
+        .expect("inspect bounded older Agent Run page");
+    assert_eq!(older.items.len(), 1);
+    assert_eq!(older.items[0].run.run_id, first.run_id);
+    assert_eq!(older.next_before_sequence, None);
+    assert_eq!(
+        harness
+            .host
+            .inspect_agent_run(InspectAgentRunCommand {
+                tender_id: harness.tender_id.clone(),
+                run_id: retry.run_id.clone(),
+            })
+            .expect("inspect one exact Agent Run")
+            .run_id,
+        retry.run_id
+    );
+    let activity = harness
+        .host
+        .inspect_agent_run_activity(&harness.tender_id)
+        .expect("inspect bounded Agent Run activity counters");
+    assert_eq!(activity.run_count, 2);
+    assert_eq!(activity.running_count, 0);
+    assert!(activity.event_count >= 2);
 }
 
 #[tokio::test]

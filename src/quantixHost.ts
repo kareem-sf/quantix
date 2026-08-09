@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type { AgentRunInspection } from "./bindings/AgentRunInspection";
+import type { AgentRunActivity } from "./bindings/AgentRunActivity";
+import type { AgentRunHistoryPage } from "./bindings/AgentRunHistoryPage";
+import type { InspectAgentRunCommand } from "./bindings/InspectAgentRunCommand";
+import type { InspectAgentRunHistoryCommand } from "./bindings/InspectAgentRunHistoryCommand";
+import type { ActivateTenderProductionCommand } from "./bindings/ActivateTenderProductionCommand";
 import type { AgentRunRecoveryDecision } from "./bindings/AgentRunRecoveryDecision";
 import type { AgentRunRecoveryDisposition } from "./bindings/AgentRunRecoveryDisposition";
 import type { BidDecisionPackageInspection } from "./bindings/BidDecisionPackageInspection";
@@ -45,6 +50,9 @@ import type { ResolveBidDecisionReturnReworkCommand } from "./bindings/ResolveBi
 import type { ResolveTenderRecoveryCommand } from "./bindings/ResolveTenderRecoveryCommand";
 import type { RuntimeReadiness } from "./bindings/RuntimeReadiness";
 import type { RunBootstrapAgentCommand } from "./bindings/RunBootstrapAgentCommand";
+import type { RunProductionTaskCommand } from "./bindings/RunProductionTaskCommand";
+import type { ProductionTaskRunResult } from "./bindings/ProductionTaskRunResult";
+import type { TenderProductionInspection } from "./bindings/TenderProductionInspection";
 import type { RunBidDecisionPackageReviewCommand } from "./bindings/RunBidDecisionPackageReviewCommand";
 import type { RunTenderRecordExtractionCommand } from "./bindings/RunTenderRecordExtractionCommand";
 import type { RunTenderRecordReviewCommand } from "./bindings/RunTenderRecordReviewCommand";
@@ -442,6 +450,46 @@ export function decideWorkPlanProposal(
   });
 }
 
+export function activateTenderProduction(
+  tenderId: string,
+  planId: string,
+  planVersion: number,
+  planManifestSha256: string,
+): Promise<TenderProductionInspection> {
+  const command: ActivateTenderProductionCommand = {
+    tender_id: tenderId,
+    plan_id: planId,
+    plan_version: planVersion,
+    plan_manifest_sha256: planManifestSha256,
+  };
+  return invoke<TenderProductionInspection>("activate_tender_production", {
+    command,
+  });
+}
+
+export function inspectTenderProduction(
+  tenderId: string,
+): Promise<TenderProductionInspection | null> {
+  const command: OpenTenderCommand = { tender_id: tenderId };
+  return invoke<TenderProductionInspection | null>(
+    "inspect_tender_production",
+    {
+      command,
+    },
+  );
+}
+
+export function runProductionTask(
+  tenderId: string,
+  productionTaskId: string,
+): Promise<ProductionTaskRunResult> {
+  const command: RunProductionTaskCommand = {
+    tender_id: tenderId,
+    production_task_id: productionTaskId,
+  };
+  return invoke<ProductionTaskRunResult>("run_production_task", { command });
+}
+
 export function decideBidDecisionPackage(
   tenderId: string,
   packageId: string,
@@ -576,11 +624,35 @@ export function runBidDecisionPackageReview(
   );
 }
 
-export function inspectAgentRuns(
+export function inspectAgentRunHistory(
   tenderId: string,
-): Promise<AgentRunInspection[]> {
+  beforeSequence: bigint | null,
+  limit: number,
+): Promise<AgentRunHistoryPage> {
+  const command: InspectAgentRunHistoryCommand = {
+    tender_id: tenderId,
+    before_sequence: beforeSequence,
+    limit,
+  };
+  return invoke<AgentRunHistoryPage>("inspect_agent_run_history", { command });
+}
+
+export function inspectAgentRun(
+  tenderId: string,
+  runId: string,
+): Promise<AgentRunInspection> {
+  const command: InspectAgentRunCommand = {
+    tender_id: tenderId,
+    run_id: runId,
+  };
+  return invoke<AgentRunInspection>("inspect_agent_run", { command });
+}
+
+export function inspectAgentRunActivity(
+  tenderId: string,
+): Promise<AgentRunActivity> {
   const command: OpenTenderCommand = { tender_id: tenderId };
-  return invoke<AgentRunInspection[]>("inspect_agent_runs", { command });
+  return invoke<AgentRunActivity>("inspect_agent_run_activity", { command });
 }
 
 export function resolveIndeterminateAgentRun(
