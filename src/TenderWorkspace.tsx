@@ -11,6 +11,7 @@ import type { TenderSummary } from "./bindings/TenderSummary";
 import type { TenderRecoveryDecision } from "./bindings/TenderRecoveryDecision";
 import type { TenderRecoveryRecord } from "./bindings/TenderRecoveryRecord";
 import { AgentRunOffice } from "./AgentRunOffice";
+import { BidDecisionPanel } from "./BidDecisionPanel";
 import { DocumentEvidenceOffice } from "./DocumentEvidenceOffice";
 import { TenderBackupPanel } from "./TenderBackupPanel";
 import { TenderRecoveryPanel } from "./TenderRecoveryPanel";
@@ -655,6 +656,12 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                 tenderId={selected.tender_id}
                 runtimeReady={runtimeReady}
                 register={documentRegister}
+                reportCommandFailure={reportCommandFailure}
+              />
+              <BidDecisionPanel
+                key={`bid-decision-${selected.tender_id}`}
+                tenderId={selected.tender_id}
+                runtimeReady={runtimeReady}
                 reportCommandFailure={reportCommandFailure}
               />
             </>

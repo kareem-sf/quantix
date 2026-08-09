@@ -433,8 +433,9 @@ fn run_agent_turn(
     if !matches!(thread_method, "thread/start" | "thread/resume") {
         return Err("expected thread start or resume".into());
     }
-    let is_record_scenario =
-        scenario.starts_with("record-extraction") || scenario.starts_with("record-review");
+    let is_record_scenario = scenario.starts_with("record-extraction")
+        || scenario.starts_with("record-review")
+        || scenario.starts_with("bid-package-review");
     let dynamic_tools_are_exact = if is_record_scenario {
         thread_request
             .pointer("/params/dynamicTools")
@@ -546,6 +547,8 @@ fn run_agent_turn(
             "tender-evidence-v1.json"
         } else if scenario.starts_with("record-review") {
             "tender-record-review-v1.json"
+        } else if scenario.starts_with("bid-package-review") {
+            "bid-decision-package-review-v1.json"
         } else {
             "tender-metadata-v1.json"
         });
@@ -584,9 +587,46 @@ fn run_agent_turn(
     if provider_data_view != &data_view {
         return Err("provider-visible Data View differs from its materialized input".into());
     }
+    if scenario.starts_with("bid-package-review") {
+        let exposes_exact_evidence = provider_data_view
+            .get("records")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|records| {
+                records.iter().any(|record| {
+                    record
+                        .get("fields")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|fields| {
+                            fields.iter().any(|field| {
+                                field
+                                    .get("evidence")
+                                    .and_then(serde_json::Value::as_array)
+                                    .is_some_and(|evidence| {
+                                        evidence.iter().any(|item| {
+                                            item.pointer("/location/original_text")
+                                                .and_then(serde_json::Value::as_str)
+                                                .is_some()
+                                        })
+                                    })
+                            })
+                        })
+                })
+            });
+        if !exposes_exact_evidence {
+            return Err("package review Data View omits exact Evidence".into());
+        }
+        if provider_data_view
+            .pointer("/manifest/resource_implications")
+            .and_then(serde_json::Value::as_array)
+            .is_none()
+        {
+            return Err("package review Data View omits resource implications".into());
+        }
+    }
     let tender_name = provider_data_view
         .pointer("/tender/name")
         .or_else(|| provider_data_view.pointer("/record/title"))
+        .or_else(|| provider_data_view.pointer("/manifest/package_id"))
         .and_then(serde_json::Value::as_str)
         .ok_or("provider-visible Tender name")?
         .to_owned();
@@ -829,11 +869,17 @@ fn run_agent_turn(
             | "usage-stream"
             | "output-invalid"
             | "record-extraction"
+            | "record-extraction-decline-risk"
+            | "record-extraction-expanded"
+            | "record-extraction-extra-characteristic"
             | "record-extraction-delayed"
             | "record-extraction-duplicate-citation"
             | "record-extraction-invalid"
             | "record-review"
             | "record-review-delayed"
+            | "bid-package-review"
+            | "bid-package-review-failed"
+            | "bid-package-review-delayed"
     ) {
         return Err(format!("unknown agent fixture scenario {scenario}").into());
     }
@@ -1175,6 +1221,57 @@ fn run_agent_turn(
             return Err("timed out waiting to release Tender Record output".into());
         }
         record_extraction_candidate(provider_data_view)?
+    } else if scenario == "record-extraction-decline-risk" {
+        let mut candidate = record_extraction_candidate(provider_data_view)?;
+        let risk = candidate["records"]
+            .as_array_mut()
+            .and_then(|records| {
+                records.iter_mut().find(|record| {
+                    record.get("stable_key").and_then(serde_json::Value::as_str)
+                        == Some("programme_pressure")
+                })
+            })
+            .ok_or("fixture risk record")?;
+        let evidence = risk["fields"][0]["evidence"].clone();
+        risk["fields"]
+            .as_array_mut()
+            .ok_or("fixture risk fields")?
+            .push(serde_json::json!({
+                "name": "bid_recommendation",
+                "value": "decline",
+                "basis_kind": "evidence",
+                "basis_reference": null,
+                "basis_description": null,
+                "original_expression": null,
+                "normalized_value": null,
+                "timezone": null,
+                "uncertainty": null,
+                "evidence": evidence
+            }));
+        candidate
+    } else if scenario == "record-extraction-extra-characteristic" {
+        let mut candidate = record_extraction_candidate(provider_data_view)?;
+        let mut added = candidate["records"]
+            .as_array()
+            .and_then(|records| {
+                records.iter().find(|record| {
+                    record.get("stable_key").and_then(serde_json::Value::as_str)
+                        == Some("project_delivery_context")
+                })
+            })
+            .cloned()
+            .ok_or("Project Characteristic candidate")?;
+        added["stable_key"] = serde_json::json!("late_project_characteristic");
+        added["title"] = serde_json::json!("Late verified Project Characteristic");
+        candidate["records"] = serde_json::json!([added]);
+        candidate
+    } else if scenario == "record-extraction-expanded" {
+        let mut candidate = record_extraction_candidate(provider_data_view)?;
+        let mut added = candidate["records"][0].clone();
+        added["stable_key"] = serde_json::json!("late_submission_obligation");
+        added["title"] = serde_json::json!("Late discovered submission obligation");
+        candidate["records"] = serde_json::json!([added]);
+        candidate
     } else if scenario == "record-extraction" {
         record_extraction_candidate(provider_data_view)?
     } else if scenario == "record-extraction-invalid" {
@@ -1209,6 +1306,51 @@ fn run_agent_turn(
             "outcome": "verified",
             "rationale": "Every material field resolves to the exact supplied authoritative Evidence."
         })
+    } else if scenario == "bid-package-review-delayed" {
+        fs::write(
+            executable.with_extension("bid-package-review-waiting"),
+            b"waiting",
+        )?;
+        for _ in 0..2_000 {
+            if executable
+                .with_extension("bid-package-review-release")
+                .is_file()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        if !executable
+            .with_extension("bid-package-review-release")
+            .is_file()
+        {
+            return Err("timed out waiting to release Bid Decision Package review".into());
+        }
+        serde_json::json!({ "outcome": "passed", "findings": [] })
+    } else if scenario == "bid-package-review-failed" {
+        let affected = provider_data_view
+            .get("record_summaries")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|records| records.first())
+            .map(|record| {
+                serde_json::json!({
+                    "record_id": record["record_id"],
+                    "version": record["version"]
+                })
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "outcome": "failed",
+            "findings": [{
+                "severity": "critical",
+                "code": "critical_compliance_gap",
+                "summary": "The exact package does not establish a safe decision basis.",
+                "affected_records": affected
+            }]
+        })
+    } else if scenario == "bid-package-review" {
+        serde_json::json!({ "outcome": "passed", "findings": [] })
     } else {
         serde_json::json!({
             "summary": format!("{tender_name} is ready for controlled intake analysis."),
@@ -1331,7 +1473,7 @@ fn record_extraction_candidate(
                     "normalized_value": null,
                     "timezone": null,
                     "uncertainty": null,
-                    "evidence": [authoritative]
+                    "evidence": [authoritative.clone()]
                 }],
                 "contradictions": []
             },
@@ -1356,6 +1498,42 @@ fn record_extraction_candidate(
                     "summary": "The supplied Evidence contains conflicting submission dates.",
                     "evidence": [deadline, conflicting_deadline]
                 }]
+            },
+            {
+                "stable_key": "project_delivery_context",
+                "kind": "project_characteristic",
+                "title": "Verified project delivery context",
+                "fields": [{
+                    "name": "required_capability",
+                    "value": "document_control",
+                    "basis_kind": "evidence",
+                    "basis_reference": null,
+                    "basis_description": null,
+                    "original_expression": null,
+                    "normalized_value": null,
+                    "timezone": null,
+                    "uncertainty": null,
+                    "evidence": [authoritative.clone()]
+                }],
+                "contradictions": []
+            },
+            {
+                "stable_key": "programme_pressure",
+                "kind": "risk",
+                "title": "Tender programme pressure",
+                "fields": [{
+                    "name": "recommended_capability",
+                    "value": "tender_analysis",
+                    "basis_kind": "evidence",
+                    "basis_reference": null,
+                    "basis_description": null,
+                    "original_expression": null,
+                    "normalized_value": null,
+                    "timezone": null,
+                    "uncertainty": null,
+                    "evidence": [authoritative.clone()]
+                }],
+                "contradictions": []
             },
             {
                 "stable_key": "crane_capacity",

@@ -16,7 +16,11 @@ use ts_rs::TS;
 use crate::{
     process_supervisor::{ProcessError, ProcessSpec, ProcessTermination, SupervisedConversation},
     tender_store::{
-        require_setup, CreateTenderEngineerEntryCommand, DecideTenderRecordCommand,
+        lock_mutex_with_check, require_setup, BidDecisionPackageInspection,
+        BidDecisionPackageRecordCategory, BidDecisionPackageRecordPage,
+        BidDecisionPackageReviewResult, BidPackageOperationBudget, ComplianceMatrixPage,
+        CreateBidDecisionPackageCommand, CreateTenderEngineerEntryCommand,
+        DecideTenderRecordCommand, RunBidDecisionPackageReviewCommand,
         RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, TenderCommandError,
         TenderErrorCode, TenderId, TenderRecordAuthority, TenderRecordDecisionResult,
         TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult, TenderStore,
@@ -777,6 +781,115 @@ impl QuantixHost {
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .decide_tender_record(&tender_id, &command)?;
         Ok(result)
+    }
+
+    pub fn create_bid_decision_package(
+        &self,
+        command: CreateBidDecisionPackageCommand,
+    ) -> Result<BidDecisionPackageInspection, TenderCommandError> {
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let budget = BidPackageOperationBudget::for_tender(&tender_id);
+        let store = self.tender_store_with_check(&tender_id, &mut || budget.check())?;
+        let package = lock_mutex_with_check(&store, &mut || budget.check())?
+            .create_bid_decision_package(&tender_id, &command, budget)?;
+        Ok(package)
+    }
+
+    pub fn inspect_current_bid_decision_package(
+        &self,
+        tender_id: &str,
+    ) -> Result<Option<BidDecisionPackageInspection>, TenderCommandError> {
+        require_setup(self)?;
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let package = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .inspect_current_bid_decision_package()?;
+        Ok(package)
+    }
+
+    pub fn inspect_compliance_matrix_page(
+        &self,
+        tender_id: &str,
+        package_id: &str,
+        version: u32,
+        after_ordinal: Option<u32>,
+        limit: u32,
+    ) -> Result<ComplianceMatrixPage, TenderCommandError> {
+        require_setup(self)?;
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let page = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .inspect_compliance_matrix_page(package_id, version, after_ordinal, limit)?;
+        Ok(page)
+    }
+
+    pub fn inspect_bid_decision_package_record_page(
+        &self,
+        tender_id: &str,
+        package_id: &str,
+        version: u32,
+        category: BidDecisionPackageRecordCategory,
+        after_ordinal: Option<u32>,
+        limit: u32,
+    ) -> Result<BidDecisionPackageRecordPage, TenderCommandError> {
+        require_setup(self)?;
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let page = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .inspect_bid_decision_package_record_page(
+                package_id,
+                version,
+                category,
+                after_ordinal,
+                limit,
+            )?;
+        Ok(page)
+    }
+
+    pub async fn run_bid_decision_package_review(
+        &self,
+        command: RunBidDecisionPackageReviewCommand,
+    ) -> Result<BidDecisionPackageReviewResult, TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        if !valid_identifier(&command.package_id) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let cancellation = self.begin_active_agent_run(tender_id.as_str())?;
+        let _active = ActiveAgentRunGuard { host: self.clone() };
+        let store = self.tender_store(&tender_id)?;
+        let prepared = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .prepare_bid_decision_package_review_run(
+                &tender_id,
+                &command.package_id,
+                command.version,
+            )?;
+        self.identify_active_agent_run(&prepared.run_id)?;
+        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let mut store = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        store.complete_agent_run(&tender_id, &prepared, execution)?;
+        Ok(BidDecisionPackageReviewResult {
+            run: store.inspect_agent_run(&prepared.run_id)?,
+            package: store.inspect_bid_decision_package(&command.package_id, command.version)?,
+        })
     }
 
     pub fn inspect_agent_runs(

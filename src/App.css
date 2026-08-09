@@ -1742,6 +1742,101 @@ button {
   gap: 16px;
 }
 
+.bid-decision {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+}
+
+.bid-decision-summary,
+.bid-capabilities,
+.bid-record-bindings,
+.bid-review,
+.bid-decision-gate {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--panel) 92%, var(--accent) 8%);
+}
+
+.bid-decision-summary dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin: 0 0 0.8rem;
+}
+
+.bid-decision-summary dl div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.bid-decision-summary dt {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.bid-decision-summary dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+.bid-blocker-list,
+.bid-evidence-list,
+.bid-capabilities ul,
+.bid-record-bindings ul,
+.bid-review ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.bid-blocker-list {
+  border-left: 4px solid var(--warning);
+  padding-block: 0.5rem;
+}
+
+.bid-capabilities,
+.bid-record-bindings,
+.bid-review,
+.bid-decision-gate,
+.bid-matrix-editor,
+.bid-capability-form {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.bid-capability-form {
+  grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.4fr) auto;
+  align-items: end;
+}
+
+.bid-capability-form label,
+.bid-matrix-editor label,
+.bid-decision-gate label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.bid-matrix-editor {
+  grid-template-columns: minmax(180px, 0.6fr) minmax(180px, 0.8fr) minmax(
+      260px,
+      1.6fr
+    );
+  align-items: start;
+}
+
+.bid-matrix-editor textarea,
+.bid-decision-gate textarea {
+  resize: vertical;
+}
+
+@media (max-width: 900px) {
+  .bid-capability-form,
+  .bid-matrix-editor {
+    grid-template-columns: 1fr;
+  }
+}
+
 .record-extraction-controls,
 .record-pagination {
   display: flex;

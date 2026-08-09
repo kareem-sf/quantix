@@ -33,12 +33,25 @@ use crate::{setup::SetupState, QuantixHost};
 
 mod agent_records;
 pub(crate) mod backups;
+mod bid_decisions;
 mod tender_records;
 
 pub use backups::{
     CreateTenderBackupCommand, PrepareTenderRecoveryCommand, ResolveTenderRecoveryCommand,
     TenderBackupRecord, TenderBackupState, TenderRecoveryDecision, TenderRecoveryDecisionRecord,
     TenderRecoveryRecord, TenderRecoveryState,
+};
+pub(crate) use bid_decisions::BidPackageOperationBudget;
+pub use bid_decisions::{
+    BidDecisionGateBlocker, BidDecisionPackageInspection, BidDecisionPackageRecordBinding,
+    BidDecisionPackageRecordCategory, BidDecisionPackageRecordPage, BidDecisionPackageReview,
+    BidDecisionPackageReviewFinding, BidDecisionPackageReviewOutcome,
+    BidDecisionPackageReviewResult, BidRecommendation, BidRecommendationOutcome, CapabilityDemand,
+    CapabilityDemandClassification, ComplianceDisposition, ComplianceDispositionUpdate,
+    ComplianceMatrixPage, ComplianceMatrixRow, CreateBidDecisionPackageCommand,
+    InspectBidDecisionPackageRecordsCommand, InspectComplianceMatrixCommand,
+    ManagerCapabilityDemandInput, ResourceImplication, ReviewFindingSeverity,
+    RunBidDecisionPackageReviewCommand, TenderRecordVersionReference,
 };
 pub use tender_records::{
     CreateTenderEngineerEntryCommand, DecideTenderRecordCommand, InspectTenderRecordsCommand,
@@ -57,7 +70,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 10;
+const TENDER_SCHEMA_VERSION: i64 = 11;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -472,6 +485,92 @@ CREATE TABLE tender_record_reviews (
     (reviewer_kind = 'engineer_user' AND reviewer_run_id IS NULL)
   )
 );
+CREATE TABLE bid_decision_packages (
+  package_id TEXT PRIMARY KEY CHECK (length(package_id) = 32),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE bid_decision_package_versions (
+  package_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  record_inventory_sha256 TEXT NOT NULL CHECK (length(record_inventory_sha256) = 64),
+  capability_demands_json TEXT NOT NULL CHECK (json_valid(capability_demands_json)),
+  resource_implications_json TEXT NOT NULL CHECK (json_valid(resource_implications_json)),
+  recommendation_json TEXT NOT NULL CHECK (json_valid(recommendation_json)),
+  analysis_blocker_count INTEGER NOT NULL CHECK (analysis_blocker_count >= 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_by TEXT NOT NULL CHECK (created_by = 'engineer_user'),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (package_id, version),
+  FOREIGN KEY (package_id) REFERENCES bid_decision_packages(package_id),
+  FOREIGN KEY (tender_revision) REFERENCES tender_revisions(revision)
+);
+CREATE TABLE bid_decision_package_heads (
+  package_id TEXT PRIMARY KEY,
+  current_version INTEGER NOT NULL CHECK (current_version > 0),
+  FOREIGN KEY (package_id, current_version)
+    REFERENCES bid_decision_package_versions(package_id, version)
+);
+CREATE TABLE bid_compliance_rows (
+  package_id TEXT NOT NULL,
+  package_version INTEGER NOT NULL CHECK (package_version > 0),
+  ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+  record_id TEXT NOT NULL,
+  record_version INTEGER NOT NULL CHECK (record_version > 0),
+  disposition TEXT NOT NULL CHECK (disposition IN (
+    'comply', 'comply_with_qualification', 'deviation', 'not_applicable', 'unresolved'
+  )),
+  responsibility TEXT NOT NULL CHECK (length(CAST(responsibility AS BLOB)) BETWEEN 1 AND 200),
+  planned_treatment TEXT NOT NULL CHECK (length(CAST(planned_treatment AS BLOB)) BETWEEN 1 AND 2000),
+  affected_work_json TEXT NOT NULL CHECK (json_valid(affected_work_json)),
+  uncertainty TEXT CHECK (uncertainty IS NULL OR length(CAST(uncertainty AS BLOB)) BETWEEN 1 AND 2000),
+  related_records_json TEXT NOT NULL CHECK (json_valid(related_records_json)),
+  verification_status TEXT NOT NULL CHECK (verification_status IN (
+    'proposed', 'verified', 'rejected', 'stale', 'superseded'
+  )),
+  trust_class TEXT NOT NULL CHECK (trust_class IN (
+    'ai_proposal', 'deterministic_fact', 'verified', 'engineer_verified',
+    'approved_assumption', 'unresolved_gap', 'prior_decision'
+  )),
+  evidence_count INTEGER NOT NULL CHECK (evidence_count >= 0),
+  blocker_codes_json TEXT NOT NULL CHECK (json_valid(blocker_codes_json)),
+  PRIMARY KEY (package_id, package_version, ordinal),
+  UNIQUE (package_id, package_version, record_id, record_version),
+  FOREIGN KEY (package_id, package_version)
+    REFERENCES bid_decision_package_versions(package_id, version),
+  FOREIGN KEY (record_id, record_version)
+    REFERENCES tender_record_versions(record_id, version)
+);
+CREATE TABLE bid_decision_package_record_bindings (
+  package_id TEXT NOT NULL,
+  package_version INTEGER NOT NULL CHECK (package_version > 0),
+  category TEXT NOT NULL CHECK (category IN (
+    'project_fingerprint', 'risk', 'opportunity', 'assumption', 'unresolved_query'
+  )),
+  ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+  record_id TEXT NOT NULL,
+  record_version INTEGER NOT NULL CHECK (record_version > 0),
+  PRIMARY KEY (package_id, package_version, category, ordinal),
+  UNIQUE (package_id, package_version, category, record_id, record_version),
+  FOREIGN KEY (package_id, package_version)
+    REFERENCES bid_decision_package_versions(package_id, version),
+  FOREIGN KEY (record_id, record_version)
+    REFERENCES tender_record_versions(record_id, version)
+);
+CREATE TABLE bid_decision_package_reviews (
+  review_id TEXT PRIMARY KEY CHECK (length(review_id) = 32),
+  package_id TEXT NOT NULL,
+  package_version INTEGER NOT NULL CHECK (package_version > 0),
+  reviewer_run_id TEXT NOT NULL UNIQUE,
+  outcome TEXT NOT NULL CHECK (outcome IN ('passed', 'failed')),
+  findings_json TEXT NOT NULL CHECK (json_valid(findings_json)),
+  created_at TEXT NOT NULL,
+  UNIQUE (package_id, package_version),
+  FOREIGN KEY (package_id, package_version)
+    REFERENCES bid_decision_package_versions(package_id, version),
+  FOREIGN KEY (reviewer_run_id) REFERENCES agent_runs(run_id)
+);
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
   event_type TEXT NOT NULL,
@@ -833,6 +932,56 @@ CREATE TRIGGER tender_record_reviews_no_delete
 BEFORE DELETE ON tender_record_reviews
 BEGIN
   SELECT RAISE(ABORT, 'Tender Record Reviews are immutable');
+END;
+CREATE TRIGGER bid_decision_packages_no_update
+BEFORE UPDATE ON bid_decision_packages
+BEGIN
+  SELECT RAISE(ABORT, 'Bid Decision Packages are immutable');
+END;
+CREATE TRIGGER bid_decision_packages_no_delete
+BEFORE DELETE ON bid_decision_packages
+BEGIN
+  SELECT RAISE(ABORT, 'Bid Decision Packages are immutable');
+END;
+CREATE TRIGGER bid_decision_package_versions_no_update
+BEFORE UPDATE ON bid_decision_package_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Bid Decision Package Versions are immutable');
+END;
+CREATE TRIGGER bid_decision_package_versions_no_delete
+BEFORE DELETE ON bid_decision_package_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Bid Decision Package Versions are immutable');
+END;
+CREATE TRIGGER bid_compliance_rows_no_update
+BEFORE UPDATE ON bid_compliance_rows
+BEGIN
+  SELECT RAISE(ABORT, 'Compliance Matrix rows are immutable');
+END;
+CREATE TRIGGER bid_compliance_rows_no_delete
+BEFORE DELETE ON bid_compliance_rows
+BEGIN
+  SELECT RAISE(ABORT, 'Compliance Matrix rows are immutable');
+END;
+CREATE TRIGGER bid_decision_package_record_bindings_no_update
+BEFORE UPDATE ON bid_decision_package_record_bindings
+BEGIN
+  SELECT RAISE(ABORT, 'Bid Decision Package record bindings are immutable');
+END;
+CREATE TRIGGER bid_decision_package_record_bindings_no_delete
+BEFORE DELETE ON bid_decision_package_record_bindings
+BEGIN
+  SELECT RAISE(ABORT, 'Bid Decision Package record bindings are immutable');
+END;
+CREATE TRIGGER bid_decision_package_reviews_no_update
+BEFORE UPDATE ON bid_decision_package_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'Bid Decision Package Reviews are immutable');
+END;
+CREATE TRIGGER bid_decision_package_reviews_no_delete
+BEFORE DELETE ON bid_decision_package_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'Bid Decision Package Reviews are immutable');
 END;
 CREATE TRIGGER audit_events_no_update
 BEFORE UPDATE ON audit_events
@@ -1574,6 +1723,9 @@ impl TenderStore {
             return Ok(false);
         }
         if !self.tender_record_manifests_are_valid_with_check(check)? {
+            return Ok(false);
+        }
+        if !self.bid_decision_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
         let mut statement = self
@@ -3360,7 +3512,7 @@ fn valid_media_type(media_type: &str) -> bool {
         && !media_type.chars().any(char::is_whitespace)
 }
 
-fn lock_mutex_with_check<'a, T>(
+pub(crate) fn lock_mutex_with_check<'a, T>(
     mutex: &'a Mutex<T>,
     check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
 ) -> Result<std::sync::MutexGuard<'a, T>, TenderCommandError> {

@@ -3,8 +3,15 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AgentRunInspection } from "./bindings/AgentRunInspection";
 import type { AgentRunRecoveryDecision } from "./bindings/AgentRunRecoveryDecision";
 import type { AgentRunRecoveryDisposition } from "./bindings/AgentRunRecoveryDisposition";
+import type { BidDecisionPackageInspection } from "./bindings/BidDecisionPackageInspection";
+import type { BidDecisionPackageRecordCategory } from "./bindings/BidDecisionPackageRecordCategory";
+import type { BidDecisionPackageRecordPage } from "./bindings/BidDecisionPackageRecordPage";
+import type { BidDecisionPackageReviewResult } from "./bindings/BidDecisionPackageReviewResult";
 import type { ChooseTenderPackageCommand } from "./bindings/ChooseTenderPackageCommand";
 import type { ConfirmSourceRelationshipCommand } from "./bindings/ConfirmSourceRelationshipCommand";
+import type { ComplianceDispositionUpdate } from "./bindings/ComplianceDispositionUpdate";
+import type { ComplianceMatrixPage } from "./bindings/ComplianceMatrixPage";
+import type { CreateBidDecisionPackageCommand } from "./bindings/CreateBidDecisionPackageCommand";
 import type { CreateTenderBackupCommand } from "./bindings/CreateTenderBackupCommand";
 import type { CreateTenderCommand } from "./bindings/CreateTenderCommand";
 import type { CreateTenderEngineerEntryCommand } from "./bindings/CreateTenderEngineerEntryCommand";
@@ -15,6 +22,9 @@ import type { EvidenceDocument } from "./bindings/EvidenceDocument";
 import type { EvidenceSearchResult } from "./bindings/EvidenceSearchResult";
 import type { InterruptAgentRunCommand } from "./bindings/InterruptAgentRunCommand";
 import type { InspectTenderRecordsCommand } from "./bindings/InspectTenderRecordsCommand";
+import type { InspectBidDecisionPackageRecordsCommand } from "./bindings/InspectBidDecisionPackageRecordsCommand";
+import type { InspectComplianceMatrixCommand } from "./bindings/InspectComplianceMatrixCommand";
+import type { ManagerCapabilityDemandInput } from "./bindings/ManagerCapabilityDemandInput";
 import type { OpenTenderCommand } from "./bindings/OpenTenderCommand";
 import type { ParseSourceArtifactCommand } from "./bindings/ParseSourceArtifactCommand";
 import type { PrepareTenderRecoveryCommand } from "./bindings/PrepareTenderRecoveryCommand";
@@ -23,6 +33,7 @@ import type { ResolveIndeterminateAgentRunCommand } from "./bindings/ResolveInde
 import type { ResolveTenderRecoveryCommand } from "./bindings/ResolveTenderRecoveryCommand";
 import type { RuntimeReadiness } from "./bindings/RuntimeReadiness";
 import type { RunBootstrapAgentCommand } from "./bindings/RunBootstrapAgentCommand";
+import type { RunBidDecisionPackageReviewCommand } from "./bindings/RunBidDecisionPackageReviewCommand";
 import type { RunTenderRecordExtractionCommand } from "./bindings/RunTenderRecordExtractionCommand";
 import type { RunTenderRecordReviewCommand } from "./bindings/RunTenderRecordReviewCommand";
 import type { SearchEvidenceCommand } from "./bindings/SearchEvidenceCommand";
@@ -330,6 +341,88 @@ export function decideTenderRecord(
   return invoke<TenderRecordDecisionResult>("decide_tender_record", {
     command,
   });
+}
+
+export function createBidDecisionPackage(
+  tenderId: string,
+  baseVersion: number | null,
+  dispositionUpdates: ComplianceDispositionUpdate[],
+  managerCapabilityDemands: ManagerCapabilityDemandInput[],
+): Promise<BidDecisionPackageInspection> {
+  const command: CreateBidDecisionPackageCommand = {
+    tender_id: tenderId,
+    base_version: baseVersion,
+    disposition_updates: dispositionUpdates,
+    manager_capability_demands: managerCapabilityDemands,
+  };
+  return invoke<BidDecisionPackageInspection>("create_bid_decision_package", {
+    command,
+  });
+}
+
+export function inspectCurrentBidDecisionPackage(
+  tenderId: string,
+): Promise<BidDecisionPackageInspection | null> {
+  const command: OpenTenderCommand = { tender_id: tenderId };
+  return invoke<BidDecisionPackageInspection | null>(
+    "inspect_current_bid_decision_package",
+    { command },
+  );
+}
+
+export function inspectComplianceMatrix(
+  tenderId: string,
+  packageId: string,
+  version: number,
+  afterOrdinal: number | null,
+  limit: number,
+): Promise<ComplianceMatrixPage> {
+  const command: InspectComplianceMatrixCommand = {
+    tender_id: tenderId,
+    package_id: packageId,
+    version,
+    after_ordinal: afterOrdinal,
+    limit,
+  };
+  return invoke<ComplianceMatrixPage>("inspect_compliance_matrix", { command });
+}
+
+export function inspectBidDecisionPackageRecords(
+  tenderId: string,
+  packageId: string,
+  version: number,
+  category: BidDecisionPackageRecordCategory,
+  afterOrdinal: number | null,
+  limit: number,
+): Promise<BidDecisionPackageRecordPage> {
+  const command: InspectBidDecisionPackageRecordsCommand = {
+    tender_id: tenderId,
+    package_id: packageId,
+    version,
+    category,
+    after_ordinal: afterOrdinal,
+    limit,
+  };
+  return invoke<BidDecisionPackageRecordPage>(
+    "inspect_bid_decision_package_records",
+    { command },
+  );
+}
+
+export function runBidDecisionPackageReview(
+  tenderId: string,
+  packageId: string,
+  version: number,
+): Promise<BidDecisionPackageReviewResult> {
+  const command: RunBidDecisionPackageReviewCommand = {
+    tender_id: tenderId,
+    package_id: packageId,
+    version,
+  };
+  return invoke<BidDecisionPackageReviewResult>(
+    "run_bid_decision_package_review",
+    { command },
+  );
 }
 
 export function inspectAgentRuns(

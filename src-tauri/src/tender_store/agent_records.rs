@@ -21,6 +21,11 @@ use crate::agent_runtime::{
     ThreadExposureSet, VerificationStatus,
 };
 
+use super::bid_decisions::{
+    bid_decision_package_review_target_is_current, bid_decision_package_review_target_is_open,
+    publish_bid_decision_package_review, BidDecisionPackageReviewCandidate,
+    BID_PACKAGE_REVIEW_CAPABILITY,
+};
 use super::tender_records::{
     publish_tender_record_candidates, publish_tender_record_review,
     tender_record_review_target_is_open, TenderRecordCandidateBatch, TenderRecordReviewCandidate,
@@ -42,7 +47,7 @@ fn profile_supports_linked_retry(profile: &AgentProfileVersionView) -> bool {
     !profile.capabilities.iter().any(|capability| {
         matches!(
             capability.as_str(),
-            RECORD_EXTRACTION_CAPABILITY | RECORD_REVIEW_CAPABILITY
+            RECORD_EXTRACTION_CAPABILITY | RECORD_REVIEW_CAPABILITY | BID_PACKAGE_REVIEW_CAPABILITY
         )
     })
 }
@@ -378,6 +383,7 @@ impl TenderStore {
         }
         let mut tender_record_candidate: Option<TenderRecordCandidateBatch> = None;
         let mut tender_record_review: Option<TenderRecordReviewCandidate> = None;
+        let mut bid_package_review: Option<BidDecisionPackageReviewCandidate> = None;
         if execution.state == AgentRunState::Completed
             && prepared
                 .profile
@@ -409,6 +415,43 @@ impl TenderStore {
                     {
                         event.summary =
                             "Candidate Tender Records failed provenance validation".into();
+                    }
+                }
+            }
+        }
+        if execution.state == AgentRunState::Completed
+            && prepared
+                .profile
+                .capabilities
+                .iter()
+                .any(|capability| capability == BID_PACKAGE_REVIEW_CAPABILITY)
+        {
+            let validation = execution
+                .candidate_payload_json
+                .as_deref()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                .and_then(|payload| {
+                    self.validate_bid_decision_package_review_candidate(&prepared.task, payload)
+                });
+            match validation {
+                Ok(candidate) => bid_package_review = Some(candidate),
+                Err(_) => {
+                    execution.state = AgentRunState::Failed;
+                    execution.failure = Some(ProviderFailure::new(
+                        ProviderFailureCategory::OutputInvalid,
+                        true,
+                        "Review the exact Bid Decision Package again with attributable bounded findings.",
+                        Some("The independent Bid Decision Package review failed Quantix validation."),
+                    ));
+                    execution.candidate_payload_json = None;
+                    if let Some(event) = execution
+                        .events
+                        .iter_mut()
+                        .rev()
+                        .find(|event| event.kind == ProviderEventKind::Terminal)
+                    {
+                        event.summary =
+                            "Independent Bid Decision Package review failed validation".into();
                     }
                 }
             }
@@ -455,6 +498,30 @@ impl TenderStore {
                 }
             }
         }
+        if execution.state == AgentRunState::Completed
+            && bid_package_review.is_some()
+            && !bid_decision_package_review_target_is_current(self, &prepared.task)?
+        {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Inspect and review the current exact Bid Decision Package version.",
+                Some("The package evidence inventory changed before review publication."),
+            ));
+            execution.candidate_payload_json = None;
+            bid_package_review = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary =
+                    "Independent package review rejected because its evidence inventory is stale"
+                        .into();
+            }
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -477,6 +544,7 @@ impl TenderStore {
             execution.candidate_payload_json = None;
             tender_record_candidate = None;
             tender_record_review = None;
+            bid_package_review = None;
             if let Some(event) = execution
                 .events
                 .iter_mut()
@@ -507,6 +575,29 @@ impl TenderStore {
             {
                 event.summary =
                     "Independent review rejected because its exact target is no longer open".into();
+            }
+        }
+        if execution.state == AgentRunState::Completed
+            && bid_package_review.is_some()
+            && !bid_decision_package_review_target_is_open(&transaction, &prepared.task)?
+        {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Inspect the current exact Bid Decision Package and its existing review or decision.",
+                Some("The package was superseded, reviewed, or decided before review publication."),
+            ));
+            execution.candidate_payload_json = None;
+            bid_package_review = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary =
+                    "Independent package review rejected because its exact target is no longer open".into();
             }
         }
         dispose_workspace(
@@ -546,6 +637,7 @@ impl TenderStore {
             execution.candidate_payload_json = None;
             tender_record_candidate = None;
             tender_record_review = None;
+            bid_package_review = None;
             if let Some(event) = execution
                 .events
                 .iter_mut()
@@ -669,6 +761,20 @@ impl TenderStore {
                 return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
             }
             publish_tender_record_review(
+                &transaction,
+                tender_id,
+                tender_revision,
+                &prepared.run_id,
+                &prepared.task,
+                candidate,
+                &completed_at,
+            )?;
+        }
+        if let Some(candidate) = bid_package_review.as_ref() {
+            if result_id.is_none() {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            publish_bid_decision_package_review(
                 &transaction,
                 tender_id,
                 tender_revision,
@@ -1826,7 +1932,7 @@ impl TenderStore {
         self.inspect_agent_run_with_check(run_id, &mut || Ok(()))
     }
 
-    fn inspect_agent_run_with_check(
+    pub(crate) fn inspect_agent_run_with_check(
         &self,
         run_id: &str,
         check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
