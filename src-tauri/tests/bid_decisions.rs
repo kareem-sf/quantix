@@ -5,13 +5,15 @@ use sha2::{Digest, Sha256};
 
 use quantix_lib::{
     ensure_quantix_setup, ActivateTenderProductionCommand, AgentProfileStatus,
-    AgentRunRecoveryDisposition, AgentRunState, BidDecisionApprovalDecision,
-    BidDecisionPackageInspection, BidDecisionPackageReviewOutcome, BidRecommendationOutcome,
-    ComplianceDisposition, ComplianceDispositionUpdate, ComposeTenderOfficeCommand,
-    CreateBidDecisionPackageCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
-    DecideBidDecisionPackageCommand, DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
-    DeviceProtection, ImportTenderPackageCommand, InspectBidDecisionApprovalHistoryCommand,
-    InvalidateBidDecisionApprovalCommand, ManagerCapabilityDemandInput, ParseSourceArtifactCommand,
+    AgentRunRecoveryDisposition, AgentRunState, ApproveProductionFindingExceptionCommand,
+    BidDecisionApprovalDecision, BidDecisionPackageInspection, BidDecisionPackageReviewOutcome,
+    BidRecommendationOutcome, ComplianceDisposition, ComplianceDispositionUpdate,
+    ComposeTenderOfficeCommand, CreateBidDecisionPackageCommand, CreateTenderCommand,
+    CreateTenderEngineerEntryCommand, DecideBidDecisionPackageCommand, DecideTenderRecordCommand,
+    DecideWorkPlanProposalCommand, DeviceProtection, ImportTenderPackageCommand,
+    InspectBidDecisionApprovalHistoryCommand, InspectProductionTaskReviewCommand,
+    InvalidateBidDecisionApprovalCommand, MajorFindingPolicy, ManagerCapabilityDemandInput,
+    ParseSourceArtifactCommand, ProductionFindingDispositionKind, ProductionFindingSeverity,
     ProductionTaskState, ProviderFailureCategory, QuantixHost,
     ResolveBidDecisionReturnReworkCommand, ResolveIndeterminateAgentRunCommand,
     ReviseTenderCommand, ReviseWorkPlanProposalCommand, RunBidDecisionPackageReviewCommand,
@@ -1269,7 +1271,7 @@ async fn active_production_materializes_only_the_exact_approved_plan_and_ready_f
     assert!(production.tasks.iter().all(|task| {
         task.plan_manifest_sha256 == approved.manifest_sha256
             && task.run_ids.is_empty()
-            && task.registered_outputs.is_empty()
+            && task.artifact_version_count == 0
     }));
     assert!(harness
         .host
@@ -1391,8 +1393,11 @@ async fn coordinator_runs_only_ready_tasks_and_handoffs_registered_outputs() {
             fs::read_to_string(harness.codex.with_extension("fixture-error"))
                 .unwrap_or_else(|_| "none".into())
         );
-        assert_eq!(completed.task.state, ProductionTaskState::Completed);
-        assert_eq!(completed.task.registered_outputs.len(), 1);
+        assert_eq!(
+            completed.task.state,
+            ProductionTaskState::ReadyForIntegration
+        );
+        assert_eq!(completed.task.artifact_version_count, 1);
         production = harness
             .host
             .inspect_tender_production(&harness.tender_id)
@@ -1424,10 +1429,12 @@ async fn coordinator_runs_only_ready_tasks_and_handoffs_registered_outputs() {
             .await
             .expect("independently review exact ready target output");
     }
-    assert_eq!(completed.task.state, ProductionTaskState::Completed);
+    assert_eq!(
+        completed.task.state,
+        ProductionTaskState::ReadyForIntegration
+    );
     assert!(author_exact_inputs.iter().any(|input| {
-        input.kind == "production_task_output"
-            && target.task.dependencies.contains(&input.reference)
+        input.kind == "production_artifact_version" && !target.task.dependencies.is_empty()
     }));
 }
 
@@ -1463,19 +1470,16 @@ async fn coordinator_automatically_schedules_author_and_independent_review_turns
         completed
             .tasks
             .iter()
-            .all(|task| task.state == ProductionTaskState::Completed),
+            .all(|task| task.state == ProductionTaskState::ReadyForIntegration),
         "{completed:#?}"
     );
     assert!(completed.tasks.iter().all(|task| {
-        task.registered_outputs.len() == 1
-            && task.task.review_profile_id.as_ref().map_or_else(
-                || task.run_ids.len() == 1,
-                |_| {
-                    task.run_ids.len() == 2
-                        && task.registered_outputs[0].run_id
-                            != task.registered_outputs[0].reviewer_run_id
-                },
-            )
+        task.artifact_version_count == 1
+            && task
+                .task
+                .review_profile_id
+                .as_ref()
+                .map_or_else(|| task.run_ids.len() == 1, |_| task.run_ids.len() == 2)
     }));
     harness
         .host
@@ -1493,17 +1497,19 @@ async fn coordinator_automatically_schedules_author_and_independent_review_turns
 }
 
 #[tokio::test]
-async fn unsupported_review_outcomes_fail_without_output_and_can_retry() {
+async fn critical_finding_requires_immutable_author_remediation_and_a_new_exact_review() {
     let harness = Harness::new("record-extraction");
     let (_, production) = active_production(&harness).await;
     let task = production
         .tasks
         .iter()
         .find(|task| {
-            task.state == ProductionTaskState::Ready && task.task.review_profile_id.is_some()
+            task.state == ProductionTaskState::Ready
+                && task.task.review_profile_id.is_some()
+                && task.task.major_finding_policy == MajorFindingPolicy::EngineerExceptionAllowed
         })
-        .expect("review-bearing ready task");
-    harness.set_agent_scenario("production-task-review-rework");
+        .expect("exception-permitted review-bearing task");
+    harness.set_agent_scenario("production-task-review-critical");
 
     let authored = harness
         .host
@@ -1514,42 +1520,979 @@ async fn unsupported_review_outcomes_fail_without_output_and_can_retry() {
         .await
         .expect("author exact production candidate");
     assert_eq!(authored.task.state, ProductionTaskState::ReviewReady);
-    let result = harness
+    let reviewed = harness
         .host
         .run_production_task(RunProductionTaskCommand {
             tender_id: harness.tender_id.clone(),
             production_task_id: task.production_task_id.clone(),
         })
         .await
-        .expect("reject an unsupported review outcome without publishing output");
+        .expect("publish the attributable critical review finding");
 
-    assert_eq!(result.run.state, AgentRunState::Failed);
-    assert_eq!(result.task.state, ProductionTaskState::Failed);
-    assert_eq!(result.task.run_ids.len(), 2);
-    assert!(result.task.registered_outputs.is_empty());
-    assert!(result
+    assert_eq!(reviewed.run.state, AgentRunState::Completed);
+    assert_eq!(reviewed.task.state, ProductionTaskState::RemediationReady);
+    assert_eq!(reviewed.task.run_ids.len(), 2);
+    assert_eq!(reviewed.task.artifact_version_count, 1);
+    assert_eq!(reviewed.task.review_count, 1);
+    assert_eq!(reviewed.task.open_blocking_finding_count, 1);
+    let first = harness
+        .host
+        .inspect_production_task_review(InspectProductionTaskReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .expect("inspect exact critical review");
+    assert_eq!(first.artifact_versions.len(), 1);
+    assert_eq!(first.reviews.len(), 1);
+    assert_eq!(first.reviews[0].target_version, 1);
+    assert_eq!(first.reviews[0].findings.len(), 1);
+    assert_eq!(
+        first.reviews[0].findings[0].severity,
+        ProductionFindingSeverity::Critical
+    );
+    assert!(first.reviews[0].findings[0].disposition.is_none());
+    assert!(first.readiness.is_none());
+    assert_ne!(
+        authored.run.profile.profile_id,
+        reviewed.run.profile.profile_id
+    );
+    assert_ne!(
+        authored.run.provider_thread_ref,
+        reviewed.run.provider_thread_ref
+    );
+    assert_ne!(
+        authored.run.permission_grant.workspace.workspace_id,
+        reviewed.run.permission_grant.workspace.workspace_id
+    );
+    let audit_before_denial = harness
+        .host
+        .open_tender(&harness.tender_id)
+        .expect("inspect audit before nonwaivable denial")
+        .audit_event_count;
+    assert_eq!(
+        harness
+            .host
+            .approve_production_finding_exception(ApproveProductionFindingExceptionCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: task.production_task_id.clone(),
+                finding_id: first.reviews[0].findings[0].finding_id.clone(),
+                review_id: first.reviews[0].review_id.clone(),
+                artifact_id: first.artifact_versions[0].summary.artifact_id.clone(),
+                artifact_version: 1,
+                payload_sha256: first.artifact_versions[0].summary.payload_sha256.clone(),
+                rationale: "A Critical finding must never be waived.".into(),
+                consequence: "The unsafe candidate would reach integration.".into(),
+            })
+            .expect_err("Critical finding is nonwaivable")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect audited nonwaivable denial")
+            .audit_event_count,
+        audit_before_denial + 1
+    );
+
+    harness.set_agent_scenario("production-task");
+    let remediated = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .await
+        .expect("author a new immutable remediation Artifact Version");
+    assert_eq!(remediated.run.state, AgentRunState::Completed);
+    assert_eq!(remediated.task.state, ProductionTaskState::ReviewReady);
+    assert_eq!(remediated.task.artifact_version_count, 2);
+    assert!(remediated.run.retry_of_run_id.is_none());
+    let integrated = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .await
+        .expect("independently review the new exact Artifact Version");
+    assert_eq!(
+        integrated.task.state,
+        ProductionTaskState::ReadyForIntegration
+    );
+    let detail = harness
+        .host
+        .inspect_production_task_review(InspectProductionTaskReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .expect("inspect immutable remediation and review lineage");
+    assert_eq!(detail.artifact_versions.len(), 2);
+    assert_eq!(detail.artifact_versions[1].summary.prior_version, Some(1));
+    assert_eq!(
+        detail.artifact_versions[1]
+            .summary
+            .remediation_review_id
+            .as_deref(),
+        Some(first.reviews[0].review_id.as_str())
+    );
+    assert_eq!(detail.reviews.len(), 2);
+    assert_eq!(detail.reviews[1].target_version, 2);
+    assert_eq!(
+        detail.reviews[0].findings[0]
+            .disposition
+            .as_ref()
+            .expect("verified remediation disposition")
+            .kind,
+        ProductionFindingDispositionKind::RemediationVerified
+    );
+    assert_eq!(
+        detail
+            .readiness
+            .as_ref()
+            .expect("exact integration readiness")
+            .artifact_version,
+        2
+    );
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close remediated production");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify immutable review and remediation lineage");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+}
+
+#[tokio::test]
+async fn major_finding_requires_an_exact_attributable_exception_before_integration() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let task = production
+        .tasks
+        .iter()
+        .find(|task| {
+            task.state == ProductionTaskState::Ready
+                && task.task.review_profile_id.is_some()
+                && task.task.major_finding_policy == MajorFindingPolicy::EngineerExceptionAllowed
+        })
+        .expect("exception-permitted review-bearing task");
+    harness.set_agent_scenario("production-task-review-major");
+    harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .await
+        .expect("author exact candidate");
+    let reviewed = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .await
+        .expect("publish exact Major finding");
+    assert_eq!(reviewed.task.state, ProductionTaskState::RemediationReady);
+    let detail = harness
+        .host
+        .inspect_production_task_review(InspectProductionTaskReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .expect("inspect Major finding");
+    let finding = &detail.reviews[0].findings[0];
+    assert_eq!(finding.severity, ProductionFindingSeverity::Major);
+    let accepted = harness
+        .host
+        .approve_production_finding_exception(ApproveProductionFindingExceptionCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+            finding_id: finding.finding_id.clone(),
+            review_id: detail.reviews[0].review_id.clone(),
+            artifact_id: detail.artifact_versions[0].summary.artifact_id.clone(),
+            artifact_version: 1,
+            payload_sha256: detail.artifact_versions[0].summary.payload_sha256.clone(),
+            rationale: "The exact Major consequence is accepted under production review policy."
+                .into(),
+            consequence: "Integration proceeds with the disclosed Major limitation.".into(),
+        })
+        .expect("approve exact policy-permitted Major exception");
+    assert!(accepted.readiness.is_some());
+    assert_eq!(
+        accepted.reviews[0].findings[0]
+            .disposition
+            .as_ref()
+            .expect("Major exception disposition")
+            .kind,
+        ProductionFindingDispositionKind::ExceptionApproved
+    );
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_production(&harness.tender_id)
+            .expect("inspect exception-ready production")
+            .expect("production")
+            .tasks
+            .iter()
+            .find(|candidate| candidate.production_task_id == task.production_task_id)
+            .expect("task")
+            .state,
+        ProductionTaskState::ReadyForIntegration
+    );
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close exception-ready Tender before tamper fixture");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold-verify exact exception disposition")
+            .state,
+        TenderIntegrityState::Ready
+    );
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close verified Tender before tamper fixture");
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open Tender Store");
+    connection
+        .execute_batch("DROP TRIGGER production_finding_dispositions_no_update")
+        .expect("enable disposition tamper fixture");
+    connection
+        .execute(
+            "UPDATE production_finding_dispositions
+             SET rationale = 'Selectively altered exception rationale.'
+             WHERE finding_id = ?1",
+            [&finding.finding_id],
+        )
+        .expect("tamper exact exception rationale");
+    drop(connection);
+    let cold_host =
+        QuantixHost::with_setup_platform(&harness.application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&cold_host).state, SetupState::Ready);
+    assert_eq!(
+        cold_host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("inspect tampered exact disposition")
+            .state,
+        TenderIntegrityState::RecoveryRequired
+    );
+}
+
+#[tokio::test]
+async fn major_exceptions_in_any_order_bind_readiness_to_the_latest_reviewed_artifact() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let task = production
+        .tasks
+        .iter()
+        .find(|task| {
+            task.state == ProductionTaskState::Ready
+                && task.task.review_profile_id.is_some()
+                && task.task.major_finding_policy == MajorFindingPolicy::EngineerExceptionAllowed
+        })
+        .expect("exception-permitted review-bearing task");
+    harness.set_agent_scenario("production-task-review-major");
+    for expected in [
+        ProductionTaskState::ReviewReady,
+        ProductionTaskState::RemediationReady,
+        ProductionTaskState::ReviewReady,
+        ProductionTaskState::RemediationReady,
+    ] {
+        let result = harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: task.production_task_id.clone(),
+            })
+            .await
+            .expect("advance two exact author/review rounds");
+        assert_eq!(result.task.state, expected);
+    }
+    let detail = harness
+        .host
+        .inspect_production_task_review(InspectProductionTaskReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .expect("inspect two exact Major reviews");
+    assert_eq!(detail.artifact_versions.len(), 2);
+    assert_eq!(detail.reviews.len(), 2);
+    assert_eq!(detail.reviews[0].findings.len(), 1);
+    assert_eq!(detail.reviews[1].findings.len(), 1);
+
+    let approve = |review: &quantix_lib::ProductionReview,
+                   artifact: &quantix_lib::ProductionArtifactVersion| {
+        harness.host.approve_production_finding_exception(
+            ApproveProductionFindingExceptionCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: task.production_task_id.clone(),
+                finding_id: review.findings[0].finding_id.clone(),
+                review_id: review.review_id.clone(),
+                artifact_id: artifact.summary.artifact_id.clone(),
+                artifact_version: artifact.summary.version,
+                payload_sha256: artifact.summary.payload_sha256.clone(),
+                rationale: "Accept the exact policy-permitted Major limitation.".into(),
+                consequence: "Integration retains the attributable limitation.".into(),
+            },
+        )
+    };
+    let first_approval = approve(&detail.reviews[1], &detail.artifact_versions[1])
+        .expect("approve the newest Major finding first");
+    assert!(first_approval.readiness.is_none());
+    let ready = approve(&detail.reviews[0], &detail.artifact_versions[0])
+        .expect("approve the remaining older Major finding");
+    let readiness = ready.readiness.expect("latest exact readiness");
+    assert_eq!(readiness.artifact_version, 2);
+    assert_eq!(
+        readiness.review_id.as_deref(),
+        Some(detail.reviews[1].review_id.as_str())
+    );
+}
+
+#[tokio::test]
+async fn remediation_only_review_policy_denies_a_major_exception() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let task = production
+        .tasks
+        .iter()
+        .find(|task| {
+            task.state == ProductionTaskState::Ready
+                && task.task.review_profile_id.is_some()
+                && task.task.major_finding_policy == MajorFindingPolicy::RemediationRequired
+        })
+        .expect("remediation-only review-bearing task");
+    harness.set_agent_scenario("production-task-review-major");
+    harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .await
+        .expect("author exact candidate");
+    harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .await
+        .expect("publish exact Major finding");
+    let detail = harness
+        .host
+        .inspect_production_task_review(InspectProductionTaskReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .expect("inspect remediation-only Major finding");
+    let review = &detail.reviews[0];
+    assert!(!review
+        .criteria
+        .iter()
+        .any(|criterion| criterion == "major_exception_requires_engineer_approval"));
+    let finding = &review.findings[0];
+    let artifact = &detail.artifact_versions[0];
+    assert_eq!(
+        harness
+            .host
+            .approve_production_finding_exception(ApproveProductionFindingExceptionCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: task.production_task_id.clone(),
+                finding_id: finding.finding_id.clone(),
+                review_id: review.review_id.clone(),
+                artifact_id: artifact.summary.artifact_id.clone(),
+                artifact_version: artifact.summary.version,
+                payload_sha256: artifact.summary.payload_sha256.clone(),
+                rationale: "Attempt a forbidden policy exception.".into(),
+                consequence: "The remediation-only policy would be bypassed.".into(),
+            })
+            .expect_err("remediation-only policy denies Major exception")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    assert!(harness
+        .host
+        .inspect_production_task_review(InspectProductionTaskReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .expect("inspect retained blocker")
+        .readiness
+        .is_none());
+
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(&database).expect("open Tender Store fixture");
+    let review_trigger: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema
+             WHERE type = 'trigger' AND name = 'production_reviews_no_update'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("load exact Review immutability trigger");
+    let task_trigger: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema
+             WHERE type = 'trigger' AND name = 'production_tasks_definition_immutable'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("load exact Production Task immutability trigger");
+    let (original_task_json, original_task_sha256): (String, String) = connection
+        .query_row(
+            "SELECT task_definition_json, task_definition_sha256
+             FROM production_tasks WHERE production_task_id = ?1",
+            [&task.production_task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load exact remediation-only task definition");
+    connection
+        .execute_batch(
+            "DROP TRIGGER production_reviews_no_update;
+             DROP TRIGGER production_tasks_definition_immutable;",
+        )
+        .expect("enable forbidden exception fixture");
+    let original_criteria_json =
+        serde_json::to_string(&review.criteria).expect("serialize original Review criteria");
+    let mut forged_criteria = review.criteria.clone();
+    forged_criteria.push("major_exception_requires_engineer_approval".into());
+    connection
+        .execute(
+            "UPDATE production_reviews SET criteria_json = ?1 WHERE review_id = ?2",
+            rusqlite::params![
+                serde_json::to_string(&forged_criteria).expect("serialize forged Review criteria"),
+                review.review_id,
+            ],
+        )
+        .expect("forge transient exception criterion");
+    let mut forged_task: Value =
+        serde_json::from_str(&original_task_json).expect("parse exact Production Task");
+    forged_task["major_finding_policy"] = Value::String("engineer_exception_allowed".into());
+    let forged_task_json =
+        serde_json::to_string(&forged_task).expect("serialize forged Production Task");
+    let forged_task_sha256 = Sha256::digest(forged_task_json.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    connection
+        .execute(
+            "UPDATE production_tasks
+             SET task_definition_json = ?1, task_definition_sha256 = ?2
+             WHERE production_task_id = ?3",
+            rusqlite::params![
+                forged_task_json,
+                forged_task_sha256,
+                task.production_task_id,
+            ],
+        )
+        .expect("forge transient exception-permitted task policy");
+    connection
+        .execute_batch(&review_trigger)
+        .expect("restore exact Review immutability trigger");
+    connection
+        .execute_batch(&task_trigger)
+        .expect("restore exact Production Task immutability trigger");
+    drop(connection);
+
+    harness
+        .host
+        .approve_production_finding_exception(ApproveProductionFindingExceptionCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+            finding_id: finding.finding_id.clone(),
+            review_id: review.review_id.clone(),
+            artifact_id: artifact.summary.artifact_id.clone(),
+            artifact_version: artifact.summary.version,
+            payload_sha256: artifact.summary.payload_sha256.clone(),
+            rationale: "Corruption fixture temporarily forges the exception criterion.".into(),
+            consequence: "Cold integrity must reject this policy-forbidden exception.".into(),
+        })
+        .expect("publish exact forbidden-exception corruption fixture");
+
+    let connection = rusqlite::Connection::open(&database).expect("reopen Tender Store fixture");
+    connection
+        .execute_batch(
+            "DROP TRIGGER production_reviews_no_update;
+             DROP TRIGGER production_tasks_definition_immutable;",
+        )
+        .expect("restore canonical remediation-only criteria");
+    connection
+        .execute(
+            "UPDATE production_reviews SET criteria_json = ?1 WHERE review_id = ?2",
+            rusqlite::params![original_criteria_json, review.review_id],
+        )
+        .expect("restore exact approved Review criteria");
+    connection
+        .execute(
+            "UPDATE production_tasks
+             SET task_definition_json = ?1, task_definition_sha256 = ?2
+             WHERE production_task_id = ?3",
+            rusqlite::params![
+                original_task_json,
+                original_task_sha256,
+                task.production_task_id,
+            ],
+        )
+        .expect("restore exact approved remediation-only task policy");
+    connection
+        .execute_batch(&review_trigger)
+        .expect("restore exact Review immutability trigger again");
+    connection
+        .execute_batch(&task_trigger)
+        .expect("restore exact Production Task immutability trigger again");
+    drop(connection);
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close policy-forbidden exception fixture");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold-reject policy-forbidden Major exception")
+            .state,
+        TenderIntegrityState::RecoveryRequired
+    );
+}
+
+#[tokio::test]
+async fn attempt_exhaustion_terminalizes_an_unresolved_critical_remediation_chain() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let task = production
+        .tasks
+        .iter()
+        .find(|task| {
+            task.state == ProductionTaskState::Ready && task.task.review_profile_id.is_some()
+        })
+        .expect("review-bearing ready task");
+    harness.set_agent_scenario("production-task-review-critical-repeat");
+    for expected in [
+        ProductionTaskState::ReviewReady,
+        ProductionTaskState::RemediationReady,
+        ProductionTaskState::ReviewReady,
+        ProductionTaskState::RemediationReady,
+        ProductionTaskState::ReviewReady,
+        ProductionTaskState::RemediationReady,
+        ProductionTaskState::ReviewReady,
+        ProductionTaskState::RemediationReady,
+    ] {
+        let result = harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: task.production_task_id.clone(),
+            })
+            .await
+            .expect("advance bounded critical remediation chain");
+        assert_eq!(result.task.state, expected);
+    }
+    assert_eq!(
+        harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: task.production_task_id.clone(),
+            })
+            .await
+            .expect_err("attempt nine is denied and terminalized")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let exhausted = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect exhausted task")
+        .expect("production")
+        .tasks
+        .into_iter()
+        .find(|candidate| candidate.production_task_id == task.production_task_id)
+        .expect("exhausted task");
+    assert_eq!(exhausted.state, ProductionTaskState::AttemptLimitReached);
+    assert_eq!(exhausted.run_ids.len(), 8);
+    assert!(exhausted.open_blocking_finding_count > 0);
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close attempt-limited production");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold-verify attributable attempt exhaustion")
+            .state,
+        TenderIntegrityState::Ready
+    );
+}
+
+#[tokio::test]
+async fn linked_retry_returns_its_committed_attempt_when_follow_up_hits_the_limit() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let task = production
+        .tasks
+        .iter()
+        .find(|task| {
+            task.state == ProductionTaskState::Ready && task.task.review_profile_id.is_some()
+        })
+        .expect("review-bearing ready task");
+    harness.set_agent_scenario("production-task-review-critical-repeat");
+    for expected in [
+        ProductionTaskState::ReviewReady,
+        ProductionTaskState::RemediationReady,
+        ProductionTaskState::ReviewReady,
+        ProductionTaskState::RemediationReady,
+        ProductionTaskState::ReviewReady,
+        ProductionTaskState::RemediationReady,
+    ] {
+        let result = harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: task.production_task_id.clone(),
+            })
+            .await
+            .expect("advance six bounded production attempts");
+        assert_eq!(result.task.state, expected);
+    }
+
+    harness.set_agent_scenario("production-task-evidence-invalid");
+    let failed = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .await
+        .expect("terminalize retry-safe attempt seven");
+    assert_eq!(failed.task.state, ProductionTaskState::Failed);
+    assert!(failed
         .run
         .failure
         .as_ref()
         .is_some_and(|failure| failure.retry_safe));
 
-    harness.set_agent_scenario("production-task");
-    let retried = harness
+    harness.set_agent_scenario("production-task-review-critical-repeat");
+    let committed_retry = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: Some(failed.run.run_id.clone()),
+        })
+        .await
+        .expect("return committed linked retry despite terminal follow-up limit");
+    assert_eq!(committed_retry.state, AgentRunState::Completed);
+    assert_eq!(
+        committed_retry.retry_of_run_id.as_deref(),
+        Some(failed.run.run_id.as_str())
+    );
+    let exhausted = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect linked-retry exhaustion")
+        .expect("production")
+        .tasks
+        .into_iter()
+        .find(|candidate| candidate.production_task_id == task.production_task_id)
+        .expect("attempt-limited task");
+    assert_eq!(exhausted.state, ProductionTaskState::AttemptLimitReached);
+    assert_eq!(exhausted.run_ids.len(), 8);
+}
+
+#[tokio::test]
+async fn minor_findings_remain_disclosed_without_blocking_integration() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let task = production
+        .tasks
+        .iter()
+        .find(|task| {
+            task.state == ProductionTaskState::Ready && task.task.review_profile_id.is_some()
+        })
+        .expect("review-bearing ready task");
+    harness.set_agent_scenario("production-task-review-minor");
+    harness
         .host
         .run_production_task(RunProductionTaskCommand {
             tender_id: harness.tender_id.clone(),
             production_task_id: task.production_task_id.clone(),
         })
         .await
-        .expect("retry the exact failed reviewer turn");
-    assert_eq!(retried.run.state, AgentRunState::Completed);
-    assert_eq!(retried.task.state, ProductionTaskState::Completed);
-    assert_eq!(retried.task.run_ids.len(), 3);
-    assert_eq!(retried.task.registered_outputs.len(), 1);
+        .expect("author exact candidate");
+    let reviewed = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .await
+        .expect("publish satisfied review with disclosed Minor finding");
     assert_eq!(
-        retried.run.retry_of_run_id.as_deref(),
-        Some(result.run.run_id.as_str())
+        reviewed.task.state,
+        ProductionTaskState::ReadyForIntegration
     );
+    let detail = harness
+        .host
+        .inspect_production_task_review(InspectProductionTaskReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .expect("inspect disclosed Minor finding");
+    assert_eq!(
+        detail.reviews[0].findings[0].severity,
+        ProductionFindingSeverity::Minor
+    );
+    assert!(detail.reviews[0].findings[0].disposition.is_none());
+    assert!(detail.readiness.is_some());
+}
+
+#[tokio::test]
+async fn invalid_production_evidence_fails_terminally_without_publishing_an_artifact() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let task = production
+        .tasks
+        .iter()
+        .find(|task| {
+            task.state == ProductionTaskState::Ready && task.task.review_profile_id.is_some()
+        })
+        .expect("review-bearing ready task");
+    harness.set_agent_scenario("production-task-evidence-invalid");
+
+    let rejected = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .await
+        .expect("terminalize semantic Evidence rejection");
+    assert_eq!(rejected.run.state, AgentRunState::Failed);
+    assert_eq!(rejected.task.state, ProductionTaskState::Failed);
+    assert_eq!(rejected.task.artifact_version_count, 0);
+    let failure = rejected.run.failure.as_ref().expect("attributable failure");
+    assert_eq!(failure.category, ProviderFailureCategory::OutputInvalid);
+    assert!(failure.retry_safe);
+
+    harness.set_agent_scenario("production-task");
+    let corrected = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .await
+        .expect("retry the exact failed author attempt");
+    assert_eq!(corrected.run.state, AgentRunState::Completed);
+    assert_eq!(corrected.task.state, ProductionTaskState::ReviewReady);
+    assert_eq!(corrected.task.artifact_version_count, 1);
+    assert_eq!(
+        corrected.run.retry_of_run_id.as_deref(),
+        Some(rejected.run.run_id.as_str())
+    );
+}
+
+#[tokio::test]
+async fn a_review_cannot_publish_after_its_exact_target_version_changes() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let task = production
+        .tasks
+        .iter()
+        .find(|task| {
+            task.state == ProductionTaskState::Ready && task.task.review_profile_id.is_some()
+        })
+        .expect("review-bearing ready task")
+        .clone();
+    harness.set_agent_scenario("production-task");
+    harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: task.production_task_id.clone(),
+        })
+        .await
+        .expect("author exact Artifact Version 1");
+
+    harness.set_agent_scenario("production-task-delayed-review");
+    let review_host = harness.host.clone();
+    let review_tender_id = harness.tender_id.clone();
+    let review_task_id = task.production_task_id.clone();
+    let reviewing = tokio::spawn(async move {
+        review_host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: review_tender_id,
+                production_task_id: review_task_id,
+            })
+            .await
+    });
+    wait_for_fixture_path(&harness.codex.with_extension("production-review-waiting")).await;
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open active Tender Store");
+    connection
+        .execute_batch("DROP TRIGGER production_artifact_versions_no_update")
+        .expect("enable exact target corruption fixture");
+    connection
+        .execute(
+            "UPDATE production_artifact_versions SET version = 2
+             WHERE production_task_id = ?1 AND version = 1",
+            [&task.production_task_id],
+        )
+        .expect("change exact target version while review is running");
+    drop(connection);
+    fs::write(
+        harness.codex.with_extension("production-review-release"),
+        b"release",
+    )
+    .expect("release exact review response");
+
+    let rejected = reviewing
+        .await
+        .expect("join review")
+        .expect("terminalize changed-target review");
+    assert_eq!(rejected.run.state, AgentRunState::Failed);
+    assert_eq!(rejected.task.state, ProductionTaskState::Failed);
+    assert_eq!(rejected.task.review_count, 0);
+    assert!(!rejected.task.ready_for_integration);
+    assert_eq!(
+        rejected
+            .run
+            .failure
+            .as_ref()
+            .map(|failure| failure.category),
+        Some(ProviderFailureCategory::OutputInvalid)
+    );
+}
+
+#[tokio::test]
+async fn cold_integrity_rejects_self_review_and_unqualified_review_attribution() {
+    for self_review in [true, false] {
+        let harness = Harness::new("record-extraction");
+        let (_, production) = active_production(&harness).await;
+        let task = production
+            .tasks
+            .iter()
+            .find(|task| {
+                task.state == ProductionTaskState::Ready && task.task.review_profile_id.is_some()
+            })
+            .expect("review-bearing ready task")
+            .clone();
+        harness.set_agent_scenario("production-task");
+        harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: task.production_task_id.clone(),
+            })
+            .await
+            .expect("author exact candidate");
+        harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: task.production_task_id.clone(),
+            })
+            .await
+            .expect("complete qualified independent review");
+        let review = harness
+            .host
+            .inspect_production_task_review(InspectProductionTaskReviewCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: task.production_task_id.clone(),
+            })
+            .expect("inspect exact review")
+            .reviews
+            .into_iter()
+            .next()
+            .expect("review");
+        let substitute = if self_review {
+            (task.task.profile_id.clone(), task.task.profile_version)
+        } else {
+            production
+                .tasks
+                .iter()
+                .map(|candidate| {
+                    (
+                        candidate.task.profile_id.clone(),
+                        candidate.task.profile_version,
+                    )
+                })
+                .find(|candidate| {
+                    candidate.0 != task.task.profile_id && candidate.0 != review.reviewer_profile_id
+                })
+                .expect("separate unqualified production profile")
+        };
+        harness
+            .host
+            .close_tender(&harness.tender_id)
+            .expect("close reviewed Tender before attribution corruption");
+        let database = harness
+            .application_home
+            .join("tenders")
+            .join(&harness.tender_id)
+            .join("tender.sqlite");
+        let connection = rusqlite::Connection::open(database).expect("open Tender Store");
+        let substitute_capabilities: Vec<String> = serde_json::from_str(
+            &connection
+                .query_row(
+                    "SELECT capabilities_json FROM agent_profile_versions
+                     WHERE profile_id = ?1 AND version = ?2",
+                    rusqlite::params![substitute.0, substitute.1],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("load substitute profile capabilities"),
+        )
+        .expect("parse substitute profile capabilities");
+        if !self_review {
+            assert!(!substitute_capabilities.contains(&review.capability));
+        }
+        connection
+            .execute_batch("DROP TRIGGER production_reviews_no_update")
+            .expect("enable review attribution corruption fixture");
+        connection
+            .execute(
+                "UPDATE production_reviews
+                 SET reviewer_profile_id = ?1, reviewer_profile_version = ?2
+                 WHERE review_id = ?3",
+                rusqlite::params![substitute.0, substitute.1, review.review_id],
+            )
+            .expect("substitute forbidden reviewer attribution");
+        drop(connection);
+
+        let integrity = harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold inspect forbidden reviewer attribution");
+        assert_eq!(
+            integrity.state,
+            TenderIntegrityState::RecoveryRequired,
+            "self_review={self_review}: {integrity:#?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1698,7 +2641,7 @@ async fn production_cancellation_and_output_budget_failure_are_terminal_without_
         .expect("terminal cancelled run");
     assert_eq!(cancelled.run.state, AgentRunState::Interrupted);
     assert_eq!(cancelled.task.state, ProductionTaskState::Cancelled);
-    assert!(cancelled.task.registered_outputs.is_empty());
+    assert_eq!(cancelled.task.artifact_version_count, 0);
     harness.set_agent_scenario("production-task");
     let cancelled_retry_author = harness
         .host
@@ -1721,7 +2664,10 @@ async fn production_cancellation_and_output_budget_failure_are_terminal_without_
         .await
         .expect("independently review the linked retry output");
     assert_eq!(cancelled_retry.run.state, AgentRunState::Completed);
-    assert_eq!(cancelled_retry.task.state, ProductionTaskState::Completed);
+    assert_eq!(
+        cancelled_retry.task.state,
+        ProductionTaskState::ReadyForIntegration
+    );
     assert_eq!(cancelled_retry.task.run_ids.len(), 3);
     assert_eq!(
         cancelled_retry_author.run.retry_of_run_id.as_deref(),
@@ -1748,7 +2694,7 @@ async fn production_cancellation_and_output_budget_failure_are_terminal_without_
         .expect("terminalize output budget failure");
     assert_eq!(failed.run.state, AgentRunState::Failed);
     assert_eq!(failed.task.state, ProductionTaskState::Failed);
-    assert!(failed.task.registered_outputs.is_empty());
+    assert_eq!(failed.task.artifact_version_count, 0);
     assert_eq!(
         failed.run.failure.as_ref().map(|failure| failure.category),
         Some(ProviderFailureCategory::OutputInvalid)
@@ -1781,9 +2727,9 @@ async fn production_cancellation_and_output_budget_failure_are_terminal_without_
         .into_iter()
         .find(|task| task.production_task_id == failed.task.production_task_id)
         .expect("retried production task");
-    assert_eq!(retried.state, ProductionTaskState::Completed);
+    assert_eq!(retried.state, ProductionTaskState::ReadyForIntegration);
     assert_eq!(retried.run_ids.len(), 3);
-    assert_eq!(retried.registered_outputs.len(), 1);
+    assert_eq!(retried.artifact_version_count, 1);
     harness
         .host
         .close_tender(&harness.tender_id)
@@ -1850,7 +2796,7 @@ async fn restart_reconciles_an_accepted_production_turn_without_replaying_it() {
         .find(|task| task.production_task_id == ready.production_task_id)
         .expect("reconciled task");
     assert_eq!(reconciled.state, ProductionTaskState::Indeterminate);
-    assert!(reconciled.registered_outputs.is_empty());
+    assert_eq!(reconciled.artifact_version_count, 0);
     assert_eq!(
         reconciled.run_ids.len(),
         1,
@@ -2007,9 +2953,9 @@ async fn indeterminate_production_requires_an_engineer_disposition_before_linked
         .into_iter()
         .find(|task| task.production_task_id == ready.production_task_id)
         .expect("recovered task");
-    assert_eq!(recovered.state, ProductionTaskState::Completed);
+    assert_eq!(recovered.state, ProductionTaskState::ReadyForIntegration);
     assert_eq!(recovered.run_ids.len(), 3);
-    assert_eq!(recovered.registered_outputs.len(), 1);
+    assert_eq!(recovered.artifact_version_count, 1);
 }
 
 #[tokio::test]
@@ -2279,7 +3225,7 @@ async fn material_authority_change_requires_an_exact_approved_work_plan_amendmen
         .expect("prior activation")
         .tasks
         .iter()
-        .filter(|task| task.state != ProductionTaskState::Completed)
+        .filter(|task| task.state != ProductionTaskState::ReadyForIntegration)
         .all(|task| task.state == ProductionTaskState::Suspended));
     assert_eq!(
         harness
@@ -2844,7 +3790,7 @@ async fn material_change_invalidates_proceed_and_reopens_an_exact_successor_path
     assert!(!suspended_production.active);
     assert!(suspended_production.tasks.iter().all(|task| matches!(
         task.state,
-        ProductionTaskState::Completed
+        ProductionTaskState::ReadyForIntegration
             | ProductionTaskState::Indeterminate
             | ProductionTaskState::Suspended
     )));

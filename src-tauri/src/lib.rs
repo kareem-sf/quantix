@@ -43,40 +43,45 @@ pub use tender_intake::{
     SourceRelationshipKind, SupersessionState, TenderPackageImportResult, TenderPackageSourceKind,
 };
 pub use tender_store::{
-    ActivateTenderProductionCommand, BidDecisionApprovalDecision, BidDecisionApprovalHistoryPage,
-    BidDecisionApprovalInvalidation, BidDecisionApprovalInvalidationResult,
-    BidDecisionApprovalRecord, BidDecisionApprovalResult, BidDecisionGateBlocker,
-    BidDecisionPackageChangeSummary, BidDecisionPackageInspection, BidDecisionPackageRecordBinding,
-    BidDecisionPackageRecordCategory, BidDecisionPackageRecordPage, BidDecisionPackageReview,
-    BidDecisionPackageReviewFinding, BidDecisionPackageReviewOutcome,
-    BidDecisionPackageReviewResult, BidDecisionReturnReworkDisposition,
-    BidDecisionReturnReworkItem, BidDecisionReturnReworkResult, BidRecommendation,
-    BidRecommendationOutcome, CapabilityDemand, CapabilityDemandClassification,
+    ActivateTenderProductionCommand, ApproveProductionFindingExceptionCommand,
+    BidDecisionApprovalDecision, BidDecisionApprovalHistoryPage, BidDecisionApprovalInvalidation,
+    BidDecisionApprovalInvalidationResult, BidDecisionApprovalRecord, BidDecisionApprovalResult,
+    BidDecisionGateBlocker, BidDecisionPackageChangeSummary, BidDecisionPackageInspection,
+    BidDecisionPackageRecordBinding, BidDecisionPackageRecordCategory,
+    BidDecisionPackageRecordPage, BidDecisionPackageReview, BidDecisionPackageReviewFinding,
+    BidDecisionPackageReviewOutcome, BidDecisionPackageReviewResult,
+    BidDecisionReturnReworkDisposition, BidDecisionReturnReworkItem, BidDecisionReturnReworkResult,
+    BidRecommendation, BidRecommendationOutcome, CapabilityDemand, CapabilityDemandClassification,
     ComplianceDisposition, ComplianceDispositionUpdate, ComplianceMatrixPage, ComplianceMatrixRow,
     ComposeTenderOfficeCommand, ContentVersionSummary, CreateBidDecisionPackageCommand,
     CreateTenderBackupCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
     DecideBidDecisionPackageCommand, DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
     InspectBidDecisionApprovalHistoryCommand, InspectBidDecisionPackageRecordsCommand,
-    InspectComplianceMatrixCommand, InspectTenderRecordsCommand,
-    InvalidateBidDecisionApprovalCommand, ManagerCapabilityDemandInput, OpenTenderCommand,
-    PrepareTenderRecoveryCommand, ProductionTaskInspection, ProductionTaskOutput,
-    ProductionTaskRunResult, ProductionTaskState, RegisterTenderContentCommand,
-    ResolveBidDecisionReturnReworkCommand, ResolveTenderRecoveryCommand, ResourceImplication,
-    ReviewFindingSeverity, ReviseTenderCommand, ReviseWorkPlanProposalCommand,
-    RunBidDecisionPackageReviewCommand, RunProductionTaskCommand, RunTenderRecordExtractionCommand,
-    RunTenderRecordReviewCommand, StartupReconciliationReport, TenderBackupRecord,
-    TenderBackupState, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
-    TenderEvidenceReference, TenderInspection, TenderIntegrityIssue, TenderIntegrityReport,
-    TenderIntegrityState, TenderLifecyclePhase, TenderProductionInspection, TenderRecordAuthority,
-    TenderRecordAuthorityKind, TenderRecordAuthorityReference, TenderRecordBasisKind,
-    TenderRecordContradiction, TenderRecordDecisionResult, TenderRecordEngineerDecisionKind,
-    TenderRecordEvidence, TenderRecordExtractionResult, TenderRecordField, TenderRecordInspection,
-    TenderRecordKind, TenderRecordPage, TenderRecordReview, TenderRecordReviewOutcome,
-    TenderRecordReviewResult, TenderRecordSourceRelationship, TenderRecordTrustClass,
-    TenderRecordVersionReference, TenderRecoveryChoice, TenderRecoveryDecision,
-    TenderRecoveryDecisionRecord, TenderRecoveryRecord, TenderRecoveryState, TenderSummary,
-    WorkPlanApprovalRecord, WorkPlanCapabilityGap, WorkPlanDecision, WorkPlanProfileBinding,
-    WorkPlanProposalInspection, WorkPlanRevisionAction, WorkPlanTask, WorkPlanWorkstream,
+    InspectComplianceMatrixCommand, InspectProductionTaskReviewCommand,
+    InspectTenderRecordsCommand, InvalidateBidDecisionApprovalCommand, MajorFindingPolicy,
+    ManagerCapabilityDemandInput, OpenTenderCommand, PrepareTenderRecoveryCommand,
+    ProductionArtifactPayload, ProductionArtifactVersion, ProductionArtifactVersionSummary,
+    ProductionFindingDisposition, ProductionFindingDispositionKind, ProductionFindingSeverity,
+    ProductionIntegrationReadiness, ProductionRemediation, ProductionReview,
+    ProductionReviewFinding, ProductionReviewResult, ProductionTaskInspection,
+    ProductionTaskReviewInspection, ProductionTaskRunResult, ProductionTaskState,
+    RegisterTenderContentCommand, ResolveBidDecisionReturnReworkCommand,
+    ResolveTenderRecoveryCommand, ResourceImplication, ReviewFindingSeverity, ReviseTenderCommand,
+    ReviseWorkPlanProposalCommand, RunBidDecisionPackageReviewCommand, RunProductionTaskCommand,
+    RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, StartupReconciliationReport,
+    TenderBackupRecord, TenderBackupState, TenderCatalogueEntry, TenderCommandError,
+    TenderErrorCode, TenderEvidenceReference, TenderInspection, TenderIntegrityIssue,
+    TenderIntegrityReport, TenderIntegrityState, TenderLifecyclePhase, TenderProductionInspection,
+    TenderRecordAuthority, TenderRecordAuthorityKind, TenderRecordAuthorityReference,
+    TenderRecordBasisKind, TenderRecordContradiction, TenderRecordDecisionResult,
+    TenderRecordEngineerDecisionKind, TenderRecordEvidence, TenderRecordExtractionResult,
+    TenderRecordField, TenderRecordInspection, TenderRecordKind, TenderRecordPage,
+    TenderRecordReview, TenderRecordReviewOutcome, TenderRecordReviewResult,
+    TenderRecordSourceRelationship, TenderRecordTrustClass, TenderRecordVersionReference,
+    TenderRecoveryChoice, TenderRecoveryDecision, TenderRecoveryDecisionRecord,
+    TenderRecoveryRecord, TenderRecoveryState, TenderSummary, WorkPlanApprovalRecord,
+    WorkPlanCapabilityGap, WorkPlanDecision, WorkPlanProfileBinding, WorkPlanProposalInspection,
+    WorkPlanRevisionAction, WorkPlanTask, WorkPlanWorkstream,
 };
 
 use tauri::Manager;
@@ -85,7 +90,8 @@ mod tauri_commands {
     use super::{
         ensure_quantix_setup as ensure_setup, ActivateTenderProductionCommand,
         AgentAccessRequestView, AgentRunActivity, AgentRunHistoryPage, AgentRunInspection,
-        AgentRunRecoveryDecision, ApproveAgentAccessCommand, BidDecisionApprovalHistoryPage,
+        AgentRunRecoveryDecision, ApproveAgentAccessCommand,
+        ApproveProductionFindingExceptionCommand, BidDecisionApprovalHistoryPage,
         BidDecisionApprovalInvalidationResult, BidDecisionApprovalResult,
         BidDecisionPackageInspection, BidDecisionPackageRecordPage, BidDecisionPackageReviewResult,
         BidDecisionReturnReworkResult, ChooseTenderPackageCommand, ComplianceMatrixPage,
@@ -96,10 +102,11 @@ mod tauri_commands {
         DocumentRegister, EvidenceDocument, EvidenceSearchResult, ImportTenderPackageCommand,
         InspectAgentRunCommand, InspectAgentRunHistoryCommand,
         InspectBidDecisionApprovalHistoryCommand, InspectBidDecisionPackageRecordsCommand,
-        InspectComplianceMatrixCommand, InspectTenderRecordsCommand, InterruptAgentRunCommand,
+        InspectComplianceMatrixCommand, InspectProductionTaskReviewCommand,
+        InspectTenderRecordsCommand, InterruptAgentRunCommand,
         InvalidateBidDecisionApprovalCommand, OpenTenderCommand, ParseSourceArtifactCommand,
-        PrepareTenderRecoveryCommand, ProductionTaskRunResult, QuantixHost,
-        RequestAgentAccessCommand, ResolveAgentAccessCommand,
+        PrepareTenderRecoveryCommand, ProductionTaskReviewInspection, ProductionTaskRunResult,
+        QuantixHost, RequestAgentAccessCommand, ResolveAgentAccessCommand,
         ResolveBidDecisionReturnReworkCommand, ResolveIndeterminateAgentRunCommand,
         ResolveTenderRecoveryCommand, ReviseTenderCommand, ReviseWorkPlanProposalCommand,
         RunBidDecisionPackageReviewCommand, RunBootstrapAgentCommand, RunProductionTaskCommand,
@@ -603,6 +610,38 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn inspect_production_task_review(
+        host: tauri::State<'_, QuantixHost>,
+        command: InspectProductionTaskReviewCommand,
+    ) -> Result<ProductionTaskReviewInspection, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.inspect_production_task_review(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn approve_production_finding_exception(
+        host: tauri::State<'_, QuantixHost>,
+        command: ApproveProductionFindingExceptionCommand,
+    ) -> Result<ProductionTaskReviewInspection, TenderCommandError> {
+        let host = host.inner().clone();
+        let scheduler_host = host.clone();
+        let tender_id = command.tender_id.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            host.approve_production_finding_exception(command)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })??;
+        scheduler_host.start_production_scheduler(tender_id);
+        Ok(result)
+    }
+
+    #[tauri::command]
     pub(super) async fn decide_bid_decision_package(
         host: tauri::State<'_, QuantixHost>,
         command: DecideBidDecisionPackageCommand,
@@ -850,6 +889,8 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
         tauri_commands::activate_tender_production,
         tauri_commands::inspect_tender_production,
         tauri_commands::run_production_task,
+        tauri_commands::inspect_production_task_review,
+        tauri_commands::approve_production_finding_exception,
         tauri_commands::decide_bid_decision_package,
         tauri_commands::inspect_bid_decision_approval_history,
         tauri_commands::resolve_bid_decision_return_rework,

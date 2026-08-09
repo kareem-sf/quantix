@@ -61,14 +61,19 @@ pub use bid_decisions::{
     ReviewFindingSeverity, RunBidDecisionPackageReviewCommand, TenderRecordVersionReference,
 };
 pub use production_scheduler::{
-    ActivateTenderProductionCommand, ProductionTaskInspection, ProductionTaskOutput,
-    ProductionTaskRunResult, ProductionTaskState, RunProductionTaskCommand,
-    TenderProductionInspection,
+    ActivateTenderProductionCommand, ApproveProductionFindingExceptionCommand,
+    InspectProductionTaskReviewCommand, ProductionArtifactPayload, ProductionArtifactVersion,
+    ProductionArtifactVersionSummary, ProductionFindingDisposition,
+    ProductionFindingDispositionKind, ProductionFindingSeverity, ProductionIntegrationReadiness,
+    ProductionRemediation, ProductionReview, ProductionReviewFinding, ProductionReviewResult,
+    ProductionTaskInspection, ProductionTaskReviewInspection, ProductionTaskRunResult,
+    ProductionTaskState, RunProductionTaskCommand, TenderProductionInspection,
 };
 pub use team_composer::{
-    ComposeTenderOfficeCommand, DecideWorkPlanProposalCommand, ReviseWorkPlanProposalCommand,
-    WorkPlanApprovalRecord, WorkPlanCapabilityGap, WorkPlanDecision, WorkPlanProfileBinding,
-    WorkPlanProposalInspection, WorkPlanRevisionAction, WorkPlanTask, WorkPlanWorkstream,
+    ComposeTenderOfficeCommand, DecideWorkPlanProposalCommand, MajorFindingPolicy,
+    ReviseWorkPlanProposalCommand, WorkPlanApprovalRecord, WorkPlanCapabilityGap, WorkPlanDecision,
+    WorkPlanProfileBinding, WorkPlanProposalInspection, WorkPlanRevisionAction, WorkPlanTask,
+    WorkPlanWorkstream,
 };
 pub use tender_records::{
     CreateTenderEngineerEntryCommand, DecideTenderRecordCommand, InspectTenderRecordsCommand,
@@ -87,7 +92,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 14;
+const TENDER_SCHEMA_VERSION: i64 = 15;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -738,7 +743,8 @@ CREATE TABLE production_tasks (
   task_definition_sha256 TEXT NOT NULL CHECK (length(task_definition_sha256) = 64),
   task_id TEXT UNIQUE,
   status TEXT NOT NULL CHECK (status IN (
-    'blocked', 'ready', 'running', 'review_ready', 'reviewing', 'completed', 'failed', 'cancelled',
+    'blocked', 'ready', 'running', 'review_ready', 'reviewing', 'remediation_ready',
+    'ready_for_integration', 'attempt_limit_reached', 'failed', 'cancelled',
     'indeterminate', 'suspended'
   )),
   created_at TEXT NOT NULL,
@@ -750,26 +756,106 @@ CREATE TABLE production_tasks (
 CREATE TABLE production_task_attempts (
   production_task_id TEXT NOT NULL,
   attempt_number INTEGER NOT NULL CHECK (attempt_number BETWEEN 1 AND 8),
-  attempt_kind TEXT NOT NULL CHECK (attempt_kind IN ('author', 'review')),
+  attempt_kind TEXT NOT NULL CHECK (attempt_kind IN ('author', 'review', 'remediation')),
   task_id TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL,
   PRIMARY KEY (production_task_id, attempt_number),
   FOREIGN KEY (production_task_id) REFERENCES production_tasks(production_task_id),
   FOREIGN KEY (task_id) REFERENCES tender_tasks(task_id)
 );
-CREATE TABLE production_task_outputs (
-  output_id TEXT PRIMARY KEY CHECK (length(output_id) = 32),
-  production_task_id TEXT NOT NULL UNIQUE,
-  run_id TEXT NOT NULL UNIQUE,
-  reviewer_run_id TEXT NOT NULL UNIQUE,
+CREATE TABLE production_artifact_versions (
+  artifact_id TEXT NOT NULL CHECK (length(artifact_id) = 32),
+  production_task_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 8),
+  author_run_id TEXT NOT NULL UNIQUE,
+  prior_version INTEGER,
+  remediation_review_id TEXT,
   payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
   payload_sha256 TEXT NOT NULL CHECK (length(payload_sha256) = 64),
+  output_validation_passed INTEGER NOT NULL CHECK (output_validation_passed = 1),
+  evidence_verified INTEGER NOT NULL CHECK (evidence_verified = 1),
   data_scopes_json TEXT NOT NULL CHECK (json_valid(data_scopes_json)),
   data_classifications_json TEXT NOT NULL CHECK (json_valid(data_classifications_json)),
   created_at TEXT NOT NULL,
+  PRIMARY KEY (artifact_id, version),
+  UNIQUE (production_task_id, version),
   FOREIGN KEY (production_task_id) REFERENCES production_tasks(production_task_id),
-  FOREIGN KEY (run_id) REFERENCES agent_runs(run_id),
-  FOREIGN KEY (reviewer_run_id) REFERENCES agent_runs(run_id)
+  FOREIGN KEY (author_run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (artifact_id, prior_version)
+    REFERENCES production_artifact_versions(artifact_id, version),
+  FOREIGN KEY (remediation_review_id) REFERENCES production_reviews(review_id)
+);
+CREATE TABLE production_reviews (
+  review_id TEXT PRIMARY KEY CHECK (length(review_id) = 32),
+  production_task_id TEXT NOT NULL,
+  target_artifact_id TEXT NOT NULL CHECK (length(target_artifact_id) = 32),
+  target_version INTEGER NOT NULL CHECK (target_version BETWEEN 1 AND 8),
+  target_payload_sha256 TEXT NOT NULL CHECK (length(target_payload_sha256) = 64),
+  reviewer_run_id TEXT NOT NULL UNIQUE,
+  reviewer_profile_id TEXT NOT NULL CHECK (length(reviewer_profile_id) = 32),
+  reviewer_profile_version INTEGER NOT NULL CHECK (reviewer_profile_version > 0),
+  capability TEXT NOT NULL CHECK (length(CAST(capability AS BLOB)) BETWEEN 1 AND 100),
+  scope_json TEXT NOT NULL CHECK (json_valid(scope_json)),
+  criteria_json TEXT NOT NULL CHECK (json_valid(criteria_json)),
+  inputs_json TEXT NOT NULL CHECK (json_valid(inputs_json)),
+  result TEXT NOT NULL CHECK (result IN ('satisfied', 'requires_remediation')),
+  resolved_finding_ids_json TEXT NOT NULL CHECK (json_valid(resolved_finding_ids_json)),
+  created_at TEXT NOT NULL,
+  UNIQUE (target_artifact_id, target_version),
+  FOREIGN KEY (production_task_id) REFERENCES production_tasks(production_task_id),
+  FOREIGN KEY (target_artifact_id, target_version)
+    REFERENCES production_artifact_versions(artifact_id, version),
+  FOREIGN KEY (reviewer_run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (reviewer_profile_id, reviewer_profile_version)
+    REFERENCES agent_profile_versions(profile_id, version)
+);
+CREATE TABLE production_review_findings (
+  finding_id TEXT PRIMARY KEY CHECK (length(finding_id) = 32),
+  review_id TEXT NOT NULL,
+  finding_sequence INTEGER NOT NULL CHECK (finding_sequence BETWEEN 1 AND 32),
+  severity TEXT NOT NULL CHECK (severity IN ('critical', 'major', 'minor')),
+  summary TEXT NOT NULL CHECK (length(CAST(summary AS BLOB)) BETWEEN 1 AND 4000),
+  evidence_references_json TEXT NOT NULL CHECK (json_valid(evidence_references_json)),
+  created_at TEXT NOT NULL,
+  UNIQUE (review_id, finding_sequence),
+  FOREIGN KEY (review_id) REFERENCES production_reviews(review_id)
+);
+CREATE TABLE production_finding_dispositions (
+  disposition_id TEXT PRIMARY KEY CHECK (length(disposition_id) = 32),
+  finding_id TEXT NOT NULL UNIQUE,
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  disposition TEXT NOT NULL CHECK (disposition IN ('remediation_verified', 'exception_approved')),
+  target_artifact_id TEXT NOT NULL CHECK (length(target_artifact_id) = 32),
+  target_version INTEGER NOT NULL CHECK (target_version BETWEEN 1 AND 8),
+  verifying_review_id TEXT,
+  decided_by TEXT NOT NULL CHECK (decided_by IN ('host_policy', 'engineer_user')),
+  acting_role TEXT NOT NULL CHECK (acting_role IN ('integration_gate', 'tendering_manager')),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  consequence TEXT NOT NULL CHECK (length(CAST(consequence AS BLOB)) BETWEEN 1 AND 4000),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (finding_id) REFERENCES production_review_findings(finding_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence),
+  FOREIGN KEY (target_artifact_id, target_version)
+    REFERENCES production_artifact_versions(artifact_id, version),
+  FOREIGN KEY (verifying_review_id) REFERENCES production_reviews(review_id)
+);
+CREATE TABLE production_integration_readiness (
+  readiness_id TEXT PRIMARY KEY CHECK (length(readiness_id) = 32),
+  production_task_id TEXT NOT NULL UNIQUE,
+  artifact_id TEXT NOT NULL CHECK (length(artifact_id) = 32),
+  artifact_version INTEGER NOT NULL CHECK (artifact_version BETWEEN 1 AND 8),
+  payload_sha256 TEXT NOT NULL CHECK (length(payload_sha256) = 64),
+  review_id TEXT,
+  output_validation_passed INTEGER NOT NULL CHECK (output_validation_passed = 1),
+  evidence_verified INTEGER NOT NULL CHECK (evidence_verified = 1),
+  dependencies_satisfied INTEGER NOT NULL CHECK (dependencies_satisfied = 1),
+  approval_gates_json TEXT NOT NULL CHECK (json_valid(approval_gates_json)),
+  finding_dispositions_sha256 TEXT NOT NULL CHECK (length(finding_dispositions_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (production_task_id) REFERENCES production_tasks(production_task_id),
+  FOREIGN KEY (artifact_id, artifact_version)
+    REFERENCES production_artifact_versions(artifact_id, version),
+  FOREIGN KEY (review_id) REFERENCES production_reviews(review_id)
 );
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
@@ -1297,15 +1383,55 @@ BEFORE DELETE ON production_task_attempts
 BEGIN
   SELECT RAISE(ABORT, 'Production Task Attempts cannot be deleted');
 END;
-CREATE TRIGGER production_task_outputs_no_update
-BEFORE UPDATE ON production_task_outputs
+CREATE TRIGGER production_artifact_versions_no_update
+BEFORE UPDATE ON production_artifact_versions
 BEGIN
-  SELECT RAISE(ABORT, 'Production Task Outputs are immutable');
+  SELECT RAISE(ABORT, 'Production Artifact Versions are immutable');
 END;
-CREATE TRIGGER production_task_outputs_no_delete
-BEFORE DELETE ON production_task_outputs
+CREATE TRIGGER production_artifact_versions_no_delete
+BEFORE DELETE ON production_artifact_versions
 BEGIN
-  SELECT RAISE(ABORT, 'Production Task Outputs are immutable');
+  SELECT RAISE(ABORT, 'Production Artifact Versions are immutable');
+END;
+CREATE TRIGGER production_reviews_no_update
+BEFORE UPDATE ON production_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'Production Reviews are immutable');
+END;
+CREATE TRIGGER production_reviews_no_delete
+BEFORE DELETE ON production_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'Production Reviews are immutable');
+END;
+CREATE TRIGGER production_review_findings_no_update
+BEFORE UPDATE ON production_review_findings
+BEGIN
+  SELECT RAISE(ABORT, 'Production Review Findings are immutable');
+END;
+CREATE TRIGGER production_review_findings_no_delete
+BEFORE DELETE ON production_review_findings
+BEGIN
+  SELECT RAISE(ABORT, 'Production Review Findings are immutable');
+END;
+CREATE TRIGGER production_finding_dispositions_no_update
+BEFORE UPDATE ON production_finding_dispositions
+BEGIN
+  SELECT RAISE(ABORT, 'Production Finding Dispositions are immutable');
+END;
+CREATE TRIGGER production_finding_dispositions_no_delete
+BEFORE DELETE ON production_finding_dispositions
+BEGIN
+  SELECT RAISE(ABORT, 'Production Finding Dispositions are immutable');
+END;
+CREATE TRIGGER production_integration_readiness_no_update
+BEFORE UPDATE ON production_integration_readiness
+BEGIN
+  SELECT RAISE(ABORT, 'Production Integration Readiness is immutable');
+END;
+CREATE TRIGGER production_integration_readiness_no_delete
+BEFORE DELETE ON production_integration_readiness
+BEGIN
+  SELECT RAISE(ABORT, 'Production Integration Readiness is immutable');
 END;
 CREATE TRIGGER audit_events_no_update
 BEFORE UPDATE ON audit_events
@@ -4298,6 +4424,25 @@ fn append_audit_event(
     change: serde_json::Value,
     created_at: &str,
 ) -> Result<(), TenderCommandError> {
+    append_audit_event_with_sequence(
+        transaction,
+        tender_id,
+        event_type,
+        aggregate_revision,
+        change,
+        created_at,
+    )
+    .map(|_| ())
+}
+
+fn append_audit_event_with_sequence(
+    transaction: &Transaction<'_>,
+    tender_id: &str,
+    event_type: &str,
+    aggregate_revision: u32,
+    change: serde_json::Value,
+    created_at: &str,
+) -> Result<i64, TenderCommandError> {
     let previous: Option<(i64, String)> = transaction
         .query_row(
             "SELECT sequence, current_hash FROM audit_events ORDER BY sequence DESC LIMIT 1",
@@ -4340,7 +4485,7 @@ fn append_audit_event(
             ],
         )
         .map_err(sql_error)?;
-    Ok(())
+    Ok(sequence)
 }
 
 fn verify_audit_chain(connection: &Connection) -> Result<(), TenderCommandError> {

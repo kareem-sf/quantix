@@ -28,7 +28,8 @@ use super::bid_decisions::{
     BID_PACKAGE_REVIEW_CAPABILITY,
 };
 use super::production_scheduler::{
-    finish_production_task, production_task_for_run, work_plan_package_dependencies_are_current,
+    finish_production_task, production_completion_payload_is_valid, production_task_for_run,
+    work_plan_package_dependencies_are_current,
 };
 use super::tender_records::{
     publish_tender_record_candidates, publish_tender_record_review,
@@ -649,6 +650,37 @@ impl TenderStore {
                 event.summary =
                     "Candidate Tender Records rejected because the decision inventory is full"
                         .into();
+            }
+        }
+        let invalid_production_payload = if execution.state == AgentRunState::Completed {
+            match execution.candidate_payload_json.as_deref() {
+                Some(payload) => !production_completion_payload_is_valid(
+                    &transaction,
+                    &prepared.task.task_id,
+                    payload,
+                )?,
+                None => false,
+            }
+        } else {
+            false
+        };
+        if invalid_production_payload {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                true,
+                "Run the same exact production attempt again with attributable, verified Evidence and finding lineage.",
+                Some("The production output did not satisfy the exact Artifact or Review semantics."),
+            ));
+            execution.candidate_payload_json = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary =
+                    "Production output rejected by exact validation and Evidence guards".into();
             }
         }
         dispose_workspace(

@@ -2,5 +2,6 @@
 import type { AgentResourceBudget } from "./AgentResourceBudget";
 import type { AgentRunPermissions } from "./AgentRunPermissions";
 import type { AgentTaskInputReference } from "./AgentTaskInputReference";
+import type { MajorFindingPolicy } from "./MajorFindingPolicy";
 
-export type WorkPlanTask = { task_key: string, workstream_key: string, profile_id: string, profile_version: number, objective: string, exact_inputs: Array<AgentTaskInputReference>, dependencies: Array<string>, deadline: string, milestone: string, review_profile_id: string | null, review_profile_version: number | null, permissions: AgentRunPermissions, resource_budget: AgentResourceBudget, output_contract_json: string, };
+export type WorkPlanTask = { task_key: string, workstream_key: string, profile_id: string, profile_version: number, objective: string, exact_inputs: Array<AgentTaskInputReference>, dependencies: Array<string>, deadline: string, milestone: string, review_profile_id: string | null, review_profile_version: number | null, major_finding_policy: MajorFindingPolicy, permissions: AgentRunPermissions, resource_budget: AgentResourceBudget, output_contract_json: string, };

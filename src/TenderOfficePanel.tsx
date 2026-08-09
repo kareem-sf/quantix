@@ -11,11 +11,16 @@ import type { WorkPlanDecision } from "./bindings/WorkPlanDecision";
 import type { WorkPlanProposalInspection } from "./bindings/WorkPlanProposalInspection";
 import type { WorkPlanRevisionAction } from "./bindings/WorkPlanRevisionAction";
 import type { TenderProductionInspection } from "./bindings/TenderProductionInspection";
+import type { ProductionReview } from "./bindings/ProductionReview";
+import type { ProductionReviewFinding } from "./bindings/ProductionReviewFinding";
+import type { ProductionTaskReviewInspection } from "./bindings/ProductionTaskReviewInspection";
 import {
   activateTenderProduction,
+  approveProductionFindingException,
   composeTenderOffice,
   decideWorkPlanProposal,
   inspectCurrentWorkPlan,
+  inspectProductionTaskReview,
   inspectTenderProduction,
   interruptAgentRun,
   reviseWorkPlanProposal,
@@ -66,7 +71,15 @@ export function TenderOfficePanel({
   const [outputBytes, setOutputBytes] = useState(256 * 1024);
   const [decision, setDecision] = useState<WorkPlanDecision>("approve");
   const [rationale, setRationale] = useState("");
+  const [reviewTaskId, setReviewTaskId] = useState<string | null>(null);
+  const [reviewDetail, setReviewDetail] =
+    useState<ProductionTaskReviewInspection | null>(null);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [exceptionDrafts, setExceptionDrafts] = useState<
+    Record<string, { rationale: string; consequence: string }>
+  >({});
   const requestSequence = useRef(0);
+  const reviewRequestSequence = useRef(0);
 
   const loadPlan = useCallback(async () => {
     const request = ++requestSequence.current;
@@ -88,14 +101,56 @@ export function TenderOfficePanel({
     void loadPlan();
     return () => {
       requestSequence.current += 1;
+      reviewRequestSequence.current += 1;
     };
   }, [loadPlan, refreshToken]);
+
+  const loadReviewDetail = useCallback(
+    async (productionTaskId: string) => {
+      const request = ++reviewRequestSequence.current;
+      setReviewBusy(true);
+      try {
+        const next = await inspectProductionTaskReview(
+          tenderId,
+          productionTaskId,
+        );
+        if (request === reviewRequestSequence.current) {
+          setReviewTaskId(productionTaskId);
+          setReviewDetail(next);
+        }
+      } catch {
+        if (request === reviewRequestSequence.current) reportCommandFailure();
+      } finally {
+        if (request === reviewRequestSequence.current) setReviewBusy(false);
+      }
+    },
+    [reportCommandFailure, tenderId],
+  );
+
+  const selectedProductionTask = production?.tasks.find(
+    (task) => task.production_task_id === reviewTaskId,
+  );
+  const selectedReviewObservation = selectedProductionTask
+    ? `${selectedProductionTask.state}:${selectedProductionTask.artifact_version_count}:${selectedProductionTask.review_count}:${selectedProductionTask.finding_count}:${selectedProductionTask.open_blocking_finding_count}`
+    : null;
+
+  useEffect(() => {
+    if (reviewTaskId && selectedReviewObservation) {
+      void loadReviewDetail(reviewTaskId);
+    }
+  }, [loadReviewDetail, reviewTaskId, selectedReviewObservation]);
 
   useEffect(() => {
     if (
       !production?.active ||
       !production.tasks.some((task) =>
-        ["ready", "running", "review_ready", "reviewing"].includes(task.state),
+        [
+          "ready",
+          "running",
+          "review_ready",
+          "reviewing",
+          "remediation_ready",
+        ].includes(task.state),
       )
     ) {
       return;
@@ -107,7 +162,13 @@ export function TenderOfficePanel({
   const productionScheduling = Boolean(
     production?.active &&
     production.tasks.some((task) =>
-      ["ready", "running", "review_ready", "reviewing"].includes(task.state),
+      [
+        "ready",
+        "running",
+        "review_ready",
+        "reviewing",
+        "remediation_ready",
+      ].includes(task.state),
     ),
   );
 
@@ -269,6 +330,56 @@ export function TenderOfficePanel({
       onTenderStateChange();
     } catch {
       reportCommandFailure();
+    }
+  };
+
+  const approveFindingException = async (
+    review: ProductionReview,
+    finding: ProductionReviewFinding,
+  ) => {
+    const draft = exceptionDrafts[finding.finding_id];
+    if (
+      !reviewTaskId ||
+      !reviewDetail ||
+      !draft?.rationale.trim() ||
+      !draft.consequence.trim()
+    ) {
+      return;
+    }
+    const artifact = reviewDetail.artifact_versions.find(
+      (candidate) =>
+        candidate.artifact_id === review.target_artifact_id &&
+        candidate.version === review.target_version,
+    );
+    if (!artifact) return;
+    const request = ++reviewRequestSequence.current;
+    setReviewBusy(true);
+    try {
+      const next = await approveProductionFindingException(
+        tenderId,
+        reviewTaskId,
+        finding.finding_id,
+        review.review_id,
+        artifact.artifact_id,
+        artifact.version,
+        artifact.payload_sha256,
+        draft.rationale.trim(),
+        draft.consequence.trim(),
+      );
+      if (request === reviewRequestSequence.current) {
+        setReviewDetail(next);
+        setExceptionDrafts((current) => {
+          const next = { ...current };
+          delete next[finding.finding_id];
+          return next;
+        });
+        await loadPlan();
+        onTenderStateChange();
+      }
+    } catch {
+      if (request === reviewRequestSequence.current) reportCommandFailure();
+    } finally {
+      if (request === reviewRequestSequence.current) setReviewBusy(false);
     }
   };
 
@@ -528,10 +639,13 @@ export function TenderOfficePanel({
                       {productionTask.task.profile_version} · dependencies{" "}
                       {productionTask.task.dependencies.join(", ") || "none"} ·{" "}
                       {productionTask.run_ids.length} run(s) ·{" "}
-                      {productionTask.registered_outputs.length} registered
-                      output(s){" "}
+                      {productionTask.artifact_version_count} Artifact
+                      Version(s) · {productionTask.review_count} Review(s) ·{" "}
+                      {productionTask.finding_count} finding(s) ·{" "}
+                      {productionTask.open_blocking_finding_count} blocking{" "}
                       {productionTask.state === "ready" ||
-                      productionTask.state === "review_ready" ? (
+                      productionTask.state === "review_ready" ||
+                      productionTask.state === "remediation_ready" ? (
                         <span>Coordinator scheduling automatically</span>
                       ) : (productionTask.state === "running" ||
                           productionTask.state === "reviewing") &&
@@ -543,10 +657,226 @@ export function TenderOfficePanel({
                           Cancel run
                         </button>
                       ) : null}
+                      {productionTask.artifact_version_count > 0 ? (
+                        <button
+                          type="button"
+                          aria-expanded={
+                            reviewTaskId === productionTask.production_task_id
+                          }
+                          onClick={() => {
+                            setReviewDetail(null);
+                            setExceptionDrafts({});
+                            setReviewTaskId(productionTask.production_task_id);
+                          }}
+                          disabled={reviewBusy}
+                        >
+                          Inspect target, Evidence, and Review
+                        </button>
+                      ) : null}
                     </li>
                   );
                 })}
               </ul>
+              {reviewTaskId ? (
+                <section className="bid-review" aria-live="polite">
+                  <div className="panel-heading">
+                    <h5>Exact production review ledger</h5>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        reviewRequestSequence.current += 1;
+                        setExceptionDrafts({});
+                        setReviewTaskId(null);
+                        setReviewDetail(null);
+                      }}
+                    >
+                      Close
+                    </button>
+                  </div>
+                  {reviewBusy && !reviewDetail ? <p>Loading review…</p> : null}
+                  {reviewDetail ? (
+                    <>
+                      <p>
+                        Integration gate:{" "}
+                        <strong>
+                          {reviewDetail.readiness
+                            ? `ready on Artifact v${reviewDetail.readiness.artifact_version}`
+                            : "not ready"}
+                        </strong>
+                      </p>
+                      <h6>Immutable Artifact Versions</h6>
+                      {reviewDetail.artifact_versions.map((artifact) => (
+                        <details
+                          key={`${artifact.artifact_id}:${artifact.version}`}
+                        >
+                          <summary>
+                            Artifact v{artifact.version} ·{" "}
+                            {artifact.payload_sha256.slice(0, 16)} · author run{" "}
+                            {artifact.author_run_id.slice(0, 12)}
+                          </summary>
+                          <p>{artifact.payload.summary}</p>
+                          <p>
+                            Output validation{" "}
+                            {artifact.output_validation_passed
+                              ? "passed"
+                              : "failed"}{" "}
+                            · Evidence verification{" "}
+                            {artifact.evidence_verified ? "passed" : "failed"}
+                          </p>
+                          <p>
+                            Exact Evidence:{" "}
+                            {artifact.payload.evidence_references.join(", ")}
+                          </p>
+                          {artifact.payload.gaps.length > 0 ? (
+                            <p>
+                              Disclosed gaps: {artifact.payload.gaps.join(", ")}
+                            </p>
+                          ) : null}
+                          {artifact.payload.remediations?.map((remediation) => (
+                            <p key={remediation.finding_id}>
+                              Remediates {remediation.finding_id}:{" "}
+                              {remediation.treatment}
+                            </p>
+                          ))}
+                        </details>
+                      ))}
+                      <h6>Independent Reviews and findings</h6>
+                      {reviewDetail.reviews.map((review) => (
+                        <details key={review.review_id} open>
+                          <summary>
+                            Artifact v{review.target_version} ·{" "}
+                            {humanize(review.result)} · reviewer{" "}
+                            {review.reviewer_profile_id.slice(0, 12)} v
+                            {review.reviewer_profile_version}
+                          </summary>
+                          <p>
+                            Capability {review.capability} · run{" "}
+                            {review.reviewer_run_id.slice(0, 12)}
+                          </p>
+                          <p>Scope: {review.scope.join(", ")}</p>
+                          <p>Criteria: {review.criteria.join(", ")}</p>
+                          <p>
+                            Exact inputs:{" "}
+                            {review.inputs
+                              .map(
+                                (input) =>
+                                  `${input.kind}:${input.reference}:v${input.version}`,
+                              )
+                              .join(", ")}
+                          </p>
+                          {review.findings.length === 0 ? (
+                            <p>No findings.</p>
+                          ) : (
+                            <ul>
+                              {review.findings.map((finding) => (
+                                <li key={finding.finding_id}>
+                                  <strong>{humanize(finding.severity)}</strong>{" "}
+                                  · {finding.summary} · Evidence{" "}
+                                  {finding.evidence_references.join(", ")}
+                                  {finding.disposition ? (
+                                    <div>
+                                      Disposition{" "}
+                                      {humanize(finding.disposition.kind)} by{" "}
+                                      {humanize(finding.disposition.decided_by)}
+                                      . Consequence:{" "}
+                                      {finding.disposition.consequence}
+                                    </div>
+                                  ) : finding.severity === "minor" ? (
+                                    <div>
+                                      Disclosed; does not block integration.
+                                    </div>
+                                  ) : finding.severity === "critical" ? (
+                                    <div>
+                                      Open and nonwaivable; author remediation
+                                      and a new exact Review are required.
+                                    </div>
+                                  ) : selectedProductionTask?.task
+                                      .major_finding_policy ===
+                                    "engineer_exception_allowed" ? (
+                                    <div className="decision-form">
+                                      <label>
+                                        Exception rationale
+                                        <textarea
+                                          value={
+                                            exceptionDrafts[finding.finding_id]
+                                              ?.rationale ?? ""
+                                          }
+                                          onChange={(event) => {
+                                            const rationale =
+                                              event.currentTarget.value;
+                                            setExceptionDrafts((current) => ({
+                                              ...current,
+                                              [finding.finding_id]: {
+                                                rationale,
+                                                consequence:
+                                                  current[finding.finding_id]
+                                                    ?.consequence ?? "",
+                                              },
+                                            }));
+                                          }}
+                                          maxLength={4000}
+                                        />
+                                      </label>
+                                      <label>
+                                        Exact consequence
+                                        <textarea
+                                          value={
+                                            exceptionDrafts[finding.finding_id]
+                                              ?.consequence ?? ""
+                                          }
+                                          onChange={(event) => {
+                                            const consequence =
+                                              event.currentTarget.value;
+                                            setExceptionDrafts((current) => ({
+                                              ...current,
+                                              [finding.finding_id]: {
+                                                rationale:
+                                                  current[finding.finding_id]
+                                                    ?.rationale ?? "",
+                                                consequence,
+                                              },
+                                            }));
+                                          }}
+                                          maxLength={4000}
+                                        />
+                                      </label>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          void approveFindingException(
+                                            review,
+                                            finding,
+                                          )
+                                        }
+                                        disabled={
+                                          reviewBusy ||
+                                          !exceptionDrafts[
+                                            finding.finding_id
+                                          ]?.rationale.trim() ||
+                                          !exceptionDrafts[
+                                            finding.finding_id
+                                          ]?.consequence.trim()
+                                        }
+                                      >
+                                        Approve exact Major exception
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div>
+                                      Open; the approved Review Policy requires
+                                      author remediation and a new exact Review.
+                                    </div>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </details>
+                      ))}
+                    </>
+                  ) : null}
+                </section>
+              ) : null}
             </div>
           ) : null}
           <div className="bid-record-bindings">
@@ -561,7 +891,8 @@ export function TenderOfficePanel({
                   {task.review_profile_version
                     ? `v${task.review_profile_version}`
                     : ""}{" "}
-                  · {task.deadline}
+                  · Major findings {humanize(task.major_finding_policy)} ·{" "}
+                  {task.deadline}
                 </li>
               ))}
             </ul>

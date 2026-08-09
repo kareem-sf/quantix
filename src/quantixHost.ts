@@ -6,6 +6,7 @@ import type { AgentRunHistoryPage } from "./bindings/AgentRunHistoryPage";
 import type { InspectAgentRunCommand } from "./bindings/InspectAgentRunCommand";
 import type { InspectAgentRunHistoryCommand } from "./bindings/InspectAgentRunHistoryCommand";
 import type { ActivateTenderProductionCommand } from "./bindings/ActivateTenderProductionCommand";
+import type { ApproveProductionFindingExceptionCommand } from "./bindings/ApproveProductionFindingExceptionCommand";
 import type { AgentRunRecoveryDecision } from "./bindings/AgentRunRecoveryDecision";
 import type { AgentRunRecoveryDisposition } from "./bindings/AgentRunRecoveryDisposition";
 import type { BidDecisionPackageInspection } from "./bindings/BidDecisionPackageInspection";
@@ -39,6 +40,7 @@ import type { InspectBidDecisionPackageRecordsCommand } from "./bindings/Inspect
 import type { InspectBidDecisionApprovalHistoryCommand } from "./bindings/InspectBidDecisionApprovalHistoryCommand";
 import type { InvalidateBidDecisionApprovalCommand } from "./bindings/InvalidateBidDecisionApprovalCommand";
 import type { InspectComplianceMatrixCommand } from "./bindings/InspectComplianceMatrixCommand";
+import type { InspectProductionTaskReviewCommand } from "./bindings/InspectProductionTaskReviewCommand";
 import type { ManagerCapabilityDemandInput } from "./bindings/ManagerCapabilityDemandInput";
 import type { OpenTenderCommand } from "./bindings/OpenTenderCommand";
 import type { ParseSourceArtifactCommand } from "./bindings/ParseSourceArtifactCommand";
@@ -52,6 +54,7 @@ import type { RuntimeReadiness } from "./bindings/RuntimeReadiness";
 import type { RunBootstrapAgentCommand } from "./bindings/RunBootstrapAgentCommand";
 import type { RunProductionTaskCommand } from "./bindings/RunProductionTaskCommand";
 import type { ProductionTaskRunResult } from "./bindings/ProductionTaskRunResult";
+import type { ProductionTaskReviewInspection } from "./bindings/ProductionTaskReviewInspection";
 import type { TenderProductionInspection } from "./bindings/TenderProductionInspection";
 import type { RunBidDecisionPackageReviewCommand } from "./bindings/RunBidDecisionPackageReviewCommand";
 import type { RunTenderRecordExtractionCommand } from "./bindings/RunTenderRecordExtractionCommand";
@@ -488,6 +491,48 @@ export function runProductionTask(
     production_task_id: productionTaskId,
   };
   return invoke<ProductionTaskRunResult>("run_production_task", { command });
+}
+
+export function inspectProductionTaskReview(
+  tenderId: string,
+  productionTaskId: string,
+): Promise<ProductionTaskReviewInspection> {
+  const command: InspectProductionTaskReviewCommand = {
+    tender_id: tenderId,
+    production_task_id: productionTaskId,
+  };
+  return invoke<ProductionTaskReviewInspection>(
+    "inspect_production_task_review",
+    { command },
+  );
+}
+
+export function approveProductionFindingException(
+  tenderId: string,
+  productionTaskId: string,
+  findingId: string,
+  reviewId: string,
+  artifactId: string,
+  artifactVersion: number,
+  payloadSha256: string,
+  rationale: string,
+  consequence: string,
+): Promise<ProductionTaskReviewInspection> {
+  const command: ApproveProductionFindingExceptionCommand = {
+    tender_id: tenderId,
+    production_task_id: productionTaskId,
+    finding_id: findingId,
+    review_id: reviewId,
+    artifact_id: artifactId,
+    artifact_version: artifactVersion,
+    payload_sha256: payloadSha256,
+    rationale,
+    consequence,
+  };
+  return invoke<ProductionTaskReviewInspection>(
+    "approve_production_finding_exception",
+    { command },
+  );
 }
 
 export function decideBidDecisionPackage(

@@ -175,6 +175,14 @@ pub struct WorkPlanWorkstream {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum MajorFindingPolicy {
+    RemediationRequired,
+    EngineerExceptionAllowed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct WorkPlanTask {
     pub task_key: String,
     pub workstream_key: String,
@@ -187,6 +195,7 @@ pub struct WorkPlanTask {
     pub milestone: String,
     pub review_profile_id: Option<String>,
     pub review_profile_version: Option<u32>,
+    pub major_finding_policy: MajorFindingPolicy,
     pub permissions: AgentRunPermissions,
     pub resource_budget: AgentResourceBudget,
     pub output_contract_json: String,
@@ -782,7 +791,10 @@ impl TenderStore {
                      WHERE activation_id IN (
                        SELECT activation_id FROM production_activations
                        WHERE plan_id = ?1 AND plan_version = ?2 AND status = 'suspended'
-                      ) AND status IN ('blocked', 'ready', 'review_ready', 'failed', 'cancelled', 'indeterminate')",
+                      ) AND status IN (
+                        'blocked', 'ready', 'review_ready', 'remediation_ready',
+                        'attempt_limit_reached', 'failed', 'cancelled', 'indeterminate'
+                      )",
                     params![command.plan_id, command.base_version, created_at],
                 )
                 .map_err(sql_error)?;
@@ -3401,8 +3413,17 @@ fn production_output_contract() -> String {
     canonical_json(&json!({
         "additionalProperties": false,
         "properties": {
-            "evidence_references": { "items": { "type": "string" }, "maxItems": 256, "type": "array" },
-            "gaps": { "items": { "type": "string" }, "maxItems": 64, "type": "array" },
+            "evidence_references": {
+                "items": { "maxLength": 400, "minLength": 1, "type": "string" },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array"
+            },
+            "gaps": {
+                "items": { "maxLength": 4000, "minLength": 1, "type": "string" },
+                "maxItems": 64,
+                "type": "array"
+            },
             "summary": { "maxLength": 4000, "minLength": 1, "type": "string" }
         },
         "required": ["summary", "evidence_references", "gaps"],
@@ -3629,6 +3650,7 @@ fn compose_tasks(
                 review_profile_version: reviewer
                     .flatten()
                     .map(|candidate| candidate.profile.version),
+                major_finding_policy: major_finding_policy(&workstream.capability),
                 permissions: owner.profile.permissions.clone(),
                 resource_budget: owner.profile.resource_budget.clone(),
                 output_contract_json: owner.profile.output_contract_json.clone(),
@@ -3807,6 +3829,7 @@ fn approval_invariants_hold(plan: &WorkPlanProposalInspection) -> bool {
                 return false;
             };
             task.profile_version == author.profile.version
+                && task.major_finding_policy == major_finding_policy(&workstream.capability)
                 && !task.objective.trim().is_empty()
                 && !task.exact_inputs.is_empty()
                 && !task.deadline.trim().is_empty()
@@ -3843,6 +3866,14 @@ fn approval_invariants_hold(plan: &WorkPlanProposalInspection) -> bool {
                 || task.review_profile_id.as_deref() == Some(binding.profile.profile_id.as_str())
         })
     })
+}
+
+fn major_finding_policy(capability: &str) -> MajorFindingPolicy {
+    if matches!(capability, "document_control" | "cost_estimation") {
+        MajorFindingPolicy::EngineerExceptionAllowed
+    } else {
+        MajorFindingPolicy::RemediationRequired
+    }
 }
 
 fn profile_shape_is_valid(profile: &AgentProfileVersionView, _status: AgentProfileStatus) -> bool {

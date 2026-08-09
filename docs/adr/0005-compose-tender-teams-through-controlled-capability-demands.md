@@ -9,10 +9,15 @@ Quantix v0 uses a host-controlled Team Composer to map exact Project Fingerprint
 - Team Composer may specialize approved Capability Catalogue components into project-specific roles. An unsupported need becomes a visible Capability Gap and blocks affected work instead of producing a fictional expert.
 - Every Tender Task has one accountable Agent Profile version, an evidence or policy trigger, exact inputs, dependencies, permissions, budget, output contract, and review policy. Contributors work through registered child tasks rather than shared mutable work.
 - Authors and reviewers always use separate profiles and threads. Specialist outputs require reviewers with matching approved Capabilities; reviewers cannot edit targets, close their own findings, or approve.
+- A successful production author run publishes an immutable Artifact Version only after the Host validates its output contract and exact Evidence references. Review runs bind that exact Artifact Version and payload digest together with the reviewer Profile Version, Capability, scope, criteria, inputs, result, and individually attributable findings.
+- Critical and Major findings block integration. Critical findings are never waivable; a Major finding may receive an exact attributable Engineer exception only when the approved Work Plan binds `Engineer Exception Allowed` (currently limited to document-control and cost-estimation review), while other reviewed work binds `Remediation Required`. Minor findings remain disclosed. Reviewers report findings and remediation verification, while Host policy owns canonical finding dispositions so a reviewer cannot directly close its own finding.
+- Remediation is new author work: it creates a successor Artifact Version linked to the prior negative Review and is independently reviewed again. Reviewed bytes, findings, Reviews, and dispositions are immutable.
+- `Ready for Integration` is an explicit exact-version record created only after output validation, Evidence verification, dependency readiness, required Reviews, finding dispositions, and the Bid Decision, Work Plan, and Production approval gates all pass.
 - The Engineer User may revise a Work Plan Proposal within Quantix invariants. Routine scheduling remains with the Tender Office Coordinator, while material membership, profile, permission, budget, responsibility, milestone, or review changes require a versioned Work Plan Amendment and EITL approval.
 - Agent Profiles follow `Proposed -> Active -> Suspended -> Retired`, remain scoped to one Tender, and never carry provider-thread memory across Tenders. Only approved Role Archetypes, Capability definitions, playbooks, templates, and registered company knowledge are reusable.
 
 ## Evidence
 
 - [Decision ticket](https://github.com/kareem-sf/quantix/issues/9)
+- [Independent production review ticket](https://github.com/kareem-sf/quantix/issues/40)
 - [Agent Profile runtime boundary](./0004-run-agent-profiles-through-host-controlled-codex-threads.md)

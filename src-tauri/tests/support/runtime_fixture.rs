@@ -907,8 +907,14 @@ fn run_agent_turn(
             | "production-task"
             | "production-task-delayed-a"
             | "production-task-delayed-b"
+            | "production-task-delayed-review"
+            | "production-task-evidence-invalid"
             | "production-task-output-over-budget"
             | "production-task-review-rework"
+            | "production-task-review-critical"
+            | "production-task-review-critical-repeat"
+            | "production-task-review-major"
+            | "production-task-review-minor"
     ) {
         return Err(format!("unknown agent fixture scenario {scenario}").into());
     }
@@ -1443,33 +1449,166 @@ fn run_agent_turn(
             "gaps": [],
             "summary": "Output deliberately exceeds the exact task byte budget."
         })
-    } else if scenario == "production-task-review-rework"
-        && provider_data_view
-            .get("review_candidate")
-            .is_some_and(|candidate| !candidate.is_null())
-    {
-        serde_json::json!({
-            "verdict": "requires_rework",
-            "findings": ["The exact candidate does not satisfy the approved review policy."]
-        })
     } else if scenario.starts_with("production-task")
         && provider_data_view
             .get("review_candidate")
             .is_some_and(|candidate| !candidate.is_null())
     {
-        serde_json::json!({ "verdict": "satisfied", "findings": [] })
+        let review_candidate = provider_data_view
+            .get("review_candidate")
+            .ok_or("review candidate")?;
+        let target_version = review_candidate
+            .get("artifact_version")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or("review target version")?;
+        let evidence_reference = review_candidate
+            .pointer("/payload/evidence_references/0")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("review target evidence")?;
+        let resolved_finding_ids = review_candidate
+            .pointer("/payload/remediations")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|remediation| remediation.get("finding_id").cloned())
+            .collect::<Vec<_>>();
+        let severity = if scenario == "production-task-review-major" {
+            Some("major")
+        } else if scenario == "production-task-review-minor" {
+            Some("minor")
+        } else if (matches!(
+            scenario,
+            "production-task-review-rework" | "production-task-review-critical"
+        ) && target_version == 1)
+            || scenario == "production-task-review-critical-repeat"
+        {
+            Some("critical")
+        } else {
+            None
+        };
+        if severity == Some("minor") {
+            serde_json::json!({
+                "result": "satisfied",
+                "resolved_finding_ids": [],
+                "findings": [{
+                    "severity": "minor",
+                    "summary": "A minor presentation limitation remains disclosed.",
+                    "evidence_references": [evidence_reference]
+                }]
+            })
+        } else if let Some(severity) = severity {
+            serde_json::json!({
+                "result": "requires_remediation",
+                "resolved_finding_ids": [],
+                "findings": [{
+                    "severity": severity,
+                    "summary": "The exact candidate does not satisfy the approved review criteria.",
+                    "evidence_references": [evidence_reference]
+                }]
+            })
+        } else {
+            serde_json::json!({
+                "result": "satisfied",
+                "resolved_finding_ids": resolved_finding_ids,
+                "findings": []
+            })
+        }
     } else if scenario.starts_with("production-task") {
-        serde_json::json!({
-            "evidence_references": provider_data_view
+        let mut evidence_references = provider_data_view
+            .pointer("/production_task/exact_inputs")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|input| {
+                Some(format!(
+                    "{}:{}:{}",
+                    input.get("kind")?.as_str()?,
+                    input.get("reference")?.as_str()?,
+                    input.get("version")?.as_u64()?,
+                ))
+            })
+            .collect::<Vec<_>>();
+        evidence_references.extend(
+            provider_data_view
                 .get("dependency_outputs")
                 .and_then(serde_json::Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter_map(|output| output.get("payload_sha256").cloned())
-                .collect::<Vec<_>>(),
+                .filter_map(|output| {
+                    Some(format!(
+                        "production_artifact_version:{}:{}",
+                        output.get("artifact_id")?.as_str()?,
+                        output.get("artifact_version")?.as_u64()?,
+                    ))
+                }),
+        );
+        if let Some(target) = provider_data_view
+            .get("remediation_target")
+            .filter(|target| !target.is_null())
+        {
+            evidence_references.push(format!(
+                "production_artifact_version:{}:{}",
+                target
+                    .get("artifact_id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or("remediation artifact id")?,
+                target
+                    .get("artifact_version")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or("remediation artifact version")?,
+            ));
+        }
+        let remediation_findings = provider_data_view
+            .get("remediation_findings")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let remediation_version = provider_data_view
+            .pointer("/remediation_target/artifact_version")
+            .and_then(serde_json::Value::as_u64);
+        if let Some(version) = remediation_version {
+            evidence_references.extend(remediation_findings.iter().filter_map(|finding| {
+                Some(format!(
+                    "production_review_finding:{}:{}",
+                    finding.get("finding_id")?.as_str()?,
+                    version,
+                ))
+            }));
+        }
+        evidence_references.sort();
+        evidence_references.dedup();
+        if scenario == "production-task-evidence-invalid" {
+            evidence_references = vec!["tender_revision:unavailable:1".into()];
+        }
+        let mut output = serde_json::json!({
+            "evidence_references": evidence_references,
             "gaps": [],
             "summary": format!("Completed the exact bounded production task for {tender_name}.")
-        })
+        });
+        if !remediation_findings.is_empty() {
+            let remediation_evidence = output
+                .get("evidence_references")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|references| references.first())
+                .cloned()
+                .ok_or("remediation evidence")?;
+            output.as_object_mut().ok_or("production output object")?.insert(
+                "remediations".into(),
+                serde_json::Value::Array(
+                    remediation_findings
+                        .into_iter()
+                        .map(|finding| {
+                            serde_json::json!({
+                                "finding_id": finding.get("finding_id").cloned().unwrap_or_default(),
+                                "treatment": "Produced a new immutable Artifact Version that addresses the finding.",
+                                "evidence_references": [remediation_evidence.clone()]
+                            })
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        output
     } else {
         serde_json::json!({
             "summary": format!("{tender_name} is ready for controlled intake analysis."),
@@ -1636,7 +1775,7 @@ fn run_multiplexed_production_turns(
                     .ok_or("multiplexed turn used an unknown thread")?;
                 if turns
                     .iter()
-                    .any(|(_, candidate, _, _)| candidate == thread_id)
+                    .any(|(_, candidate, _, _, _)| candidate == thread_id)
                 {
                     return Err("multiplexed thread received more than one turn".into());
                 }
@@ -1674,7 +1813,39 @@ fn run_multiplexed_production_turns(
                 let review = provider_input
                     .pointer("/provider_data_views/0/payload/review_candidate")
                     .is_some_and(|candidate| !candidate.is_null());
-                turns.push((suffix, thread_id.to_owned(), turn_id, review));
+                let evidence_reference = if review {
+                    provider_input
+                        .pointer("/provider_data_views/0/payload/review_candidate/payload/evidence_references/0")
+                        .and_then(serde_json::Value::as_str)
+                        .ok_or("multiplexed review evidence")?
+                        .to_owned()
+                } else {
+                    let input = provider_input
+                        .pointer("/provider_data_views/0/payload/production_task/exact_inputs/0")
+                        .ok_or("multiplexed production exact input")?;
+                    format!(
+                        "{}:{}:{}",
+                        input
+                            .get("kind")
+                            .and_then(serde_json::Value::as_str)
+                            .ok_or("input kind")?,
+                        input
+                            .get("reference")
+                            .and_then(serde_json::Value::as_str)
+                            .ok_or("input reference")?,
+                        input
+                            .get("version")
+                            .and_then(serde_json::Value::as_u64)
+                            .ok_or("input version")?,
+                    )
+                };
+                turns.push((
+                    suffix,
+                    thread_id.to_owned(),
+                    turn_id,
+                    review,
+                    evidence_reference,
+                ));
             }
             _ => return Err("unexpected multiplexed production request".into()),
         }
@@ -1686,7 +1857,7 @@ fn run_multiplexed_production_turns(
         )?;
     }
 
-    for (suffix, _, _, _) in &turns {
+    for (suffix, _, _, _, _) in &turns {
         if automatic {
             continue;
         }
@@ -1707,12 +1878,16 @@ fn run_multiplexed_production_turns(
         }
     }
 
-    for (suffix, thread_id, turn_id, review) in turns {
+    for (suffix, thread_id, turn_id, review, evidence_reference) in turns {
         let candidate = if review {
-            serde_json::json!({ "verdict": "satisfied", "findings": [] })
+            serde_json::json!({
+                "result": "satisfied",
+                "resolved_finding_ids": [],
+                "findings": []
+            })
         } else {
             serde_json::json!({
-                "evidence_references": [],
+                "evidence_references": [evidence_reference],
                 "gaps": [],
                 "summary": format!("Completed multiplexed production task {suffix}.")
             })

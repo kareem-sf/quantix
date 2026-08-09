@@ -773,9 +773,25 @@ impl QuantixHost {
             .production_task_and_state_for_run(&prepared.run_id)?;
         let production_retry = production_task.is_some();
         drop(_active);
-        if let Some((production_task_id, ProductionTaskState::ReviewReady)) = production_task {
-            self.run_production_task_attempt(&tender_id, &production_task_id)
-                .await?;
+        if let Some((production_task_id, state)) = production_task {
+            if matches!(
+                state,
+                ProductionTaskState::ReviewReady | ProductionTaskState::RemediationReady
+            ) {
+                if let Err(error) = self
+                    .run_production_task_attempt(&tender_id, &production_task_id)
+                    .await
+                {
+                    let exhausted = store
+                        .lock()
+                        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                        .production_task_state(&production_task_id)?
+                        == Some(ProductionTaskState::AttemptLimitReached);
+                    if !exhausted {
+                        return Err(error);
+                    }
+                }
+            }
         }
         if production_retry {
             self.start_production_scheduler(tender_id.as_str().to_owned());
@@ -875,7 +891,9 @@ impl QuantixHost {
             for task in production.tasks.into_iter().filter(|task| {
                 matches!(
                     task.state,
-                    ProductionTaskState::Ready | ProductionTaskState::ReviewReady
+                    ProductionTaskState::Ready
+                        | ProductionTaskState::ReviewReady
+                        | ProductionTaskState::RemediationReady
                 )
             }) {
                 let profile_id = if task.state == ProductionTaskState::ReviewReady {
