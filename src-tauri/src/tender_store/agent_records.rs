@@ -12,7 +12,7 @@ use crate::agent_runtime::{
         permission_duration, BootstrapGrantRequest,
     },
     AccessApproval, AccessRequest, AgentAccessRequestStatus, AgentAccessRequestView,
-    AgentProfileVersionView, AgentRunInspection, AgentRunRecoveryDecision,
+    AgentProfileStatus, AgentProfileVersionView, AgentRunInspection, AgentRunRecoveryDecision,
     AgentRunRecoveryDisposition, AgentRunState, ApproveAgentAccessCommand, BootstrapAuthority,
     BootstrapRole, BootstrapTeamMember, DataClassification, PendingProviderEvent, PermissionGrant,
     PreparedAgentRun, ProposedAgentResult, ProviderEvent, ProviderEventKind, ProviderExecution,
@@ -2305,11 +2305,17 @@ struct RawAgentRun {
 struct RawProfileVersion {
     identity: String,
     profession: String,
+    seniority: String,
     capabilities_json: String,
+    objective: String,
+    behavior: String,
+    skepticism: String,
+    risk_tolerance: String,
     instructions: String,
     output_contract_json: String,
     review_policy: String,
     permissions_json: String,
+    prohibited_actions_json: String,
     resource_budget_json: String,
 }
 
@@ -2338,7 +2344,19 @@ pub(super) fn insert_profile(
             params![profile.profile_id, stable_identity, created_at],
         )
         .map_err(sql_error)?;
-    insert_profile_version(transaction, profile, created_at)
+    insert_profile_version(transaction, profile, created_at)?;
+    transaction
+        .execute(
+            "INSERT INTO agent_profile_heads (profile_id, current_version, status)
+             VALUES (?1, ?2, ?3)",
+            params![
+                profile.profile_id,
+                profile.version,
+                AgentProfileStatus::Active.as_str()
+            ],
+        )
+        .map_err(sql_error)?;
+    Ok(())
 }
 
 pub(super) fn insert_profile_version(
@@ -2349,26 +2367,68 @@ pub(super) fn insert_profile_version(
     transaction
         .execute(
             "INSERT INTO agent_profile_versions (
-               profile_id, version, identity, profession, capabilities_json, instructions,
-               output_contract_json, review_policy, permissions_json, resource_budget_json,
-               created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+               profile_id, version, identity, profession, seniority, capabilities_json,
+               objective, behavior, skepticism, risk_tolerance, instructions,
+               output_contract_json, review_policy, permissions_json,
+               prohibited_actions_json, resource_budget_json, created_at
+             ) VALUES (
+               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+               ?15, ?16, ?17
+             )",
             params![
                 profile.profile_id,
                 profile.version,
                 profile.identity,
                 profile.profession,
+                profile.seniority,
                 canonical_json(&profile.capabilities)?,
+                profile.objective,
+                profile.behavior,
+                profile.skepticism,
+                profile.risk_tolerance,
                 profile.instructions,
                 profile.output_contract_json,
                 profile.review_policy,
                 canonical_json(&profile.permissions)?,
+                canonical_json(&profile.prohibited_actions)?,
                 canonical_json(&profile.resource_budget)?,
                 created_at,
             ],
         )
         .map_err(sql_error)?;
     Ok(())
+}
+
+pub(super) fn update_profile_head(
+    transaction: &rusqlite::Transaction<'_>,
+    profile_id: &str,
+    version: u32,
+    status: AgentProfileStatus,
+) -> Result<(), TenderCommandError> {
+    if transaction
+        .execute(
+            "UPDATE agent_profile_heads
+             SET current_version = ?2, status = ?3
+             WHERE profile_id = ?1 AND current_version <= ?2",
+            params![profile_id, version, status.as_str()],
+        )
+        .map_err(sql_error)?
+        == 1
+        || transaction
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM agent_profile_heads
+                   WHERE profile_id = ?1 AND current_version > ?2
+                 )",
+                params![profile_id, version],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(sql_error)?
+    {
+        Ok(())
+    } else {
+        Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+    }
 }
 
 pub(super) fn insert_task(
@@ -2436,20 +2496,28 @@ pub(super) fn load_profile(
 ) -> Result<AgentProfileVersionView, TenderCommandError> {
     let raw: Option<RawProfileVersion> = connection
         .query_row(
-            "SELECT identity, profession, capabilities_json, instructions,
-                    output_contract_json, review_policy, permissions_json, resource_budget_json
+            "SELECT identity, profession, seniority, capabilities_json, objective,
+                    behavior, skepticism, risk_tolerance, instructions,
+                    output_contract_json, review_policy, permissions_json,
+                    prohibited_actions_json, resource_budget_json
              FROM agent_profile_versions WHERE profile_id = ?1 AND version = ?2",
             params![key.0, key.1],
             |row| {
                 Ok(RawProfileVersion {
                     identity: row.get(0)?,
                     profession: row.get(1)?,
-                    capabilities_json: row.get(2)?,
-                    instructions: row.get(3)?,
-                    output_contract_json: row.get(4)?,
-                    review_policy: row.get(5)?,
-                    permissions_json: row.get(6)?,
-                    resource_budget_json: row.get(7)?,
+                    seniority: row.get(2)?,
+                    capabilities_json: row.get(3)?,
+                    objective: row.get(4)?,
+                    behavior: row.get(5)?,
+                    skepticism: row.get(6)?,
+                    risk_tolerance: row.get(7)?,
+                    instructions: row.get(8)?,
+                    output_contract_json: row.get(9)?,
+                    review_policy: row.get(10)?,
+                    permissions_json: row.get(11)?,
+                    prohibited_actions_json: row.get(12)?,
+                    resource_budget_json: row.get(13)?,
                 })
             },
         )
@@ -2462,11 +2530,17 @@ pub(super) fn load_profile(
         version: key.1,
         identity: raw.identity,
         profession: raw.profession,
+        seniority: raw.seniority,
         capabilities: parse_canonical_json(&raw.capabilities_json)?,
+        objective: raw.objective,
+        behavior: raw.behavior,
+        skepticism: raw.skepticism,
+        risk_tolerance: raw.risk_tolerance,
         instructions: raw.instructions,
         output_contract_json: raw.output_contract_json,
         review_policy: raw.review_policy,
         permissions: parse_canonical_json(&raw.permissions_json)?,
+        prohibited_actions: parse_canonical_json(&raw.prohibited_actions_json)?,
         resource_budget: parse_canonical_json(&raw.resource_budget_json)?,
     })
 }

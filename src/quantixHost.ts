@@ -16,6 +16,7 @@ import type { ChooseTenderPackageCommand } from "./bindings/ChooseTenderPackageC
 import type { ConfirmSourceRelationshipCommand } from "./bindings/ConfirmSourceRelationshipCommand";
 import type { ComplianceDispositionUpdate } from "./bindings/ComplianceDispositionUpdate";
 import type { ComplianceMatrixPage } from "./bindings/ComplianceMatrixPage";
+import type { ComposeTenderOfficeCommand } from "./bindings/ComposeTenderOfficeCommand";
 import type { CreateBidDecisionPackageCommand } from "./bindings/CreateBidDecisionPackageCommand";
 import type { DecideBidDecisionPackageCommand } from "./bindings/DecideBidDecisionPackageCommand";
 import type { CreateTenderBackupCommand } from "./bindings/CreateTenderBackupCommand";
@@ -24,6 +25,7 @@ import type { CreateTenderEngineerEntryCommand } from "./bindings/CreateTenderEn
 import type { DocumentRegister } from "./bindings/DocumentRegister";
 import type { DocumentParseResult } from "./bindings/DocumentParseResult";
 import type { DecideTenderRecordCommand } from "./bindings/DecideTenderRecordCommand";
+import type { DecideWorkPlanProposalCommand } from "./bindings/DecideWorkPlanProposalCommand";
 import type { EvidenceDocument } from "./bindings/EvidenceDocument";
 import type { EvidenceSearchResult } from "./bindings/EvidenceSearchResult";
 import type { InterruptAgentRunCommand } from "./bindings/InterruptAgentRunCommand";
@@ -37,6 +39,7 @@ import type { OpenTenderCommand } from "./bindings/OpenTenderCommand";
 import type { ParseSourceArtifactCommand } from "./bindings/ParseSourceArtifactCommand";
 import type { PrepareTenderRecoveryCommand } from "./bindings/PrepareTenderRecoveryCommand";
 import type { ReviseTenderCommand } from "./bindings/ReviseTenderCommand";
+import type { ReviseWorkPlanProposalCommand } from "./bindings/ReviseWorkPlanProposalCommand";
 import type { ResolveIndeterminateAgentRunCommand } from "./bindings/ResolveIndeterminateAgentRunCommand";
 import type { ResolveBidDecisionReturnReworkCommand } from "./bindings/ResolveBidDecisionReturnReworkCommand";
 import type { ResolveTenderRecoveryCommand } from "./bindings/ResolveTenderRecoveryCommand";
@@ -64,6 +67,9 @@ import type { TenderRecordEngineerDecisionKind } from "./bindings/TenderRecordEn
 import type { TenderRecordExtractionResult } from "./bindings/TenderRecordExtractionResult";
 import type { TenderRecordPage } from "./bindings/TenderRecordPage";
 import type { TenderRecordReviewResult } from "./bindings/TenderRecordReviewResult";
+import type { WorkPlanDecision } from "./bindings/WorkPlanDecision";
+import type { WorkPlanProposalInspection } from "./bindings/WorkPlanProposalInspection";
+import type { WorkPlanRevisionAction } from "./bindings/WorkPlanRevisionAction";
 
 export function ensureQuantixSetup(): Promise<SetupOutcome> {
   return invoke<SetupOutcome>("ensure_quantix_setup");
@@ -377,6 +383,63 @@ export function inspectCurrentBidDecisionPackage(
     "inspect_current_bid_decision_package",
     { command },
   );
+}
+
+export function composeTenderOffice(
+  tenderId: string,
+): Promise<WorkPlanProposalInspection> {
+  const command: ComposeTenderOfficeCommand = { tender_id: tenderId };
+  return invoke<WorkPlanProposalInspection>("compose_tender_office", {
+    command,
+  });
+}
+
+export function inspectCurrentWorkPlan(
+  tenderId: string,
+): Promise<WorkPlanProposalInspection | null> {
+  const command: OpenTenderCommand = { tender_id: tenderId };
+  return invoke<WorkPlanProposalInspection | null>(
+    "inspect_current_work_plan",
+    {
+      command,
+    },
+  );
+}
+
+export function reviseWorkPlanProposal(
+  tenderId: string,
+  planId: string,
+  baseVersion: number,
+  actions: WorkPlanRevisionAction[],
+): Promise<WorkPlanProposalInspection> {
+  const command: ReviseWorkPlanProposalCommand = {
+    tender_id: tenderId,
+    plan_id: planId,
+    base_version: baseVersion,
+    actions,
+  };
+  return invoke<WorkPlanProposalInspection>("revise_work_plan_proposal", {
+    command,
+  });
+}
+
+export function decideWorkPlanProposal(
+  tenderId: string,
+  planId: string,
+  version: number,
+  decision: WorkPlanDecision,
+  rationale: string,
+): Promise<WorkPlanProposalInspection> {
+  const command: DecideWorkPlanProposalCommand = {
+    tender_id: tenderId,
+    plan_id: planId,
+    version,
+    decision,
+    rationale,
+  };
+  return invoke<WorkPlanProposalInspection>("decide_work_plan_proposal", {
+    command,
+  });
 }
 
 export function decideBidDecisionPackage(

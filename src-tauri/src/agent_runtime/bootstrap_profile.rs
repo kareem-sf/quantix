@@ -45,11 +45,22 @@ pub(crate) fn bootstrap_profile(
         version: 1,
         identity: identity.into(),
         profession: profession.into(),
+        seniority: "Senior".into(),
         capabilities,
+        objective: instructions.into(),
+        behavior: "Work only from exact registered inputs, preserve uncertainty, and escalate blocked decisions.".into(),
+        skepticism: "Challenge unsupported claims and require attributable Evidence before reliance.".into(),
+        risk_tolerance: "Low tolerance for unverified or irreversible Tender commitments.".into(),
         instructions: instructions.into(),
         output_contract_json: bootstrap_output_contract(),
         review_policy: review_policy.into(),
         permissions: bootstrap_permissions(role),
+        prohibited_actions: vec![
+            "approve_tender_decision".into(),
+            "mutate_tender_store_directly".into(),
+            "perform_external_action".into(),
+            "access_secret_data".into(),
+        ],
         resource_budget: bootstrap_resource_budget(),
     }
 }

@@ -16,6 +16,7 @@ import { DocumentEvidenceOffice } from "./DocumentEvidenceOffice";
 import { TenderBackupPanel } from "./TenderBackupPanel";
 import { TenderRecoveryPanel } from "./TenderRecoveryPanel";
 import { TenderRecordsPanel } from "./TenderRecordsPanel";
+import { TenderOfficePanel } from "./TenderOfficePanel";
 import {
   chooseAndImportTenderPackage,
   confirmSourceRelationship,
@@ -59,7 +60,12 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
     useState<SourceRelationshipKind>("replacement");
   const [busy, setBusy] = useState(false);
   const [commandFailed, setCommandFailed] = useState(false);
+  const [tenderStateVersion, setTenderStateVersion] = useState(0);
   const reportCommandFailure = useCallback(() => setCommandFailed(true), []);
+  const reportTenderStateChange = useCallback(
+    () => setTenderStateVersion((version) => version + 1),
+    [],
+  );
 
   const refreshBackupRecovery = async (tenderId: string) => {
     const [nextBackups, nextRecoveries] = await Promise.all([
@@ -668,6 +674,14 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                 tenderId={selected.tender_id}
                 runtimeReady={runtimeReady}
                 reportCommandFailure={reportCommandFailure}
+                onTenderStateChange={reportTenderStateChange}
+              />
+              <TenderOfficePanel
+                key={`tender-office-${selected.tender_id}`}
+                tenderId={selected.tender_id}
+                runtimeReady={runtimeReady}
+                reportCommandFailure={reportCommandFailure}
+                refreshToken={tenderStateVersion}
               />
             </>
           ) : recovery ? (

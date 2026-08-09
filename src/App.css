@@ -1830,6 +1830,69 @@ button {
   resize: vertical;
 }
 
+.tender-office > * + * {
+  margin-top: 1rem;
+}
+
+.tender-office__profiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+  gap: 1rem;
+}
+
+.tender-office__profile-details {
+  display: grid;
+  gap: 0.65rem;
+  margin: 1rem 0;
+}
+
+.tender-office__profile-details div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.tender-office__profile-details dt {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tender-office__profile-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tender-office details pre {
+  max-height: 14rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tender-office__revision fieldset {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.5rem;
+  border: 1px solid var(--line);
+}
+
+.tender-office__revision fieldset label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tender-office__revision input,
+.tender-office__revision select,
+.tender-office__revision textarea,
+.tender-office .bid-decision-gate select,
+.tender-office .bid-decision-gate textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 @media (max-width: 900px) {
   .bid-capability-form,
   .bid-matrix-editor {

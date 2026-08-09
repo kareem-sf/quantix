@@ -9,17 +9,17 @@ mod tender_store;
 
 pub use agent_runtime::{
     approve_one_run_access, AccessApproval, AccessRequest, AgentAccessRequestStatus,
-    AgentAccessRequestView, AgentAccessResolution, AgentProfileVersionView, AgentResourceBudget,
-    AgentRunInspection, AgentRunPermissions, AgentRunRecoveryDecision, AgentRunRecoveryDisposition,
-    AgentRunState, AgentRunWorkspaceManifest, AgentTaskInputReference, ApproveAgentAccessCommand,
-    BootstrapAuthority, BootstrapRole, BootstrapTeamMember, DataClassification, DataViewManifest,
-    InterruptAgentRunCommand, OneRunAccessGrant, PermissionCeiling, PermissionDenialReason,
-    PermissionGrant, ProposedAgentResult, ProviderEvent, ProviderEventKind, ProviderFailure,
-    ProviderFailureCategory, ProviderRateLimit, ProviderRateLimitState, ProviderRateLimitWindow,
-    ProviderUsage, RequestAgentAccessCommand, ResolveAgentAccessCommand,
-    ResolveIndeterminateAgentRunCommand, RunBootstrapAgentCommand, TenderTaskView,
-    ThreadExposureSet, ToolIdempotency, ToolSideEffectClass, TypedToolDefinition, TypedToolQuota,
-    VerificationStatus,
+    AgentAccessRequestView, AgentAccessResolution, AgentProfileStatus, AgentProfileVersionView,
+    AgentResourceBudget, AgentRunInspection, AgentRunPermissions, AgentRunRecoveryDecision,
+    AgentRunRecoveryDisposition, AgentRunState, AgentRunWorkspaceManifest, AgentTaskInputReference,
+    ApproveAgentAccessCommand, BootstrapAuthority, BootstrapRole, BootstrapTeamMember,
+    DataClassification, DataViewManifest, InterruptAgentRunCommand, OneRunAccessGrant,
+    PermissionCeiling, PermissionDenialReason, PermissionGrant, ProposedAgentResult, ProviderEvent,
+    ProviderEventKind, ProviderFailure, ProviderFailureCategory, ProviderRateLimit,
+    ProviderRateLimitState, ProviderRateLimitWindow, ProviderUsage, RequestAgentAccessCommand,
+    ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand, RunBootstrapAgentCommand,
+    TenderTaskView, ThreadExposureSet, ToolIdempotency, ToolSideEffectClass, TypedToolDefinition,
+    TypedToolQuota, VerificationStatus,
 };
 pub use document_parsing::{
     DocumentParseResult, EvidenceBoundingBox, EvidenceDocument, EvidenceLanguage, EvidenceLocation,
@@ -50,14 +50,15 @@ pub use tender_store::{
     BidDecisionReturnReworkDisposition, BidDecisionReturnReworkItem, BidDecisionReturnReworkResult,
     BidRecommendation, BidRecommendationOutcome, CapabilityDemand, CapabilityDemandClassification,
     ComplianceDisposition, ComplianceDispositionUpdate, ComplianceMatrixPage, ComplianceMatrixRow,
-    ContentVersionSummary, CreateBidDecisionPackageCommand, CreateTenderBackupCommand,
-    CreateTenderCommand, CreateTenderEngineerEntryCommand, DecideBidDecisionPackageCommand,
-    DecideTenderRecordCommand, InspectBidDecisionApprovalHistoryCommand,
-    InspectBidDecisionPackageRecordsCommand, InspectComplianceMatrixCommand,
-    InspectTenderRecordsCommand, InvalidateBidDecisionApprovalCommand,
-    ManagerCapabilityDemandInput, OpenTenderCommand, PrepareTenderRecoveryCommand,
-    RegisterTenderContentCommand, ResolveBidDecisionReturnReworkCommand,
-    ResolveTenderRecoveryCommand, ResourceImplication, ReviewFindingSeverity, ReviseTenderCommand,
+    ComposeTenderOfficeCommand, ContentVersionSummary, CreateBidDecisionPackageCommand,
+    CreateTenderBackupCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
+    DecideBidDecisionPackageCommand, DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
+    InspectBidDecisionApprovalHistoryCommand, InspectBidDecisionPackageRecordsCommand,
+    InspectComplianceMatrixCommand, InspectTenderRecordsCommand,
+    InvalidateBidDecisionApprovalCommand, ManagerCapabilityDemandInput, OpenTenderCommand,
+    PrepareTenderRecoveryCommand, RegisterTenderContentCommand,
+    ResolveBidDecisionReturnReworkCommand, ResolveTenderRecoveryCommand, ResourceImplication,
+    ReviewFindingSeverity, ReviseTenderCommand, ReviseWorkPlanProposalCommand,
     RunBidDecisionPackageReviewCommand, RunTenderRecordExtractionCommand,
     RunTenderRecordReviewCommand, StartupReconciliationReport, TenderBackupRecord,
     TenderBackupState, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
@@ -69,7 +70,9 @@ pub use tender_store::{
     TenderRecordPage, TenderRecordReview, TenderRecordReviewOutcome, TenderRecordReviewResult,
     TenderRecordSourceRelationship, TenderRecordTrustClass, TenderRecordVersionReference,
     TenderRecoveryChoice, TenderRecoveryDecision, TenderRecoveryDecisionRecord,
-    TenderRecoveryRecord, TenderRecoveryState, TenderSummary,
+    TenderRecoveryRecord, TenderRecoveryState, TenderSummary, WorkPlanApprovalRecord,
+    WorkPlanCapabilityGap, WorkPlanDecision, WorkPlanProfileBinding, WorkPlanProposalInspection,
+    WorkPlanRevisionAction, WorkPlanTask, WorkPlanWorkstream,
 };
 
 use tauri::Manager;
@@ -81,9 +84,10 @@ mod tauri_commands {
         BidDecisionApprovalInvalidationResult, BidDecisionApprovalResult,
         BidDecisionPackageInspection, BidDecisionPackageRecordPage, BidDecisionPackageReviewResult,
         BidDecisionReturnReworkResult, ChooseTenderPackageCommand, ComplianceMatrixPage,
-        ConfirmSourceRelationshipCommand, CreateBidDecisionPackageCommand,
-        CreateTenderBackupCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
-        DecideBidDecisionPackageCommand, DecideTenderRecordCommand, DocumentParseResult,
+        ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand,
+        CreateBidDecisionPackageCommand, CreateTenderBackupCommand, CreateTenderCommand,
+        CreateTenderEngineerEntryCommand, DecideBidDecisionPackageCommand,
+        DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DocumentParseResult,
         DocumentRegister, EvidenceDocument, EvidenceSearchResult, ImportTenderPackageCommand,
         InspectBidDecisionApprovalHistoryCommand, InspectBidDecisionPackageRecordsCommand,
         InspectComplianceMatrixCommand, InspectTenderRecordsCommand, InterruptAgentRunCommand,
@@ -91,13 +95,13 @@ mod tauri_commands {
         PrepareTenderRecoveryCommand, QuantixHost, RequestAgentAccessCommand,
         ResolveAgentAccessCommand, ResolveBidDecisionReturnReworkCommand,
         ResolveIndeterminateAgentRunCommand, ResolveTenderRecoveryCommand, ReviseTenderCommand,
-        RunBidDecisionPackageReviewCommand, RunBootstrapAgentCommand,
-        RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, RuntimeReadiness,
-        SearchEvidenceCommand, SetupOutcome, TenderBackupRecord, TenderCatalogueEntry,
-        TenderCommandError, TenderErrorCode, TenderIntegrityReport, TenderPackageImportResult,
-        TenderPackageSourceKind, TenderRecordAuthority, TenderRecordDecisionResult,
-        TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult,
-        TenderRecoveryRecord, TenderSummary,
+        ReviseWorkPlanProposalCommand, RunBidDecisionPackageReviewCommand,
+        RunBootstrapAgentCommand, RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand,
+        RuntimeReadiness, SearchEvidenceCommand, SetupOutcome, TenderBackupRecord,
+        TenderCatalogueEntry, TenderCommandError, TenderErrorCode, TenderIntegrityReport,
+        TenderPackageImportResult, TenderPackageSourceKind, TenderRecordAuthority,
+        TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordPage,
+        TenderRecordReviewResult, TenderRecoveryRecord, TenderSummary, WorkPlanProposalInspection,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -488,6 +492,60 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn compose_tender_office(
+        host: tauri::State<'_, QuantixHost>,
+        command: ComposeTenderOfficeCommand,
+    ) -> Result<WorkPlanProposalInspection, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.compose_tender_office(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_current_work_plan(
+        host: tauri::State<'_, QuantixHost>,
+        command: OpenTenderCommand,
+    ) -> Result<Option<WorkPlanProposalInspection>, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.inspect_current_work_plan(&command.tender_id)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn revise_work_plan_proposal(
+        host: tauri::State<'_, QuantixHost>,
+        command: ReviseWorkPlanProposalCommand,
+    ) -> Result<WorkPlanProposalInspection, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.revise_work_plan_proposal(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn decide_work_plan_proposal(
+        host: tauri::State<'_, QuantixHost>,
+        command: DecideWorkPlanProposalCommand,
+    ) -> Result<WorkPlanProposalInspection, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.decide_work_plan_proposal(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
     pub(super) async fn decide_bid_decision_package(
         host: tauri::State<'_, QuantixHost>,
         command: DecideBidDecisionPackageCommand,
@@ -700,6 +758,10 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
         tauri_commands::decide_tender_record,
         tauri_commands::create_bid_decision_package,
         tauri_commands::inspect_current_bid_decision_package,
+        tauri_commands::compose_tender_office,
+        tauri_commands::inspect_current_work_plan,
+        tauri_commands::revise_work_plan_proposal,
+        tauri_commands::decide_work_plan_proposal,
         tauri_commands::decide_bid_decision_package,
         tauri_commands::inspect_bid_decision_approval_history,
         tauri_commands::resolve_bid_decision_return_rework,

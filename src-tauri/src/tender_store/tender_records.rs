@@ -20,7 +20,7 @@ use crate::{
 use super::{
     agent_records::{
         ensure_agent_run_capacity, insert_event, insert_profile_version, insert_task, load_profile,
-        load_task, load_thread_exposure,
+        load_task, load_thread_exposure, update_profile_head,
     },
     append_audit_event, random_identifier, sql_error, sqlite_timestamp, valid_identifier,
     RawEvidenceLocation, TenderCommandError, TenderErrorCode, TenderId, TenderStore,
@@ -433,11 +433,17 @@ pub(crate) fn record_extraction_profile(profile_id: String) -> AgentProfileVersi
         version: 2,
         identity: "Tender Analyst".into(),
         profession: "Tender Engineer".into(),
+        seniority: "Senior".into(),
         capabilities: vec![RECORD_EXTRACTION_CAPABILITY.into()],
+        objective: "Extract structured Tender Records from exact Evidence without filling gaps.".into(),
+        behavior: "Separate source wording, interpretation, contradictions, uncertainty, and missing information.".into(),
+        skepticism: "Treat every material claim as unsupported until exact provenance is supplied.".into(),
+        risk_tolerance: "Low tolerance for invented or weakly attributed Tender facts.".into(),
         instructions: "Extract only structured pre-bid Tender records supported by the supplied exact Evidence. Preserve original-language authority, label translations as derived, represent absence as an Assumption or Tender Query, surface contradictions, and make no approval decision.".into(),
         output_contract_json: record_extraction_output_contract(),
         review_policy: "Every proposed record requires independent review or exact Engineer User verification. Missing provenance blocks verification.".into(),
         permissions: record_extraction_permissions(),
+        prohibited_actions: standard_prohibited_actions(),
         resource_budget: record_extraction_budget(),
     }
 }
@@ -448,13 +454,28 @@ pub(crate) fn record_review_profile(profile_id: String) -> AgentProfileVersionVi
         version: 2,
         identity: "Independent Reviewer".into(),
         profession: "Tender Assurance Engineer".into(),
+        seniority: "Senior".into(),
         capabilities: vec![RECORD_REVIEW_CAPABILITY.into()],
+        objective: "Independently review one exact proposed Tender Record version.".into(),
+        behavior: "Review without editing the target and report only attributable findings.".into(),
+        skepticism: "Challenge provenance, contradictions, assumptions, and unsupported certainty.".into(),
+        risk_tolerance: "Very low tolerance for unverified material Tender facts.".into(),
         instructions: "Review the supplied immutable Tender Record version against its exact authoritative Evidence. Return only an attributable verification or rejection outcome. Do not rewrite the author target and never fill missing provenance with plausible content.".into(),
         output_contract_json: record_review_output_contract(),
         review_policy: "Verification is allowed only when every material field has an eligible exact provenance basis. Assumptions and unresolved Tender Queries require an Engineer decision, not independent verification.".into(),
         permissions: record_review_permissions(),
+        prohibited_actions: standard_prohibited_actions(),
         resource_budget: record_review_budget(),
     }
+}
+
+fn standard_prohibited_actions() -> Vec<String> {
+    vec![
+        "approve_tender_decision".into(),
+        "mutate_tender_store_directly".into(),
+        "perform_external_action".into(),
+        "access_secret_data".into(),
+    ]
 }
 
 fn record_review_task(
@@ -764,6 +785,12 @@ impl TenderStore {
             } else {
                 insert_profile_version(&transaction, &profile, &created_at)?;
             }
+            update_profile_head(
+                &transaction,
+                &profile.profile_id,
+                profile.version,
+                crate::agent_runtime::AgentProfileStatus::Active,
+            )?;
             let deadline: String = transaction
                 .query_row(
                     "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 hour')",
@@ -1021,6 +1048,12 @@ impl TenderStore {
             } else {
                 insert_profile_version(&transaction, &profile, &created_at)?;
             }
+            update_profile_head(
+                &transaction,
+                &profile.profile_id,
+                profile.version,
+                crate::agent_runtime::AgentProfileStatus::Active,
+            )?;
             let deadline: String = transaction
                 .query_row(
                     "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 hour')",

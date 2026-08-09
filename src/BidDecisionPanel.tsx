@@ -26,6 +26,7 @@ interface BidDecisionPanelProps {
   tenderId: string;
   runtimeReady: boolean;
   reportCommandFailure: () => void;
+  onTenderStateChange: () => void;
 }
 
 const PAGE_SIZE = 4;
@@ -187,6 +188,7 @@ export function BidDecisionPanel({
   tenderId,
   runtimeReady,
   reportCommandFailure,
+  onTenderStateChange,
 }: BidDecisionPanelProps) {
   const [packageInspection, setPackageInspection] =
     useState<BidDecisionPackageInspection | null>(null);
@@ -326,6 +328,7 @@ export function BidDecisionPanel({
       setBusy(true);
       try {
         await operation();
+        onTenderStateChange();
         await refresh();
       } catch {
         reportCommandFailure();
@@ -333,7 +336,7 @@ export function BidDecisionPanel({
         setBusy(false);
       }
     },
-    [refresh, reportCommandFailure],
+    [onTenderStateChange, refresh, reportCommandFailure],
   );
 
   const savedManagerDemands = useMemo(

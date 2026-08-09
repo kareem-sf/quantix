@@ -34,6 +34,7 @@ use crate::{setup::SetupState, QuantixHost};
 mod agent_records;
 pub(crate) mod backups;
 mod bid_decisions;
+mod team_composer;
 mod tender_records;
 
 pub use backups::{
@@ -58,6 +59,11 @@ pub use bid_decisions::{
     ManagerCapabilityDemandInput, ResolveBidDecisionReturnReworkCommand, ResourceImplication,
     ReviewFindingSeverity, RunBidDecisionPackageReviewCommand, TenderRecordVersionReference,
 };
+pub use team_composer::{
+    ComposeTenderOfficeCommand, DecideWorkPlanProposalCommand, ReviseWorkPlanProposalCommand,
+    WorkPlanApprovalRecord, WorkPlanCapabilityGap, WorkPlanDecision, WorkPlanProfileBinding,
+    WorkPlanProposalInspection, WorkPlanRevisionAction, WorkPlanTask, WorkPlanWorkstream,
+};
 pub use tender_records::{
     CreateTenderEngineerEntryCommand, DecideTenderRecordCommand, InspectTenderRecordsCommand,
     RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, TenderEvidenceReference,
@@ -75,7 +81,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 12;
+const TENDER_SCHEMA_VERSION: i64 = 13;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -242,15 +248,28 @@ CREATE TABLE agent_profile_versions (
   version INTEGER NOT NULL CHECK (version > 0),
   identity TEXT NOT NULL,
   profession TEXT NOT NULL,
+  seniority TEXT NOT NULL,
   capabilities_json TEXT NOT NULL CHECK (json_valid(capabilities_json)),
+  objective TEXT NOT NULL,
+  behavior TEXT NOT NULL,
+  skepticism TEXT NOT NULL,
+  risk_tolerance TEXT NOT NULL,
   instructions TEXT NOT NULL,
   output_contract_json TEXT NOT NULL CHECK (json_valid(output_contract_json)),
   review_policy TEXT NOT NULL,
   permissions_json TEXT NOT NULL CHECK (json_valid(permissions_json)),
+  prohibited_actions_json TEXT NOT NULL CHECK (json_valid(prohibited_actions_json)),
   resource_budget_json TEXT NOT NULL CHECK (json_valid(resource_budget_json)),
   created_at TEXT NOT NULL,
   PRIMARY KEY (profile_id, version),
   FOREIGN KEY (profile_id) REFERENCES agent_profiles(profile_id)
+);
+CREATE TABLE agent_profile_heads (
+  profile_id TEXT PRIMARY KEY,
+  current_version INTEGER NOT NULL CHECK (current_version > 0),
+  status TEXT NOT NULL CHECK (status IN ('proposed', 'active', 'suspended', 'retired')),
+  FOREIGN KEY (profile_id, current_version)
+    REFERENCES agent_profile_versions(profile_id, version)
 );
 CREATE TABLE tender_tasks (
   task_id TEXT PRIMARY KEY CHECK (length(task_id) = 32),
@@ -638,6 +657,56 @@ CREATE TABLE bid_decision_approval_invalidations (
   created_at TEXT NOT NULL,
   FOREIGN KEY (approval_id) REFERENCES bid_decision_approval_records(approval_id)
 );
+CREATE TABLE work_plans (
+  plan_id TEXT PRIMARY KEY CHECK (length(plan_id) = 32),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE work_plan_versions (
+  plan_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  bid_package_id TEXT NOT NULL,
+  bid_package_version INTEGER NOT NULL CHECK (bid_package_version > 0),
+  bid_package_manifest_sha256 TEXT NOT NULL CHECK (length(bid_package_manifest_sha256) = 64),
+  capability_catalogue_version INTEGER NOT NULL CHECK (capability_catalogue_version = 1),
+  permission_policy_version INTEGER NOT NULL CHECK (permission_policy_version = 1),
+  profiles_json TEXT NOT NULL CHECK (json_valid(profiles_json)),
+  workstreams_json TEXT NOT NULL CHECK (json_valid(workstreams_json)),
+  tasks_json TEXT NOT NULL CHECK (json_valid(tasks_json)),
+  query_bindings_json TEXT NOT NULL CHECK (json_valid(query_bindings_json)),
+  capability_gaps_json TEXT NOT NULL CHECK (json_valid(capability_gaps_json)),
+  blocker_codes_json TEXT NOT NULL CHECK (json_valid(blocker_codes_json)),
+  revision_actions_json TEXT NOT NULL CHECK (json_valid(revision_actions_json)),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  created_by TEXT NOT NULL CHECK (created_by = 'engineer_user'),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (plan_id, version),
+  FOREIGN KEY (plan_id) REFERENCES work_plans(plan_id),
+  FOREIGN KEY (bid_package_id, bid_package_version)
+    REFERENCES bid_decision_package_versions(package_id, version)
+);
+CREATE TABLE work_plan_heads (
+  plan_id TEXT PRIMARY KEY,
+  current_version INTEGER NOT NULL CHECK (current_version > 0),
+  FOREIGN KEY (plan_id, current_version)
+    REFERENCES work_plan_versions(plan_id, version)
+);
+CREATE TABLE work_plan_approvals (
+  approval_id TEXT PRIMARY KEY CHECK (length(approval_id) = 32),
+  plan_id TEXT NOT NULL,
+  plan_version INTEGER NOT NULL CHECK (plan_version > 0),
+  decision TEXT NOT NULL CHECK (decision IN ('approve', 'return', 'reject')),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  plan_manifest_sha256 TEXT NOT NULL CHECK (length(plan_manifest_sha256) = 64),
+  decided_by TEXT NOT NULL CHECK (decided_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+  approval_manifest_json TEXT NOT NULL CHECK (json_valid(approval_manifest_json)),
+  approval_sha256 TEXT NOT NULL UNIQUE CHECK (length(approval_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (plan_id, plan_version),
+  FOREIGN KEY (plan_id, plan_version)
+    REFERENCES work_plan_versions(plan_id, version)
+);
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
   event_type TEXT NOT NULL,
@@ -793,6 +862,17 @@ CREATE TRIGGER agent_profile_versions_no_delete
 BEFORE DELETE ON agent_profile_versions
 BEGIN
   SELECT RAISE(ABORT, 'Agent Profile Versions are immutable');
+END;
+CREATE TRIGGER agent_profile_heads_identity_immutable
+BEFORE UPDATE ON agent_profile_heads
+WHEN NEW.profile_id != OLD.profile_id
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Profile head identity is immutable');
+END;
+CREATE TRIGGER agent_profile_heads_no_delete
+BEFORE DELETE ON agent_profile_heads
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Profile heads cannot be deleted');
 END;
 CREATE TRIGGER tender_tasks_no_update
 BEFORE UPDATE ON tender_tasks
@@ -1079,6 +1159,47 @@ CREATE TRIGGER bid_decision_approval_invalidations_no_delete
 BEFORE DELETE ON bid_decision_approval_invalidations
 BEGIN
   SELECT RAISE(ABORT, 'Bid Decision Approval invalidations are immutable');
+END;
+CREATE TRIGGER work_plans_no_update
+BEFORE UPDATE ON work_plans
+BEGIN
+  SELECT RAISE(ABORT, 'Work Plans are immutable');
+END;
+CREATE TRIGGER work_plans_no_delete
+BEFORE DELETE ON work_plans
+BEGIN
+  SELECT RAISE(ABORT, 'Work Plans are immutable');
+END;
+CREATE TRIGGER work_plan_versions_no_update
+BEFORE UPDATE ON work_plan_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Work Plan Versions are immutable');
+END;
+CREATE TRIGGER work_plan_versions_no_delete
+BEFORE DELETE ON work_plan_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Work Plan Versions are immutable');
+END;
+CREATE TRIGGER work_plan_heads_identity_immutable
+BEFORE UPDATE ON work_plan_heads
+WHEN NEW.plan_id != OLD.plan_id
+BEGIN
+  SELECT RAISE(ABORT, 'Work Plan head identity is immutable');
+END;
+CREATE TRIGGER work_plan_heads_no_delete
+BEFORE DELETE ON work_plan_heads
+BEGIN
+  SELECT RAISE(ABORT, 'Work Plan heads cannot be deleted');
+END;
+CREATE TRIGGER work_plan_approvals_no_update
+BEFORE UPDATE ON work_plan_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Work Plan Approvals are immutable');
+END;
+CREATE TRIGGER work_plan_approvals_no_delete
+BEFORE DELETE ON work_plan_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Work Plan Approvals are immutable');
 END;
 CREATE TRIGGER audit_events_no_update
 BEFORE UPDATE ON audit_events
@@ -1403,7 +1524,7 @@ impl TenderStore {
         }
 
         let mut connection = Connection::open(root.join("tender.sqlite")).map_err(sql_error)?;
-        configure_writer(&connection)?;
+        configure_writer(&mut connection)?;
         connection.execute_batch(TENDER_SCHEMA).map_err(sql_error)?;
         connection
             .pragma_update(None, "user_version", TENDER_SCHEMA_VERSION)
@@ -1574,12 +1695,12 @@ impl TenderStore {
         TENDER_STORE_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
         validate_tender_store_layout(root).map_err(recovery_required_if_integrity)?;
         let database = root.join("tender.sqlite");
-        let connection = Connection::open_with_flags(
+        let mut connection = Connection::open_with_flags(
             database,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(|_| TenderCommandError::new(TenderErrorCode::RecoveryRequired))?;
-        configure_writer(&connection)
+        configure_writer(&mut connection)
             .map_err(|_| TenderCommandError::new(TenderErrorCode::RecoveryRequired))?;
         if inspect_store_structure(&connection, expected_tender_id)
             .map_err(|_| TenderCommandError::new(TenderErrorCode::RecoveryRequired))?
@@ -1859,6 +1980,9 @@ impl TenderStore {
             return Ok(false);
         }
         if !self.bid_decision_manifests_are_valid_with_check(check)? {
+            return Ok(false);
+        }
+        if !self.work_plan_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
         let mut statement = self
@@ -3776,7 +3900,8 @@ pub(crate) fn lock_mutex_with_check<'a, T>(
     }
 }
 
-fn configure_writer(connection: &Connection) -> Result<(), TenderCommandError> {
+fn configure_writer(connection: &mut Connection) -> Result<(), TenderCommandError> {
+    connection.set_transaction_behavior(TransactionBehavior::Immediate);
     connection
         .busy_timeout(Duration::from_secs(5))
         .map_err(sql_error)?;

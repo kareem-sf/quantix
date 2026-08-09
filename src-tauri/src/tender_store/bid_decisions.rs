@@ -26,7 +26,7 @@ use super::tender_records::{
 use super::{
     agent_records::{
         ensure_agent_run_capacity, insert_event, insert_profile_version, insert_task, load_profile,
-        load_thread_exposure,
+        load_thread_exposure, update_profile_head,
     },
     append_audit_event, random_identifier, sql_error, sqlite_timestamp, valid_identifier,
     TenderCommandError, TenderErrorCode, TenderId, TenderLifecyclePhase, TenderStore,
@@ -1991,6 +1991,28 @@ impl TenderStore {
                 ],
             )
             .map_err(sql_error)?;
+        let suspended_profile_count = transaction
+            .execute(
+                "UPDATE agent_profile_heads
+                 SET status = 'suspended'
+                 WHERE status = 'active'
+                   AND EXISTS (
+                     SELECT 1
+                     FROM work_plan_heads
+                     JOIN work_plan_versions AS plans
+                       ON plans.plan_id = work_plan_heads.plan_id
+                      AND plans.version = work_plan_heads.current_version
+                     JOIN work_plan_approvals AS plan_approvals
+                       ON plan_approvals.plan_id = plans.plan_id
+                      AND plan_approvals.plan_version = plans.version
+                      AND plan_approvals.decision = 'approve'
+                     JOIN json_each(plans.profiles_json) AS bound_profile
+                       ON json_extract(bound_profile.value, '$.profile.profile_id') = agent_profile_heads.profile_id
+                      AND json_extract(bound_profile.value, '$.profile.version') = agent_profile_heads.current_version
+                   )",
+                [],
+            )
+            .map_err(sql_error)?;
         if transaction
             .execute(
                 "UPDATE tender SET lifecycle_phase = 'bid_decision'
@@ -2015,6 +2037,7 @@ impl TenderStore {
                 "invalidation_id": invalidation_id,
                 "manifest_sha256": manifest_sha256,
                 "changed_record_count": changed_records.len().to_string(),
+                "suspended_profile_count": suspended_profile_count.to_string(),
             }),
             &created_at,
         )?;
@@ -3230,6 +3253,10 @@ fn capability_is_supported(value: &str) -> bool {
             | "document_control"
             | "tender_analysis"
             | "independent_review"
+            | "programme_planning"
+            | "contracts_review"
+            | "procurement_analysis"
+            | "technical_review"
     )
 }
 
@@ -3451,7 +3478,7 @@ fn load_stored_rows_after_with_check(
     Ok(rows)
 }
 
-fn package_dependencies_are_current(
+pub(super) fn package_dependencies_are_current(
     store: &TenderStore,
     package_id: &str,
     version: u32,
@@ -4145,11 +4172,22 @@ fn bid_package_review_profile(profile_id: String) -> AgentProfileVersionView {
         version: 3,
         identity: "Independent Reviewer".into(),
         profession: "Tender Assurance Engineer".into(),
+        seniority: "Senior".into(),
         capabilities: vec![BID_PACKAGE_REVIEW_CAPABILITY.into()],
+        objective: "Independently review one exact Bid Decision Package and its Evidence.".into(),
+        behavior: "Review without editing the package, resolving findings, or making the formal decision.".into(),
+        skepticism: "Challenge blockers, dispositions, capability coverage, assumptions, and recommendation logic.".into(),
+        risk_tolerance: "Very low tolerance for unsupported Proceed or Decline recommendations.".into(),
         instructions: "Independently review the exact immutable Bid Decision Package version. Check complete dispositions, exact trust/evidence bindings, Project Fingerprint trust, capability coverage, gaps, risks, assumptions, unresolved queries, resource implications, and recommendation. Record findings without editing the package or its analyzed Tender Records.".into(),
         output_contract_json: bid_package_review_output_contract(),
         review_policy: "A pass may contain only disclosed Minor findings. Critical or Major findings require a failed review and a new corrected package version; the reviewer cannot approve the Bid Decision.".into(),
         permissions: bid_package_review_permissions(),
+        prohibited_actions: vec![
+            "approve_tender_decision".into(),
+            "mutate_tender_store_directly".into(),
+            "perform_external_action".into(),
+            "access_secret_data".into(),
+        ],
         resource_budget: bid_package_review_budget(),
     }
 }
@@ -4296,6 +4334,12 @@ impl TenderStore {
             } else {
                 insert_profile_version(&transaction, &profile, &created_at)?;
             }
+            update_profile_head(
+                &transaction,
+                &profile.profile_id,
+                profile.version,
+                crate::agent_runtime::AgentProfileStatus::Active,
+            )?;
             let deadline: String = transaction
                 .query_row(
                     "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 hour')",

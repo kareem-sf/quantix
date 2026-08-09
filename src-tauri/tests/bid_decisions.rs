@@ -4,18 +4,20 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use quantix_lib::{
-    ensure_quantix_setup, AgentRunState, BidDecisionApprovalDecision, BidDecisionPackageInspection,
-    BidDecisionPackageReviewOutcome, BidRecommendationOutcome, ComplianceDisposition,
-    ComplianceDispositionUpdate, CreateBidDecisionPackageCommand, CreateTenderCommand,
-    CreateTenderEngineerEntryCommand, DecideBidDecisionPackageCommand, DecideTenderRecordCommand,
+    ensure_quantix_setup, AgentProfileStatus, AgentRunState, BidDecisionApprovalDecision,
+    BidDecisionPackageInspection, BidDecisionPackageReviewOutcome, BidRecommendationOutcome,
+    ComplianceDisposition, ComplianceDispositionUpdate, ComposeTenderOfficeCommand,
+    CreateBidDecisionPackageCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
+    DecideBidDecisionPackageCommand, DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
     DeviceProtection, ImportTenderPackageCommand, InspectBidDecisionApprovalHistoryCommand,
     InvalidateBidDecisionApprovalCommand, ManagerCapabilityDemandInput, ParseSourceArtifactCommand,
     ProviderFailureCategory, QuantixHost, ResolveBidDecisionReturnReworkCommand,
-    ReviseTenderCommand, RunBidDecisionPackageReviewCommand, RunTenderRecordExtractionCommand,
-    RuntimeLayout, SetupPlatform, SetupState, StoragePermissions, TenderErrorCode,
-    TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase,
+    ReviseTenderCommand, ReviseWorkPlanProposalCommand, RunBidDecisionPackageReviewCommand,
+    RunTenderRecordExtractionCommand, RuntimeLayout, SetupPlatform, SetupState, StoragePermissions,
+    TenderErrorCode, TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase,
     TenderRecordEngineerDecisionKind, TenderRecordInspection, TenderRecordKind,
-    TenderRecordVersionReference, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    TenderRecordVersionReference, WorkPlanDecision, WorkPlanRevisionAction,
+    MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 struct ReadySetupPlatform;
@@ -226,6 +228,915 @@ async fn record_inventory_overflow_fails_terminally_without_publication_and_is_a
     assert_eq!(
         denial_payload["change"]["candidate_record_count"],
         Value::String("2".into())
+    );
+}
+
+#[tokio::test]
+async fn exact_proceed_composes_the_mandatory_tender_office_as_a_proposal() {
+    let harness = Harness::new("record-extraction");
+    let package = ready_package(&harness).await;
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact Bid Decision Package");
+
+    let proposal = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose the deterministic Tender Office proposal");
+
+    assert_eq!(proposal.version, 1);
+    assert!(proposal.current);
+    assert!(proposal.approval.is_none());
+    assert!(proposal.capability_gaps.is_empty());
+    assert!(proposal.profiles.iter().all(|binding| {
+        binding.status == AgentProfileStatus::Proposed
+            && !binding.profile.seniority.is_empty()
+            && !binding.profile.objective.is_empty()
+            && !binding.profile.behavior.is_empty()
+            && !binding.profile.skepticism.is_empty()
+            && !binding.profile.risk_tolerance.is_empty()
+            && !binding.profile.permissions.data_scopes.is_empty()
+            && !binding.profile.prohibited_actions.is_empty()
+    }));
+    let cost_estimator = proposal
+        .profiles
+        .iter()
+        .find(|binding| binding.profile.identity == "Cost Estimator")
+        .expect("mandatory Cost Estimator");
+    assert!(cost_estimator
+        .profile
+        .capabilities
+        .iter()
+        .any(|capability| capability == "cost_estimation"));
+    let cost_reviewer = proposal
+        .profiles
+        .iter()
+        .find(|binding| {
+            binding
+                .profile
+                .capabilities
+                .iter()
+                .any(|capability| capability == "review_cost_estimation")
+        })
+        .expect("separate qualified Cost Reviewer");
+    assert_ne!(
+        cost_estimator.profile.profile_id,
+        cost_reviewer.profile.profile_id
+    );
+    assert!(proposal
+        .workstreams
+        .iter()
+        .any(|workstream| workstream.workstream_key == "cost_estimation"));
+    assert!(proposal
+        .workstreams
+        .iter()
+        .any(|workstream| workstream.workstream_key == "query_rfi_control"));
+    assert!(proposal.workstreams.iter().all(|workstream| {
+        workstream
+            .deadlines
+            .contains(&"2026-05-15T14:00:00+03:00".into())
+    }));
+    assert!(proposal
+        .tasks
+        .iter()
+        .all(|task| task.deadline == "2026-05-15T14:00:00+03:00"));
+    assert_eq!(
+        proposal.query_bindings.len() as u32,
+        package.unresolved_query_count
+    );
+    assert!(proposal.tasks.iter().any(|task| {
+        task.review_profile_id.is_some()
+            && task.profile_id != task.review_profile_id.clone().expect("reviewer")
+    }));
+}
+
+#[tokio::test]
+async fn supported_conditional_demand_composes_a_separate_qualified_specialist() {
+    let harness = Harness::new("record-extraction");
+    let records = harness.extract_records().await;
+    harness.verify_records(&records, false);
+    let package = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+            disposition_updates: complete_dispositions(&records),
+            manager_capability_demands: vec![ManagerCapabilityDemandInput {
+                capability: "programme_planning".into(),
+                rationale: "The accelerated programme requires a dedicated planning specialist."
+                    .into(),
+                triggering_record: None,
+            }],
+        })
+        .expect("create package with a supported conditional demand");
+    harness.set_agent_scenario("bid-package-review");
+    let package = harness
+        .host
+        .run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id,
+            version: package.version,
+        })
+        .await
+        .expect("review conditional package")
+        .package;
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept conditional package");
+
+    let proposal = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose conditional specialist");
+
+    let specialist = proposal
+        .profiles
+        .iter()
+        .find(|binding| {
+            binding
+                .profile
+                .capabilities
+                .iter()
+                .any(|capability| capability == "programme_planning")
+        })
+        .expect("Planning Engineer profile");
+    assert_eq!(specialist.profile.profession, "Planning Engineer");
+    assert_ne!(
+        specialist.profile.profile_id,
+        proposal
+            .profiles
+            .iter()
+            .find(|binding| {
+                binding
+                    .profile
+                    .capabilities
+                    .iter()
+                    .any(|capability| capability == "independent_review")
+            })
+            .expect("independent reviewer")
+            .profile
+            .profile_id
+    );
+    let reviewer = proposal
+        .profiles
+        .iter()
+        .find(|binding| {
+            binding
+                .profile
+                .capabilities
+                .iter()
+                .any(|capability| capability == "review_programme_planning")
+        })
+        .expect("separate qualified Planning Reviewer");
+    let programme_task = proposal
+        .tasks
+        .iter()
+        .find(|task| task.workstream_key == "programme_planning")
+        .expect("programme task");
+    assert_eq!(
+        programme_task.review_profile_id.as_deref(),
+        Some(reviewer.profile.profile_id.as_str())
+    );
+}
+
+#[tokio::test]
+async fn manager_team_actions_create_validated_proposal_versions_and_visible_gaps() {
+    let harness = Harness::new("record-extraction");
+    let package = ready_package(&harness).await;
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact package");
+    let first = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose first proposal");
+    let coordinator = first
+        .profiles
+        .iter()
+        .find(|binding| binding.archetype == "tender_office_coordinator")
+        .expect("Coordinator")
+        .profile
+        .profile_id
+        .clone();
+    let split = harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: first.plan_id.clone(),
+            base_version: first.version,
+            actions: vec![WorkPlanRevisionAction::SplitProfile {
+                profile_id: coordinator,
+                identities: vec!["Tender Coordinator".into(), "Query Coordinator".into()],
+            }],
+        })
+        .expect("split compatible Coordinator responsibilities");
+    assert_eq!(split.version, 2);
+    let split_profiles = split
+        .profiles
+        .iter()
+        .filter(|binding| binding.archetype == "tender_office_coordinator")
+        .map(|binding| binding.profile.profile_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(split_profiles.len(), 2);
+    assert!(split
+        .profiles
+        .iter()
+        .filter(|binding| binding.archetype == "tender_office_coordinator")
+        .all(|binding| {
+            binding.profile.capabilities.len() == 1
+                && binding.profile.permissions.data_scopes.len() == 1
+                && binding.profile.permissions.allowed_actions.len() == 1
+        }));
+    assert_eq!(
+        split.workstreams[0].deadlines,
+        first.workstreams[0].deadlines
+    );
+    let combined = harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: split.plan_id.clone(),
+            base_version: split.version,
+            actions: vec![WorkPlanRevisionAction::CombineProfiles {
+                profile_ids: split_profiles,
+                identity: "Tender Coordination and Query Lead".into(),
+            }],
+        })
+        .expect("combine compatible Coordinator responsibilities");
+    assert_eq!(combined.version, 3);
+    let recombined = combined
+        .profiles
+        .iter()
+        .find(|binding| binding.profile.identity == "Tender Coordination and Query Lead")
+        .expect("recombined Coordinator");
+    assert_eq!(recombined.profile.capabilities.len(), 2);
+    assert_eq!(recombined.profile.permissions.data_scopes.len(), 2);
+    assert_eq!(
+        combined.workstreams[0].deadlines,
+        first.workstreams[0].deadlines
+    );
+    let analyst = combined
+        .profiles
+        .iter()
+        .find(|binding| binding.archetype == "tender_analyst")
+        .expect("Tender Analyst")
+        .profile
+        .profile_id
+        .clone();
+    let renamed = harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: combined.plan_id.clone(),
+            base_version: combined.version,
+            actions: vec![WorkPlanRevisionAction::RenameProfile {
+                profile_id: analyst,
+                identity: "Tender Requirements Analyst".into(),
+            }],
+        })
+        .expect("rename exact profile");
+    assert!(renamed
+        .profiles
+        .iter()
+        .any(|binding| binding.profile.identity == "Tender Requirements Analyst"));
+    let estimator = renamed
+        .profiles
+        .iter()
+        .find(|binding| binding.archetype == "cost_estimator")
+        .expect("Cost Estimator")
+        .profile
+        .profile_id
+        .clone();
+    let adjusted = harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: renamed.plan_id.clone(),
+            base_version: renamed.version,
+            actions: vec![WorkPlanRevisionAction::AdjustProfile {
+                profile_id: estimator.clone(),
+                objective:
+                    "Develop the controlled estimate and explicitly reconcile quotation gaps."
+                        .into(),
+                behavior: "Use deterministic calculation inputs and preserve every exception."
+                    .into(),
+                skepticism:
+                    "Challenge missing quantities, optimistic rates, and unsupported allowances."
+                        .into(),
+                risk_tolerance: "Very low tolerance for unpriced or unreviewed exposure.".into(),
+                resource_budget: quantix_lib::AgentResourceBudget {
+                    provider_turns: 1,
+                    duration_seconds: 90,
+                    output_bytes: 128 * 1024,
+                },
+            }],
+        })
+        .expect("adjust profile inside Safety Limits");
+    let removed = harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: adjusted.plan_id.clone(),
+            base_version: adjusted.version,
+            actions: vec![WorkPlanRevisionAction::RemoveProfile {
+                profile_id: estimator,
+            }],
+        })
+        .expect("remove Cost Estimator into a blocking gap");
+    assert!(removed
+        .capability_gaps
+        .iter()
+        .any(|gap| gap.capability == "cost_estimation"));
+    assert!(removed
+        .blocker_codes
+        .iter()
+        .any(|code| code == "capability_gap"));
+    let restored = harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: removed.plan_id.clone(),
+            base_version: removed.version,
+            actions: vec![WorkPlanRevisionAction::AddProfile {
+                archetype: "cost_estimator".into(),
+                identity: "Cost Estimator".into(),
+            }],
+        })
+        .expect("restore mandatory Cost Estimator");
+    assert_eq!(restored.version, 7);
+    assert!(restored.capability_gaps.is_empty());
+    let document_controller = restored
+        .profiles
+        .iter()
+        .find(|binding| binding.archetype == "document_controller")
+        .expect("Document Controller")
+        .profile
+        .profile_id
+        .clone();
+    let missing_core = harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: restored.plan_id.clone(),
+            base_version: restored.version,
+            actions: vec![WorkPlanRevisionAction::RemoveProfile {
+                profile_id: document_controller,
+            }],
+        })
+        .expect("remove a core profile into a visible blocking gap");
+    assert!(missing_core
+        .capability_gaps
+        .iter()
+        .any(|gap| gap.capability == "document_control"));
+    let repaired_core = harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: missing_core.plan_id,
+            base_version: missing_core.version,
+            actions: vec![WorkPlanRevisionAction::AddProfile {
+                archetype: "document_controller".into(),
+                identity: "Replacement Document Controller".into(),
+            }],
+        })
+        .expect("restore a removed core profile through a validated revision");
+    assert!(repaired_core.capability_gaps.is_empty());
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close before revision-lineage integrity inspection");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("inspect exact manager revision lineage")
+            .state,
+        TenderIntegrityState::Ready
+    );
+}
+
+#[tokio::test]
+async fn exact_work_plan_approval_enforces_conflicts_staleness_gaps_and_one_decision() {
+    let harness = Harness::new("record-extraction");
+    let package = ready_package(&harness).await;
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact package");
+    let first = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose proposal");
+    let reviewer = first
+        .profiles
+        .iter()
+        .find(|binding| binding.archetype == "independent_reviewer")
+        .expect("reviewer")
+        .profile
+        .profile_id
+        .clone();
+    let estimator = first
+        .profiles
+        .iter()
+        .find(|binding| binding.archetype == "cost_estimator")
+        .expect("estimator")
+        .profile
+        .profile_id
+        .clone();
+    let audit_before_conflict = harness
+        .host
+        .open_tender(&harness.tender_id)
+        .expect("inspect audit before conflict denial")
+        .audit_event_count;
+    assert_eq!(
+        harness
+            .host
+            .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+                tender_id: harness.tender_id.clone(),
+                plan_id: first.plan_id.clone(),
+                base_version: first.version,
+                actions: vec![WorkPlanRevisionAction::CombineProfiles {
+                    profile_ids: vec![reviewer, estimator.clone()],
+                    identity: "Conflicted Author Reviewer".into(),
+                }],
+            })
+            .expect_err("author and reviewer must stay separate")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect attributable conflict denial")
+            .audit_event_count,
+        audit_before_conflict + 1
+    );
+    let analyst = first
+        .profiles
+        .iter()
+        .find(|binding| binding.archetype == "tender_analyst")
+        .expect("analyst")
+        .profile
+        .profile_id
+        .clone();
+    let second = harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: first.plan_id.clone(),
+            base_version: first.version,
+            actions: vec![WorkPlanRevisionAction::RenameProfile {
+                profile_id: analyst,
+                identity: "Tender Requirements Analyst".into(),
+            }],
+        })
+        .expect("revise proposal");
+    let stale = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: first.plan_id.clone(),
+            version: first.version,
+            decision: WorkPlanDecision::Approve,
+            rationale: "Approve stale plan.".into(),
+        })
+        .expect_err("superseded proposal cannot be approved");
+    assert_eq!(stale.code, TenderErrorCode::InvalidCommand);
+    let approved = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: second.plan_id.clone(),
+            version: second.version,
+            decision: WorkPlanDecision::Approve,
+            rationale: "Approve the exact validated Work Plan for controlled production.".into(),
+        })
+        .expect("approve exact Work Plan");
+    assert_eq!(
+        approved.approval.as_ref().map(|approval| approval.decision),
+        Some(WorkPlanDecision::Approve)
+    );
+    assert!(approved
+        .profiles
+        .iter()
+        .all(|binding| binding.status == AgentProfileStatus::Active));
+    assert_eq!(
+        harness
+            .host
+            .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+                tender_id: harness.tender_id.clone(),
+                plan_id: second.plan_id,
+                version: second.version,
+                decision: WorkPlanDecision::Approve,
+                rationale: "Duplicate approval.".into(),
+            })
+            .expect_err("duplicate approval must fail")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+
+    let blocked_harness = Harness::new("record-extraction");
+    let package = ready_package(&blocked_harness).await;
+    blocked_harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &blocked_harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact package for blocked plan");
+    let plan = blocked_harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: blocked_harness.tender_id.clone(),
+        })
+        .expect("compose blocked-plan basis");
+    let estimator = plan
+        .profiles
+        .iter()
+        .find(|binding| binding.archetype == "cost_estimator")
+        .expect("estimator")
+        .profile
+        .profile_id
+        .clone();
+    let blocked = blocked_harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: blocked_harness.tender_id.clone(),
+            plan_id: plan.plan_id,
+            base_version: plan.version,
+            actions: vec![WorkPlanRevisionAction::RemoveProfile {
+                profile_id: estimator,
+            }],
+        })
+        .expect("create blocked proposal");
+    assert_eq!(
+        blocked_harness
+            .host
+            .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+                tender_id: blocked_harness.tender_id.clone(),
+                plan_id: blocked.plan_id.clone(),
+                version: blocked.version,
+                decision: WorkPlanDecision::Approve,
+                rationale: "Attempt to approve a Capability Gap.".into(),
+            })
+            .expect_err("Capability Gap blocks approval")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let returned = blocked_harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: blocked_harness.tender_id.clone(),
+            plan_id: blocked.plan_id.clone(),
+            version: blocked.version,
+            decision: WorkPlanDecision::Return,
+            rationale: "Return the incomplete staffing proposal for exact revision.".into(),
+        })
+        .expect("return blocked proposal");
+    assert_eq!(
+        returned.approval.as_ref().map(|approval| approval.decision),
+        Some(WorkPlanDecision::Return)
+    );
+    assert!(returned
+        .profiles
+        .iter()
+        .all(|binding| binding.status == AgentProfileStatus::Proposed));
+    let repaired = blocked_harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: blocked_harness.tender_id.clone(),
+            plan_id: blocked.plan_id,
+            base_version: blocked.version,
+            actions: vec![WorkPlanRevisionAction::AddProfile {
+                archetype: "cost_estimator".into(),
+                identity: "Revised Cost Estimator".into(),
+            }],
+        })
+        .expect("a returned plan can publish an exact successor");
+    assert!(repaired.capability_gaps.is_empty());
+    let rejected = blocked_harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: blocked_harness.tender_id.clone(),
+            plan_id: repaired.plan_id,
+            version: repaired.version,
+            decision: WorkPlanDecision::Reject,
+            rationale: "Reject the revised staffing proposal without activating production.".into(),
+        })
+        .expect("reject revised proposal");
+    assert_eq!(
+        rejected.approval.as_ref().map(|approval| approval.decision),
+        Some(WorkPlanDecision::Reject)
+    );
+    assert!(rejected
+        .profiles
+        .iter()
+        .all(|binding| binding.status == AgentProfileStatus::Proposed));
+}
+
+#[tokio::test]
+async fn stale_accepted_package_dependencies_block_work_plan_activation() {
+    let harness = Harness::new("record-extraction");
+    let package = ready_package(&harness).await;
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact package");
+    let plan = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose exact Work Plan before a material observation");
+    let current_records = inspect_all_records(&harness.host, &harness.tender_id);
+    let mut evidence = current_records
+        .iter()
+        .flat_map(|record| record.fields.iter().flat_map(|field| field.evidence.iter()))
+        .map(|evidence| evidence.reference.clone())
+        .collect::<Vec<_>>();
+    evidence.sort_by(|left, right| {
+        left.artifact_id
+            .cmp(&right.artifact_id)
+            .then_with(|| left.version.cmp(&right.version))
+            .then_with(|| left.ordinal.cmp(&right.ordinal))
+    });
+    evidence.dedup_by(|left, right| {
+        left.artifact_id == right.artifact_id
+            && left.version == right.version
+            && left.ordinal == right.ordinal
+    });
+    harness.set_agent_scenario("record-extraction-expanded");
+    harness
+        .host
+        .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id: harness.tender_id.clone(),
+            evidence,
+            authorities: Vec::new(),
+        })
+        .await
+        .expect("publish a material dependency after Proceed");
+
+    assert_eq!(
+        harness
+            .host
+            .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+                tender_id: harness.tender_id.clone(),
+                plan_id: plan.plan_id,
+                version: plan.version,
+                decision: WorkPlanDecision::Approve,
+                rationale: "Attempt to activate a plan whose package basis is stale.".into(),
+            })
+            .expect_err("stale accepted package must block Work Plan approval")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    assert!(harness
+        .host
+        .inspect_current_work_plan(&harness.tender_id)
+        .expect("inspect denied Work Plan")
+        .expect("Work Plan remains")
+        .profiles
+        .iter()
+        .all(|binding| binding.status == AgentProfileStatus::Proposed));
+}
+
+#[tokio::test]
+async fn unapproved_work_plan_can_rebase_after_material_change_reproceed() {
+    let harness = Harness::new("record-extraction");
+    let package = ready_package(&harness).await;
+    let accepted = harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact package");
+    let plan = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("leave exact Work Plan unapproved");
+    let current_records = inspect_all_records(&harness.host, &harness.tender_id);
+    let mut evidence = current_records
+        .iter()
+        .flat_map(|record| record.fields.iter().flat_map(|field| field.evidence.iter()))
+        .map(|evidence| evidence.reference.clone())
+        .collect::<Vec<_>>();
+    evidence.sort_by(|left, right| {
+        left.artifact_id
+            .cmp(&right.artifact_id)
+            .then_with(|| left.version.cmp(&right.version))
+            .then_with(|| left.ordinal.cmp(&right.ordinal))
+    });
+    evidence.dedup_by(|left, right| {
+        left.artifact_id == right.artifact_id
+            && left.version == right.version
+            && left.ordinal == right.ordinal
+    });
+    harness.set_agent_scenario("record-extraction-expanded");
+    harness
+        .host
+        .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id: harness.tender_id.clone(),
+            evidence,
+            authorities: Vec::new(),
+        })
+        .await
+        .expect("publish exact material dependency");
+    let invalidated = harness
+        .host
+        .invalidate_bid_decision_approval(InvalidateBidDecisionApprovalCommand {
+            tender_id: harness.tender_id.clone(),
+            approval_id: accepted.approval.approval_id,
+            approval_sha256: accepted.approval.approval_sha256,
+            material_change_summary: "A verified material obligation changes the planning basis."
+                .into(),
+            affected_areas: vec!["delivery_plan".into()],
+        })
+        .expect("invalidate Proceed while Work Plan remains Proposed");
+    assert!(harness
+        .host
+        .inspect_current_work_plan(&harness.tender_id)
+        .expect("inspect stale Proposed Work Plan")
+        .expect("Work Plan remains inspectable")
+        .profiles
+        .iter()
+        .all(|binding| binding.status == AgentProfileStatus::Proposed));
+    let captured_successor = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: Some(package.version),
+            disposition_updates: Vec::new(),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("publish captured material-change successor");
+    let changed = invalidated
+        .invalidation
+        .changed_records
+        .first()
+        .expect("captured changed record");
+    harness
+        .host
+        .decide_tender_record(DecideTenderRecordCommand {
+            tender_id: harness.tender_id.clone(),
+            record_id: changed.record_id.clone(),
+            version: changed.version,
+            decision: TenderRecordEngineerDecisionKind::Verify,
+            rationale: "Verify the exact changed obligation before re-Proceed.".into(),
+        })
+        .expect("verify captured material-change record");
+    let current_records = inspect_all_records(&harness.host, &harness.tender_id);
+    let successor = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: Some(captured_successor.version),
+            disposition_updates: complete_dispositions(&current_records),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("publish ready exact successor");
+    harness.set_agent_scenario("bid-package-review");
+    let successor = harness
+        .host
+        .run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: successor.package_id,
+            version: successor.version,
+        })
+        .await
+        .expect("review exact successor")
+        .package;
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &successor,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("re-Proceed on exact successor");
+
+    let rebased = harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: plan.plan_id,
+            base_version: plan.version,
+            actions: vec![WorkPlanRevisionAction::RebasePackageBasis],
+        })
+        .expect("rebase previously unapproved Work Plan");
+    assert_eq!(rebased.bid_package_id, successor.package_id);
+    assert_eq!(rebased.bid_package_version, successor.version);
+    assert!(rebased.approval.is_none());
+    assert!(rebased
+        .profiles
+        .iter()
+        .all(|binding| binding.status == AgentProfileStatus::Proposed));
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close before unapproved rebase integrity inspection");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("inspect unapproved rebase lineage")
+            .state,
+        TenderIntegrityState::Ready
+    );
+}
+
+#[tokio::test]
+async fn cold_open_rejects_a_tampered_work_plan_approval_and_profile_binding() {
+    let harness = Harness::new("record-extraction");
+    let package = ready_package(&harness).await;
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact package");
+    let plan = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose exact Work Plan");
+    let approved = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: plan.plan_id,
+            version: plan.version,
+            decision: WorkPlanDecision::Approve,
+            rationale: "Approve the exact production team and Work Plan.".into(),
+        })
+        .expect("approve exact Work Plan");
+    let corrupted_profile_id = approved.profiles[0].profile.profile_id.clone();
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close Tender before corruption injection");
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    rusqlite::Connection::open(database)
+        .expect("open Tender Store")
+        .execute(
+            "UPDATE agent_profile_heads SET status = 'retired' WHERE profile_id = ?1",
+            [&corrupted_profile_id],
+        )
+        .expect("corrupt an approved Work Plan profile binding");
+
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("inspect tampered Work Plan");
+    assert_eq!(integrity.state, TenderIntegrityState::RecoveryRequired);
+    assert!(
+        integrity
+            .issues
+            .contains(&quantix_lib::TenderIntegrityIssue::ManifestInvalid),
+        "{integrity:#?}"
     );
 }
 
@@ -568,6 +1479,26 @@ async fn material_change_invalidates_proceed_and_reopens_an_exact_successor_path
             BidDecisionApprovalDecision::Accept,
         ))
         .expect("accept exact package");
+    let first_plan = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose Work Plan for the accepted package");
+    let approved_plan = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: first_plan.plan_id.clone(),
+            version: first_plan.version,
+            decision: WorkPlanDecision::Approve,
+            rationale: "Approve production only for the exact accepted package.".into(),
+        })
+        .expect("approve exact initial Work Plan");
+    assert!(approved_plan
+        .profiles
+        .iter()
+        .all(|binding| binding.status == AgentProfileStatus::Active));
     let audit_before_unproven_invalidation = harness
         .host
         .open_tender(&harness.tender_id)
@@ -647,6 +1578,16 @@ async fn material_change_invalidates_proceed_and_reopens_an_exact_successor_path
         Some(invalidated.invalidation.clone())
     );
     assert!(!invalidated.invalidation.changed_records.is_empty());
+    let suspended_plan = harness
+        .host
+        .inspect_current_work_plan(&harness.tender_id)
+        .expect("inspect suspended Work Plan")
+        .expect("historical Work Plan remains inspectable");
+    assert!(!suspended_plan.current);
+    assert!(suspended_plan
+        .profiles
+        .iter()
+        .all(|binding| binding.status == AgentProfileStatus::Suspended));
     assert_eq!(
         harness
             .host
@@ -680,6 +1621,83 @@ async fn material_change_invalidates_proceed_and_reopens_an_exact_successor_path
     );
     assert!(successor.return_rework_basis.is_none());
     assert_eq!(successor.version, package.version + 1);
+    let changed_record = invalidated
+        .invalidation
+        .changed_records
+        .first()
+        .expect("exact changed record")
+        .clone();
+    harness
+        .host
+        .decide_tender_record(DecideTenderRecordCommand {
+            tender_id: harness.tender_id.clone(),
+            record_id: changed_record.record_id,
+            version: changed_record.version,
+            decision: TenderRecordEngineerDecisionKind::Verify,
+            rationale: "Verify the exact material-change obligation before re-Proceed.".into(),
+        })
+        .expect("verify material-change record after the captured successor publication");
+    let current_records = inspect_all_records(&harness.host, &harness.tender_id);
+    let successor = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: Some(successor.version),
+            disposition_updates: complete_dispositions(&current_records),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("publish a fully dispositioned successor after exact verification");
+    harness.set_agent_scenario("bid-package-review");
+    let successor = harness
+        .host
+        .run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: successor.package_id,
+            version: successor.version,
+        })
+        .await
+        .expect("review exact material-change successor")
+        .package;
+    assert!(successor.decision_gate_ready, "{successor:#?}");
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &successor,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact material-change successor");
+    let rebased_plan = harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: first_plan.plan_id,
+            base_version: first_plan.version,
+            actions: vec![WorkPlanRevisionAction::RebasePackageBasis],
+        })
+        .expect("rebase the suspended Work Plan onto the exact successor package");
+    assert_eq!(rebased_plan.version, first_plan.version + 1);
+    assert_eq!(rebased_plan.bid_package_id, successor.package_id);
+    assert_eq!(rebased_plan.bid_package_version, successor.version);
+    assert!(rebased_plan
+        .profiles
+        .iter()
+        .all(|binding| binding.status == AgentProfileStatus::Proposed));
+    let reapproved_plan = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: rebased_plan.plan_id,
+            version: rebased_plan.version,
+            decision: WorkPlanDecision::Approve,
+            rationale: "Approve production against the exact successor package and Work Plan."
+                .into(),
+        })
+        .expect("approve exact rebased Work Plan");
+    assert!(reapproved_plan
+        .profiles
+        .iter()
+        .all(|binding| binding.status == AgentProfileStatus::Active));
 
     harness
         .host

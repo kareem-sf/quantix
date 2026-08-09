@@ -2,4 +2,4 @@
 import type { AgentResourceBudget } from "./AgentResourceBudget";
 import type { AgentRunPermissions } from "./AgentRunPermissions";
 
-export type AgentProfileVersionView = { profile_id: string, version: number, identity: string, profession: string, capabilities: Array<string>, instructions: string, output_contract_json: string, review_policy: string, permissions: AgentRunPermissions, resource_budget: AgentResourceBudget, };
+export type AgentProfileVersionView = { profile_id: string, version: number, identity: string, profession: string, seniority: string, capabilities: Array<string>, objective: string, behavior: string, skepticism: string, risk_tolerance: string, instructions: string, output_contract_json: string, review_policy: string, permissions: AgentRunPermissions, prohibited_actions: Array<string>, resource_budget: AgentResourceBudget, };

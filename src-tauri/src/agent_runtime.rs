@@ -294,12 +294,49 @@ pub struct AgentProfileVersionView {
     pub version: u32,
     pub identity: String,
     pub profession: String,
+    pub seniority: String,
     pub capabilities: Vec<String>,
+    pub objective: String,
+    pub behavior: String,
+    pub skepticism: String,
+    pub risk_tolerance: String,
     pub instructions: String,
     pub output_contract_json: String,
     pub review_policy: String,
     pub permissions: AgentRunPermissions,
+    pub prohibited_actions: Vec<String>,
     pub resource_budget: AgentResourceBudget,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum AgentProfileStatus {
+    Proposed,
+    Active,
+    Suspended,
+    Retired,
+}
+
+impl AgentProfileStatus {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Proposed => "proposed",
+            Self::Active => "active",
+            Self::Suspended => "suspended",
+            Self::Retired => "retired",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Result<Self, TenderCommandError> {
+        match value {
+            "proposed" => Ok(Self::Proposed),
+            "active" => Ok(Self::Active),
+            "suspended" => Ok(Self::Suspended),
+            "retired" => Ok(Self::Retired),
+            _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
