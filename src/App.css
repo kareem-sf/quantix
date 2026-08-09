@@ -671,6 +671,118 @@ button {
   cursor: pointer;
 }
 
+.backup-panel {
+  margin-top: 28px;
+  padding: 18px;
+  border: 1px solid #8fa0bd;
+  background: #f8faff;
+}
+
+.backup-panel__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.backup-panel h4,
+.backup-panel h5 {
+  margin: 0;
+  color: #071434;
+}
+
+.backup-panel h4 {
+  font-size: 19px;
+}
+
+.backup-panel > p {
+  color: #46516d;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.backup-panel__heading button,
+.backup-list button {
+  min-height: 38px;
+  padding: 7px 11px;
+  border: 1px solid #174fd2;
+  color: #ffffff;
+  background: #174fd2;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.backup-list {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.backup-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid #c7cfdd;
+  background: #ffffff;
+}
+
+.backup-list li > div {
+  display: grid;
+  gap: 4px;
+}
+
+.backup-list small {
+  color: #596680;
+}
+
+.backup-list .button-secondary {
+  color: #174fd2;
+  background: #ffffff;
+}
+
+.recovery-offers {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.recovery-offers article {
+  padding: 14px;
+  border-left: 3px solid #174fd2;
+  background: #ffffff;
+}
+
+.recovery-offers article > p {
+  color: #46516d;
+  font-size: 13px;
+}
+
+.recovery-offers label {
+  display: grid;
+  gap: 7px;
+  color: #46516d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.recovery-offers textarea {
+  min-height: 78px;
+  resize: vertical;
+  padding: 9px;
+  border: 1px solid #8794ae;
+  font: inherit;
+}
+
+.backup-panel button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 .intake-panel,
 .agent-office,
 .document-register {

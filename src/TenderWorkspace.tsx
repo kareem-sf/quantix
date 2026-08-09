@@ -3,21 +3,30 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import type { DocumentRegister } from "./bindings/DocumentRegister";
 import type { SourceRelationshipKind } from "./bindings/SourceRelationshipKind";
 import type { TenderCatalogueEntry } from "./bindings/TenderCatalogueEntry";
+import type { TenderBackupRecord } from "./bindings/TenderBackupRecord";
 import type { TenderIntegrityReport } from "./bindings/TenderIntegrityReport";
 import type { TenderPackageImportResult } from "./bindings/TenderPackageImportResult";
 import type { TenderPackageSourceKind } from "./bindings/TenderPackageSourceKind";
 import type { TenderSummary } from "./bindings/TenderSummary";
+import type { TenderRecoveryDecision } from "./bindings/TenderRecoveryDecision";
+import type { TenderRecoveryRecord } from "./bindings/TenderRecoveryRecord";
 import { AgentRunOffice } from "./AgentRunOffice";
 import { DocumentEvidenceOffice } from "./DocumentEvidenceOffice";
+import { TenderBackupPanel } from "./TenderBackupPanel";
 import { TenderRecoveryPanel } from "./TenderRecoveryPanel";
 import {
   chooseAndImportTenderPackage,
   confirmSourceRelationship,
+  createTenderBackup,
   createTender,
   inspectDocumentRegister,
+  inspectTenderBackups,
   inspectTenderIntegrity,
+  inspectTenderRecoveries,
   listTenders,
   openTender,
+  prepareTenderRecovery,
+  resolveTenderRecovery,
   reviseTender,
 } from "./quantixHost";
 
@@ -36,6 +45,8 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
   });
   const [selected, setSelected] = useState<TenderSummary>();
   const [recovery, setRecovery] = useState<TenderIntegrityReport>();
+  const [backups, setBackups] = useState<TenderBackupRecord[]>([]);
+  const [recoveries, setRecoveries] = useState<TenderRecoveryRecord[]>([]);
   const [documentRegister, setDocumentRegister] = useState<DocumentRegister>();
   const [lastIntake, setLastIntake] = useState<TenderPackageImportResult>();
   const [newName, setNewName] = useState("");
@@ -47,6 +58,15 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
   const [busy, setBusy] = useState(false);
   const [commandFailed, setCommandFailed] = useState(false);
   const reportCommandFailure = useCallback(() => setCommandFailed(true), []);
+
+  const refreshBackupRecovery = async (tenderId: string) => {
+    const [nextBackups, nextRecoveries] = await Promise.all([
+      inspectTenderBackups(tenderId),
+      inspectTenderRecoveries(tenderId),
+    ]);
+    setBackups(nextBackups);
+    setRecoveries(nextRecoveries);
+  };
 
   useEffect(() => {
     let active = true;
@@ -115,6 +135,8 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
         setLastIntake(undefined);
         setPriorVersionKey("");
         setReplacementVersionKey("");
+        setBackups([]);
+        setRecoveries([]);
       }
     });
   };
@@ -135,6 +157,7 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
     try {
       updateTender(await openTender(tenderId));
       setDocumentRegister(await inspectDocumentRegister(tenderId));
+      await refreshBackupRecovery(tenderId);
       setLastIntake(undefined);
     } catch {
       try {
@@ -142,6 +165,7 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
         if (integrity.state === "recovery_required") {
           setSelected(undefined);
           setRecovery(integrity);
+          await refreshBackupRecovery(tenderId);
           return;
         }
       } catch {
@@ -163,9 +187,61 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
       } else {
         setSelected(undefined);
         setRecovery(integrity);
+        await refreshBackupRecovery(tenderId);
       }
     } catch {
       setCommandFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCreateBackup = async (tenderId: string) => {
+    setBusy(true);
+    setCommandFailed(false);
+    try {
+      await createTenderBackup(tenderId);
+      await refreshBackupRecovery(tenderId);
+    } catch {
+      setCommandFailed(true);
+      await refreshBackupRecovery(tenderId).catch(() => undefined);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePrepareRecovery = async (tenderId: string, backupId: string) => {
+    setBusy(true);
+    setCommandFailed(false);
+    try {
+      await prepareTenderRecovery(tenderId, backupId);
+      await refreshBackupRecovery(tenderId);
+    } catch {
+      setCommandFailed(true);
+      await refreshBackupRecovery(tenderId).catch(() => undefined);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleResolveRecovery = async (
+    tenderId: string,
+    recoveryId: string,
+    decision: TenderRecoveryDecision,
+    rationale: string,
+  ) => {
+    setBusy(true);
+    setCommandFailed(false);
+    try {
+      await resolveTenderRecovery(tenderId, recoveryId, decision, rationale);
+      if (decision === "approve_replacement") {
+        updateTender(await openTender(tenderId));
+        setDocumentRegister(await inspectDocumentRegister(tenderId));
+      }
+      await refreshBackupRecovery(tenderId);
+    } catch {
+      setCommandFailed(true);
+      await refreshBackupRecovery(tenderId).catch(() => undefined);
     } finally {
       setBusy(false);
     }
@@ -356,6 +432,24 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                   <dd>{selected.audit_chain_head.slice(0, 12)}…</dd>
                 </div>
               </dl>
+              <TenderBackupPanel
+                tenderId={selected.tender_id}
+                backups={backups}
+                recoveries={recoveries}
+                busy={busy}
+                onCreate={() => void handleCreateBackup(selected.tender_id)}
+                onPrepare={(backupId) =>
+                  void handlePrepareRecovery(selected.tender_id, backupId)
+                }
+                onResolve={(recoveryId, decision, rationale) =>
+                  void handleResolveRecovery(
+                    selected.tender_id,
+                    recoveryId,
+                    decision,
+                    rationale,
+                  )
+                }
+              />
               <form className="tender-form" onSubmit={handleRevise}>
                 <label htmlFor="revised-tender-name">Revise Tender name</label>
                 <input
@@ -557,11 +651,32 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
               </section>
             </>
           ) : recovery ? (
-            <TenderRecoveryPanel
-              report={recovery}
-              refreshing={busy}
-              onRefresh={() => void inspectRecovery(recovery.tender_id)}
-            />
+            <>
+              <TenderRecoveryPanel
+                report={recovery}
+                refreshing={busy}
+                onRefresh={() => void inspectRecovery(recovery.tender_id)}
+              />
+              <TenderBackupPanel
+                tenderId={recovery.tender_id}
+                backups={backups}
+                recoveries={recoveries}
+                busy={busy}
+                canCreate={false}
+                onCreate={() => void handleCreateBackup(recovery.tender_id)}
+                onPrepare={(backupId) =>
+                  void handlePrepareRecovery(recovery.tender_id, backupId)
+                }
+                onResolve={(recoveryId, decision, rationale) =>
+                  void handleResolveRecovery(
+                    recovery.tender_id,
+                    recoveryId,
+                    decision,
+                    rationale,
+                  )
+                }
+              />
+            </>
           ) : (
             <div className="tender-detail__empty">
               <p className="section-label">Tender detail</p>

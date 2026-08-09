@@ -5,6 +5,7 @@ import type { AgentRunRecoveryDecision } from "./bindings/AgentRunRecoveryDecisi
 import type { AgentRunRecoveryDisposition } from "./bindings/AgentRunRecoveryDisposition";
 import type { ChooseTenderPackageCommand } from "./bindings/ChooseTenderPackageCommand";
 import type { ConfirmSourceRelationshipCommand } from "./bindings/ConfirmSourceRelationshipCommand";
+import type { CreateTenderBackupCommand } from "./bindings/CreateTenderBackupCommand";
 import type { CreateTenderCommand } from "./bindings/CreateTenderCommand";
 import type { DocumentRegister } from "./bindings/DocumentRegister";
 import type { DocumentParseResult } from "./bindings/DocumentParseResult";
@@ -13,8 +14,10 @@ import type { EvidenceSearchResult } from "./bindings/EvidenceSearchResult";
 import type { InterruptAgentRunCommand } from "./bindings/InterruptAgentRunCommand";
 import type { OpenTenderCommand } from "./bindings/OpenTenderCommand";
 import type { ParseSourceArtifactCommand } from "./bindings/ParseSourceArtifactCommand";
+import type { PrepareTenderRecoveryCommand } from "./bindings/PrepareTenderRecoveryCommand";
 import type { ReviseTenderCommand } from "./bindings/ReviseTenderCommand";
 import type { ResolveIndeterminateAgentRunCommand } from "./bindings/ResolveIndeterminateAgentRunCommand";
+import type { ResolveTenderRecoveryCommand } from "./bindings/ResolveTenderRecoveryCommand";
 import type { RuntimeReadiness } from "./bindings/RuntimeReadiness";
 import type { RunBootstrapAgentCommand } from "./bindings/RunBootstrapAgentCommand";
 import type { SearchEvidenceCommand } from "./bindings/SearchEvidenceCommand";
@@ -22,9 +25,12 @@ import type { SetupOutcome } from "./bindings/SetupOutcome";
 import type { SourceRelationshipKind } from "./bindings/SourceRelationshipKind";
 import type { TenderSummary } from "./bindings/TenderSummary";
 import type { TenderCatalogueEntry } from "./bindings/TenderCatalogueEntry";
+import type { TenderBackupRecord } from "./bindings/TenderBackupRecord";
 import type { TenderIntegrityReport } from "./bindings/TenderIntegrityReport";
 import type { TenderPackageImportResult } from "./bindings/TenderPackageImportResult";
 import type { TenderPackageSourceKind } from "./bindings/TenderPackageSourceKind";
+import type { TenderRecoveryDecision } from "./bindings/TenderRecoveryDecision";
+import type { TenderRecoveryRecord } from "./bindings/TenderRecoveryRecord";
 
 export function ensureQuantixSetup(): Promise<SetupOutcome> {
   return invoke<SetupOutcome>("ensure_quantix_setup");
@@ -63,6 +69,55 @@ export function inspectTenderIntegrity(
 ): Promise<TenderIntegrityReport> {
   const command: OpenTenderCommand = { tender_id: tenderId };
   return invoke<TenderIntegrityReport>("inspect_tender_integrity", { command });
+}
+
+export function createTenderBackup(
+  tenderId: string,
+): Promise<TenderBackupRecord> {
+  const command: CreateTenderBackupCommand = { tender_id: tenderId };
+  return invoke<TenderBackupRecord>("create_tender_backup", { command });
+}
+
+export function inspectTenderBackups(
+  tenderId: string,
+): Promise<TenderBackupRecord[]> {
+  const command: OpenTenderCommand = { tender_id: tenderId };
+  return invoke<TenderBackupRecord[]>("inspect_tender_backups", { command });
+}
+
+export function prepareTenderRecovery(
+  tenderId: string,
+  backupId: string,
+): Promise<TenderRecoveryRecord> {
+  const command: PrepareTenderRecoveryCommand = {
+    tender_id: tenderId,
+    backup_id: backupId,
+  };
+  return invoke<TenderRecoveryRecord>("prepare_tender_recovery", { command });
+}
+
+export function inspectTenderRecoveries(
+  tenderId: string,
+): Promise<TenderRecoveryRecord[]> {
+  const command: OpenTenderCommand = { tender_id: tenderId };
+  return invoke<TenderRecoveryRecord[]>("inspect_tender_recoveries", {
+    command,
+  });
+}
+
+export function resolveTenderRecovery(
+  tenderId: string,
+  recoveryId: string,
+  decision: TenderRecoveryDecision,
+  rationale: string,
+): Promise<TenderRecoveryRecord> {
+  const command: ResolveTenderRecoveryCommand = {
+    tender_id: tenderId,
+    recovery_id: recoveryId,
+    decision,
+    rationale,
+  };
+  return invoke<TenderRecoveryRecord>("resolve_tender_recovery", { command });
 }
 
 export function reviseTender(

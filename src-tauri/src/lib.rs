@@ -40,10 +40,13 @@ pub use tender_intake::{
     SourceRelationshipKind, SupersessionState, TenderPackageImportResult, TenderPackageSourceKind,
 };
 pub use tender_store::{
-    ContentVersionSummary, CreateTenderCommand, OpenTenderCommand, RegisterTenderContentCommand,
-    ReviseTenderCommand, StartupReconciliationReport, TenderCatalogueEntry, TenderCommandError,
-    TenderErrorCode, TenderInspection, TenderIntegrityIssue, TenderIntegrityReport,
-    TenderIntegrityState, TenderRecoveryChoice, TenderSummary,
+    ContentVersionSummary, CreateTenderBackupCommand, CreateTenderCommand, OpenTenderCommand,
+    PrepareTenderRecoveryCommand, RegisterTenderContentCommand, ResolveTenderRecoveryCommand,
+    ReviseTenderCommand, StartupReconciliationReport, TenderBackupRecord, TenderBackupState,
+    TenderCatalogueEntry, TenderCommandError, TenderErrorCode, TenderInspection,
+    TenderIntegrityIssue, TenderIntegrityReport, TenderIntegrityState, TenderRecoveryChoice,
+    TenderRecoveryDecision, TenderRecoveryDecisionRecord, TenderRecoveryRecord,
+    TenderRecoveryState, TenderSummary,
 };
 
 use tauri::Manager;
@@ -52,13 +55,15 @@ mod tauri_commands {
     use super::{
         ensure_quantix_setup as ensure_setup, AgentAccessRequestView, AgentRunInspection,
         AgentRunRecoveryDecision, ApproveAgentAccessCommand, ChooseTenderPackageCommand,
-        ConfirmSourceRelationshipCommand, CreateTenderCommand, DocumentParseResult,
-        DocumentRegister, EvidenceDocument, EvidenceSearchResult, ImportTenderPackageCommand,
-        InterruptAgentRunCommand, OpenTenderCommand, ParseSourceArtifactCommand, QuantixHost,
+        ConfirmSourceRelationshipCommand, CreateTenderBackupCommand, CreateTenderCommand,
+        DocumentParseResult, DocumentRegister, EvidenceDocument, EvidenceSearchResult,
+        ImportTenderPackageCommand, InterruptAgentRunCommand, OpenTenderCommand,
+        ParseSourceArtifactCommand, PrepareTenderRecoveryCommand, QuantixHost,
         RequestAgentAccessCommand, ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand,
-        ReviseTenderCommand, RunBootstrapAgentCommand, RuntimeReadiness, SearchEvidenceCommand,
-        SetupOutcome, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
-        TenderIntegrityReport, TenderPackageImportResult, TenderPackageSourceKind, TenderSummary,
+        ResolveTenderRecoveryCommand, ReviseTenderCommand, RunBootstrapAgentCommand,
+        RuntimeReadiness, SearchEvidenceCommand, SetupOutcome, TenderBackupRecord,
+        TenderCatalogueEntry, TenderCommandError, TenderErrorCode, TenderIntegrityReport,
+        TenderPackageImportResult, TenderPackageSourceKind, TenderRecoveryRecord, TenderSummary,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -123,6 +128,75 @@ mod tauri_commands {
         .map_err(|_| TenderCommandError {
             code: TenderErrorCode::StoreUnavailable,
         })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn create_tender_backup(
+        host: tauri::State<'_, QuantixHost>,
+        command: CreateTenderBackupCommand,
+    ) -> Result<TenderBackupRecord, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.create_tender_backup(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_tender_backups(
+        host: tauri::State<'_, QuantixHost>,
+        command: OpenTenderCommand,
+    ) -> Result<Vec<TenderBackupRecord>, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.inspect_tender_backups(&command.tender_id)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn prepare_tender_recovery(
+        host: tauri::State<'_, QuantixHost>,
+        command: PrepareTenderRecoveryCommand,
+    ) -> Result<TenderRecoveryRecord, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.prepare_tender_recovery(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_tender_recoveries(
+        host: tauri::State<'_, QuantixHost>,
+        command: OpenTenderCommand,
+    ) -> Result<Vec<TenderRecoveryRecord>, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.inspect_tender_recoveries(&command.tender_id)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn resolve_tender_recovery(
+        host: tauri::State<'_, QuantixHost>,
+        command: ResolveTenderRecoveryCommand,
+    ) -> Result<TenderRecoveryRecord, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.resolve_tender_recovery(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
     }
 
     #[tauri::command]
@@ -356,6 +430,11 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
         tauri_commands::list_tenders,
         tauri_commands::open_tender,
         tauri_commands::inspect_tender_integrity,
+        tauri_commands::create_tender_backup,
+        tauri_commands::inspect_tender_backups,
+        tauri_commands::prepare_tender_recovery,
+        tauri_commands::inspect_tender_recoveries,
+        tauri_commands::resolve_tender_recovery,
         tauri_commands::revise_tender,
         tauri_commands::choose_and_import_tender_package,
         tauri_commands::inspect_document_register,

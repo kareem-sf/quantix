@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    io::Read,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
@@ -20,7 +21,7 @@ use crate::document_parsing::{
     DocumentParseResult, EvidenceDocument, EvidenceLanguage, EvidenceLocation,
     EvidenceLocationKind, EvidenceRegion, EvidenceSearchHit, EvidenceSearchResult,
     ParseExceptionCode, ParseJob, ParseSourceArtifactCommand, ParseState, PreparedParseOutput,
-    SearchEvidenceCommand, TextDirection,
+    SearchEvidenceCommand, TextDirection, MAX_DOCLING_JSON_BYTES, MAX_EVIDENCE_LOCATIONS,
 };
 use crate::tender_intake::{
     prepare_package, ConfirmSourceRelationshipCommand, DocumentRegister, DocumentRegisterEntry,
@@ -30,6 +31,13 @@ use crate::tender_intake::{
 use crate::{setup::SetupState, QuantixHost};
 
 mod agent_records;
+pub(crate) mod backups;
+
+pub use backups::{
+    CreateTenderBackupCommand, PrepareTenderRecoveryCommand, ResolveTenderRecoveryCommand,
+    TenderBackupRecord, TenderBackupState, TenderRecoveryDecision, TenderRecoveryDecisionRecord,
+    TenderRecoveryRecord, TenderRecoveryState,
+};
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -850,9 +858,11 @@ pub struct StartupReconciliationReport {
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum TenderErrorCode {
+    InsufficientSpace,
     IntegrityFailed,
     InvalidCommand,
     NotFound,
+    OperationTimedOut,
     RecoveryRequired,
     RuntimeRequired,
     SetupRequired,
@@ -1336,10 +1346,12 @@ impl TenderStore {
         transaction.commit().map_err(sql_error)
     }
 
-    fn inspect_integrity(
+    fn inspect_integrity_with_check(
         root: &Path,
         expected_tender_id: &TenderId,
+        mut check: impl FnMut() -> Result<(), TenderCommandError>,
     ) -> Result<TenderIntegrityReport, TenderCommandError> {
+        check()?;
         #[cfg(feature = "runtime-fixture")]
         if let Ok(failure) = std::env::var("QUANTIX_STORAGE_INSPECTION_FAIL_TENDER") {
             if failure == expected_tender_id.as_str() {
@@ -1349,6 +1361,7 @@ impl TenderStore {
                 return Err(TenderCommandError::new(TenderErrorCode::NotFound));
             }
         }
+        check()?;
         if let Err(error) = validate_tender_store_layout(root) {
             return if error.code == TenderErrorCode::NotFound {
                 Err(error)
@@ -1371,9 +1384,11 @@ impl TenderStore {
                 ));
             }
         };
-        match inspect_store_structure(&connection, expected_tender_id) {
+        configure_reader(&connection)?;
+        match inspect_store_structure_with_check(&connection, expected_tender_id, &mut check) {
             Ok(None) => {}
             Ok(Some(issue)) => return Ok(recovery_report(expected_tender_id, vec![issue])),
+            Err(error) if error.code == TenderErrorCode::OperationTimedOut => return Err(error),
             Err(_) => {
                 return Ok(recovery_report(
                     expected_tender_id,
@@ -1382,14 +1397,16 @@ impl TenderStore {
             }
         }
         let mut issues = Vec::new();
-        match verify_audit_chain(&connection) {
+        match verify_audit_chain_with_check(&connection, &mut check) {
             Ok(()) => {}
             Err(error) if error.code == TenderErrorCode::IntegrityFailed => {
                 issues.push(TenderIntegrityIssue::AuditChainInvalid);
             }
             Err(error) => return Err(error),
         }
-        if let Some(issue) = inspect_referenced_content(&connection, &root.join("content"))? {
+        if let Some(issue) =
+            inspect_referenced_content_with_check(&connection, &root.join("content"), &mut check)?
+        {
             issues.push(issue);
         }
         let store = Self {
@@ -1397,7 +1414,7 @@ impl TenderStore {
             connection,
             recovery_required: false,
         };
-        if !store.semantic_manifests_are_valid()? {
+        if !store.semantic_manifests_are_valid_with_check(&mut check)? {
             issues.push(TenderIntegrityIssue::ManifestInvalid);
         }
         let state = if issues.is_empty() {
@@ -1422,43 +1439,53 @@ impl TenderStore {
     }
 
     fn semantic_manifests_are_valid(&self) -> Result<bool, TenderCommandError> {
-        if self.inspect_agent_runs().is_err() {
+        self.semantic_manifests_are_valid_with_check(&mut || Ok(()))
+    }
+
+    fn semantic_manifests_are_valid_with_check(
+        &self,
+        check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+    ) -> Result<bool, TenderCommandError> {
+        check()?;
+        if !self.agent_run_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
-        let parsed_documents = {
-            let mut statement = self
-                .connection
-                .prepare(
-                    "SELECT artifact_id, version, location_count
-                     FROM parsed_documents ORDER BY artifact_id, version",
-                )
-                .map_err(sql_error)?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, u32>(1)?,
-                        row.get::<_, u32>(2)?,
-                    ))
-                })
-                .map_err(sql_error)?
-                .collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(sql_error)?;
-            rows
-        };
-        for (artifact_id, version, location_count) in parsed_documents {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT artifact_id, version, location_count
+                 FROM parsed_documents ORDER BY artifact_id, version",
+            )
+            .map_err(sql_error)?;
+        let parsed_documents = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, u32>(2)?,
+                ))
+            })
+            .map_err(sql_error)?;
+        for document in parsed_documents {
+            check()?;
+            let (artifact_id, version, location_count) = document.map_err(sql_error)?;
             let command = ParseSourceArtifactCommand {
                 tender_id: String::new(),
                 artifact_id,
                 version,
             };
-            let Ok(document) = self.evidence_document(&command) else {
-                return Ok(false);
+            let document = match self.evidence_document_with_check(&command, check) {
+                Ok(document) => document,
+                Err(error) if error.code == TenderErrorCode::OperationTimedOut => {
+                    return Err(error);
+                }
+                Err(_) => return Ok(false),
             };
             if usize::try_from(location_count).ok() != Some(document.locations.len()) {
                 return Ok(false);
             }
         }
+        check()?;
         Ok(true)
     }
 
@@ -2105,38 +2132,87 @@ impl TenderStore {
         &self,
         command: &ParseSourceArtifactCommand,
     ) -> Result<EvidenceDocument, TenderCommandError> {
-        let parsed: (String, String, String, String) = self
+        self.evidence_document_with_check(command, &mut || Ok(()))
+    }
+
+    fn evidence_document_with_check(
+        &self,
+        command: &ParseSourceArtifactCommand,
+        check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+    ) -> Result<EvidenceDocument, TenderCommandError> {
+        check()?;
+        let parsed: (String, String, String, String, u32) = self
             .connection
             .query_row(
-                "SELECT pd.language, pd.direction, pd.docling_schema_version, pd.json_sha256
+                "SELECT pd.language, pd.direction, pd.docling_schema_version, pd.json_sha256,
+                        pd.location_count
                  FROM parsed_documents pd
                  WHERE pd.artifact_id = ?1 AND pd.version = ?2",
                 params![command.artifact_id, command.version],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .optional()
             .map_err(sql_error)?
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::NotFound))?;
+        let expected_location_count = usize::try_from(parsed.4)
+            .ok()
+            .filter(|count| *count > 0 && *count <= MAX_EVIDENCE_LOCATIONS)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
         let mut statement = self
             .connection
             .prepare(
                 "SELECT ordinal, kind, structural_path, provenance_json, section,
                         paragraph_number, table_number, sheet_name, cell_range,
-                        original_text, translated_text, language, direction
+                        original_text, translated_text, language, direction,
+                        length(CAST(kind AS BLOB))
+                          + length(CAST(structural_path AS BLOB))
+                          + length(CAST(provenance_json AS BLOB))
+                          + COALESCE(length(CAST(section AS BLOB)), 0)
+                          + COALESCE(length(CAST(sheet_name AS BLOB)), 0)
+                          + COALESCE(length(CAST(cell_range AS BLOB)), 0)
+                          + length(CAST(original_text AS BLOB))
+                          + COALESCE(length(CAST(translated_text AS BLOB)), 0)
+                          + length(CAST(language AS BLOB))
+                          + length(CAST(direction AS BLOB))
                  FROM evidence_locations
                  WHERE artifact_id = ?1 AND version = ?2
                  ORDER BY ordinal",
             )
             .map_err(sql_error)?;
-        let rows = statement
-            .query_map(params![command.artifact_id, command.version], |row| {
-                RawEvidenceLocation::read(row, 0)
-            })
+        let mut rows = statement
+            .query(params![command.artifact_id, command.version])
             .map_err(sql_error)?;
         let mut locations = Vec::new();
-        for row in rows {
-            locations.push(row.map_err(sql_error)?.into_domain()?);
+        let mut total_bytes = 0_u64;
+        while let Some(row) = rows.next().map_err(sql_error)? {
+            check()?;
+            if locations.len() >= expected_location_count {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            let row_bytes = u64::try_from(row.get::<_, i64>(13).map_err(sql_error)?)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            total_bytes = total_bytes
+                .checked_add(row_bytes)
+                .filter(|total| *total <= MAX_DOCLING_JSON_BYTES)
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            locations.push(
+                RawEvidenceLocation::read(row, 0)
+                    .map_err(sql_error)?
+                    .into_domain()?,
+            );
         }
+        if locations.len() != expected_location_count {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        check()?;
         Ok(EvidenceDocument {
             artifact_id: command.artifact_id.clone(),
             version: command.version,
@@ -2808,30 +2884,40 @@ impl QuantixHost {
     ) -> Result<TenderIntegrityReport, TenderCommandError> {
         require_setup(self)?;
         let tender_id = TenderId::parse(tender_id)?;
+        self.inspect_tender_integrity_with_check(&tender_id, || Ok(()))
+    }
+
+    pub(crate) fn inspect_tender_integrity_with_check(
+        &self,
+        tender_id: &TenderId,
+        mut check: impl FnMut() -> Result<(), TenderCommandError>,
+    ) -> Result<TenderIntegrityReport, TenderCommandError> {
+        check()?;
         let root = self
             .application_home()
             .join("tenders")
             .join(tender_id.as_str());
-        let cached = self
-            .open_tender_stores()
-            .lock()
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-            .get(&tender_id)
+        let cached = self.open_tender_stores();
+        let cached = lock_mutex_with_check(cached, &mut check)?
+            .get(tender_id)
             .cloned();
         let report = if let Some(cached) = &cached {
-            let mut guard = match cached.lock() {
+            let mut guard = match lock_mutex_with_check(cached, &mut check) {
                 Ok(guard) => guard,
+                Err(error) if error.code == TenderErrorCode::OperationTimedOut => {
+                    return Err(error);
+                }
                 Err(_) => {
-                    self.mark_tender_recovery_required(&tender_id);
+                    self.mark_tender_recovery_required(tender_id);
                     return Ok(recovery_report(
-                        &tender_id,
+                        tender_id,
                         vec![TenderIntegrityIssue::InspectionUnavailable],
                     ));
                 }
             };
             let mut report = inspection_result_or_recovery(
-                &tender_id,
-                TenderStore::inspect_integrity(&root, &tender_id),
+                tender_id,
+                TenderStore::inspect_integrity_with_check(&root, tender_id, &mut check),
                 true,
             )?;
             if report.state == TenderIntegrityState::RecoveryRequired {
@@ -2844,19 +2930,20 @@ impl QuantixHost {
                         .issues
                         .push(TenderIntegrityIssue::InspectionUnavailable);
                 }
-                self.mark_tender_recovery_required(&tender_id);
+                self.mark_tender_recovery_required(tender_id);
             }
             report
         } else {
             inspection_result_or_recovery(
-                &tender_id,
-                TenderStore::inspect_integrity(&root, &tender_id),
+                tender_id,
+                TenderStore::inspect_integrity_with_check(&root, tender_id, &mut check),
                 false,
             )?
         };
         if cached.is_none() && report.state == TenderIntegrityState::RecoveryRequired {
-            self.mark_tender_recovery_required(&tender_id);
+            self.mark_tender_recovery_required(tender_id);
         }
+        check()?;
         Ok(report)
     }
 
@@ -2926,17 +3013,19 @@ impl QuantixHost {
         &self,
         tender_id: &TenderId,
     ) -> Result<Arc<Mutex<TenderStore>>, TenderCommandError> {
-        let recovery_required = self
-            .recovery_required_tenders()
-            .lock()
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        self.tender_store_with_check(tender_id, &mut || Ok(()))
+    }
+
+    pub(crate) fn tender_store_with_check(
+        &self,
+        tender_id: &TenderId,
+        check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+    ) -> Result<Arc<Mutex<TenderStore>>, TenderCommandError> {
+        let recovery_required = lock_mutex_with_check(self.recovery_required_tenders(), check)?;
         if recovery_required.contains(tender_id) {
             return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
         }
-        let mut stores = self
-            .open_tender_stores()
-            .lock()
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let mut stores = lock_mutex_with_check(self.open_tender_stores(), check)?;
         if let Some(store) = stores.get(tender_id) {
             return Ok(Arc::clone(store));
         }
@@ -2946,6 +3035,7 @@ impl QuantixHost {
             .join("tenders")
             .join(tender_id.as_str());
         let store = Arc::new(Mutex::new(TenderStore::open(&root, tender_id)?));
+        check()?;
         stores.insert(tender_id.clone(), Arc::clone(&store));
         Ok(store)
     }
@@ -3144,6 +3234,24 @@ fn valid_media_type(media_type: &str) -> bool {
         && !media_type.chars().any(char::is_whitespace)
 }
 
+fn lock_mutex_with_check<'a, T>(
+    mutex: &'a Mutex<T>,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<std::sync::MutexGuard<'a, T>, TenderCommandError> {
+    loop {
+        match mutex.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                check()?;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err(TenderCommandError::new(TenderErrorCode::StoreUnavailable));
+            }
+        }
+    }
+}
+
 fn configure_writer(connection: &Connection) -> Result<(), TenderCommandError> {
     connection
         .busy_timeout(Duration::from_secs(5))
@@ -3160,6 +3268,17 @@ fn configure_writer(connection: &Connection) -> Result<(), TenderCommandError> {
     connection
         .pragma_update(None, "synchronous", "FULL")
         .map_err(sql_error)?;
+    configure_sqlite_limits(connection)
+}
+
+fn configure_reader(connection: &Connection) -> Result<(), TenderCommandError> {
+    connection
+        .busy_timeout(Duration::from_secs(5))
+        .map_err(sql_error)?;
+    configure_sqlite_limits(connection)
+}
+
+fn configure_sqlite_limits(connection: &Connection) -> Result<(), TenderCommandError> {
     connection
         .set_limit(Limit::SQLITE_LIMIT_LENGTH, 16 * 1024 * 1024)
         .map_err(sql_error)?;
@@ -3251,6 +3370,15 @@ fn inspect_store_structure(
     connection: &Connection,
     expected_tender_id: &TenderId,
 ) -> Result<Option<TenderIntegrityIssue>, TenderCommandError> {
+    inspect_store_structure_with_check(connection, expected_tender_id, &mut || Ok(()))
+}
+
+fn inspect_store_structure_with_check(
+    connection: &Connection,
+    expected_tender_id: &TenderId,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<Option<TenderIntegrityIssue>, TenderCommandError> {
+    check()?;
     let version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(sql_error)?;
@@ -3261,12 +3389,15 @@ fn inspect_store_structure(
     expected_schema
         .execute_batch(TENDER_SCHEMA)
         .map_err(sql_error)?;
-    if tender_schema_objects(connection)? != tender_schema_objects(&expected_schema)? {
+    check()?;
+    if tender_schema_objects(connection, check)? != tender_schema_objects(&expected_schema, check)?
+    {
         return Ok(Some(TenderIntegrityIssue::SchemaMismatch));
     }
     let quick_check: String = connection
         .query_row("PRAGMA quick_check", [], |row| row.get(0))
         .map_err(sql_error)?;
+    check()?;
     if quick_check != "ok" {
         return Ok(Some(TenderIntegrityIssue::DatabaseIntegrityInvalid));
     }
@@ -3288,6 +3419,7 @@ fn inspect_store_structure(
             |row| row.get(0),
         )
         .map_err(sql_error)?;
+    check()?;
     if stored_tender_id != expected_tender_id.as_str() {
         return Ok(Some(TenderIntegrityIssue::TenderIdentityMismatch));
     }
@@ -3343,7 +3475,10 @@ fn recovery_required_if_integrity(error: TenderCommandError) -> TenderCommandErr
 
 type SchemaObject = (String, String, String, Option<String>);
 
-fn tender_schema_objects(connection: &Connection) -> Result<Vec<SchemaObject>, TenderCommandError> {
+fn tender_schema_objects(
+    connection: &Connection,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<Vec<SchemaObject>, TenderCommandError> {
     let mut statement = connection
         .prepare(
             "SELECT type, name, tbl_name, sql FROM sqlite_schema
@@ -3351,13 +3486,16 @@ fn tender_schema_objects(connection: &Connection) -> Result<Vec<SchemaObject>, T
              ORDER BY type, name",
         )
         .map_err(sql_error)?;
-    let objects = statement
+    let rows = statement
         .query_map([], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })
-        .map_err(sql_error)?
-        .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(sql_error)?;
+    let mut objects = Vec::new();
+    for row in rows {
+        check()?;
+        objects.push(row.map_err(sql_error)?);
+    }
     Ok(objects)
 }
 
@@ -3415,6 +3553,14 @@ fn append_audit_event(
 }
 
 fn verify_audit_chain(connection: &Connection) -> Result<(), TenderCommandError> {
+    verify_audit_chain_with_check(connection, &mut || Ok(()))
+}
+
+fn verify_audit_chain_with_check(
+    connection: &Connection,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<(), TenderCommandError> {
+    check()?;
     let tender_id: String = connection
         .query_row(
             "SELECT tender_id FROM tender WHERE singleton = 1",
@@ -3445,6 +3591,7 @@ fn verify_audit_chain(connection: &Connection) -> Result<(), TenderCommandError>
     let mut expected_sequence = 1_i64;
     let mut expected_preceding = ZERO_AUDIT_HASH.to_owned();
     for event in events {
+        check()?;
         let (
             sequence,
             event_type,
@@ -3493,6 +3640,7 @@ fn verify_audit_chain(connection: &Connection) -> Result<(), TenderCommandError>
     if expected_sequence == 1 {
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
+    check()?;
     Ok(())
 }
 
@@ -3500,6 +3648,15 @@ fn inspect_referenced_content(
     connection: &Connection,
     content_root: &Path,
 ) -> Result<Option<TenderIntegrityIssue>, TenderCommandError> {
+    inspect_referenced_content_with_check(connection, content_root, &mut || Ok(()))
+}
+
+fn inspect_referenced_content_with_check(
+    connection: &Connection,
+    content_root: &Path,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<Option<TenderIntegrityIssue>, TenderCommandError> {
+    check()?;
     if let Err(error) = validate_content_cache_roots(content_root) {
         return if error.code == TenderErrorCode::IntegrityFailed {
             Ok(Some(TenderIntegrityIssue::StorageLayoutInvalid))
@@ -3520,7 +3677,15 @@ fn inspect_referenced_content(
         })
         .map_err(sql_error)?;
     for object in objects {
+        check()?;
         let (expected_sha256, integrity, expected_size) = object.map_err(sql_error)?;
+        let expected_size = match u64::try_from(expected_size)
+            .ok()
+            .filter(|size| *size > 0 && *size <= MAX_CONTENT_BYTES as u64)
+        {
+            Some(size) => size,
+            None => return Ok(Some(TenderIntegrityIssue::ReferencedContentMismatch)),
+        };
         let integrity = match integrity.parse::<cacache::Integrity>() {
             Ok(integrity) => integrity,
             Err(_) => return Ok(Some(TenderIntegrityIssue::ReferencedContentMismatch)),
@@ -3528,16 +3693,38 @@ fn inspect_referenced_content(
         if !cacache::exists_sync(content_root, &integrity) {
             return Ok(Some(TenderIntegrityIssue::ReferencedContentMissing));
         }
-        let bytes = match cacache::read_hash_sync(content_root, &integrity) {
-            Ok(bytes) => bytes,
+        let mut reader = match cacache::SyncReader::open_hash(content_root, integrity) {
+            Ok(reader) => reader,
             Err(_) => return Ok(Some(TenderIntegrityIssue::ReferencedContentMismatch)),
         };
-        if u64::try_from(expected_size).ok() != Some(bytes.len() as u64)
-            || sha256_hex(&bytes) != expected_sha256
-        {
+        let mut digest = Sha256::new();
+        let mut size_bytes = 0_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            check()?;
+            let read = match reader.read(&mut buffer) {
+                Ok(read) => read,
+                Err(_) => return Ok(Some(TenderIntegrityIssue::ReferencedContentMismatch)),
+            };
+            if read == 0 {
+                break;
+            }
+            size_bytes = match size_bytes.checked_add(read as u64) {
+                Some(size_bytes) if size_bytes <= expected_size => size_bytes,
+                _ => return Ok(Some(TenderIntegrityIssue::ReferencedContentMismatch)),
+            };
+            digest.update(&buffer[..read]);
+        }
+        let actual_sha256: String = digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if size_bytes != expected_size || actual_sha256 != expected_sha256 {
             return Ok(Some(TenderIntegrityIssue::ReferencedContentMismatch));
         }
     }
+    check()?;
     Ok(None)
 }
 
@@ -3613,6 +3800,17 @@ mod tests {
         fn device_protection(&self, _path: &Path) -> DeviceProtection {
             DeviceProtection::Protected
         }
+    }
+
+    #[test]
+    fn checked_mutex_wait_honors_the_operation_deadline() {
+        let mutex = Mutex::new(());
+        let _held = mutex.lock().expect("hold Tender Store lock");
+        let error = lock_mutex_with_check(&mutex, &mut || {
+            Err(TenderCommandError::new(TenderErrorCode::OperationTimedOut))
+        })
+        .expect_err("expired lock wait must fail");
+        assert_eq!(error.code, TenderErrorCode::OperationTimedOut);
     }
 
     #[test]

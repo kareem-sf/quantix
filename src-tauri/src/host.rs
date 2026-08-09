@@ -26,6 +26,7 @@ struct QuantixHostInner {
     catalogue_lock: Mutex<()>,
     open_tender_stores: OpenTenderStores,
     recovery_required_tenders: Mutex<HashSet<TenderId>>,
+    recovery_operation_lock: Mutex<()>,
     runtime_layout: RuntimeLayout,
     process_supervisor: ProcessSupervisor,
     runtime_preparation: Mutex<Option<CancellationToken>>,
@@ -102,6 +103,7 @@ impl QuantixHost {
                 catalogue_lock: Mutex::new(()),
                 open_tender_stores: Mutex::new(Default::default()),
                 recovery_required_tenders: Mutex::new(Default::default()),
+                recovery_operation_lock: Mutex::new(()),
                 runtime_layout,
                 process_supervisor: ProcessSupervisor,
                 runtime_preparation: Mutex::new(None),
@@ -115,6 +117,10 @@ impl QuantixHost {
 
     pub fn application_home(&self) -> &Path {
         &self.inner.application_home
+    }
+
+    pub(crate) fn setup_platform(&self) -> &dyn SetupPlatform {
+        self.inner.setup_platform.as_ref()
     }
 
     pub(crate) fn ensure_setup(&self) -> SetupOutcome {
@@ -136,6 +142,9 @@ impl QuantixHost {
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
         if !*reconciled {
+            crate::tender_store::backups::reconcile_interrupted_backup_operations(
+                &self.inner.application_home,
+            )?;
             let removed_tender_candidates =
                 crate::tender_store::reconcile_application_staging(&self.inner.application_home)?;
             *self
@@ -165,6 +174,10 @@ impl QuantixHost {
 
     pub(crate) fn recovery_required_tenders(&self) -> &Mutex<HashSet<TenderId>> {
         &self.inner.recovery_required_tenders
+    }
+
+    pub(crate) fn recovery_operation_lock(&self) -> &Mutex<()> {
+        &self.inner.recovery_operation_lock
     }
 
     pub(crate) fn catalogue_lock(&self) -> &Mutex<()> {

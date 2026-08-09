@@ -27,6 +27,10 @@ use super::{
 };
 
 const BOOTSTRAP_STABLE_IDENTITY: &str = "quantix.bootstrap.tender-analyst";
+const MAX_AGENT_RUNS_PER_TENDER: usize = 10_000;
+const MAX_PROVIDER_EVENTS_PER_RUN: usize = 10_000;
+const MAX_PROVIDER_EVENT_FIELD_BYTES: u64 = 64 * 1024;
+const MAX_PROVIDER_EVENT_BYTES_PER_RUN: u64 = 16 * 1024 * 1024;
 
 impl TenderStore {
     pub(crate) fn prepare_bootstrap_agent_run(
@@ -248,6 +252,7 @@ impl TenderStore {
                 }
                 None => (None, None),
             };
+            ensure_agent_run_capacity(&transaction)?;
             transaction
                 .execute(
                     "INSERT INTO agent_runs (
@@ -265,14 +270,20 @@ impl TenderStore {
                     ],
                 )
                 .map_err(sql_error)?;
-            transaction
-                .execute(
-                    "INSERT INTO provider_events (
-                       run_id, sequence, kind, summary, opaque_reference, created_at
-                     ) VALUES (?1, 1, 'run_started', 'Agent Run started', NULL, ?2)",
-                    params![run_id, created_at],
-                )
-                .map_err(sql_error)?;
+            insert_event(
+                &transaction,
+                &run_id,
+                1,
+                PendingProviderEvent {
+                    kind: ProviderEventKind::RunStarted,
+                    summary: "Agent Run started".into(),
+                    correlation_id: None,
+                    request_fingerprint: None,
+                    denial_reason: None,
+                    opaque_reference: None,
+                },
+                &created_at,
+            )?;
             append_audit_event(
                 &transaction,
                 tender_id.as_str(),
@@ -1536,28 +1547,73 @@ impl TenderStore {
     }
 
     pub(crate) fn inspect_agent_runs(&self) -> Result<Vec<AgentRunInspection>, TenderCommandError> {
-        let run_ids = {
-            let mut statement = self
-                .connection
-                .prepare("SELECT run_id FROM agent_runs ORDER BY run_sequence")
-                .map_err(sql_error)?;
-            let run_ids = statement
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(sql_error)?
-                .collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(sql_error)?;
-            run_ids
-        };
-        run_ids
-            .iter()
-            .map(|run_id| self.inspect_agent_run(run_id))
-            .collect()
+        self.inspect_agent_runs_with_check(&mut || Ok(()))
+    }
+
+    pub(crate) fn inspect_agent_runs_with_check(
+        &self,
+        check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+    ) -> Result<Vec<AgentRunInspection>, TenderCommandError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT run_id FROM agent_runs ORDER BY run_sequence")
+            .map_err(sql_error)?;
+        let run_ids = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(sql_error)?;
+        let mut runs = Vec::new();
+        for run_id in run_ids {
+            check()?;
+            if runs.len() >= MAX_AGENT_RUNS_PER_TENDER {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            runs.push(self.inspect_agent_run_with_check(&run_id.map_err(sql_error)?, check)?);
+        }
+        check()?;
+        Ok(runs)
+    }
+
+    pub(crate) fn agent_run_manifests_are_valid_with_check(
+        &self,
+        check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+    ) -> Result<bool, TenderCommandError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT run_id FROM agent_runs ORDER BY run_sequence")
+            .map_err(sql_error)?;
+        let mut run_ids = statement.query([]).map_err(sql_error)?;
+        let mut run_count = 0_usize;
+        while let Some(row) = run_ids.next().map_err(sql_error)? {
+            check()?;
+            run_count = run_count
+                .checked_add(1)
+                .filter(|count| *count <= MAX_AGENT_RUNS_PER_TENDER)
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            let run_id = row.get::<_, String>(0).map_err(sql_error)?;
+            if let Err(error) = self.inspect_agent_run_with_check(&run_id, check) {
+                if error.code == TenderErrorCode::OperationTimedOut {
+                    return Err(error);
+                }
+                return Ok(false);
+            }
+        }
+        check()?;
+        Ok(true)
     }
 
     pub(crate) fn inspect_agent_run(
         &self,
         run_id: &str,
     ) -> Result<AgentRunInspection, TenderCommandError> {
+        self.inspect_agent_run_with_check(run_id, &mut || Ok(()))
+    }
+
+    fn inspect_agent_run_with_check(
+        &self,
+        run_id: &str,
+        check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+    ) -> Result<AgentRunInspection, TenderCommandError> {
+        check()?;
         let row: Option<RawAgentRun> = self
             .connection
             .query_row(
@@ -1596,7 +1652,7 @@ impl TenderStore {
         if task.profile_id != profile.profile_id || task.profile_version != profile.version {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
-        let events = load_events(&self.connection, run_id)?;
+        let events = load_events_with_check(&self.connection, run_id, check)?;
         let usage = row
             .usage_json
             .as_deref()
@@ -1683,6 +1739,7 @@ impl TenderStore {
         if recovery_decision.is_some() && state != AgentRunState::Indeterminate {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
+        check()?;
         Ok(AgentRunInspection {
             run_id: run_id.to_owned(),
             retry_of_run_id: row.retry_of_run_id,
@@ -2068,66 +2125,75 @@ fn load_task(
     })
 }
 
-fn load_events(
+fn load_events_with_check(
     connection: &rusqlite::Connection,
     run_id: &str,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
 ) -> Result<Vec<ProviderEvent>, TenderCommandError> {
     let mut statement = connection
         .prepare(
             "SELECT sequence, kind, summary, correlation_id, request_fingerprint,
-                    denial_reason, opaque_reference
+                    denial_reason, opaque_reference,
+                    length(CAST(kind AS BLOB)), length(CAST(summary AS BLOB)),
+                    COALESCE(length(CAST(correlation_id AS BLOB)), 0),
+                    COALESCE(length(CAST(request_fingerprint AS BLOB)), 0),
+                    COALESCE(length(CAST(denial_reason AS BLOB)), 0),
+                    COALESCE(length(CAST(opaque_reference AS BLOB)), 0)
              FROM provider_events WHERE run_id = ?1 ORDER BY sequence",
         )
         .map_err(sql_error)?;
-    let events = statement
-        .query_map([run_id], |row| {
-            Ok((
-                row.get::<_, u32>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-            ))
-        })
-        .map_err(sql_error)?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(sql_error)?;
+    let mut rows = statement.query([run_id]).map_err(sql_error)?;
     let mut expected = 1_u32;
-    events
-        .into_iter()
-        .map(
-            |(
-                sequence,
-                kind,
-                summary,
-                correlation_id,
-                request_fingerprint,
-                denial_reason,
-                opaque_reference,
-            )| {
-                if sequence != expected {
-                    return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-                }
-                expected = expected
-                    .checked_add(1)
-                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-                Ok(ProviderEvent {
-                    sequence,
-                    kind: ProviderEventKind::parse(&kind)?,
-                    summary,
-                    correlation_id,
-                    request_fingerprint,
-                    denial_reason: denial_reason
-                        .as_deref()
-                        .map(crate::agent_runtime::PermissionDenialReason::parse)
-                        .transpose()?,
-                    opaque_reference,
-                })
-            },
-        )
-        .collect()
+    let mut events = Vec::new();
+    let mut total_bytes = 0_u64;
+    while let Some(row) = rows.next().map_err(sql_error)? {
+        check()?;
+        if events.len() >= MAX_PROVIDER_EVENTS_PER_RUN {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let mut row_bytes = 0_u64;
+        for index in 7..13 {
+            let field_bytes = u64::try_from(row.get::<_, i64>(index).map_err(sql_error)?)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            if field_bytes > MAX_PROVIDER_EVENT_FIELD_BYTES {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            row_bytes = row_bytes
+                .checked_add(field_bytes)
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        }
+        total_bytes = total_bytes
+            .checked_add(row_bytes)
+            .filter(|total| *total <= MAX_PROVIDER_EVENT_BYTES_PER_RUN)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let sequence = row.get::<_, u32>(0).map_err(sql_error)?;
+        let kind = row.get::<_, String>(1).map_err(sql_error)?;
+        let summary = row.get::<_, String>(2).map_err(sql_error)?;
+        let correlation_id = row.get::<_, Option<String>>(3).map_err(sql_error)?;
+        let request_fingerprint = row.get::<_, Option<String>>(4).map_err(sql_error)?;
+        let denial_reason = row.get::<_, Option<String>>(5).map_err(sql_error)?;
+        let opaque_reference = row.get::<_, Option<String>>(6).map_err(sql_error)?;
+        if sequence != expected {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        expected = expected
+            .checked_add(1)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        events.push(ProviderEvent {
+            sequence,
+            kind: ProviderEventKind::parse(&kind)?,
+            summary,
+            correlation_id,
+            request_fingerprint,
+            denial_reason: denial_reason
+                .as_deref()
+                .map(crate::agent_runtime::PermissionDenialReason::parse)
+                .transpose()?,
+            opaque_reference,
+        });
+    }
+    check()?;
+    Ok(events)
 }
 
 fn load_access_requested_at(
@@ -2311,6 +2377,82 @@ fn next_provider_event_sequence(
         .map_err(sql_error)
 }
 
+fn ensure_agent_run_capacity(
+    transaction: &rusqlite::Transaction<'_>,
+) -> Result<(), TenderCommandError> {
+    let run_count: i64 = transaction
+        .query_row("SELECT COUNT(*) FROM agent_runs", [], |row| row.get(0))
+        .map_err(sql_error)?;
+    let run_count = u64::try_from(run_count)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    if run_count
+        >= u64::try_from(MAX_AGENT_RUNS_PER_TENDER)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    Ok(())
+}
+
+fn provider_event_field_bytes(event: &PendingProviderEvent) -> Result<u64, TenderCommandError> {
+    let fields = [
+        Some(event.kind.as_str()),
+        Some(event.summary.as_str()),
+        event.correlation_id.as_deref(),
+        event.request_fingerprint.as_deref(),
+        event.denial_reason.map(|reason| reason.as_str()),
+        event.opaque_reference.as_deref(),
+    ];
+    fields.iter().flatten().try_fold(0_u64, |total, field| {
+        let field_bytes = u64::try_from(field.len())
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if field_bytes > MAX_PROVIDER_EVENT_FIELD_BYTES {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        total
+            .checked_add(field_bytes)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))
+    })
+}
+
+fn ensure_provider_event_capacity(
+    transaction: &rusqlite::Transaction<'_>,
+    run_id: &str,
+    event: &PendingProviderEvent,
+) -> Result<(), TenderCommandError> {
+    let event_bytes = provider_event_field_bytes(event)?;
+    let (event_count, existing_bytes): (i64, i64) = transaction
+        .query_row(
+            "SELECT COUNT(*),
+                    COALESCE(SUM(
+                      length(CAST(kind AS BLOB)) + length(CAST(summary AS BLOB)) +
+                      COALESCE(length(CAST(correlation_id AS BLOB)), 0) +
+                      COALESCE(length(CAST(request_fingerprint AS BLOB)), 0) +
+                      COALESCE(length(CAST(denial_reason AS BLOB)), 0) +
+                      COALESCE(length(CAST(opaque_reference AS BLOB)), 0)
+                    ), 0)
+             FROM provider_events WHERE run_id = ?1",
+            [run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(sql_error)?;
+    let event_count = u64::try_from(event_count)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let existing_bytes = u64::try_from(existing_bytes)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    if event_count
+        >= u64::try_from(MAX_PROVIDER_EVENTS_PER_RUN)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
+        || existing_bytes
+            .checked_add(event_bytes)
+            .filter(|total| *total <= MAX_PROVIDER_EVENT_BYTES_PER_RUN)
+            .is_none()
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    Ok(())
+}
+
 fn insert_event(
     transaction: &rusqlite::Transaction<'_>,
     run_id: &str,
@@ -2318,6 +2460,7 @@ fn insert_event(
     event: PendingProviderEvent,
     created_at: &str,
 ) -> Result<(), TenderCommandError> {
+    ensure_provider_event_capacity(transaction, run_id, &event)?;
     transaction
         .execute(
             "INSERT INTO provider_events (
@@ -2444,5 +2587,173 @@ fn ensure_canonical_value(value: &str) -> Result<(), TenderCommandError> {
         Ok(())
     } else {
         Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event_table(connection: &rusqlite::Connection) {
+        connection
+            .execute_batch(
+                "CREATE TABLE provider_events (
+                   run_id TEXT NOT NULL,
+                   sequence INTEGER NOT NULL,
+                   kind TEXT NOT NULL,
+                   summary TEXT NOT NULL,
+                   correlation_id TEXT,
+                   request_fingerprint TEXT,
+                   denial_reason TEXT,
+                   opaque_reference TEXT,
+                   created_at TEXT NOT NULL
+                 );",
+            )
+            .expect("create provider event table");
+    }
+
+    fn warning_event(summary: String) -> PendingProviderEvent {
+        PendingProviderEvent {
+            kind: ProviderEventKind::Warning,
+            summary,
+            correlation_id: None,
+            request_fingerprint: None,
+            denial_reason: None,
+            opaque_reference: None,
+        }
+    }
+
+    #[test]
+    fn canonical_agent_run_boundary_rejects_the_tender_run_cap() {
+        let mut connection = rusqlite::Connection::open_in_memory().expect("open SQLite");
+        connection
+            .execute_batch(
+                "CREATE TABLE agent_runs (run_id TEXT NOT NULL);
+                 WITH digits(value) AS (
+                   VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+                 )
+                 INSERT INTO agent_runs (run_id)
+                 SELECT printf('%d%d%d%d', a.value, b.value, c.value, d.value)
+                 FROM digits AS a
+                 CROSS JOIN digits AS b
+                 CROSS JOIN digits AS c
+                 CROSS JOIN digits AS d;",
+            )
+            .expect("fill Agent Run limit");
+        let transaction = connection.transaction().expect("start transaction");
+
+        let error = ensure_agent_run_capacity(&transaction)
+            .expect_err("the canonical boundary must reject an extra Agent Run");
+
+        assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+        assert_eq!(
+            transaction
+                .query_row("SELECT COUNT(*) FROM agent_runs", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("count Agent Runs"),
+            i64::try_from(MAX_AGENT_RUNS_PER_TENDER).expect("Agent Run limit")
+        );
+    }
+
+    #[test]
+    fn canonical_provider_event_boundary_rejects_count_without_inserting() {
+        let mut connection = rusqlite::Connection::open_in_memory().expect("open SQLite");
+        event_table(&connection);
+        connection
+            .execute_batch(
+                "WITH digits(value) AS (
+                   VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+                 )
+                 INSERT INTO provider_events (
+                   run_id, sequence, kind, summary, created_at
+                 )
+                 SELECT 'run',
+                        1 + a.value + 10 * b.value + 100 * c.value + 1000 * d.value,
+                        'warning', '', '2026-08-09T00:00:00Z'
+                 FROM digits AS a
+                 CROSS JOIN digits AS b
+                 CROSS JOIN digits AS c
+                 CROSS JOIN digits AS d;",
+            )
+            .expect("fill provider event count limit");
+        let transaction = connection.transaction().expect("start transaction");
+
+        let error = insert_event(
+            &transaction,
+            "run",
+            10_001,
+            warning_event("one event too many".into()),
+            "2026-08-09T00:00:01Z",
+        )
+        .expect_err("event count limit must reject the insert");
+
+        assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+        assert_eq!(
+            transaction
+                .query_row("SELECT COUNT(*) FROM provider_events", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .expect("count provider events"),
+            i64::try_from(MAX_PROVIDER_EVENTS_PER_RUN).expect("provider event limit")
+        );
+    }
+
+    #[test]
+    fn canonical_provider_event_boundary_rejects_field_and_aggregate_bytes() {
+        let mut connection = rusqlite::Connection::open_in_memory().expect("open SQLite");
+        event_table(&connection);
+        let transaction = connection.transaction().expect("start transaction");
+        let oversized =
+            "x".repeat(usize::try_from(MAX_PROVIDER_EVENT_FIELD_BYTES).expect("field limit") + 1);
+        let error = insert_event(
+            &transaction,
+            "run",
+            1,
+            warning_event(oversized),
+            "2026-08-09T00:00:00Z",
+        )
+        .expect_err("oversized field must be rejected");
+        assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+        assert_eq!(
+            transaction
+                .query_row("SELECT COUNT(*) FROM provider_events", [], |row| row
+                    .get::<_, u32>(0))
+                .expect("count rejected provider events"),
+            0
+        );
+        transaction
+            .execute_batch(
+                "WITH RECURSIVE counter(value) AS (
+                   VALUES (1)
+                   UNION ALL
+                   SELECT value + 1 FROM counter WHERE value < 256
+                 )
+                 INSERT INTO provider_events (
+                   run_id, sequence, kind, summary, created_at
+                 )
+                 SELECT 'run', value, 'warning',
+                        substr(hex(zeroblob(32765)), 1, 65529),
+                        '2026-08-09T00:00:00Z'
+                 FROM counter;",
+            )
+            .expect("fill provider event byte limit");
+
+        let error = insert_event(
+            &transaction,
+            "run",
+            257,
+            warning_event("one byte too many".into()),
+            "2026-08-09T00:00:01Z",
+        )
+        .expect_err("aggregate event bytes must reject the insert");
+
+        assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+        assert_eq!(
+            transaction
+                .query_row("SELECT COUNT(*) FROM provider_events", [], |row| row
+                    .get::<_, u32>(0))
+                .expect("count retained provider events"),
+            256
+        );
     }
 }

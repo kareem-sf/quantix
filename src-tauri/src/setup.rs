@@ -14,7 +14,7 @@ use crate::QuantixHost;
 
 pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 1024 * 1024 * 1024;
 
-const INSTALLATION_SCHEMA_VERSION: i64 = 3;
+const INSTALLATION_SCHEMA_VERSION: i64 = 5;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
@@ -30,8 +30,77 @@ const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
 ];
 const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 3)
+           schema_version INTEGER NOT NULL CHECK (schema_version = 5)
          )";
+pub(crate) const TENDER_BACKUPS_TABLE_SQL: &str = "CREATE TABLE tender_backups (
+           backup_id TEXT PRIMARY KEY CHECK (length(backup_id) = 32),
+           tender_id TEXT NOT NULL CHECK (length(tender_id) = 32),
+           state TEXT NOT NULL CHECK (state IN ('creating', 'ready', 'failed')),
+           source_json TEXT,
+           content_object_count INTEGER NOT NULL CHECK (content_object_count >= 0),
+           manifest_sha256 TEXT CHECK (manifest_sha256 IS NULL OR length(manifest_sha256) = 64),
+           archive_size_bytes INTEGER CHECK (archive_size_bytes IS NULL OR archive_size_bytes > 0),
+           diagnostic_code TEXT,
+           created_at TEXT NOT NULL,
+           CHECK (
+             (state = 'creating' AND source_json IS NULL AND content_object_count = 0
+              AND manifest_sha256 IS NULL AND archive_size_bytes IS NULL AND diagnostic_code IS NULL)
+             OR
+             (state = 'ready' AND source_json IS NOT NULL AND manifest_sha256 IS NOT NULL
+              AND archive_size_bytes IS NOT NULL AND diagnostic_code IS NULL)
+             OR
+             (state = 'failed' AND source_json IS NULL AND manifest_sha256 IS NULL
+              AND archive_size_bytes IS NULL AND diagnostic_code IS NOT NULL)
+           )
+         )";
+pub(crate) const TENDER_RECOVERIES_TABLE_SQL: &str = "CREATE TABLE tender_recoveries (
+           recovery_id TEXT PRIMARY KEY CHECK (length(recovery_id) = 32),
+           tender_id TEXT NOT NULL CHECK (length(tender_id) = 32),
+           backup_id TEXT NOT NULL,
+           state TEXT NOT NULL CHECK (state IN ('preparing', 'awaiting_approval', 'applying', 'applied', 'rejected', 'failed')),
+           backup_source_json TEXT,
+           current_source_json TEXT,
+           diagnostic_code TEXT,
+           created_at TEXT NOT NULL,
+           FOREIGN KEY (backup_id) REFERENCES tender_backups(backup_id),
+           CHECK (
+             (state = 'preparing' AND backup_source_json IS NOT NULL
+              AND diagnostic_code IS NULL)
+             OR
+             (state = 'awaiting_approval' AND backup_source_json IS NOT NULL
+              AND diagnostic_code IS NULL)
+             OR
+             (state IN ('applying', 'applied', 'rejected') AND backup_source_json IS NOT NULL
+              AND diagnostic_code IS NULL)
+             OR
+             (state = 'failed' AND diagnostic_code IS NOT NULL)
+           )
+         )";
+pub(crate) const TENDER_RECOVERY_DECISIONS_TABLE_SQL: &str =
+    "CREATE TABLE tender_recovery_decisions (
+           recovery_id TEXT PRIMARY KEY CHECK (length(recovery_id) = 32),
+           decision TEXT NOT NULL CHECK (decision IN ('approve_replacement', 'reject')),
+           rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 500),
+           decided_by TEXT NOT NULL CHECK (length(CAST(decided_by AS BLOB)) BETWEEN 1 AND 200),
+           manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+           current_audit_chain_head TEXT CHECK (
+             current_audit_chain_head IS NULL OR length(current_audit_chain_head) = 64
+           ),
+           decided_at TEXT NOT NULL,
+           FOREIGN KEY (recovery_id) REFERENCES tender_recoveries(recovery_id)
+         )";
+const TENDER_RECOVERY_DECISIONS_NO_UPDATE_SQL: &str =
+    "CREATE TRIGGER tender_recovery_decisions_no_update
+         BEFORE UPDATE ON tender_recovery_decisions
+         BEGIN
+           SELECT RAISE(ABORT, 'Tender Recovery decisions are immutable');
+         END";
+const TENDER_RECOVERY_DECISIONS_NO_DELETE_SQL: &str =
+    "CREATE TRIGGER tender_recovery_decisions_no_delete
+         BEFORE DELETE ON tender_recovery_decisions
+         BEGIN
+           SELECT RAISE(ABORT, 'Tender Recovery decisions are immutable');
+         END";
 const TENDER_CATALOGUE_TABLE_SQL: &str = "CREATE TABLE tender_catalogue (
            tender_id TEXT PRIMARY KEY CHECK (length(tender_id) = 32),
            name TEXT NOT NULL CHECK (length(CAST(name AS BLOB)) BETWEEN 1 AND 200),
@@ -506,9 +575,14 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute(INSTALLATION_TABLE_SQL, [])?;
     transaction.execute(RUNTIME_PREPARATION_TABLE_SQL, [])?;
+    transaction.execute(TENDER_BACKUPS_TABLE_SQL, [])?;
     transaction.execute(TENDER_CATALOGUE_TABLE_SQL, [])?;
+    transaction.execute(TENDER_RECOVERIES_TABLE_SQL, [])?;
+    transaction.execute(TENDER_RECOVERY_DECISIONS_TABLE_SQL, [])?;
+    transaction.execute(TENDER_RECOVERY_DECISIONS_NO_UPDATE_SQL, [])?;
+    transaction.execute(TENDER_RECOVERY_DECISIONS_NO_DELETE_SQL, [])?;
     transaction.execute(
-        "INSERT INTO installation (singleton, schema_version) VALUES (1, 3)",
+        "INSERT INTO installation (singleton, schema_version) VALUES (1, 5)",
         [],
     )?;
     transaction.execute(
@@ -621,9 +695,39 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
             ),
             (
                 "table".to_owned(),
+                "tender_backups".to_owned(),
+                "tender_backups".to_owned(),
+                Some(TENDER_BACKUPS_TABLE_SQL.to_owned()),
+            ),
+            (
+                "table".to_owned(),
                 "tender_catalogue".to_owned(),
                 "tender_catalogue".to_owned(),
                 Some(TENDER_CATALOGUE_TABLE_SQL.to_owned()),
+            ),
+            (
+                "table".to_owned(),
+                "tender_recoveries".to_owned(),
+                "tender_recoveries".to_owned(),
+                Some(TENDER_RECOVERIES_TABLE_SQL.to_owned()),
+            ),
+            (
+                "table".to_owned(),
+                "tender_recovery_decisions".to_owned(),
+                "tender_recovery_decisions".to_owned(),
+                Some(TENDER_RECOVERY_DECISIONS_TABLE_SQL.to_owned()),
+            ),
+            (
+                "trigger".to_owned(),
+                "tender_recovery_decisions_no_delete".to_owned(),
+                "tender_recovery_decisions".to_owned(),
+                Some(TENDER_RECOVERY_DECISIONS_NO_DELETE_SQL.to_owned()),
+            ),
+            (
+                "trigger".to_owned(),
+                "tender_recovery_decisions_no_update".to_owned(),
+                "tender_recovery_decisions".to_owned(),
+                Some(TENDER_RECOVERY_DECISIONS_NO_UPDATE_SQL.to_owned()),
             ),
         ]
     {

@@ -1,10 +1,11 @@
 use std::{io, path::Path, sync::Arc};
 
 use quantix_lib::{
-    configure_tauri_builder, AgentRunRecoveryDisposition, CreateTenderCommand, DeviceProtection,
-    QuantixHost, RuntimeLayout, SetupPlatform, StoragePermissions, TenderCommandError,
-    TenderErrorCode, TenderIntegrityIssue, TenderIntegrityReport, TenderIntegrityState,
-    TenderRecoveryChoice, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    configure_tauri_builder, AgentRunRecoveryDisposition, CreateTenderBackupCommand,
+    CreateTenderCommand, DeviceProtection, PrepareTenderRecoveryCommand, QuantixHost,
+    RuntimeLayout, SetupPlatform, StoragePermissions, TenderCommandError, TenderErrorCode,
+    TenderIntegrityIssue, TenderIntegrityReport, TenderIntegrityState, TenderRecoveryChoice,
+    MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use tauri::test::{assert_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
 
@@ -25,6 +26,89 @@ impl SetupPlatform for ReadySetupPlatform {
 
     fn device_protection(&self, _path: &Path) -> DeviceProtection {
         DeviceProtection::Protected
+    }
+}
+
+#[test]
+fn renderer_can_inspect_verified_backups_and_recovery_offers_through_named_commands() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let host = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(user_home.path().join("resources")),
+    );
+    host.accept_runtime_fixture();
+    let tender = host
+        .create_tender(CreateTenderCommand {
+            name: "Backup Recovery IPC".into(),
+        })
+        .expect("create Tender");
+    let backup = host
+        .create_tender_backup(CreateTenderBackupCommand {
+            tender_id: tender.tender_id.clone(),
+        })
+        .expect("create verified backup");
+    let offer = host
+        .prepare_tender_recovery(PrepareTenderRecoveryCommand {
+            tender_id: tender.tender_id.clone(),
+            backup_id: backup.backup_id.clone(),
+        })
+        .expect("prepare recovery offer");
+    let app = configure_tauri_builder(mock_builder())
+        .manage(host)
+        .build(mock_context(noop_assets()))
+        .expect("test Tauri application");
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .expect("test webview");
+
+    assert_ipc_response(
+        &webview,
+        request(
+            "inspect_tender_backups",
+            serde_json::json!({ "command": { "tender_id": tender.tender_id } }),
+        ),
+        Ok(vec![backup]),
+    );
+    assert_ipc_response(
+        &webview,
+        request(
+            "inspect_tender_recoveries",
+            serde_json::json!({ "command": { "tender_id": tender.tender_id } }),
+        ),
+        Ok(vec![offer]),
+    );
+    for (command, body) in [
+        (
+            "create_tender_backup",
+            serde_json::json!({ "command": { "tender_id": "invalid" } }),
+        ),
+        (
+            "prepare_tender_recovery",
+            serde_json::json!({
+                "command": { "tender_id": "invalid", "backup_id": "invalid" }
+            }),
+        ),
+        (
+            "resolve_tender_recovery",
+            serde_json::json!({
+                "command": {
+                    "tender_id": "invalid",
+                    "recovery_id": "invalid",
+                    "decision": "reject",
+                    "rationale": "Engineer rejected the candidate"
+                }
+            }),
+        ),
+    ] {
+        assert_ipc_response(
+            &webview,
+            request(command, body),
+            Err(TenderCommandError {
+                code: TenderErrorCode::InvalidCommand,
+            }),
+        );
     }
 }
 

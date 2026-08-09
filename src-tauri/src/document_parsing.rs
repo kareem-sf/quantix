@@ -29,10 +29,10 @@ const DOCLING_DOCUMENT_TIMEOUT_SECONDS: &str = "840";
 const DOCLING_PROCESS_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const DOCLING_PROCESS_OUTPUT_LIMIT: usize = 64 * 1024;
 #[cfg(not(feature = "runtime-fixture"))]
-const MAX_DOCLING_JSON_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_DOCLING_JSON_BYTES: u64 = 64 * 1024 * 1024;
 #[cfg(feature = "runtime-fixture")]
-const MAX_DOCLING_JSON_BYTES: u64 = 64 * 1024;
-const MAX_EVIDENCE_LOCATIONS: usize = 100_000;
+pub(crate) const MAX_DOCLING_JSON_BYTES: u64 = 64 * 1024;
+pub(crate) const MAX_EVIDENCE_LOCATIONS: usize = 100_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
 #[serde(deny_unknown_fields)]

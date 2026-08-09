@@ -1,8 +1,9 @@
 use std::{io, path::Path, sync::Arc};
 
 use quantix_lib::{
-    ensure_quantix_setup, CreateTenderCommand, DeviceProtection, QuantixHost,
-    RegisterTenderContentCommand, SetupPlatform, StoragePermissions,
+    ensure_quantix_setup, CreateTenderBackupCommand, CreateTenderCommand, DeviceProtection,
+    PrepareTenderRecoveryCommand, QuantixHost, RegisterTenderContentCommand,
+    ResolveTenderRecoveryCommand, SetupPlatform, StoragePermissions, TenderRecoveryDecision,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
@@ -52,6 +53,28 @@ fn main() {
         }
         "list" => {
             host.list_tenders().expect("list Tender fixture action");
+        }
+        "backup" => {
+            host.create_tender_backup(CreateTenderBackupCommand {
+                tender_id: arguments.next().expect("Tender identity argument"),
+            })
+            .expect("backup Tender fixture action");
+        }
+        "prepare-recovery" => {
+            host.prepare_tender_recovery(PrepareTenderRecoveryCommand {
+                tender_id: arguments.next().expect("Tender identity argument"),
+                backup_id: arguments.next().expect("backup identity argument"),
+            })
+            .expect("prepare Tender recovery fixture action");
+        }
+        "apply-recovery" => {
+            host.resolve_tender_recovery(ResolveTenderRecoveryCommand {
+                tender_id: arguments.next().expect("Tender identity argument"),
+                recovery_id: arguments.next().expect("recovery identity argument"),
+                decision: TenderRecoveryDecision::ApproveReplacement,
+                rationale: "Fixture Engineer approved the verified exact replacement".into(),
+            })
+            .expect("apply Tender recovery fixture action");
         }
         _ => panic!("unknown storage fixture action"),
     }
