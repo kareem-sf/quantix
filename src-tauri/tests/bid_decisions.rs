@@ -1,14 +1,21 @@
 use std::{fs, io, path::Path, sync::Arc};
 
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
 use quantix_lib::{
-    ensure_quantix_setup, AgentRunState, BidDecisionPackageReviewOutcome, BidRecommendationOutcome,
-    ComplianceDisposition, ComplianceDispositionUpdate, CreateBidDecisionPackageCommand,
-    CreateTenderCommand, DecideTenderRecordCommand, DeviceProtection, ImportTenderPackageCommand,
-    ManagerCapabilityDemandInput, ParseSourceArtifactCommand, ProviderFailureCategory, QuantixHost,
-    RunBidDecisionPackageReviewCommand, RunTenderRecordExtractionCommand, RuntimeLayout,
-    SetupPlatform, SetupState, StoragePermissions, TenderErrorCode, TenderEvidenceReference,
-    TenderIntegrityState, TenderRecordEngineerDecisionKind, TenderRecordInspection,
-    TenderRecordKind, TenderRecordVersionReference, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    ensure_quantix_setup, AgentRunState, BidDecisionApprovalDecision, BidDecisionPackageInspection,
+    BidDecisionPackageReviewOutcome, BidRecommendationOutcome, ComplianceDisposition,
+    ComplianceDispositionUpdate, CreateBidDecisionPackageCommand, CreateTenderCommand,
+    CreateTenderEngineerEntryCommand, DecideBidDecisionPackageCommand, DecideTenderRecordCommand,
+    DeviceProtection, ImportTenderPackageCommand, InspectBidDecisionApprovalHistoryCommand,
+    InvalidateBidDecisionApprovalCommand, ManagerCapabilityDemandInput, ParseSourceArtifactCommand,
+    ProviderFailureCategory, QuantixHost, ResolveBidDecisionReturnReworkCommand,
+    ReviseTenderCommand, RunBidDecisionPackageReviewCommand, RunTenderRecordExtractionCommand,
+    RuntimeLayout, SetupPlatform, SetupState, StoragePermissions, TenderErrorCode,
+    TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase,
+    TenderRecordEngineerDecisionKind, TenderRecordInspection, TenderRecordKind,
+    TenderRecordVersionReference, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 struct ReadySetupPlatform;
@@ -72,7 +79,7 @@ impl Harness {
             .expect("update fake app-server scenario");
     }
 
-    async fn extract_records(&self) -> Vec<TenderRecordInspection> {
+    async fn import_evidence(&self) -> Vec<TenderEvidenceReference> {
         let source = self._root.path().join("decision-source");
         fs::create_dir(&source).expect("source directory");
         fs::write(
@@ -96,8 +103,7 @@ impl Harness {
             })
             .await
             .expect("parse source");
-        let evidence = self
-            .host
+        self.host
             .inspect_evidence(ParseSourceArtifactCommand {
                 tender_id: self.tender_id.clone(),
                 artifact_id: document.artifact_id.clone(),
@@ -111,7 +117,11 @@ impl Harness {
                 version: document.version,
                 ordinal: location.ordinal,
             })
-            .collect();
+            .collect()
+    }
+
+    async fn extract_records(&self) -> Vec<TenderRecordInspection> {
+        let evidence = self.import_evidence().await;
         let extraction = self
             .host
             .run_tender_record_extraction(RunTenderRecordExtractionCommand {
@@ -145,6 +155,78 @@ impl Harness {
                 .expect("verify exact Tender Record");
         }
     }
+}
+
+#[tokio::test]
+async fn record_inventory_overflow_fails_terminally_without_publication_and_is_audited() {
+    let harness = Harness::new("record-extraction-inventory-fill");
+    let evidence = harness.import_evidence().await;
+    let filled = harness
+        .host
+        .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id: harness.tender_id.clone(),
+            evidence: evidence.clone(),
+            authorities: Vec::new(),
+        })
+        .await
+        .expect("fill the bounded Bid Decision record inventory");
+    assert_eq!(filled.run.state, AgentRunState::Completed);
+    assert_eq!(filled.published_record_count, 255);
+
+    harness.set_agent_scenario("record-extraction-inventory-overflow");
+    let denied = harness
+        .host
+        .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id: harness.tender_id.clone(),
+            evidence,
+            authorities: Vec::new(),
+        })
+        .await
+        .expect("terminalize the denied publication");
+    assert_eq!(denied.run.state, AgentRunState::Failed);
+    assert_eq!(
+        denied.run.failure.as_ref().map(|failure| failure.category),
+        Some(ProviderFailureCategory::OutputInvalid)
+    );
+    assert_eq!(denied.published_record_count, 0);
+
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open Tender Store");
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM tender_record_heads", [], |row| {
+                row.get::<_, u32>(0)
+            })
+            .expect("count retained Tender Records"),
+        255
+    );
+    let denial_payload: String = connection
+        .query_row(
+            "SELECT payload_json FROM audit_events
+             WHERE event_type = 'tender_record_publication_denied'
+             ORDER BY sequence DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("inspect publication denial audit");
+    let denial_payload: Value =
+        serde_json::from_str(&denial_payload).expect("parse publication denial audit");
+    assert_eq!(
+        denial_payload["change"]["reason"],
+        Value::String("bid_decision_record_inventory_limit".into())
+    );
+    assert_eq!(
+        denial_payload["change"]["run_id"],
+        Value::String(denied.run.run_id)
+    );
+    assert_eq!(
+        denial_payload["change"]["candidate_record_count"],
+        Value::String("2".into())
+    );
 }
 
 fn inspect_all_records(host: &QuantixHost, tender_id: &str) -> Vec<TenderRecordInspection> {
@@ -195,6 +277,55 @@ fn complete_dispositions(records: &[TenderRecordInspection]) -> Vec<ComplianceDi
             related_records: Vec::new(),
         })
         .collect()
+}
+
+async fn ready_package(harness: &Harness) -> BidDecisionPackageInspection {
+    let records = harness.extract_records().await;
+    harness.verify_records(&records, false);
+    let package = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+            disposition_updates: complete_dispositions(&records),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("create complete decision package");
+    harness.set_agent_scenario("bid-package-review");
+    harness
+        .host
+        .run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id,
+            version: package.version,
+        })
+        .await
+        .expect("review complete decision package")
+        .package
+}
+
+fn approval_command(
+    harness: &Harness,
+    package: &BidDecisionPackageInspection,
+    decision: BidDecisionApprovalDecision,
+) -> DecideBidDecisionPackageCommand {
+    DecideBidDecisionPackageCommand {
+        tender_id: harness.tender_id.clone(),
+        package_id: package.package_id.clone(),
+        version: package.version,
+        manifest_sha256: package.manifest_sha256.clone(),
+        decision,
+        rationale:
+            "Tendering Manager reviewed the exact package, Evidence, findings, and consequences."
+                .into(),
+        conditions: vec!["Work Plan approval remains mandatory before production.".into()],
+        exceptions: vec!["No exception grants production authority.".into()],
+        required_rework: if decision == BidDecisionApprovalDecision::Return {
+            vec!["Resolve the named package gaps and publish a successor version.".into()]
+        } else {
+            Vec::new()
+        },
+    }
 }
 
 #[tokio::test]
@@ -288,6 +419,756 @@ async fn complete_exact_package_passes_review_and_is_ready_for_the_formal_gate()
         .expect("current package");
     assert_eq!(reopened.manifest_sha256, package.manifest_sha256);
     assert!(reopened.decision_gate_ready);
+    assert!(
+        reopened.approval.is_none(),
+        "review cannot approve a package"
+    );
+}
+
+#[tokio::test]
+async fn tendering_manager_accepts_one_exact_package_and_advances_to_tender_planning() {
+    let harness = Harness::new("record-extraction");
+    let package = ready_package(&harness).await;
+    assert_eq!(package.lifecycle_phase, TenderLifecyclePhase::BidDecision);
+    assert!(package.change_summary.added_record_count > 0);
+
+    let result = harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact independently reviewed package");
+    assert_eq!(result.approval.decided_by, "engineer_user");
+    assert_eq!(result.approval.acting_role, "tendering_manager");
+    assert_eq!(
+        result.approval.lifecycle_after,
+        TenderLifecyclePhase::TenderPlanning
+    );
+    assert!(result.approval.evidence_count > 0);
+    assert_eq!(result.package.approval, Some(result.approval.clone()));
+    assert_eq!(
+        result.package.lifecycle_phase,
+        TenderLifecyclePhase::TenderPlanning
+    );
+    assert!(!result.package.decision_gate_ready);
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect lifecycle after Proceed")
+            .lifecycle_phase,
+        TenderLifecyclePhase::TenderPlanning
+    );
+    let audit_after_approval = harness
+        .host
+        .open_tender(&harness.tender_id)
+        .expect("inspect audit count after Proceed")
+        .audit_event_count;
+    assert_eq!(
+        harness
+            .host
+            .revise_tender(ReviseTenderCommand {
+                tender_id: harness.tender_id.clone(),
+                name: "Attempted post-Proceed mutation".into(),
+            })
+            .expect_err("Proceed closes the pre-bid writer plane")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect audited lifecycle denial")
+            .audit_event_count,
+        audit_after_approval + 1
+    );
+
+    assert_eq!(
+        harness
+            .host
+            .decide_bid_decision_package(approval_command(
+                &harness,
+                &package,
+                BidDecisionApprovalDecision::Accept,
+            ))
+            .expect_err("double submission cannot create another Approval Record")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let history = harness
+        .host
+        .inspect_bid_decision_approval_history(InspectBidDecisionApprovalHistoryCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 10,
+        })
+        .expect("inspect immutable decision history");
+    assert_eq!(history.approvals, vec![result.approval.clone()]);
+
+    let cold_host =
+        QuantixHost::with_setup_platform(&harness.application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&cold_host).state, SetupState::Ready);
+    let integrity = cold_host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-open Approval Record integrity");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+    let reopened = cold_host
+        .inspect_current_bid_decision_package(&harness.tender_id)
+        .expect("inspect approved package")
+        .expect("package remains preserved");
+    assert_eq!(reopened.approval, Some(result.approval));
+    assert_eq!(
+        reopened.lifecycle_phase,
+        TenderLifecyclePhase::TenderPlanning
+    );
+    drop(cold_host);
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close Tender before Approval Record corruption injection");
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    rusqlite::Connection::open(database)
+        .expect("open Tender Store")
+        .execute_batch(
+            "DROP TRIGGER bid_decision_approval_records_no_update;
+             UPDATE bid_decision_approval_records
+             SET approval_sha256 = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';",
+        )
+        .expect("corrupt immutable Approval Record hash");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("inspect corrupted Approval Record")
+            .state,
+        TenderIntegrityState::RecoveryRequired
+    );
+}
+
+#[tokio::test]
+async fn material_change_invalidates_proceed_and_reopens_an_exact_successor_path() {
+    let harness = Harness::new("record-extraction");
+    let package = ready_package(&harness).await;
+    let accepted = harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact package");
+    let audit_before_unproven_invalidation = harness
+        .host
+        .open_tender(&harness.tender_id)
+        .expect("inspect audit count before invalidation denial")
+        .audit_event_count;
+    assert_eq!(
+        harness
+            .host
+            .invalidate_bid_decision_approval(InvalidateBidDecisionApprovalCommand {
+                tender_id: harness.tender_id.clone(),
+                approval_id: accepted.approval.approval_id.clone(),
+                approval_sha256: accepted.approval.approval_sha256.clone(),
+                material_change_summary:
+                    "A material addendum changes the commercial and delivery basis.".into(),
+                affected_areas: vec!["commercial_terms".into(), "delivery_plan".into()],
+            })
+            .expect_err("an assertion without an exact changed dependency cannot reopen Proceed")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect audited invalidation denial")
+            .audit_event_count,
+        audit_before_unproven_invalidation + 1
+    );
+    let current_records = inspect_all_records(&harness.host, &harness.tender_id);
+    let mut evidence = current_records
+        .iter()
+        .flat_map(|record| record.fields.iter().flat_map(|field| field.evidence.iter()))
+        .map(|evidence| evidence.reference.clone())
+        .collect::<Vec<_>>();
+    evidence.sort_by(|left, right| {
+        left.artifact_id
+            .cmp(&right.artifact_id)
+            .then_with(|| left.version.cmp(&right.version))
+            .then_with(|| left.ordinal.cmp(&right.ordinal))
+    });
+    evidence.dedup_by(|left, right| {
+        left.artifact_id == right.artifact_id
+            && left.version == right.version
+            && left.ordinal == right.ordinal
+    });
+    harness.set_agent_scenario("record-extraction-expanded");
+    harness
+        .host
+        .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id: harness.tender_id.clone(),
+            evidence,
+            authorities: Vec::new(),
+        })
+        .await
+        .expect("an exact material dependency can be registered after Proceed");
+    let invalidated = harness
+        .host
+        .invalidate_bid_decision_approval(InvalidateBidDecisionApprovalCommand {
+            tender_id: harness.tender_id.clone(),
+            approval_id: accepted.approval.approval_id.clone(),
+            approval_sha256: accepted.approval.approval_sha256.clone(),
+            material_change_summary:
+                "A material addendum changes the commercial and delivery basis.".into(),
+            affected_areas: vec!["commercial_terms".into(), "delivery_plan".into()],
+        })
+        .expect("invalidate exact Proceed approval");
+    assert_eq!(
+        invalidated.package.lifecycle_phase,
+        TenderLifecyclePhase::BidDecision
+    );
+    assert_eq!(
+        invalidated
+            .package
+            .approval
+            .as_ref()
+            .and_then(|approval| approval.invalidation.clone()),
+        Some(invalidated.invalidation.clone())
+    );
+    assert!(!invalidated.invalidation.changed_records.is_empty());
+    assert_eq!(
+        harness
+            .host
+            .create_tender_engineer_entry(CreateTenderEngineerEntryCommand {
+                tender_id: harness.tender_id.clone(),
+                value: "Late unbound change".into(),
+                description: "Cannot alter the captured exact diff before its successor.".into(),
+            })
+            .expect_err("material-change intake freezes until the exact successor publishes")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let stale = harness
+        .host
+        .inspect_current_bid_decision_package(&harness.tender_id)
+        .expect("inspect invalidated package after registered change")
+        .expect("approved package remains preserved");
+    assert!(!stale.current);
+    let successor = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: Some(package.version),
+            disposition_updates: Vec::new(),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("publish material-change successor");
+    assert_eq!(
+        successor.material_change_basis,
+        Some(invalidated.invalidation.clone())
+    );
+    assert!(successor.return_rework_basis.is_none());
+    assert_eq!(successor.version, package.version + 1);
+
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close before invalidation integrity inspection");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("inspect material-change lineage")
+            .state,
+        TenderIntegrityState::Ready
+    );
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close before dependency-snapshot corruption injection");
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open Tender Store");
+    let (prior_inventory_json, prior_inventory_sha256): (String, String) = connection
+        .query_row(
+            "SELECT record_inventory_json, record_inventory_sha256
+             FROM bid_decision_package_versions WHERE version = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load accepted dependency snapshot");
+    let successor_manifest_json: String = connection
+        .query_row(
+            "SELECT manifest_json FROM bid_decision_package_versions WHERE version = 2",
+            [],
+            |row| row.get(0),
+        )
+        .expect("load successor manifest");
+    let mut successor_manifest: Value =
+        serde_json::from_str(&successor_manifest_json).expect("parse successor manifest");
+    successor_manifest["record_inventory_sha256"] = Value::String(prior_inventory_sha256.clone());
+    let successor_manifest_json =
+        serde_json::to_string(&successor_manifest).expect("canonical successor manifest");
+    let successor_manifest_sha256 = Sha256::digest(successor_manifest_json.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    connection
+        .execute("DROP TRIGGER bid_decision_package_versions_no_update", [])
+        .expect("drop immutable version trigger for corruption fixture");
+    connection
+        .execute(
+            "UPDATE bid_decision_package_versions
+             SET record_inventory_json = ?1, record_inventory_sha256 = ?2,
+                 manifest_json = ?3, manifest_sha256 = ?4
+             WHERE version = 2",
+            rusqlite::params![
+                prior_inventory_json,
+                prior_inventory_sha256,
+                successor_manifest_json,
+                successor_manifest_sha256,
+            ],
+        )
+        .expect("forge unchanged successor dependency snapshot");
+    drop(connection);
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("inspect forged material-change successor")
+            .state,
+        TenderIntegrityState::RecoveryRequired
+    );
+}
+
+#[tokio::test]
+async fn active_agent_work_blocks_the_atomic_gate_until_its_output_is_repackaged() {
+    let harness = Harness::new("record-extraction");
+    let package = ready_package(&harness).await;
+    let document = harness
+        .host
+        .inspect_document_register(&harness.tender_id)
+        .expect("inspect parsed decision source")
+        .documents
+        .into_iter()
+        .next()
+        .expect("parsed decision source");
+    let evidence = harness
+        .host
+        .inspect_evidence(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: document.artifact_id.clone(),
+            version: document.version,
+        })
+        .expect("inspect exact Evidence for delayed extraction")
+        .locations
+        .into_iter()
+        .map(|location| TenderEvidenceReference {
+            artifact_id: document.artifact_id.clone(),
+            version: document.version,
+            ordinal: location.ordinal,
+        })
+        .collect();
+    harness.set_agent_scenario("record-extraction-delayed");
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let extraction = tokio::spawn(async move {
+        host.run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id,
+            evidence,
+            authorities: Vec::new(),
+        })
+        .await
+    });
+    let waiting = harness.codex.with_extension("record-output-waiting");
+    for _ in 0..1_000 {
+        if waiting.is_file() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(
+        waiting.is_file(),
+        "provider did not reach delayed output boundary"
+    );
+    assert_eq!(
+        harness
+            .host
+            .decide_bid_decision_package(approval_command(
+                &harness,
+                &package,
+                BidDecisionApprovalDecision::Accept,
+            ))
+            .expect_err("active Agent Run must block the formal gate")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    assert!(harness
+        .host
+        .inspect_current_bid_decision_package(&harness.tender_id)
+        .expect("inspect package after active-run denial")
+        .is_some_and(|package| package.approval.is_none()));
+    fs::write(
+        harness.codex.with_extension("record-output-release"),
+        b"release",
+    )
+    .expect("release delayed extraction");
+    extraction
+        .await
+        .expect("join delayed extraction")
+        .expect("complete delayed extraction before any lifecycle transition");
+    assert_eq!(
+        harness
+            .host
+            .decide_bid_decision_package(approval_command(
+                &harness,
+                &package,
+                BidDecisionApprovalDecision::Accept,
+            ))
+            .expect_err("published material changes stale the exact package")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+}
+
+#[tokio::test]
+async fn return_preserves_the_pending_gate_and_requires_a_successor_exact_version() {
+    let harness = Harness::new("record-extraction");
+    let package = ready_package(&harness).await;
+    let returned = harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Return,
+        ))
+        .expect("return exact package for required rework");
+    assert_eq!(
+        returned.package.lifecycle_phase,
+        TenderLifecyclePhase::BidDecision
+    );
+    assert!(!returned.approval.required_rework.is_empty());
+    assert!(!returned.package.decision_gate_ready);
+
+    assert_eq!(
+        harness
+            .host
+            .create_bid_decision_package(CreateBidDecisionPackageCommand {
+                tender_id: harness.tender_id.clone(),
+                base_version: Some(package.version),
+                disposition_updates: Vec::new(),
+                manager_capability_demands: Vec::new(),
+            })
+            .expect_err("unresolved Return rework keeps the gate pending")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let rework = harness
+        .host
+        .resolve_bid_decision_return_rework(ResolveBidDecisionReturnReworkCommand {
+            tender_id: harness.tender_id.clone(),
+            approval_id: returned.approval.approval_id.clone(),
+            resolutions: vec![
+                "Rechecked the exact package and recorded the required controlled disposition."
+                    .into(),
+            ],
+        })
+        .expect("resolve every required Return item attributably");
+    assert_eq!(rework.disposition.items.len(), 1);
+    assert_eq!(
+        rework.disposition.approval_sha256,
+        returned.approval.approval_sha256
+    );
+
+    let successor = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: Some(package.version),
+            disposition_updates: Vec::new(),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("publish reworked successor package");
+    assert_eq!(successor.version, 2);
+    assert_eq!(successor.change_summary.prior_version, Some(1));
+    assert_eq!(successor.prior_approval_count, 1);
+    assert!(successor.approval.is_none());
+    assert_eq!(
+        successor.return_rework_basis,
+        Some(rework.disposition.clone())
+    );
+    assert_eq!(
+        harness
+            .host
+            .decide_bid_decision_package(approval_command(
+                &harness,
+                &package,
+                BidDecisionApprovalDecision::Accept,
+            ))
+            .expect_err("stale package view cannot be approved")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let mut tampered = approval_command(&harness, &successor, BidDecisionApprovalDecision::Accept);
+    tampered.manifest_sha256 = "0".repeat(64);
+    assert_eq!(
+        harness
+            .host
+            .decide_bid_decision_package(tampered)
+            .expect_err("changed manifest cannot be approved")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+
+    harness.set_agent_scenario("bid-package-review");
+    let successor = harness
+        .host
+        .run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: successor.package_id,
+            version: successor.version,
+        })
+        .await
+        .expect("review successor package")
+        .package;
+    let accepted = harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &successor,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept reworked exact package");
+    assert_eq!(accepted.approval.approval_sequence, 2);
+    assert_eq!(
+        accepted.approval.preceding_approval_hash,
+        returned.approval.approval_sha256
+    );
+    let history = harness
+        .host
+        .inspect_bid_decision_approval_history(InspectBidDecisionApprovalHistoryCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 10,
+        })
+        .expect("inspect return and Proceed history");
+    assert_eq!(history.approvals.len(), 2);
+    assert_eq!(
+        history.approvals[0].decision,
+        BidDecisionApprovalDecision::Accept
+    );
+    assert_eq!(
+        history.approvals[1].decision,
+        BidDecisionApprovalDecision::Return
+    );
+}
+
+#[tokio::test]
+async fn reject_is_an_attributable_terminal_decline_that_preserves_the_tender() {
+    let harness = Harness::new("record-extraction");
+    let package = ready_package(&harness).await;
+    let record_count = inspect_all_records(&harness.host, &harness.tender_id).len();
+    let declined = harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Reject,
+        ))
+        .expect("record formal Decline");
+    assert_eq!(
+        declined.approval.decision,
+        BidDecisionApprovalDecision::Reject
+    );
+    assert_eq!(
+        declined.package.lifecycle_phase,
+        TenderLifecyclePhase::Declined
+    );
+    assert_eq!(
+        inspect_all_records(&harness.host, &harness.tender_id).len(),
+        record_count,
+        "Decline must preserve exact source analysis"
+    );
+    assert_eq!(
+        harness
+            .host
+            .create_bid_decision_package(CreateBidDecisionPackageCommand {
+                tender_id: harness.tender_id.clone(),
+                base_version: Some(package.version),
+                disposition_updates: Vec::new(),
+                manager_capability_demands: Vec::new(),
+            })
+            .expect_err("Decline is terminal")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    assert_eq!(
+        harness
+            .host
+            .invalidate_bid_decision_approval(InvalidateBidDecisionApprovalCommand {
+                tender_id: harness.tender_id.clone(),
+                approval_id: declined.approval.approval_id.clone(),
+                approval_sha256: declined.approval.approval_sha256.clone(),
+                material_change_summary: "Attempted reopening of a declined Tender.".into(),
+                affected_areas: vec!["commercial_terms".into()],
+            })
+            .expect_err("Decline is not a reopenable Proceed approval")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    assert!(harness
+        .host
+        .inspect_current_bid_decision_package(&harness.tender_id)
+        .expect("inspect preserved declined package")
+        .is_some_and(|package| package.approval == Some(declined.approval)));
+    assert_eq!(
+        harness
+            .host
+            .revise_tender(ReviseTenderCommand {
+                tender_id: harness.tender_id.clone(),
+                name: "Attempted post-Decline mutation".into(),
+            })
+            .expect_err("Decline closes the pre-bid writer plane")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+}
+
+#[tokio::test]
+async fn incomplete_or_unreviewed_package_cannot_proceed_or_decline() {
+    let harness = Harness::new("record-extraction");
+    harness.extract_records().await;
+    let package = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+            disposition_updates: Vec::new(),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("create incomplete decision basis");
+    let audit_before_denials = harness
+        .host
+        .open_tender(&harness.tender_id)
+        .expect("inspect audit count before denied decisions")
+        .audit_event_count;
+    for decision in [
+        BidDecisionApprovalDecision::Accept,
+        BidDecisionApprovalDecision::Reject,
+    ] {
+        assert_eq!(
+            harness
+                .host
+                .decide_bid_decision_package(approval_command(&harness, &package, decision))
+                .expect_err("failed gate guard cannot mutate lifecycle")
+                .code,
+            TenderErrorCode::InvalidCommand
+        );
+    }
+    let mut malformed_return =
+        approval_command(&harness, &package, BidDecisionApprovalDecision::Return);
+    malformed_return.required_rework.clear();
+    assert_eq!(
+        harness
+            .host
+            .decide_bid_decision_package(malformed_return)
+            .expect_err("semantically invalid formal decision is denied")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let mut empty_rationale =
+        approval_command(&harness, &package, BidDecisionApprovalDecision::Accept);
+    empty_rationale.rationale.clear();
+    assert_eq!(
+        harness
+            .host
+            .decide_bid_decision_package(empty_rationale)
+            .expect_err("Host validation denial is audited in the valid Tender")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect denied decision audit events")
+            .audit_event_count,
+        audit_before_denials + 4
+    );
+    let successor = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: Some(package.version),
+            disposition_updates: Vec::new(),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("publish a successor before any formal decision");
+    assert_eq!(
+        harness
+            .host
+            .decide_bid_decision_package(approval_command(
+                &harness,
+                &package,
+                BidDecisionApprovalDecision::Return,
+            ))
+            .expect_err("stale exact package cannot be returned")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    assert!(harness
+        .host
+        .inspect_bid_decision_approval_history(InspectBidDecisionApprovalHistoryCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 10,
+        })
+        .expect("inspect history after failed guards")
+        .approvals
+        .is_empty());
+    let returned = harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &successor,
+            BidDecisionApprovalDecision::Return,
+        ))
+        .expect("Tendering Manager can explicitly return incomplete work");
+    assert_eq!(
+        returned.package.lifecycle_phase,
+        TenderLifecyclePhase::BidDecision
+    );
+    assert_eq!(
+        returned.approval.decision,
+        BidDecisionApprovalDecision::Return
+    );
+    assert_eq!(
+        harness
+            .host
+            .create_bid_decision_package(CreateBidDecisionPackageCommand {
+                tender_id: harness.tender_id.clone(),
+                base_version: Some(successor.version),
+                disposition_updates: Vec::new(),
+                manager_capability_demands: Vec::new(),
+            })
+            .expect_err("Return rework cannot be bypassed by cloning the package")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
 }
 
 #[tokio::test]

@@ -872,6 +872,8 @@ fn run_agent_turn(
             | "record-extraction-decline-risk"
             | "record-extraction-expanded"
             | "record-extraction-extra-characteristic"
+            | "record-extraction-inventory-fill"
+            | "record-extraction-inventory-overflow"
             | "record-extraction-delayed"
             | "record-extraction-duplicate-citation"
             | "record-extraction-invalid"
@@ -1264,6 +1266,40 @@ fn run_agent_turn(
         added["stable_key"] = serde_json::json!("late_project_characteristic");
         added["title"] = serde_json::json!("Late verified Project Characteristic");
         candidate["records"] = serde_json::json!([added]);
+        candidate
+    } else if scenario == "record-extraction-inventory-fill" {
+        let mut candidate = record_extraction_candidate(provider_data_view)?;
+        let template = candidate["records"][0].clone();
+        candidate["records"] = serde_json::Value::Array(
+            (0..255)
+                .map(|index| {
+                    let mut record = template.clone();
+                    record["stable_key"] =
+                        serde_json::json!(format!("decision_inventory_{index:03}"));
+                    record["title"] =
+                        serde_json::json!(format!("Decision inventory record {index:03}"));
+                    record
+                })
+                .collect(),
+        );
+        candidate
+    } else if scenario == "record-extraction-inventory-overflow" {
+        let mut candidate = record_extraction_candidate(provider_data_view)?;
+        let template = candidate["records"][0].clone();
+        candidate["records"] = serde_json::Value::Array(
+            [
+                "decision_inventory_overflow_a",
+                "decision_inventory_overflow_b",
+            ]
+            .into_iter()
+            .map(|stable_key| {
+                let mut record = template.clone();
+                record["stable_key"] = serde_json::json!(stable_key);
+                record["title"] = serde_json::json!(format!("Rejected {stable_key}"));
+                record
+            })
+            .collect(),
+        );
         candidate
     } else if scenario == "record-extraction-expanded" {
         let mut candidate = record_extraction_candidate(provider_data_view)?;

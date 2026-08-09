@@ -28,6 +28,7 @@ use super::{
 
 pub(crate) const MAX_RECORD_EVIDENCE_INPUTS: usize = 256;
 pub(crate) const MAX_RECORDS_PER_RESULT: usize = 256;
+pub(crate) const MAX_DECISION_RECORD_INVENTORY: usize = MAX_RECORDS_PER_RESULT;
 pub(crate) const MAX_RECORD_FIELDS: usize = 64;
 pub(crate) const MAX_RECORD_CONTRADICTIONS: usize = 32;
 pub(crate) const RECORD_EXTRACTION_CAPABILITY: &str = "extract_evidence_backed_tender_records";
@@ -37,7 +38,6 @@ pub(crate) const RECORD_REVIEW_CAPABILITY: &str = "independently_review_tender_r
 pub(crate) const RECORD_REVIEW_SCOPE: &str = "tender_record";
 pub(crate) const RECORD_REVIEW_ACTION: &str = "review_exact_tender_record";
 const MAX_RECORD_SOURCE_RELATIONSHIPS: usize = 512;
-const MAX_TENDER_RECORDS: usize = 10_000;
 const MAX_RECORD_VERSIONS: usize = 1_000;
 const MAX_RECORD_REVIEWS: usize = 64;
 const MAX_EXPANDED_RECORD_BYTES: u64 = 2 * 1024 * 1024;
@@ -668,7 +668,7 @@ impl TenderStore {
         evidence: &[TenderEvidenceReference],
         authority_references: &[TenderRecordAuthorityReference],
     ) -> Result<PreparedAgentRun, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         if evidence.is_empty() || evidence.len() > MAX_RECORD_EVIDENCE_INPUTS {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
@@ -929,7 +929,7 @@ impl TenderStore {
         record_id: &str,
         version: u32,
     ) -> Result<PreparedAgentRun, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         if !valid_identifier(record_id) || version == 0 {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
@@ -1392,7 +1392,7 @@ impl TenderStore {
         tender_id: &TenderId,
         command: &DecideTenderRecordCommand,
     ) -> Result<TenderRecordDecisionResult, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1493,7 +1493,7 @@ impl TenderStore {
         tender_id: &TenderId,
         command: &CreateTenderEngineerEntryCommand,
     ) -> Result<TenderRecordAuthority, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         if command.value.trim().is_empty() || command.description.trim().is_empty() {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
@@ -1642,7 +1642,7 @@ impl TenderStore {
         if record_rows != head_rows
             || usize::try_from(record_rows)
                 .ok()
-                .is_none_or(|count| count > MAX_TENDER_RECORDS)
+                .is_none_or(|count| count > MAX_DECISION_RECORD_INVENTORY)
         {
             return Ok(false);
         }
@@ -1662,7 +1662,7 @@ impl TenderStore {
             check()?;
             record_count = record_count
                 .checked_add(1)
-                .filter(|count| *count <= MAX_TENDER_RECORDS)
+                .filter(|count| *count <= MAX_DECISION_RECORD_INVENTORY)
                 .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
             let record_id = record_row.get::<_, String>(0).map_err(sql_error)?;
             let stable_key = record_row.get::<_, String>(1).map_err(sql_error)?;
@@ -2627,6 +2627,9 @@ pub(super) fn publish_tender_record_candidates(
     candidate: &TenderRecordCandidateBatch,
     created_at: &str,
 ) -> Result<(), TenderCommandError> {
+    if !tender_record_candidates_fit_decision_inventory(transaction, candidate)? {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
     let mut published = Vec::with_capacity(candidate.records.len());
     for record in &candidate.records {
         let existing: Option<(String, u32)> = transaction
@@ -2659,7 +2662,7 @@ pub(super) fn publish_tender_record_candidates(
                 .map_err(sql_error)?;
             if usize::try_from(record_count)
                 .ok()
-                .is_none_or(|count| count >= MAX_TENDER_RECORDS)
+                .is_none_or(|count| count >= MAX_DECISION_RECORD_INVENTORY)
             {
                 return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
             }
@@ -2713,6 +2716,42 @@ pub(super) fn publish_tender_record_candidates(
         json!({ "records": published, "run_id": run_id }),
         created_at,
     )
+}
+
+pub(super) fn tender_record_candidates_fit_decision_inventory(
+    transaction: &rusqlite::Transaction<'_>,
+    candidate: &TenderRecordCandidateBatch,
+) -> Result<bool, TenderCommandError> {
+    let current_count: i64 = transaction
+        .query_row("SELECT COUNT(*) FROM tender_record_heads", [], |row| {
+            row.get(0)
+        })
+        .map_err(sql_error)?;
+    let Some(remaining) = usize::try_from(current_count)
+        .ok()
+        .and_then(|count| MAX_DECISION_RECORD_INVENTORY.checked_sub(count))
+    else {
+        return Ok(false);
+    };
+    let mut new_records = 0_usize;
+    for record in &candidate.records {
+        let exists: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM tender_records WHERE stable_key = ?1)",
+                [&record.stable_key],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if !exists {
+            new_records = new_records
+                .checked_add(1)
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            if new_records > remaining {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
 }
 
 fn record_extraction_data_view(
@@ -2931,4 +2970,86 @@ fn parse_record_cursor(value: &str) -> Result<(String, u32), TenderCommandError>
         return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
     }
     Ok((stable_key.into(), version))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidate(stable_key: &str) -> TenderRecordCandidate {
+        TenderRecordCandidate {
+            stable_key: stable_key.into(),
+            kind: TenderRecordKind::Risk,
+            title: stable_key.into(),
+            fields: Vec::new(),
+            contradictions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn bid_decision_reentry_rejects_inventory_overflow_before_any_record_write() {
+        let mut connection = rusqlite::Connection::open_in_memory().expect("open SQLite");
+        connection
+            .execute_batch(
+                "CREATE TABLE tender (
+                   singleton INTEGER PRIMARY KEY,
+                   lifecycle_phase TEXT NOT NULL
+                 );
+                 CREATE TABLE tender_records (
+                   record_id TEXT PRIMARY KEY,
+                   stable_key TEXT NOT NULL UNIQUE
+                 );
+                 CREATE TABLE tender_record_heads (
+                   record_id TEXT PRIMARY KEY,
+                   current_version INTEGER NOT NULL
+                 );
+                 INSERT INTO tender (singleton, lifecycle_phase)
+                 VALUES (1, 'bid_decision');
+                 WITH RECURSIVE counter(value) AS (
+                   VALUES (1)
+                   UNION ALL
+                   SELECT value + 1 FROM counter WHERE value < 255
+                 )
+                 INSERT INTO tender_records (record_id, stable_key)
+                 SELECT printf('%032x', value), printf('existing_%03d', value)
+                 FROM counter;
+                 INSERT INTO tender_record_heads (record_id, current_version)
+                 SELECT record_id, 1 FROM tender_records;",
+            )
+            .expect("fill the accepted decision inventory boundary");
+        let transaction = connection.transaction().expect("start transaction");
+        let batch = TenderRecordCandidateBatch {
+            records: vec![candidate("new_record_a"), candidate("new_record_b")],
+        };
+
+        let error = publish_tender_record_candidates(
+            &transaction,
+            &TenderId::parse("00000000000000000000000000000001").expect("Tender identity"),
+            1,
+            "00000000000000000000000000000002",
+            &batch,
+            "2026-08-09T00:00:00Z",
+        )
+        .expect_err("the decision inventory cap must reject the entire publication");
+
+        assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+        assert_eq!(
+            transaction
+                .query_row("SELECT COUNT(*) FROM tender_records", [], |row| {
+                    row.get::<_, u32>(0)
+                })
+                .expect("count retained records"),
+            255
+        );
+        assert_eq!(
+            transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM tender_records WHERE stable_key LIKE 'new_record_%'",
+                    [],
+                    |row| row.get::<_, u32>(0),
+                )
+                .expect("count rejected records"),
+            0
+        );
+    }
 }

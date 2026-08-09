@@ -43,15 +43,20 @@ pub use backups::{
 };
 pub(crate) use bid_decisions::BidPackageOperationBudget;
 pub use bid_decisions::{
-    BidDecisionGateBlocker, BidDecisionPackageInspection, BidDecisionPackageRecordBinding,
-    BidDecisionPackageRecordCategory, BidDecisionPackageRecordPage, BidDecisionPackageReview,
-    BidDecisionPackageReviewFinding, BidDecisionPackageReviewOutcome,
-    BidDecisionPackageReviewResult, BidRecommendation, BidRecommendationOutcome, CapabilityDemand,
-    CapabilityDemandClassification, ComplianceDisposition, ComplianceDispositionUpdate,
-    ComplianceMatrixPage, ComplianceMatrixRow, CreateBidDecisionPackageCommand,
-    InspectBidDecisionPackageRecordsCommand, InspectComplianceMatrixCommand,
-    ManagerCapabilityDemandInput, ResourceImplication, ReviewFindingSeverity,
-    RunBidDecisionPackageReviewCommand, TenderRecordVersionReference,
+    BidDecisionApprovalDecision, BidDecisionApprovalHistoryPage, BidDecisionApprovalInvalidation,
+    BidDecisionApprovalInvalidationResult, BidDecisionApprovalRecord, BidDecisionApprovalResult,
+    BidDecisionGateBlocker, BidDecisionPackageChangeSummary, BidDecisionPackageInspection,
+    BidDecisionPackageRecordBinding, BidDecisionPackageRecordCategory,
+    BidDecisionPackageRecordPage, BidDecisionPackageReview, BidDecisionPackageReviewFinding,
+    BidDecisionPackageReviewOutcome, BidDecisionPackageReviewResult,
+    BidDecisionReturnReworkDisposition, BidDecisionReturnReworkItem, BidDecisionReturnReworkResult,
+    BidRecommendation, BidRecommendationOutcome, CapabilityDemand, CapabilityDemandClassification,
+    ComplianceDisposition, ComplianceDispositionUpdate, ComplianceMatrixPage, ComplianceMatrixRow,
+    CreateBidDecisionPackageCommand, DecideBidDecisionPackageCommand,
+    InspectBidDecisionApprovalHistoryCommand, InspectBidDecisionPackageRecordsCommand,
+    InspectComplianceMatrixCommand, InvalidateBidDecisionApprovalCommand,
+    ManagerCapabilityDemandInput, ResolveBidDecisionReturnReworkCommand, ResourceImplication,
+    ReviewFindingSeverity, RunBidDecisionPackageReviewCommand, TenderRecordVersionReference,
 };
 pub use tender_records::{
     CreateTenderEngineerEntryCommand, DecideTenderRecordCommand, InspectTenderRecordsCommand,
@@ -70,7 +75,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 11;
+const TENDER_SCHEMA_VERSION: i64 = 12;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -80,6 +85,9 @@ CREATE TABLE tender (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
   tender_id TEXT NOT NULL UNIQUE,
   current_revision INTEGER NOT NULL CHECK (current_revision > 0),
+  lifecycle_phase TEXT NOT NULL CHECK (lifecycle_phase IN (
+    'intake', 'bid_decision', 'tender_planning', 'declined'
+  )),
   created_at TEXT NOT NULL
 );
 CREATE TABLE tender_revisions (
@@ -493,6 +501,7 @@ CREATE TABLE bid_decision_package_versions (
   package_id TEXT NOT NULL,
   version INTEGER NOT NULL CHECK (version > 0),
   tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  record_inventory_json TEXT NOT NULL CHECK (json_valid(record_inventory_json)),
   record_inventory_sha256 TEXT NOT NULL CHECK (length(record_inventory_sha256) = 64),
   capability_demands_json TEXT NOT NULL CHECK (json_valid(capability_demands_json)),
   resource_implications_json TEXT NOT NULL CHECK (json_valid(resource_implications_json)),
@@ -570,6 +579,64 @@ CREATE TABLE bid_decision_package_reviews (
   FOREIGN KEY (package_id, package_version)
     REFERENCES bid_decision_package_versions(package_id, version),
   FOREIGN KEY (reviewer_run_id) REFERENCES agent_runs(run_id)
+);
+CREATE TABLE bid_decision_approval_records (
+  approval_sequence INTEGER PRIMARY KEY CHECK (approval_sequence > 0),
+  approval_id TEXT NOT NULL UNIQUE CHECK (length(approval_id) = 32),
+  package_id TEXT NOT NULL,
+  package_version INTEGER NOT NULL CHECK (package_version > 0),
+  package_manifest_sha256 TEXT NOT NULL CHECK (length(package_manifest_sha256) = 64),
+  tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  decision TEXT NOT NULL CHECK (decision IN ('accept', 'return', 'reject')),
+  decided_by TEXT NOT NULL CHECK (decided_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  evidence_count INTEGER NOT NULL CHECK (evidence_count >= 0),
+  evidence_sha256 TEXT NOT NULL CHECK (length(evidence_sha256) = 64),
+  conditions_json TEXT NOT NULL CHECK (json_valid(conditions_json)),
+  exceptions_json TEXT NOT NULL CHECK (json_valid(exceptions_json)),
+  required_rework_json TEXT NOT NULL CHECK (json_valid(required_rework_json)),
+  lifecycle_before TEXT NOT NULL CHECK (lifecycle_before = 'bid_decision'),
+  lifecycle_after TEXT NOT NULL CHECK (lifecycle_after IN (
+    'bid_decision', 'tender_planning', 'declined'
+  )),
+  consequence TEXT NOT NULL CHECK (length(CAST(consequence AS BLOB)) BETWEEN 1 AND 2000),
+  preceding_approval_hash TEXT NOT NULL CHECK (length(preceding_approval_hash) = 64),
+  approval_manifest_json TEXT NOT NULL CHECK (json_valid(approval_manifest_json)),
+  approval_sha256 TEXT NOT NULL UNIQUE CHECK (length(approval_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (package_id, package_version),
+  FOREIGN KEY (package_id, package_version)
+    REFERENCES bid_decision_package_versions(package_id, version),
+  FOREIGN KEY (tender_revision) REFERENCES tender_revisions(revision)
+);
+CREATE TABLE bid_decision_return_rework_dispositions (
+  disposition_id TEXT PRIMARY KEY CHECK (length(disposition_id) = 32),
+  approval_id TEXT NOT NULL UNIQUE,
+  approval_sha256 TEXT NOT NULL CHECK (length(approval_sha256) = 64),
+  items_json TEXT NOT NULL CHECK (json_valid(items_json)),
+  resolved_by TEXT NOT NULL CHECK (resolved_by = 'engineer_user'),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (approval_id) REFERENCES bid_decision_approval_records(approval_id)
+);
+CREATE TABLE bid_decision_approval_invalidations (
+  invalidation_id TEXT PRIMARY KEY CHECK (length(invalidation_id) = 32),
+  approval_id TEXT NOT NULL UNIQUE,
+  approval_sha256 TEXT NOT NULL CHECK (length(approval_sha256) = 64),
+  material_change_summary TEXT NOT NULL
+    CHECK (length(CAST(material_change_summary AS BLOB)) BETWEEN 1 AND 4000),
+  affected_areas_json TEXT NOT NULL CHECK (json_valid(affected_areas_json)),
+  changed_records_json TEXT NOT NULL CHECK (json_valid(changed_records_json)),
+  invalidated_by TEXT NOT NULL CHECK (invalidated_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+  lifecycle_before TEXT NOT NULL CHECK (lifecycle_before = 'tender_planning'),
+  lifecycle_after TEXT NOT NULL CHECK (lifecycle_after = 'bid_decision'),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (approval_id) REFERENCES bid_decision_approval_records(approval_id)
 );
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
@@ -983,6 +1050,36 @@ BEFORE DELETE ON bid_decision_package_reviews
 BEGIN
   SELECT RAISE(ABORT, 'Bid Decision Package Reviews are immutable');
 END;
+CREATE TRIGGER bid_decision_approval_records_no_update
+BEFORE UPDATE ON bid_decision_approval_records
+BEGIN
+  SELECT RAISE(ABORT, 'Bid Decision Approval Records are immutable');
+END;
+CREATE TRIGGER bid_decision_approval_records_no_delete
+BEFORE DELETE ON bid_decision_approval_records
+BEGIN
+  SELECT RAISE(ABORT, 'Bid Decision Approval Records are immutable');
+END;
+CREATE TRIGGER bid_decision_return_rework_dispositions_no_update
+BEFORE UPDATE ON bid_decision_return_rework_dispositions
+BEGIN
+  SELECT RAISE(ABORT, 'Bid Decision Return rework dispositions are immutable');
+END;
+CREATE TRIGGER bid_decision_return_rework_dispositions_no_delete
+BEFORE DELETE ON bid_decision_return_rework_dispositions
+BEGIN
+  SELECT RAISE(ABORT, 'Bid Decision Return rework dispositions are immutable');
+END;
+CREATE TRIGGER bid_decision_approval_invalidations_no_update
+BEFORE UPDATE ON bid_decision_approval_invalidations
+BEGIN
+  SELECT RAISE(ABORT, 'Bid Decision Approval invalidations are immutable');
+END;
+CREATE TRIGGER bid_decision_approval_invalidations_no_delete
+BEFORE DELETE ON bid_decision_approval_invalidations
+BEGIN
+  SELECT RAISE(ABORT, 'Bid Decision Approval invalidations are immutable');
+END;
 CREATE TRIGGER audit_events_no_update
 BEFORE UPDATE ON audit_events
 BEGIN
@@ -993,6 +1090,8 @@ BEFORE DELETE ON audit_events
 BEGIN
   SELECT RAISE(ABORT, 'Audit Events are immutable');
 END;
+CREATE INDEX audit_events_type_created_at
+ON audit_events(event_type, created_at);
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
@@ -1041,8 +1140,40 @@ pub struct TenderSummary {
     pub tender_id: String,
     pub name: String,
     pub revision: u32,
+    pub lifecycle_phase: TenderLifecyclePhase,
     pub audit_event_count: u64,
     pub audit_chain_head: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TenderLifecyclePhase {
+    Intake,
+    BidDecision,
+    TenderPlanning,
+    Declined,
+}
+
+impl TenderLifecyclePhase {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Intake => "intake",
+            Self::BidDecision => "bid_decision",
+            Self::TenderPlanning => "tender_planning",
+            Self::Declined => "declined",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Result<Self, TenderCommandError> {
+        match value {
+            "intake" => Ok(Self::Intake),
+            "bid_decision" => Ok(Self::BidDecision),
+            "tender_planning" => Ok(Self::TenderPlanning),
+            "declined" => Ok(Self::Declined),
+            _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -1284,7 +1415,9 @@ impl TenderStore {
         let created_at = sqlite_timestamp(&transaction)?;
         transaction
             .execute(
-                "INSERT INTO tender (singleton, tender_id, current_revision, created_at) VALUES (1, ?1, 1, ?2)",
+                "INSERT INTO tender (
+                   singleton, tender_id, current_revision, lifecycle_phase, created_at
+                 ) VALUES (1, ?1, 1, 'intake', ?2)",
                 params![tender_id.as_str(), created_at],
             )
             .map_err(sql_error)?;
@@ -1324,7 +1457,7 @@ impl TenderStore {
         &mut self,
         tender_id: &TenderId,
     ) -> Result<(), TenderCommandError> {
-        self.require_writable()?;
+        self.require_storage_writable()?;
         let attempts = {
             let mut statement = self
                 .connection
@@ -1491,7 +1624,7 @@ impl TenderStore {
         &mut self,
         tender_id: &TenderId,
     ) -> Result<(), TenderCommandError> {
-        self.require_writable()?;
+        self.require_storage_writable()?;
         let referenced = {
             let mut statement = self
                 .connection
@@ -1767,12 +1900,123 @@ impl TenderStore {
         Ok(true)
     }
 
-    fn require_writable(&self) -> Result<(), TenderCommandError> {
+    fn require_storage_writable(&self) -> Result<(), TenderCommandError> {
         if self.recovery_required {
             Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired))
         } else {
             Ok(())
         }
+    }
+
+    fn require_pre_bid_writable(&mut self) -> Result<(), TenderCommandError> {
+        self.require_storage_writable()?;
+        let lifecycle_phase = TenderLifecyclePhase::parse(
+            &self
+                .connection
+                .query_row(
+                    "SELECT lifecycle_phase FROM tender WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(sql_error)?,
+        )?;
+        if matches!(
+            lifecycle_phase,
+            TenderLifecyclePhase::Intake | TenderLifecyclePhase::BidDecision
+        ) {
+            Ok(())
+        } else {
+            let transaction = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(sql_error)?;
+            let (tender_id, tender_revision): (String, u32) = transaction
+                .query_row(
+                    "SELECT tender_id, current_revision FROM tender WHERE singleton = 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(sql_error)?;
+            let created_at = sqlite_timestamp(&transaction)?;
+            append_audit_event(
+                &transaction,
+                &tender_id,
+                "tender_command_denied",
+                tender_revision,
+                json!({
+                    "command": "pre_bid_mutation",
+                    "lifecycle_phase": lifecycle_phase,
+                    "reason": "lifecycle_closed",
+                }),
+                &created_at,
+            )?;
+            transaction.commit().map_err(sql_error)?;
+            Err(TenderCommandError::new(TenderErrorCode::InvalidCommand))
+        }
+    }
+
+    fn require_change_intake_writable(&mut self) -> Result<(), TenderCommandError> {
+        self.require_storage_writable()?;
+        let lifecycle_phase = TenderLifecyclePhase::parse(
+            &self
+                .connection
+                .query_row(
+                    "SELECT lifecycle_phase FROM tender WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(sql_error)?,
+        )?;
+        let successor_pending = lifecycle_phase == TenderLifecyclePhase::BidDecision
+            && self
+                .connection
+                .query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM bid_decision_approval_invalidations AS invalidations
+                       JOIN bid_decision_approval_records AS approvals
+                         ON approvals.approval_id = invalidations.approval_id
+                       JOIN bid_decision_package_heads AS heads
+                         ON heads.package_id = approvals.package_id
+                        AND heads.current_version = approvals.package_version
+                       WHERE approvals.decision = 'accept'
+                     )",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(sql_error)?;
+        if lifecycle_phase != TenderLifecyclePhase::Declined && !successor_pending {
+            return Ok(());
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let (tender_id, tender_revision): (String, u32) = transaction
+            .query_row(
+                "SELECT tender_id, current_revision FROM tender WHERE singleton = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(sql_error)?;
+        let created_at = sqlite_timestamp(&transaction)?;
+        append_audit_event(
+            &transaction,
+            &tender_id,
+            "tender_command_denied",
+            tender_revision,
+            json!({
+                "command": "material_change_intake",
+                "lifecycle_phase": lifecycle_phase,
+                "reason": if successor_pending {
+                    "material_change_successor_pending"
+                } else {
+                    "lifecycle_closed"
+                },
+            }),
+            &created_at,
+        )?;
+        transaction.commit().map_err(sql_error)?;
+        Err(TenderCommandError::new(TenderErrorCode::InvalidCommand))
     }
 
     fn latch_recovery_required(&mut self) -> Result<(), TenderCommandError> {
@@ -1783,15 +2027,16 @@ impl TenderStore {
     }
 
     fn summary(&self) -> Result<TenderSummary, TenderCommandError> {
-        let (tender_id, revision, name): (String, u32, String) = self
+        let (tender_id, revision, lifecycle_phase, name): (String, u32, String, String) = self
             .connection
             .query_row(
-                "SELECT tender.tender_id, tender.current_revision, tender_revisions.name
+                "SELECT tender.tender_id, tender.current_revision, tender.lifecycle_phase,
+                        tender_revisions.name
                  FROM tender
                  JOIN tender_revisions ON tender_revisions.revision = tender.current_revision
                  WHERE tender.singleton = 1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .map_err(sql_error)?;
         let (audit_event_count, audit_chain_head): (i64, Option<String>) = self
@@ -1809,6 +2054,7 @@ impl TenderStore {
             tender_id,
             name,
             revision,
+            lifecycle_phase: TenderLifecyclePhase::parse(&lifecycle_phase)?,
             audit_event_count: audit_event_count
                 .try_into()
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
@@ -1820,7 +2066,7 @@ impl TenderStore {
         &mut self,
         command: &ReviseTenderCommand,
     ) -> Result<TenderSummary, TenderCommandError> {
-        self.require_writable()?;
+        self.require_pre_bid_writable()?;
         let name = command.name.trim();
         let transaction = self
             .connection
@@ -1873,7 +2119,7 @@ impl TenderStore {
         &mut self,
         command: &RegisterTenderContentCommand,
     ) -> Result<ContentVersionSummary, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let content_root = self.root.join("content");
         let integrity = match cacache::write_hash_sync(&content_root, &command.bytes) {
             Ok(integrity) => integrity,
@@ -2006,7 +2252,7 @@ impl TenderStore {
         reason: &str,
         error: TenderCommandError,
     ) -> Result<T, TenderCommandError> {
-        self.require_writable()?;
+        self.require_storage_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -2041,7 +2287,7 @@ impl TenderStore {
         &mut self,
         source: &Path,
     ) -> Result<TenderPackageImportResult, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let prepared = prepare_package(source, &self.root.join("content"))?;
         self.publish_intake(prepared)
     }
@@ -2051,7 +2297,7 @@ impl TenderStore {
         command: &ParseSourceArtifactCommand,
         tender_id: &TenderId,
     ) -> Result<ParseJob, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let (document_type, integrity, expected_sha256): (String, String, String) = self
             .connection
             .query_row(
@@ -2182,7 +2428,7 @@ impl TenderStore {
         job: &ParseJob,
         prepared: PreparedParseOutput,
     ) -> Result<DocumentParseResult, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let integrity = cacache::write_hash_sync(self.root.join("content"), &prepared.json_bytes)
             .map_err(content_store_error)?;
         let verified = cacache::read_hash_sync(self.root.join("content"), &integrity)
@@ -2341,7 +2587,7 @@ impl TenderStore {
         state: ParseState,
         exception: ParseExceptionCode,
     ) -> Result<DocumentParseResult, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         if !matches!(
             state,
             ParseState::Failed | ParseState::Interrupted | ParseState::Quarantined
@@ -2560,7 +2806,7 @@ impl TenderStore {
         &mut self,
         prepared: PreparedIntake,
     ) -> Result<TenderPackageImportResult, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let discovered_count = u32::try_from(prepared.documents.len())
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         let registered_count = u32::try_from(
@@ -2853,7 +3099,7 @@ impl TenderStore {
         &mut self,
         command: &ConfirmSourceRelationshipCommand,
     ) -> Result<DocumentRegister, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -2932,7 +3178,7 @@ impl TenderStore {
         expected_tender_id: &TenderId,
         command_name: &str,
     ) -> Result<(), TenderCommandError> {
-        self.require_writable()?;
+        self.require_storage_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)

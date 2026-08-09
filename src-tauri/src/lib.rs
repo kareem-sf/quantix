@@ -41,23 +41,28 @@ pub use tender_intake::{
     SourceRelationshipKind, SupersessionState, TenderPackageImportResult, TenderPackageSourceKind,
 };
 pub use tender_store::{
-    BidDecisionGateBlocker, BidDecisionPackageInspection, BidDecisionPackageRecordBinding,
-    BidDecisionPackageRecordCategory, BidDecisionPackageRecordPage, BidDecisionPackageReview,
-    BidDecisionPackageReviewFinding, BidDecisionPackageReviewOutcome,
-    BidDecisionPackageReviewResult, BidRecommendation, BidRecommendationOutcome, CapabilityDemand,
-    CapabilityDemandClassification, ComplianceDisposition, ComplianceDispositionUpdate,
-    ComplianceMatrixPage, ComplianceMatrixRow, ContentVersionSummary,
-    CreateBidDecisionPackageCommand, CreateTenderBackupCommand, CreateTenderCommand,
-    CreateTenderEngineerEntryCommand, DecideTenderRecordCommand,
+    BidDecisionApprovalDecision, BidDecisionApprovalHistoryPage, BidDecisionApprovalInvalidation,
+    BidDecisionApprovalInvalidationResult, BidDecisionApprovalRecord, BidDecisionApprovalResult,
+    BidDecisionGateBlocker, BidDecisionPackageChangeSummary, BidDecisionPackageInspection,
+    BidDecisionPackageRecordBinding, BidDecisionPackageRecordCategory,
+    BidDecisionPackageRecordPage, BidDecisionPackageReview, BidDecisionPackageReviewFinding,
+    BidDecisionPackageReviewOutcome, BidDecisionPackageReviewResult,
+    BidDecisionReturnReworkDisposition, BidDecisionReturnReworkItem, BidDecisionReturnReworkResult,
+    BidRecommendation, BidRecommendationOutcome, CapabilityDemand, CapabilityDemandClassification,
+    ComplianceDisposition, ComplianceDispositionUpdate, ComplianceMatrixPage, ComplianceMatrixRow,
+    ContentVersionSummary, CreateBidDecisionPackageCommand, CreateTenderBackupCommand,
+    CreateTenderCommand, CreateTenderEngineerEntryCommand, DecideBidDecisionPackageCommand,
+    DecideTenderRecordCommand, InspectBidDecisionApprovalHistoryCommand,
     InspectBidDecisionPackageRecordsCommand, InspectComplianceMatrixCommand,
-    InspectTenderRecordsCommand, ManagerCapabilityDemandInput, OpenTenderCommand,
-    PrepareTenderRecoveryCommand, RegisterTenderContentCommand, ResolveTenderRecoveryCommand,
-    ResourceImplication, ReviewFindingSeverity, ReviseTenderCommand,
+    InspectTenderRecordsCommand, InvalidateBidDecisionApprovalCommand,
+    ManagerCapabilityDemandInput, OpenTenderCommand, PrepareTenderRecoveryCommand,
+    RegisterTenderContentCommand, ResolveBidDecisionReturnReworkCommand,
+    ResolveTenderRecoveryCommand, ResourceImplication, ReviewFindingSeverity, ReviseTenderCommand,
     RunBidDecisionPackageReviewCommand, RunTenderRecordExtractionCommand,
     RunTenderRecordReviewCommand, StartupReconciliationReport, TenderBackupRecord,
     TenderBackupState, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
     TenderEvidenceReference, TenderInspection, TenderIntegrityIssue, TenderIntegrityReport,
-    TenderIntegrityState, TenderRecordAuthority, TenderRecordAuthorityKind,
+    TenderIntegrityState, TenderLifecyclePhase, TenderRecordAuthority, TenderRecordAuthorityKind,
     TenderRecordAuthorityReference, TenderRecordBasisKind, TenderRecordContradiction,
     TenderRecordDecisionResult, TenderRecordEngineerDecisionKind, TenderRecordEvidence,
     TenderRecordExtractionResult, TenderRecordField, TenderRecordInspection, TenderRecordKind,
@@ -72,22 +77,27 @@ use tauri::Manager;
 mod tauri_commands {
     use super::{
         ensure_quantix_setup as ensure_setup, AgentAccessRequestView, AgentRunInspection,
-        AgentRunRecoveryDecision, ApproveAgentAccessCommand, BidDecisionPackageInspection,
-        BidDecisionPackageRecordPage, BidDecisionPackageReviewResult, ChooseTenderPackageCommand,
-        ComplianceMatrixPage, ConfirmSourceRelationshipCommand, CreateBidDecisionPackageCommand,
+        AgentRunRecoveryDecision, ApproveAgentAccessCommand, BidDecisionApprovalHistoryPage,
+        BidDecisionApprovalInvalidationResult, BidDecisionApprovalResult,
+        BidDecisionPackageInspection, BidDecisionPackageRecordPage, BidDecisionPackageReviewResult,
+        BidDecisionReturnReworkResult, ChooseTenderPackageCommand, ComplianceMatrixPage,
+        ConfirmSourceRelationshipCommand, CreateBidDecisionPackageCommand,
         CreateTenderBackupCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
-        DecideTenderRecordCommand, DocumentParseResult, DocumentRegister, EvidenceDocument,
-        EvidenceSearchResult, ImportTenderPackageCommand, InspectBidDecisionPackageRecordsCommand,
+        DecideBidDecisionPackageCommand, DecideTenderRecordCommand, DocumentParseResult,
+        DocumentRegister, EvidenceDocument, EvidenceSearchResult, ImportTenderPackageCommand,
+        InspectBidDecisionApprovalHistoryCommand, InspectBidDecisionPackageRecordsCommand,
         InspectComplianceMatrixCommand, InspectTenderRecordsCommand, InterruptAgentRunCommand,
-        OpenTenderCommand, ParseSourceArtifactCommand, PrepareTenderRecoveryCommand, QuantixHost,
-        RequestAgentAccessCommand, ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand,
-        ResolveTenderRecoveryCommand, ReviseTenderCommand, RunBidDecisionPackageReviewCommand,
-        RunBootstrapAgentCommand, RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand,
-        RuntimeReadiness, SearchEvidenceCommand, SetupOutcome, TenderBackupRecord,
-        TenderCatalogueEntry, TenderCommandError, TenderErrorCode, TenderIntegrityReport,
-        TenderPackageImportResult, TenderPackageSourceKind, TenderRecordAuthority,
-        TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordPage,
-        TenderRecordReviewResult, TenderRecoveryRecord, TenderSummary,
+        InvalidateBidDecisionApprovalCommand, OpenTenderCommand, ParseSourceArtifactCommand,
+        PrepareTenderRecoveryCommand, QuantixHost, RequestAgentAccessCommand,
+        ResolveAgentAccessCommand, ResolveBidDecisionReturnReworkCommand,
+        ResolveIndeterminateAgentRunCommand, ResolveTenderRecoveryCommand, ReviseTenderCommand,
+        RunBidDecisionPackageReviewCommand, RunBootstrapAgentCommand,
+        RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, RuntimeReadiness,
+        SearchEvidenceCommand, SetupOutcome, TenderBackupRecord, TenderCatalogueEntry,
+        TenderCommandError, TenderErrorCode, TenderIntegrityReport, TenderPackageImportResult,
+        TenderPackageSourceKind, TenderRecordAuthority, TenderRecordDecisionResult,
+        TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult,
+        TenderRecoveryRecord, TenderSummary,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -478,6 +488,62 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn decide_bid_decision_package(
+        host: tauri::State<'_, QuantixHost>,
+        command: DecideBidDecisionPackageCommand,
+    ) -> Result<BidDecisionApprovalResult, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.decide_bid_decision_package(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_bid_decision_approval_history(
+        host: tauri::State<'_, QuantixHost>,
+        command: InspectBidDecisionApprovalHistoryCommand,
+    ) -> Result<BidDecisionApprovalHistoryPage, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.inspect_bid_decision_approval_history(command)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn resolve_bid_decision_return_rework(
+        host: tauri::State<'_, QuantixHost>,
+        command: ResolveBidDecisionReturnReworkCommand,
+    ) -> Result<BidDecisionReturnReworkResult, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.resolve_bid_decision_return_rework(command)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn invalidate_bid_decision_approval(
+        host: tauri::State<'_, QuantixHost>,
+        command: InvalidateBidDecisionApprovalCommand,
+    ) -> Result<BidDecisionApprovalInvalidationResult, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.invalidate_bid_decision_approval(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
     pub(super) async fn inspect_compliance_matrix(
         host: tauri::State<'_, QuantixHost>,
         command: InspectComplianceMatrixCommand,
@@ -634,6 +700,10 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
         tauri_commands::decide_tender_record,
         tauri_commands::create_bid_decision_package,
         tauri_commands::inspect_current_bid_decision_package,
+        tauri_commands::decide_bid_decision_package,
+        tauri_commands::inspect_bid_decision_approval_history,
+        tauri_commands::resolve_bid_decision_return_rework,
+        tauri_commands::invalidate_bid_decision_approval,
         tauri_commands::inspect_compliance_matrix,
         tauri_commands::inspect_bid_decision_package_records,
         tauri_commands::run_bid_decision_package_review,

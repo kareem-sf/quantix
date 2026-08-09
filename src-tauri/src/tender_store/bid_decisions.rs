@@ -19,21 +19,24 @@ use crate::agent_runtime::{
     PendingProviderEvent, PreparedAgentRun, ProviderEventKind, TenderTaskView, VerificationStatus,
 };
 
-use super::tender_records::{TenderRecordInspection, TenderRecordKind, TenderRecordTrustClass};
+use super::tender_records::{
+    TenderEvidenceReference, TenderRecordInspection, TenderRecordKind, TenderRecordTrustClass,
+    MAX_DECISION_RECORD_INVENTORY,
+};
 use super::{
     agent_records::{
         ensure_agent_run_capacity, insert_event, insert_profile_version, insert_task, load_profile,
         load_thread_exposure,
     },
     append_audit_event, random_identifier, sql_error, sqlite_timestamp, valid_identifier,
-    TenderCommandError, TenderErrorCode, TenderId, TenderStore,
+    TenderCommandError, TenderErrorCode, TenderId, TenderLifecyclePhase, TenderStore,
 };
 
 pub(crate) const BID_PACKAGE_REVIEW_CAPABILITY: &str = "independently_review_bid_decision_package";
 const BID_PACKAGE_REVIEW_SCOPE: &str = "bid_decision_package";
 const BID_PACKAGE_REVIEW_ACTION: &str = "review_exact_bid_decision_package";
 const MAX_PACKAGE_VERSIONS: usize = 1_000;
-const MAX_COMPLIANCE_ROWS: usize = 256;
+const MAX_COMPLIANCE_ROWS: usize = MAX_DECISION_RECORD_INVENTORY;
 const MAX_CAPABILITY_DEMANDS: usize = 256;
 const MAX_MANAGER_DEMANDS: usize = 64;
 const MAX_REVIEW_FINDINGS: usize = 64;
@@ -43,6 +46,13 @@ const MAX_VISIBLE_BLOCKERS: usize = 64;
 const MAX_PACKAGE_MANIFEST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_REVIEW_DATA_VIEW_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PACKAGE_OPERATION_DURATION: Duration = Duration::from_secs(30);
+const MAX_APPROVAL_LIST_ITEMS: usize = 32;
+const MAX_APPROVAL_ITEM_BYTES: usize = 1_000;
+const MAX_APPROVAL_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
+const MAX_APPROVAL_HISTORY_PAGE_ITEMS: u32 = 10;
+const MAX_APPROVAL_RECORDS: usize = 64;
+const MAX_MATERIAL_CHANGE_RECORDS: usize = MAX_COMPLIANCE_ROWS * 2;
+const ZERO_APPROVAL_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS, Validate)]
 #[serde(deny_unknown_fields)]
@@ -144,6 +154,120 @@ pub struct RunBidDecisionPackageReviewCommand {
     pub package_id: String,
     #[garde(range(min = 1))]
     pub version: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum BidDecisionApprovalDecision {
+    Accept,
+    Return,
+    Reject,
+}
+
+impl BidDecisionApprovalDecision {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Accept => "accept",
+            Self::Return => "return",
+            Self::Reject => "reject",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, TenderCommandError> {
+        match value {
+            "accept" => Ok(Self::Accept),
+            "return" => Ok(Self::Return),
+            "reject" => Ok(Self::Reject),
+            _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+        }
+    }
+
+    fn lifecycle_after(self) -> TenderLifecyclePhase {
+        match self {
+            Self::Accept => TenderLifecyclePhase::TenderPlanning,
+            Self::Return => TenderLifecyclePhase::BidDecision,
+            Self::Reject => TenderLifecyclePhase::Declined,
+        }
+    }
+
+    fn consequence(self) -> &'static str {
+        match self {
+            Self::Accept => {
+                "Proceed: this exact package advances to Tender Planning; production remains blocked until the controlled Work Plan is approved."
+            }
+            Self::Return => {
+                "Return: the Bid Decision gate remains pending until the required rework is published as a new exact package version and reviewed."
+            }
+            Self::Reject => {
+                "Decline: Tender pursuit ends while all source, analysis, Evidence, findings, and decision history remain preserved."
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct DecideBidDecisionPackageCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub package_id: String,
+    #[garde(range(min = 1))]
+    pub version: u32,
+    #[garde(length(bytes, min = 64, max = 64))]
+    pub manifest_sha256: String,
+    #[garde(skip)]
+    pub decision: BidDecisionApprovalDecision,
+    #[garde(length(bytes, min = 1, max = 4000))]
+    pub rationale: String,
+    #[garde(skip)]
+    pub conditions: Vec<String>,
+    #[garde(skip)]
+    pub exceptions: Vec<String>,
+    #[garde(skip)]
+    pub required_rework: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct InspectBidDecisionApprovalHistoryCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
+    #[garde(range(min = 1))]
+    pub before_sequence: Option<u32>,
+    #[garde(range(min = 1, max = 10))]
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ResolveBidDecisionReturnReworkCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub approval_id: String,
+    #[garde(skip)]
+    pub resolutions: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct InvalidateBidDecisionApprovalCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub approval_id: String,
+    #[garde(length(bytes, min = 64, max = 64))]
+    pub approval_sha256: String,
+    #[garde(length(bytes, min = 1, max = 4000))]
+    pub material_change_summary: String,
+    #[garde(length(max = 32))]
+    pub affected_areas: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
@@ -358,6 +482,108 @@ pub struct BidDecisionPackageReview {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BidDecisionApprovalRecord {
+    pub approval_sequence: u32,
+    pub approval_id: String,
+    pub package_id: String,
+    pub package_version: u32,
+    pub package_manifest_sha256: String,
+    pub tender_revision: u32,
+    pub decision: BidDecisionApprovalDecision,
+    pub decided_by: String,
+    pub acting_role: String,
+    pub rationale: String,
+    pub evidence_count: u32,
+    pub evidence_sha256: String,
+    pub conditions: Vec<String>,
+    pub exceptions: Vec<String>,
+    pub required_rework: Vec<String>,
+    pub lifecycle_before: TenderLifecyclePhase,
+    pub lifecycle_after: TenderLifecyclePhase,
+    pub consequence: String,
+    pub preceding_approval_hash: String,
+    pub approval_sha256: String,
+    pub created_at: String,
+    pub invalidation: Option<BidDecisionApprovalInvalidation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BidDecisionApprovalInvalidation {
+    pub invalidation_id: String,
+    pub approval_id: String,
+    pub approval_sha256: String,
+    pub material_change_summary: String,
+    pub affected_areas: Vec<String>,
+    pub changed_records: Vec<TenderRecordVersionReference>,
+    pub invalidated_by: String,
+    pub acting_role: String,
+    pub lifecycle_before: TenderLifecyclePhase,
+    pub lifecycle_after: TenderLifecyclePhase,
+    pub manifest_sha256: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BidDecisionApprovalInvalidationResult {
+    pub invalidation: BidDecisionApprovalInvalidation,
+    pub package: BidDecisionPackageInspection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BidDecisionReturnReworkItem {
+    pub required_rework: String,
+    pub resolution: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BidDecisionReturnReworkDisposition {
+    pub disposition_id: String,
+    pub approval_id: String,
+    pub approval_sha256: String,
+    pub items: Vec<BidDecisionReturnReworkItem>,
+    pub resolved_by: String,
+    pub manifest_sha256: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BidDecisionReturnReworkResult {
+    pub disposition: BidDecisionReturnReworkDisposition,
+    pub package: BidDecisionPackageInspection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BidDecisionApprovalHistoryPage {
+    pub approvals: Vec<BidDecisionApprovalRecord>,
+    pub next_sequence: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BidDecisionApprovalResult {
+    pub approval: BidDecisionApprovalRecord,
+    pub package: BidDecisionPackageInspection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BidDecisionPackageChangeSummary {
+    pub prior_version: Option<u32>,
+    pub added_record_count: u32,
+    pub removed_record_count: u32,
+    pub changed_compliance_row_count: u32,
+    pub capability_demands_changed: bool,
+    pub resource_implications_changed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct BidDecisionPackageInspection {
@@ -379,6 +605,13 @@ pub struct BidDecisionPackageInspection {
     pub blocker_count: u32,
     pub blockers: Vec<BidDecisionGateBlocker>,
     pub review: Option<BidDecisionPackageReview>,
+    pub approval: Option<BidDecisionApprovalRecord>,
+    pub return_rework: Option<BidDecisionReturnReworkDisposition>,
+    pub return_rework_basis: Option<BidDecisionReturnReworkDisposition>,
+    pub material_change_basis: Option<BidDecisionApprovalInvalidation>,
+    pub prior_approval_count: u32,
+    pub change_summary: BidDecisionPackageChangeSummary,
+    pub lifecycle_phase: TenderLifecyclePhase,
     pub decision_gate_ready: bool,
     pub current: bool,
     pub created_by: String,
@@ -420,7 +653,7 @@ struct StoredBinding {
     record: TenderRecordVersionReference,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct RecordInventoryObservation {
     record: TenderRecordVersionReference,
     kind: TenderRecordKind,
@@ -439,6 +672,60 @@ struct PackageManifest<'a> {
     recommendation: &'a BidRecommendation,
     analysis_blocker_count: usize,
     record_inventory_sha256: &'a str,
+    return_rework_basis: Option<&'a BidDecisionReturnReworkDisposition>,
+    material_change_basis: Option<&'a BidDecisionApprovalInvalidation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ApprovalManifest {
+    acting_role: String,
+    approval_id: String,
+    approval_sequence: u32,
+    conditions: Vec<String>,
+    consequence: String,
+    created_at: String,
+    decided_by: String,
+    decision: BidDecisionApprovalDecision,
+    evidence_count: u32,
+    evidence_sha256: String,
+    exceptions: Vec<String>,
+    lifecycle_after: TenderLifecyclePhase,
+    lifecycle_before: TenderLifecyclePhase,
+    package_id: String,
+    package_manifest_sha256: String,
+    package_version: u32,
+    preceding_approval_hash: String,
+    rationale: String,
+    required_rework: Vec<String>,
+    schema_version: u32,
+    tender_revision: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ReturnReworkManifest {
+    approval_id: String,
+    approval_sha256: String,
+    created_at: String,
+    disposition_id: String,
+    items: Vec<BidDecisionReturnReworkItem>,
+    resolved_by: String,
+    schema_version: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ApprovalInvalidationManifest {
+    acting_role: String,
+    affected_areas: Vec<String>,
+    approval_id: String,
+    approval_sha256: String,
+    created_at: String,
+    changed_records: Vec<TenderRecordVersionReference>,
+    invalidated_by: String,
+    invalidation_id: String,
+    lifecycle_after: TenderLifecyclePhase,
+    lifecycle_before: TenderLifecyclePhase,
+    material_change_summary: String,
+    schema_version: u32,
 }
 
 type StoredPackageInspectionRow = (
@@ -493,9 +780,25 @@ impl TenderStore {
         command: &CreateBidDecisionPackageCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<BidDecisionPackageInspection, TenderCommandError> {
-        self.require_writable()?;
+        self.require_pre_bid_writable()?;
         budget.check()?;
         validate_package_command(command)?;
+        let lifecycle_phase = TenderLifecyclePhase::parse(
+            &self
+                .connection
+                .query_row(
+                    "SELECT lifecycle_phase FROM tender WHERE singleton = 1 AND tender_id = ?1",
+                    [tender_id.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(sql_error)?,
+        )?;
+        if !matches!(
+            lifecycle_phase,
+            TenderLifecyclePhase::Intake | TenderLifecyclePhase::BidDecision
+        ) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
         let current_head: Option<(String, u32)> = self
             .connection
             .query_row(
@@ -510,6 +813,40 @@ impl TenderStore {
             (Some((_, current)), Some(base)) if *current == base => {}
             _ => return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand)),
         }
+        let (return_rework_basis, material_change_basis) = if let Some((package_id, version)) =
+            &current_head
+        {
+            match load_package_approval(&self.connection, package_id, *version)? {
+                Some(approval) if approval.decision == BidDecisionApprovalDecision::Return => (
+                    Some(
+                        load_return_rework_disposition(&self.connection, &approval.approval_id)?
+                            .ok_or_else(|| {
+                                TenderCommandError::new(TenderErrorCode::InvalidCommand)
+                            })?,
+                    ),
+                    None,
+                ),
+                Some(approval) if approval.decision == BidDecisionApprovalDecision::Accept => {
+                    let invalidation = approval
+                        .invalidation
+                        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+                    let prior_inventory =
+                        load_package_record_inventory(&self.connection, package_id, *version)?;
+                    let current_inventory =
+                        current_record_inventory_bounded_with_check(self, &mut || budget.check())?;
+                    if changed_record_references(&prior_inventory, &current_inventory)
+                        != invalidation.changed_records
+                    {
+                        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+                    }
+                    (None, Some(invalidation))
+                }
+                Some(_) => return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand)),
+                None => (None, None),
+            }
+        } else {
+            (None, None)
+        };
         let current_refs = current_record_references(&self.connection)?;
         if current_refs.len() > MAX_COMPLIANCE_ROWS {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
@@ -631,7 +968,8 @@ impl TenderStore {
                     .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let record_inventory_sha256 = sha256_hex(canonical_json(&record_inventory)?.as_bytes());
+        let record_inventory_json = canonical_json(&record_inventory)?;
+        let record_inventory_sha256 = sha256_hex(record_inventory_json.as_bytes());
         bindings.sort_by(|left, right| {
             left.category
                 .as_str()
@@ -843,6 +1181,8 @@ impl TenderStore {
             recommendation: &recommendation,
             analysis_blocker_count,
             record_inventory_sha256: &record_inventory_sha256,
+            return_rework_basis: return_rework_basis.as_ref(),
+            material_change_basis: material_change_basis.as_ref(),
         })?;
         let manifest_json = canonical_json(&manifest)?;
         if manifest_json.len() > MAX_PACKAGE_MANIFEST_BYTES {
@@ -881,6 +1221,18 @@ impl TenderStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_error)?;
         let created_at = sqlite_timestamp(&transaction)?;
+        if lifecycle_phase == TenderLifecyclePhase::Intake
+            && transaction
+                .execute(
+                    "UPDATE tender SET lifecycle_phase = 'bid_decision'
+                     WHERE singleton = 1 AND tender_id = ?1 AND lifecycle_phase = 'intake'",
+                    [tender_id.as_str()],
+                )
+                .map_err(sql_error)?
+                != 1
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
         if current_head.is_none() {
             transaction
                 .execute(
@@ -892,15 +1244,17 @@ impl TenderStore {
         transaction
             .execute(
                 "INSERT INTO bid_decision_package_versions (
-                   package_id, version, tender_revision, record_inventory_sha256,
+                   package_id, version, tender_revision, record_inventory_json,
+                   record_inventory_sha256,
                    capability_demands_json, resource_implications_json,
                    recommendation_json, analysis_blocker_count, manifest_json,
                    manifest_sha256, created_by, created_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'engineer_user', ?11)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'engineer_user', ?12)",
                 params![
                     package_id,
                     version,
                     tender_revision,
+                    record_inventory_json,
                     record_inventory_sha256,
                     canonical_json(&capability_demands)?,
                     canonical_json(&resource_implications)?,
@@ -1021,6 +1375,738 @@ impl TenderStore {
             .transpose()
     }
 
+    pub(crate) fn decide_bid_decision_package(
+        &mut self,
+        tender_id: &TenderId,
+        command: &DecideBidDecisionPackageCommand,
+        budget: BidPackageOperationBudget,
+    ) -> Result<BidDecisionApprovalResult, TenderCommandError> {
+        self.require_storage_writable()?;
+        budget.check()?;
+        if validate_approval_command(command).is_err() {
+            self.record_bid_decision_denial(tender_id, command, "decision_shape_invalid")?;
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let package = match self.inspect_bid_decision_package(&command.package_id, command.version)
+        {
+            Ok(package) => package,
+            Err(error) if error.code == TenderErrorCode::NotFound => {
+                self.record_bid_decision_denial(tender_id, command, "package_not_found")?;
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            Err(error) => return Err(error),
+        };
+        let active_execution: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE status = 'running')
+                        OR EXISTS(SELECT 1 FROM parse_attempts WHERE status = 'running')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        let approval_count: u32 = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM bid_decision_approval_records",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        let denial_reason = if package.manifest_sha256 != command.manifest_sha256 {
+            Some("manifest_changed")
+        } else if !package.current {
+            Some("package_stale")
+        } else if package.lifecycle_phase != TenderLifecyclePhase::BidDecision {
+            Some("lifecycle_closed")
+        } else if package.approval.is_some() {
+            Some("decision_already_recorded")
+        } else if active_execution {
+            Some("active_execution")
+        } else if approval_count as usize >= MAX_APPROVAL_RECORDS {
+            Some("approval_history_limit")
+        } else if matches!(
+            command.decision,
+            BidDecisionApprovalDecision::Accept | BidDecisionApprovalDecision::Reject
+        ) && !package.decision_gate_ready
+        {
+            Some("decision_gate_blocked")
+        } else {
+            None
+        };
+        if let Some(reason) = denial_reason {
+            self.record_bid_decision_denial(tender_id, command, reason)?;
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let evidence = approval_evidence(self, &command.package_id, command.version, &mut || {
+            budget.check()
+        })?;
+        let evidence_json = canonical_json(&evidence)?;
+        if evidence_json.len() > MAX_APPROVAL_MANIFEST_BYTES {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let evidence_sha256 = sha256_hex(evidence_json.as_bytes());
+        let evidence_count = u32::try_from(evidence.len())
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let lifecycle_after = command.decision.lifecycle_after();
+        let consequence = command.decision.consequence();
+        let conditions = normalized_approval_items(&command.conditions)?;
+        let exceptions = normalized_approval_items(&command.exceptions)?;
+        let required_rework = normalized_approval_items(&command.required_rework)?;
+
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        budget.check()?;
+        let exact_state: Option<(u32, String, u32, String, u32, Option<String>)> = transaction
+            .query_row(
+                "SELECT versions.tender_revision, versions.manifest_sha256,
+                        versions.analysis_blocker_count, tender.lifecycle_phase,
+                        heads.current_version, reviews.outcome
+                 FROM bid_decision_package_versions AS versions
+                 JOIN bid_decision_package_heads AS heads
+                   ON heads.package_id = versions.package_id
+                 JOIN tender ON tender.singleton = 1
+                 LEFT JOIN bid_decision_package_reviews AS reviews
+                   ON reviews.package_id = versions.package_id
+                  AND reviews.package_version = versions.version
+                 WHERE versions.package_id = ?1 AND versions.version = ?2
+                   AND tender.tender_id = ?3",
+                params![command.package_id, command.version, tender_id.as_str()],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let Some((
+            tender_revision,
+            manifest_sha256,
+            analysis_blocker_count,
+            lifecycle_before,
+            current_version,
+            review_outcome,
+        )) = exact_state
+        else {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        };
+        let gate_required = matches!(
+            command.decision,
+            BidDecisionApprovalDecision::Accept | BidDecisionApprovalDecision::Reject
+        );
+        let active_execution: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE status = 'running')
+                        OR EXISTS(SELECT 1 FROM parse_attempts WHERE status = 'running')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        let exact_denial = if tender_revision != package.tender_revision
+            || manifest_sha256 != command.manifest_sha256
+            || current_version != command.version
+        {
+            Some("package_changed_before_commit")
+        } else if lifecycle_before != TenderLifecyclePhase::BidDecision.as_str() {
+            Some("lifecycle_closed_before_commit")
+        } else if active_execution {
+            Some("active_execution_before_commit")
+        } else if gate_required
+            && (analysis_blocker_count != 0 || review_outcome.as_deref() != Some("passed"))
+        {
+            Some("decision_gate_changed_before_commit")
+        } else {
+            None
+        };
+        if let Some(reason) = exact_denial {
+            append_bid_decision_denial(&transaction, tender_id, tender_revision, command, reason)?;
+            transaction.commit().map_err(sql_error)?;
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let existing_approval: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM bid_decision_approval_records
+                 WHERE package_id = ?1 AND package_version = ?2)",
+                params![command.package_id, command.version],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if existing_approval {
+            append_bid_decision_denial(
+                &transaction,
+                tender_id,
+                tender_revision,
+                command,
+                "decision_already_recorded_before_commit",
+            )?;
+            transaction.commit().map_err(sql_error)?;
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let (previous_sequence, preceding_approval_hash): (u32, String) = transaction
+            .query_row(
+                "SELECT COALESCE(MAX(approval_sequence), 0),
+                        COALESCE(MAX(approval_sha256) FILTER (
+                          WHERE approval_sequence = (
+                            SELECT MAX(approval_sequence) FROM bid_decision_approval_records
+                          )
+                        ), ?1)
+                 FROM bid_decision_approval_records",
+                [ZERO_APPROVAL_HASH],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(sql_error)?;
+        let approval_sequence = previous_sequence
+            .checked_add(1)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let approval_id = random_identifier(&transaction)?;
+        let created_at = sqlite_timestamp(&transaction)?;
+        let approval_manifest = ApprovalManifest {
+            acting_role: "tendering_manager".into(),
+            approval_id: approval_id.clone(),
+            approval_sequence,
+            conditions: conditions.clone(),
+            consequence: consequence.into(),
+            created_at: created_at.clone(),
+            decided_by: "engineer_user".into(),
+            decision: command.decision,
+            evidence_count,
+            evidence_sha256: evidence_sha256.clone(),
+            exceptions: exceptions.clone(),
+            lifecycle_after,
+            lifecycle_before: TenderLifecyclePhase::BidDecision,
+            package_id: command.package_id.clone(),
+            package_manifest_sha256: command.manifest_sha256.clone(),
+            package_version: command.version,
+            preceding_approval_hash: preceding_approval_hash.clone(),
+            rationale: command.rationale.trim().into(),
+            required_rework: required_rework.clone(),
+            schema_version: 1,
+            tender_revision,
+        };
+        let approval_manifest_json = canonical_json(&approval_manifest)?;
+        if approval_manifest_json.len() > MAX_APPROVAL_MANIFEST_BYTES {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let approval_sha256 = sha256_hex(approval_manifest_json.as_bytes());
+        budget.check()?;
+        transaction
+            .execute(
+                "INSERT INTO bid_decision_approval_records (
+                   approval_sequence, approval_id, package_id, package_version,
+                   package_manifest_sha256, tender_revision, decision, decided_by,
+                   acting_role, rationale, evidence_count, evidence_sha256,
+                   conditions_json, exceptions_json, required_rework_json,
+                   lifecycle_before, lifecycle_after, consequence,
+                   preceding_approval_hash, approval_manifest_json, approval_sha256,
+                   created_at
+                 ) VALUES (
+                   ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'engineer_user',
+                   'tendering_manager', ?8, ?9, ?10, ?11, ?12, ?13,
+                   'bid_decision', ?14, ?15, ?16, ?17, ?18, ?19
+                 )",
+                params![
+                    approval_sequence,
+                    approval_id,
+                    command.package_id,
+                    command.version,
+                    command.manifest_sha256,
+                    tender_revision,
+                    command.decision.as_str(),
+                    command.rationale.trim(),
+                    evidence_count,
+                    evidence_sha256,
+                    canonical_json(&conditions)?,
+                    canonical_json(&exceptions)?,
+                    canonical_json(&required_rework)?,
+                    lifecycle_after.as_str(),
+                    consequence,
+                    preceding_approval_hash,
+                    approval_manifest_json,
+                    approval_sha256,
+                    created_at,
+                ],
+            )
+            .map_err(sql_error)?;
+        if transaction
+            .execute(
+                "UPDATE tender SET lifecycle_phase = ?2
+                 WHERE singleton = 1 AND tender_id = ?1 AND lifecycle_phase = 'bid_decision'",
+                params![tender_id.as_str(), lifecycle_after.as_str()],
+            )
+            .map_err(sql_error)?
+            != 1
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        append_audit_event(
+            &transaction,
+            tender_id.as_str(),
+            "bid_decision_approval_recorded",
+            tender_revision,
+            json!({
+                "approval_id": approval_id,
+                "approval_sha256": approval_sha256,
+                "decision": command.decision,
+                "package_id": command.package_id,
+                "package_manifest_sha256": command.manifest_sha256,
+                "package_version": command.version.to_string(),
+            }),
+            &created_at,
+        )?;
+        budget.check()?;
+        transaction.commit().map_err(sql_error)?;
+        let package = self.inspect_bid_decision_package(&command.package_id, command.version)?;
+        let approval = package
+            .approval
+            .clone()
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        Ok(BidDecisionApprovalResult { approval, package })
+    }
+
+    pub(crate) fn resolve_bid_decision_return_rework(
+        &mut self,
+        tender_id: &TenderId,
+        command: &ResolveBidDecisionReturnReworkCommand,
+        budget: BidPackageOperationBudget,
+    ) -> Result<BidDecisionReturnReworkResult, TenderCommandError> {
+        self.require_pre_bid_writable()?;
+        budget.check()?;
+        if !valid_identifier(&command.approval_id)
+            || command.resolutions.len() > MAX_APPROVAL_LIST_ITEMS
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let resolutions = normalized_approval_items(&command.resolutions)?;
+        let approval = load_approval_by_id(&self.connection, &command.approval_id)?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let current_version: Option<u32> = self
+            .connection
+            .query_row(
+                "SELECT current_version FROM bid_decision_package_heads WHERE package_id = ?1",
+                [&approval.package_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let active_execution: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE status = 'running')
+                        OR EXISTS(SELECT 1 FROM parse_attempts WHERE status = 'running')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if approval.decision != BidDecisionApprovalDecision::Return
+            || current_version != Some(approval.package_version)
+            || resolutions.len() != approval.required_rework.len()
+            || resolutions.is_empty()
+            || active_execution
+            || load_return_rework_disposition(&self.connection, &command.approval_id)?.is_some()
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let items = approval
+            .required_rework
+            .iter()
+            .cloned()
+            .zip(resolutions)
+            .map(
+                |(required_rework, resolution)| BidDecisionReturnReworkItem {
+                    required_rework,
+                    resolution,
+                },
+            )
+            .collect::<Vec<_>>();
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        budget.check()?;
+        let still_current: bool = transaction
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM bid_decision_package_heads AS heads
+                   JOIN tender ON tender.singleton = 1
+                   WHERE heads.package_id = ?1 AND heads.current_version = ?2
+                     AND tender.tender_id = ?3 AND tender.lifecycle_phase = 'bid_decision'
+                 ) AND NOT EXISTS(
+                   SELECT 1 FROM bid_decision_return_rework_dispositions
+                   WHERE approval_id = ?4
+                 )",
+                params![
+                    approval.package_id,
+                    approval.package_version,
+                    tender_id.as_str(),
+                    approval.approval_id,
+                ],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if !still_current {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let disposition_id = random_identifier(&transaction)?;
+        let created_at = sqlite_timestamp(&transaction)?;
+        let manifest = ReturnReworkManifest {
+            approval_id: approval.approval_id.clone(),
+            approval_sha256: approval.approval_sha256.clone(),
+            created_at: created_at.clone(),
+            disposition_id: disposition_id.clone(),
+            items: items.clone(),
+            resolved_by: "engineer_user".into(),
+            schema_version: 1,
+        };
+        let manifest_json = canonical_json(&manifest)?;
+        if manifest_json.len() > MAX_APPROVAL_MANIFEST_BYTES {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let manifest_sha256 = sha256_hex(manifest_json.as_bytes());
+        transaction
+            .execute(
+                "INSERT INTO bid_decision_return_rework_dispositions (
+                   disposition_id, approval_id, approval_sha256, items_json,
+                   resolved_by, manifest_json, manifest_sha256, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, 'engineer_user', ?5, ?6, ?7)",
+                params![
+                    disposition_id,
+                    approval.approval_id,
+                    approval.approval_sha256,
+                    canonical_json(&items)?,
+                    manifest_json,
+                    manifest_sha256,
+                    created_at,
+                ],
+            )
+            .map_err(sql_error)?;
+        append_audit_event(
+            &transaction,
+            tender_id.as_str(),
+            "bid_decision_return_rework_resolved",
+            approval.tender_revision,
+            json!({
+                "approval_id": approval.approval_id,
+                "disposition_id": disposition_id,
+                "item_count": items.len().to_string(),
+                "manifest_sha256": manifest_sha256,
+            }),
+            &created_at,
+        )?;
+        budget.check()?;
+        transaction.commit().map_err(sql_error)?;
+        let disposition =
+            load_return_rework_disposition(&self.connection, &command.approval_id)?
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let package =
+            self.inspect_bid_decision_package(&approval.package_id, approval.package_version)?;
+        Ok(BidDecisionReturnReworkResult {
+            disposition,
+            package,
+        })
+    }
+
+    pub(crate) fn invalidate_bid_decision_approval(
+        &mut self,
+        tender_id: &TenderId,
+        command: &InvalidateBidDecisionApprovalCommand,
+        budget: BidPackageOperationBudget,
+    ) -> Result<BidDecisionApprovalInvalidationResult, TenderCommandError> {
+        self.require_storage_writable()?;
+        budget.check()?;
+        let material_change_summary = command.material_change_summary.trim().to_owned();
+        let affected_areas = match normalized_approval_items(&command.affected_areas) {
+            Ok(areas) => areas,
+            Err(_) => {
+                self.record_bid_decision_invalidation_denial(
+                    tender_id,
+                    command,
+                    "invalidation_shape_invalid",
+                )?;
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+        };
+        if !valid_identifier(&command.approval_id)
+            || !valid_sha256(&command.approval_sha256)
+            || material_change_summary.is_empty()
+            || material_change_summary.len() > 4_000
+            || affected_areas.is_empty()
+        {
+            self.record_bid_decision_invalidation_denial(
+                tender_id,
+                command,
+                "invalidation_shape_invalid",
+            )?;
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let Some(approval) = load_approval_by_id(&self.connection, &command.approval_id)? else {
+            self.record_bid_decision_invalidation_denial(tender_id, command, "approval_not_found")?;
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        };
+        let approved_inventory = load_package_record_inventory(
+            &self.connection,
+            &approval.package_id,
+            approval.package_version,
+        )?;
+        let current_inventory =
+            current_record_inventory_bounded_with_check(self, &mut || budget.check())?;
+        let changed_records = changed_record_references(&approved_inventory, &current_inventory);
+        let current_head: Option<(String, u32)> = self
+            .connection
+            .query_row(
+                "SELECT package_id, current_version FROM bid_decision_package_heads",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let lifecycle_phase = TenderLifecyclePhase::parse(
+            &self
+                .connection
+                .query_row(
+                    "SELECT lifecycle_phase FROM tender WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(sql_error)?,
+        )?;
+        let active_execution: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE status = 'running')
+                        OR EXISTS(SELECT 1 FROM parse_attempts WHERE status = 'running')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if approval.decision != BidDecisionApprovalDecision::Accept
+            || approval.approval_sha256 != command.approval_sha256
+            || approval.invalidation.is_some()
+            || current_head != Some((approval.package_id.clone(), approval.package_version))
+            || lifecycle_phase != TenderLifecyclePhase::TenderPlanning
+            || active_execution
+            || !valid_material_change_record_count(&changed_records)
+        {
+            self.record_bid_decision_invalidation_denial(
+                tender_id,
+                command,
+                "invalidation_guard_failed",
+            )?;
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        budget.check()?;
+        let still_exact: bool = transaction
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM bid_decision_approval_records AS approvals
+                   JOIN bid_decision_package_heads AS heads
+                     ON heads.package_id = approvals.package_id
+                    AND heads.current_version = approvals.package_version
+                   JOIN tender ON tender.singleton = 1
+                   WHERE approvals.approval_id = ?1
+                     AND approvals.approval_sha256 = ?2
+                     AND approvals.decision = 'accept'
+                     AND tender.tender_id = ?3
+                     AND tender.lifecycle_phase = 'tender_planning'
+                 ) AND NOT EXISTS(
+                   SELECT 1 FROM bid_decision_approval_invalidations WHERE approval_id = ?1
+                 ) AND NOT EXISTS(
+                   SELECT 1 FROM agent_runs WHERE status = 'running'
+                 ) AND NOT EXISTS(
+                   SELECT 1 FROM parse_attempts WHERE status = 'running'
+                 )",
+                params![
+                    command.approval_id,
+                    command.approval_sha256,
+                    tender_id.as_str(),
+                ],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if !still_exact {
+            append_bid_decision_invalidation_denial(
+                &transaction,
+                tender_id,
+                approval.tender_revision,
+                command,
+                "invalidation_state_changed_before_commit",
+            )?;
+            transaction.commit().map_err(sql_error)?;
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let invalidation_id = random_identifier(&transaction)?;
+        let created_at = sqlite_timestamp(&transaction)?;
+        let manifest = ApprovalInvalidationManifest {
+            acting_role: "tendering_manager".into(),
+            affected_areas: affected_areas.clone(),
+            approval_id: approval.approval_id.clone(),
+            approval_sha256: approval.approval_sha256.clone(),
+            created_at: created_at.clone(),
+            changed_records: changed_records.clone(),
+            invalidated_by: "engineer_user".into(),
+            invalidation_id: invalidation_id.clone(),
+            lifecycle_after: TenderLifecyclePhase::BidDecision,
+            lifecycle_before: TenderLifecyclePhase::TenderPlanning,
+            material_change_summary: material_change_summary.clone(),
+            schema_version: 1,
+        };
+        let manifest_json = canonical_json(&manifest)?;
+        if manifest_json.len() > MAX_APPROVAL_MANIFEST_BYTES {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let manifest_sha256 = sha256_hex(manifest_json.as_bytes());
+        transaction
+            .execute(
+                "INSERT INTO bid_decision_approval_invalidations (
+                   invalidation_id, approval_id, approval_sha256,
+                   material_change_summary, affected_areas_json, changed_records_json,
+                   invalidated_by,
+                   acting_role, lifecycle_before, lifecycle_after, manifest_json,
+                   manifest_sha256, created_at
+                 ) VALUES (
+                   ?1, ?2, ?3, ?4, ?5, ?6, 'engineer_user', 'tendering_manager',
+                   'tender_planning', 'bid_decision', ?7, ?8, ?9
+                 )",
+                params![
+                    invalidation_id,
+                    approval.approval_id,
+                    approval.approval_sha256,
+                    material_change_summary,
+                    canonical_json(&affected_areas)?,
+                    canonical_json(&changed_records)?,
+                    manifest_json,
+                    manifest_sha256,
+                    created_at,
+                ],
+            )
+            .map_err(sql_error)?;
+        if transaction
+            .execute(
+                "UPDATE tender SET lifecycle_phase = 'bid_decision'
+                 WHERE singleton = 1 AND tender_id = ?1
+                   AND lifecycle_phase = 'tender_planning'",
+                [tender_id.as_str()],
+            )
+            .map_err(sql_error)?
+            != 1
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        append_audit_event(
+            &transaction,
+            tender_id.as_str(),
+            "bid_decision_approval_invalidated",
+            approval.tender_revision,
+            json!({
+                "affected_area_count": affected_areas.len().to_string(),
+                "approval_id": approval.approval_id,
+                "approval_sha256": approval.approval_sha256,
+                "invalidation_id": invalidation_id,
+                "manifest_sha256": manifest_sha256,
+                "changed_record_count": changed_records.len().to_string(),
+            }),
+            &created_at,
+        )?;
+        budget.check()?;
+        transaction.commit().map_err(sql_error)?;
+        let invalidation = load_approval_invalidation(&self.connection, &command.approval_id)?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let package =
+            self.inspect_bid_decision_package(&approval.package_id, approval.package_version)?;
+        Ok(BidDecisionApprovalInvalidationResult {
+            invalidation,
+            package,
+        })
+    }
+
+    pub(crate) fn inspect_bid_decision_approval_history(
+        &self,
+        before_sequence: Option<u32>,
+        limit: u32,
+        budget: BidPackageOperationBudget,
+    ) -> Result<BidDecisionApprovalHistoryPage, TenderCommandError> {
+        if limit == 0 || limit > MAX_APPROVAL_HISTORY_PAGE_ITEMS {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let rows =
+            load_approval_history(&self.connection, before_sequence, limit + 1, &mut || {
+                budget.check()
+            })?;
+        let approvals = rows
+            .iter()
+            .take(limit as usize)
+            .cloned()
+            .collect::<Vec<_>>();
+        let next_sequence = (rows.len() > approvals.len())
+            .then(|| approvals.last().map(|approval| approval.approval_sequence))
+            .flatten();
+        Ok(BidDecisionApprovalHistoryPage {
+            approvals,
+            next_sequence,
+        })
+    }
+
+    fn record_bid_decision_denial(
+        &mut self,
+        tender_id: &TenderId,
+        command: &DecideBidDecisionPackageCommand,
+        reason: &str,
+    ) -> Result<(), TenderCommandError> {
+        self.require_storage_writable()?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let tender_revision: u32 = transaction
+            .query_row(
+                "SELECT current_revision FROM tender WHERE singleton = 1 AND tender_id = ?1",
+                [tender_id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        append_bid_decision_denial(&transaction, tender_id, tender_revision, command, reason)?;
+        transaction.commit().map_err(sql_error)
+    }
+
+    fn record_bid_decision_invalidation_denial(
+        &mut self,
+        tender_id: &TenderId,
+        command: &InvalidateBidDecisionApprovalCommand,
+        reason: &str,
+    ) -> Result<(), TenderCommandError> {
+        self.require_storage_writable()?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let tender_revision: u32 = transaction
+            .query_row(
+                "SELECT current_revision FROM tender WHERE singleton = 1 AND tender_id = ?1",
+                [tender_id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        append_bid_decision_invalidation_denial(
+            &transaction,
+            tender_id,
+            tender_revision,
+            command,
+            reason,
+        )?;
+        transaction.commit().map_err(sql_error)
+    }
+
     pub(crate) fn inspect_bid_decision_package(
         &self,
         package_id: &str,
@@ -1101,6 +2187,42 @@ impl TenderStore {
         let unresolved_query_count =
             category_count(BidDecisionPackageRecordCategory::UnresolvedQuery)?;
         let review = load_package_review(&self.connection, package_id, version)?;
+        let approval = load_package_approval(&self.connection, package_id, version)?;
+        let return_rework = approval
+            .as_ref()
+            .map(|approval| load_return_rework_disposition(&self.connection, &approval.approval_id))
+            .transpose()?
+            .flatten();
+        let return_rework_basis =
+            return_rework_basis_for_package(&self.connection, package_id, version)?;
+        let material_change_basis =
+            material_change_basis_for_package(&self.connection, package_id, version)?;
+        let prior_approval_count = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM bid_decision_approval_records
+                 WHERE NOT (package_id = ?1 AND package_version = ?2)",
+                params![package_id, version],
+                |row| row.get::<_, u32>(0),
+            )
+            .map_err(sql_error)?;
+        let lifecycle_phase = TenderLifecyclePhase::parse(
+            &self
+                .connection
+                .query_row(
+                    "SELECT lifecycle_phase FROM tender WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(sql_error)?,
+        )?;
+        let change_summary = package_change_summary(
+            &self.connection,
+            package_id,
+            version,
+            &capability_demands,
+            &resource_implications,
+        )?;
         let current_version: Option<u32> = self
             .connection
             .query_row(
@@ -1155,6 +2277,8 @@ impl TenderStore {
         let decision_gate_ready = current
             && dependencies_current
             && computed_analysis_blockers == 0
+            && approval.is_none()
+            && lifecycle_phase == TenderLifecyclePhase::BidDecision
             && review
                 .as_ref()
                 .is_some_and(|review| review.outcome == BidDecisionPackageReviewOutcome::Passed);
@@ -1190,6 +2314,13 @@ impl TenderStore {
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
             blockers,
             review,
+            approval,
+            return_rework,
+            return_rework_basis,
+            material_change_basis,
+            prior_approval_count,
+            change_summary,
+            lifecycle_phase,
             decision_gate_ready,
             current: dependencies_current,
             created_by,
@@ -1310,6 +2441,603 @@ impl TenderStore {
             records,
         })
     }
+}
+
+fn validate_approval_command(
+    command: &DecideBidDecisionPackageCommand,
+) -> Result<(), TenderCommandError> {
+    if !valid_identifier(&command.tender_id)
+        || !valid_identifier(&command.package_id)
+        || command.version == 0
+        || !valid_sha256(&command.manifest_sha256)
+        || command.rationale.trim().is_empty()
+        || command.rationale.len() > 4_000
+        || command.conditions.len() > MAX_APPROVAL_LIST_ITEMS
+        || command.exceptions.len() > MAX_APPROVAL_LIST_ITEMS
+        || command.required_rework.len() > MAX_APPROVAL_LIST_ITEMS
+        || (command.decision == BidDecisionApprovalDecision::Return
+            && command.required_rework.is_empty())
+        || (command.decision != BidDecisionApprovalDecision::Return
+            && !command.required_rework.is_empty())
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    normalized_approval_items(&command.conditions)?;
+    normalized_approval_items(&command.exceptions)?;
+    normalized_approval_items(&command.required_rework)?;
+    Ok(())
+}
+
+fn append_bid_decision_denial(
+    transaction: &rusqlite::Transaction<'_>,
+    tender_id: &TenderId,
+    tender_revision: u32,
+    command: &DecideBidDecisionPackageCommand,
+    reason: &str,
+) -> Result<(), TenderCommandError> {
+    let created_at = sqlite_timestamp(transaction)?;
+    append_audit_event(
+        transaction,
+        tender_id.as_str(),
+        "bid_decision_approval_denied",
+        tender_revision,
+        json!({
+            "decision": command.decision,
+            "package_id": command.package_id,
+            "package_manifest_sha256": command.manifest_sha256,
+            "package_version": command.version.to_string(),
+            "reason": reason,
+        }),
+        &created_at,
+    )
+}
+
+fn append_bid_decision_invalidation_denial(
+    transaction: &rusqlite::Transaction<'_>,
+    tender_id: &TenderId,
+    tender_revision: u32,
+    command: &InvalidateBidDecisionApprovalCommand,
+    reason: &str,
+) -> Result<(), TenderCommandError> {
+    let created_at = sqlite_timestamp(transaction)?;
+    append_audit_event(
+        transaction,
+        tender_id.as_str(),
+        "bid_decision_approval_invalidation_denied",
+        tender_revision,
+        json!({
+            "approval_id": command.approval_id,
+            "approval_sha256": command.approval_sha256,
+            "reason": reason,
+        }),
+        &created_at,
+    )
+}
+
+fn normalized_approval_items(values: &[String]) -> Result<Vec<String>, TenderCommandError> {
+    if values.len() > MAX_APPROVAL_LIST_ITEMS {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let normalized = values
+        .iter()
+        .map(|value| value.trim().to_owned())
+        .collect::<Vec<_>>();
+    if normalized
+        .iter()
+        .any(|value| value.is_empty() || value.len() > MAX_APPROVAL_ITEM_BYTES)
+        || normalized.iter().collect::<HashSet<_>>().len() != normalized.len()
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    Ok(normalized)
+}
+
+fn approval_evidence(
+    store: &TenderStore,
+    package_id: &str,
+    version: u32,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<Vec<TenderEvidenceReference>, TenderCommandError> {
+    let mut records = package_bound_records(&store.connection, package_id, version)?
+        .into_iter()
+        .collect::<Vec<_>>();
+    records.sort();
+    let mut evidence = HashSet::new();
+    for (record_id, record_version) in records {
+        check()?;
+        let record = store.inspect_tender_record_version(&record_id, record_version)?;
+        evidence.extend(
+            record
+                .fields
+                .iter()
+                .flat_map(|field| field.evidence.iter())
+                .chain(
+                    record
+                        .contradictions
+                        .iter()
+                        .flat_map(|contradiction| contradiction.evidence.iter()),
+                )
+                .map(|item| item.reference.clone()),
+        );
+    }
+    let mut evidence = evidence.into_iter().collect::<Vec<_>>();
+    evidence.sort_by(|left, right| {
+        left.artifact_id
+            .cmp(&right.artifact_id)
+            .then_with(|| left.version.cmp(&right.version))
+            .then_with(|| left.ordinal.cmp(&right.ordinal))
+    });
+    Ok(evidence)
+}
+
+type StoredApprovalRow = (
+    u32,
+    String,
+    String,
+    u32,
+    String,
+    u32,
+    String,
+    String,
+    String,
+    String,
+    u32,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+);
+
+type StoredApprovalInvalidationRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+);
+
+fn load_package_approval(
+    connection: &rusqlite::Connection,
+    package_id: &str,
+    version: u32,
+) -> Result<Option<BidDecisionApprovalRecord>, TenderCommandError> {
+    let row = connection
+        .query_row(
+            "SELECT approval_sequence, approval_id, package_id, package_version,
+                    package_manifest_sha256, tender_revision, decision, decided_by,
+                    acting_role, rationale, evidence_count, evidence_sha256,
+                    conditions_json, exceptions_json, required_rework_json,
+                    lifecycle_before, lifecycle_after, consequence,
+                    preceding_approval_hash, approval_manifest_json, approval_sha256,
+                    created_at
+             FROM bid_decision_approval_records
+             WHERE package_id = ?1 AND package_version = ?2",
+            params![package_id, version],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
+                    row.get(11)?,
+                    row.get(12)?,
+                    row.get(13)?,
+                    row.get(14)?,
+                    row.get(15)?,
+                    row.get(16)?,
+                    row.get(17)?,
+                    row.get(18)?,
+                    row.get(19)?,
+                    row.get(20)?,
+                    row.get(21)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let mut approval = approval_record_from_row(row)?;
+    approval.invalidation = load_approval_invalidation(connection, &approval.approval_id)?;
+    Ok(Some(approval))
+}
+
+fn load_approval_by_id(
+    connection: &rusqlite::Connection,
+    approval_id: &str,
+) -> Result<Option<BidDecisionApprovalRecord>, TenderCommandError> {
+    let key: Option<(String, u32)> = connection
+        .query_row(
+            "SELECT package_id, package_version FROM bid_decision_approval_records
+             WHERE approval_id = ?1",
+            [approval_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    key.map(|(package_id, version)| load_package_approval(connection, &package_id, version))
+        .transpose()
+        .map(Option::flatten)
+}
+
+fn load_return_rework_disposition(
+    connection: &rusqlite::Connection,
+    approval_id: &str,
+) -> Result<Option<BidDecisionReturnReworkDisposition>, TenderCommandError> {
+    let row: Option<(String, String, String, String, String, String, String)> = connection
+        .query_row(
+            "SELECT disposition_id, approval_sha256, items_json, resolved_by,
+                    manifest_json, manifest_sha256, created_at
+             FROM bid_decision_return_rework_dispositions WHERE approval_id = ?1",
+            [approval_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let Some((
+        disposition_id,
+        approval_sha256,
+        items_json,
+        resolved_by,
+        manifest_json,
+        manifest_sha256,
+        created_at,
+    )) = row
+    else {
+        return Ok(None);
+    };
+    if manifest_json.len() > MAX_APPROVAL_MANIFEST_BYTES
+        || sha256_hex(manifest_json.as_bytes()) != manifest_sha256
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let items: Vec<BidDecisionReturnReworkItem> = parse_canonical_json(&items_json)?;
+    let manifest: ReturnReworkManifest = parse_canonical_json(&manifest_json)?;
+    if manifest.schema_version != 1
+        || manifest.disposition_id != disposition_id
+        || manifest.approval_id != approval_id
+        || manifest.approval_sha256 != approval_sha256
+        || manifest.items != items
+        || manifest.resolved_by != resolved_by
+        || manifest.created_at != created_at
+        || resolved_by != "engineer_user"
+        || !valid_sha256(&approval_sha256)
+        || !valid_sha256(&manifest_sha256)
+        || items.is_empty()
+        || items.len() > MAX_APPROVAL_LIST_ITEMS
+        || items.iter().any(|item| {
+            item.required_rework.trim() != item.required_rework
+                || item.required_rework.is_empty()
+                || item.required_rework.len() > MAX_APPROVAL_ITEM_BYTES
+                || item.resolution.trim() != item.resolution
+                || item.resolution.is_empty()
+                || item.resolution.len() > MAX_APPROVAL_ITEM_BYTES
+        })
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(Some(BidDecisionReturnReworkDisposition {
+        disposition_id,
+        approval_id: approval_id.into(),
+        approval_sha256,
+        items,
+        resolved_by,
+        manifest_sha256,
+        created_at,
+    }))
+}
+
+fn load_approval_invalidation(
+    connection: &rusqlite::Connection,
+    approval_id: &str,
+) -> Result<Option<BidDecisionApprovalInvalidation>, TenderCommandError> {
+    let row: Option<StoredApprovalInvalidationRow> = connection
+        .query_row(
+            "SELECT invalidation_id, approval_sha256, material_change_summary,
+                    affected_areas_json, changed_records_json, invalidated_by, acting_role, lifecycle_before,
+                    lifecycle_after, manifest_json, manifest_sha256, created_at
+             FROM bid_decision_approval_invalidations WHERE approval_id = ?1",
+            [approval_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
+                    row.get(11)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let Some((
+        invalidation_id,
+        approval_sha256,
+        material_change_summary,
+        affected_areas_json,
+        changed_records_json,
+        invalidated_by,
+        acting_role,
+        lifecycle_before,
+        lifecycle_after,
+        manifest_json,
+        manifest_sha256,
+        created_at,
+    )) = row
+    else {
+        return Ok(None);
+    };
+    if manifest_json.len() > MAX_APPROVAL_MANIFEST_BYTES
+        || sha256_hex(manifest_json.as_bytes()) != manifest_sha256
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let affected_areas: Vec<String> = parse_canonical_json(&affected_areas_json)?;
+    let changed_records: Vec<TenderRecordVersionReference> =
+        parse_canonical_json(&changed_records_json)?;
+    let manifest: ApprovalInvalidationManifest = parse_canonical_json(&manifest_json)?;
+    let lifecycle_before = TenderLifecyclePhase::parse(&lifecycle_before)?;
+    let lifecycle_after = TenderLifecyclePhase::parse(&lifecycle_after)?;
+    if manifest.schema_version != 1
+        || manifest.invalidation_id != invalidation_id
+        || manifest.approval_id != approval_id
+        || manifest.approval_sha256 != approval_sha256
+        || manifest.material_change_summary != material_change_summary
+        || manifest.affected_areas != affected_areas
+        || manifest.changed_records != changed_records
+        || manifest.invalidated_by != invalidated_by
+        || manifest.acting_role != acting_role
+        || manifest.lifecycle_before != lifecycle_before
+        || manifest.lifecycle_after != lifecycle_after
+        || manifest.created_at != created_at
+        || invalidated_by != "engineer_user"
+        || acting_role != "tendering_manager"
+        || lifecycle_before != TenderLifecyclePhase::TenderPlanning
+        || lifecycle_after != TenderLifecyclePhase::BidDecision
+        || material_change_summary.trim() != material_change_summary
+        || material_change_summary.is_empty()
+        || material_change_summary.len() > 4_000
+        || normalized_approval_items(&affected_areas)? != affected_areas
+        || affected_areas.is_empty()
+        || !valid_material_change_record_count(&changed_records)
+        || changed_records
+            .iter()
+            .any(|record| !valid_identifier(&record.record_id) || record.version == 0)
+        || !valid_identifier(&invalidation_id)
+        || !valid_sha256(&approval_sha256)
+        || !valid_sha256(&manifest_sha256)
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(Some(BidDecisionApprovalInvalidation {
+        invalidation_id,
+        approval_id: approval_id.into(),
+        approval_sha256,
+        material_change_summary,
+        affected_areas,
+        changed_records,
+        invalidated_by,
+        acting_role,
+        lifecycle_before,
+        lifecycle_after,
+        manifest_sha256,
+        created_at,
+    }))
+}
+
+fn return_rework_basis_for_package(
+    connection: &rusqlite::Connection,
+    package_id: &str,
+    version: u32,
+) -> Result<Option<BidDecisionReturnReworkDisposition>, TenderCommandError> {
+    let Some(prior_version) = version.checked_sub(1).filter(|prior| *prior > 0) else {
+        return Ok(None);
+    };
+    let Some(approval) = load_package_approval(connection, package_id, prior_version)? else {
+        return Ok(None);
+    };
+    if approval.decision != BidDecisionApprovalDecision::Return {
+        return Ok(None);
+    }
+    load_return_rework_disposition(connection, &approval.approval_id)?
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+        .map(Some)
+}
+
+fn material_change_basis_for_package(
+    connection: &rusqlite::Connection,
+    package_id: &str,
+    version: u32,
+) -> Result<Option<BidDecisionApprovalInvalidation>, TenderCommandError> {
+    let Some(prior_version) = version.checked_sub(1).filter(|prior| *prior > 0) else {
+        return Ok(None);
+    };
+    let Some(approval) = load_package_approval(connection, package_id, prior_version)? else {
+        return Ok(None);
+    };
+    match approval.decision {
+        BidDecisionApprovalDecision::Accept => approval
+            .invalidation
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+            .map(Some),
+        BidDecisionApprovalDecision::Return => Ok(None),
+        BidDecisionApprovalDecision::Reject => {
+            Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+        }
+    }
+}
+
+fn load_approval_history(
+    connection: &rusqlite::Connection,
+    before_sequence: Option<u32>,
+    limit: u32,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<Vec<BidDecisionApprovalRecord>, TenderCommandError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT package_id, package_version FROM bid_decision_approval_records
+             WHERE (?1 IS NULL OR approval_sequence < ?1)
+             ORDER BY approval_sequence DESC LIMIT ?2",
+        )
+        .map_err(sql_error)?;
+    let keys = statement
+        .query_map(params![before_sequence, limit], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+        })
+        .map_err(sql_error)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(sql_error)?;
+    let mut approvals = Vec::with_capacity(keys.len());
+    for (package_id, version) in keys {
+        check()?;
+        approvals.push(
+            load_package_approval(connection, &package_id, version)?
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+        );
+    }
+    Ok(approvals)
+}
+
+fn approval_record_from_row(
+    row: StoredApprovalRow,
+) -> Result<BidDecisionApprovalRecord, TenderCommandError> {
+    let (
+        approval_sequence,
+        approval_id,
+        package_id,
+        package_version,
+        package_manifest_sha256,
+        tender_revision,
+        decision,
+        decided_by,
+        acting_role,
+        rationale,
+        evidence_count,
+        evidence_sha256,
+        conditions_json,
+        exceptions_json,
+        required_rework_json,
+        lifecycle_before,
+        lifecycle_after,
+        consequence,
+        preceding_approval_hash,
+        approval_manifest_json,
+        approval_sha256,
+        created_at,
+    ) = row;
+    if approval_manifest_json.len() > MAX_APPROVAL_MANIFEST_BYTES
+        || sha256_hex(approval_manifest_json.as_bytes()) != approval_sha256
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let manifest: ApprovalManifest = parse_canonical_json(&approval_manifest_json)?;
+    let conditions: Vec<String> = parse_canonical_json(&conditions_json)?;
+    let exceptions: Vec<String> = parse_canonical_json(&exceptions_json)?;
+    let required_rework: Vec<String> = parse_canonical_json(&required_rework_json)?;
+    let decision = BidDecisionApprovalDecision::parse(&decision)?;
+    let lifecycle_before = TenderLifecyclePhase::parse(&lifecycle_before)?;
+    let lifecycle_after = TenderLifecyclePhase::parse(&lifecycle_after)?;
+    if manifest.schema_version != 1
+        || manifest.approval_sequence != approval_sequence
+        || manifest.approval_id != approval_id
+        || manifest.package_id != package_id
+        || manifest.package_version != package_version
+        || manifest.package_manifest_sha256 != package_manifest_sha256
+        || manifest.tender_revision != tender_revision
+        || manifest.decision != decision
+        || manifest.decided_by != decided_by
+        || manifest.acting_role != acting_role
+        || manifest.rationale != rationale
+        || manifest.evidence_count != evidence_count
+        || manifest.evidence_sha256 != evidence_sha256
+        || manifest.conditions != conditions
+        || manifest.exceptions != exceptions
+        || manifest.required_rework != required_rework
+        || manifest.lifecycle_before != lifecycle_before
+        || manifest.lifecycle_after != lifecycle_after
+        || manifest.consequence != consequence
+        || manifest.preceding_approval_hash != preceding_approval_hash
+        || manifest.created_at != created_at
+        || decided_by != "engineer_user"
+        || acting_role != "tendering_manager"
+        || lifecycle_before != TenderLifecyclePhase::BidDecision
+        || lifecycle_after != decision.lifecycle_after()
+        || consequence != decision.consequence()
+        || !valid_sha256(&approval_sha256)
+        || !valid_sha256(&preceding_approval_hash)
+        || !valid_sha256(&package_manifest_sha256)
+        || !valid_sha256(&evidence_sha256)
+        || normalized_approval_items(&conditions)? != conditions
+        || normalized_approval_items(&exceptions)? != exceptions
+        || normalized_approval_items(&required_rework)? != required_rework
+        || (decision == BidDecisionApprovalDecision::Return && required_rework.is_empty())
+        || (decision != BidDecisionApprovalDecision::Return && !required_rework.is_empty())
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(BidDecisionApprovalRecord {
+        approval_sequence,
+        approval_id,
+        package_id,
+        package_version,
+        package_manifest_sha256,
+        tender_revision,
+        decision,
+        decided_by,
+        acting_role,
+        rationale,
+        evidence_count,
+        evidence_sha256,
+        conditions,
+        exceptions,
+        required_rework,
+        lifecycle_before,
+        lifecycle_after,
+        consequence,
+        preceding_approval_hash,
+        approval_sha256,
+        created_at,
+        invalidation: None,
+    })
 }
 
 fn validate_package_command(
@@ -1588,6 +3316,8 @@ fn package_manifest_value_with_check(
         "record_inventory_sha256": package.record_inventory_sha256,
         "record_bindings": bindings,
         "resource_implications": package.resource_implications,
+        "return_rework_basis": package.return_rework_basis,
+        "material_change_basis": package.material_change_basis,
         "schema_version": 1,
         "tender_revision": package.tender_revision,
     }))
@@ -1801,6 +3531,70 @@ fn package_dependencies_are_current(
     Ok(true)
 }
 
+fn package_change_summary(
+    connection: &rusqlite::Connection,
+    package_id: &str,
+    version: u32,
+    capabilities: &[CapabilityDemand],
+    resources: &[ResourceImplication],
+) -> Result<BidDecisionPackageChangeSummary, TenderCommandError> {
+    let current_records = package_bound_records(connection, package_id, version)?;
+    let current_rows = load_stored_rows(connection, package_id, version)?
+        .into_iter()
+        .map(|row| ((row.record.record_id.clone(), row.record.version), row))
+        .collect::<HashMap<_, _>>();
+    let Some(prior_version) = version.checked_sub(1).filter(|prior| *prior > 0) else {
+        return Ok(BidDecisionPackageChangeSummary {
+            prior_version: None,
+            added_record_count: u32::try_from(current_records.len())
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            removed_record_count: 0,
+            changed_compliance_row_count: u32::try_from(current_rows.len())
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            capability_demands_changed: !capabilities.is_empty(),
+            resource_implications_changed: !resources.is_empty(),
+        });
+    };
+    let (prior_capabilities_json, prior_resources_json): (String, String) = connection
+        .query_row(
+            "SELECT capability_demands_json, resource_implications_json
+             FROM bid_decision_package_versions
+             WHERE package_id = ?1 AND version = ?2",
+            params![package_id, prior_version],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(sql_error)?;
+    let prior_capabilities: Vec<CapabilityDemand> = parse_canonical_json(&prior_capabilities_json)?;
+    let prior_resources: Vec<ResourceImplication> = parse_canonical_json(&prior_resources_json)?;
+    let prior_records = package_bound_records(connection, package_id, prior_version)?;
+    let prior_rows = load_stored_rows(connection, package_id, prior_version)?
+        .into_iter()
+        .map(|row| ((row.record.record_id.clone(), row.record.version), row))
+        .collect::<HashMap<_, _>>();
+    let changed_rows = current_rows
+        .iter()
+        .filter(|(key, row)| prior_rows.get(key) != Some(*row))
+        .count()
+        .checked_add(
+            prior_rows
+                .keys()
+                .filter(|key| !current_rows.contains_key(*key))
+                .count(),
+        )
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    Ok(BidDecisionPackageChangeSummary {
+        prior_version: Some(prior_version),
+        added_record_count: u32::try_from(current_records.difference(&prior_records).count())
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+        removed_record_count: u32::try_from(prior_records.difference(&current_records).count())
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+        changed_compliance_row_count: u32::try_from(changed_rows)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+        capability_demands_changed: prior_capabilities != capabilities,
+        resource_implications_changed: prior_resources != resources,
+    })
+}
+
 fn current_record_inventory(
     store: &TenderStore,
 ) -> Result<Vec<RecordInventoryObservation>, TenderCommandError> {
@@ -1817,6 +3611,129 @@ fn current_record_inventory(
             })
         })
         .collect()
+}
+
+fn current_record_inventory_bounded_with_check(
+    store: &TenderStore,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<Vec<RecordInventoryObservation>, TenderCommandError> {
+    check()?;
+    let count: u32 = store
+        .connection
+        .query_row("SELECT COUNT(*) FROM tender_record_heads", [], |row| {
+            row.get(0)
+        })
+        .map_err(sql_error)?;
+    if usize::try_from(count)
+        .ok()
+        .is_none_or(|count| count > MAX_COMPLIANCE_ROWS)
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let mut statement = store
+        .connection
+        .prepare(
+            "SELECT tender_record_heads.record_id, tender_record_heads.current_version
+             FROM tender_record_heads JOIN tender_records USING (record_id)
+             ORDER BY tender_records.stable_key",
+        )
+        .map_err(sql_error)?;
+    let mapped = statement
+        .query_map([], |row| {
+            Ok(TenderRecordVersionReference {
+                record_id: row.get(0)?,
+                version: row.get(1)?,
+            })
+        })
+        .map_err(sql_error)?;
+    let mut inventory = Vec::with_capacity(count as usize);
+    for reference in mapped {
+        check()?;
+        if inventory.len() >= MAX_COMPLIANCE_ROWS {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let reference = reference.map_err(sql_error)?;
+        let record =
+            store.inspect_tender_record_version(&reference.record_id, reference.version)?;
+        check()?;
+        inventory.push(RecordInventoryObservation {
+            record: reference,
+            kind: record.kind,
+            verification_status: record.verification_status,
+            trust_class: record.trust_class,
+        });
+    }
+    if inventory.len() != count as usize {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(inventory)
+}
+
+fn load_package_record_inventory(
+    connection: &rusqlite::Connection,
+    package_id: &str,
+    version: u32,
+) -> Result<Vec<RecordInventoryObservation>, TenderCommandError> {
+    let (inventory_json, inventory_sha256): (String, String) = connection
+        .query_row(
+            "SELECT record_inventory_json, record_inventory_sha256
+             FROM bid_decision_package_versions
+             WHERE package_id = ?1 AND version = ?2",
+            params![package_id, version],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(sql_error)?;
+    if inventory_json.len() > MAX_PACKAGE_MANIFEST_BYTES
+        || sha256_hex(inventory_json.as_bytes()) != inventory_sha256
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let inventory: Vec<RecordInventoryObservation> = parse_canonical_json(&inventory_json)?;
+    if inventory.len() > MAX_COMPLIANCE_ROWS
+        || inventory.iter().any(|observation| {
+            !valid_identifier(&observation.record.record_id) || observation.record.version == 0
+        })
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(inventory)
+}
+
+fn changed_record_references(
+    prior_inventory: &[RecordInventoryObservation],
+    current_inventory: &[RecordInventoryObservation],
+) -> Vec<TenderRecordVersionReference> {
+    let mut changed = current_inventory
+        .iter()
+        .filter(|current| {
+            prior_inventory
+                .iter()
+                .find(|prior| prior.record.record_id == current.record.record_id)
+                != Some(*current)
+        })
+        .map(|observation| observation.record.clone())
+        .chain(
+            prior_inventory
+                .iter()
+                .filter(|prior| {
+                    !current_inventory
+                        .iter()
+                        .any(|current| current.record.record_id == prior.record.record_id)
+                })
+                .map(|observation| observation.record.clone()),
+        )
+        .collect::<Vec<_>>();
+    changed.sort_by(|left, right| {
+        left.record_id
+            .cmp(&right.record_id)
+            .then_with(|| left.version.cmp(&right.version))
+    });
+    changed.dedup();
+    changed
+}
+
+fn valid_material_change_record_count(records: &[TenderRecordVersionReference]) -> bool {
+    !records.is_empty() && records.len() <= MAX_MATERIAL_CHANGE_RECORDS
 }
 
 fn load_visible_package_blockers(
@@ -2278,12 +4195,12 @@ impl TenderStore {
         package_id: &str,
         version: u32,
     ) -> Result<PreparedAgentRun, TenderCommandError> {
-        self.require_writable()?;
+        self.require_pre_bid_writable()?;
         if !valid_identifier(package_id) || version == 0 {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
         let package = self.inspect_bid_decision_package(package_id, version)?;
-        if !package.current || package.review.is_some() {
+        if !package.current || package.review.is_some() || package.approval.is_some() {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
         let payload = bid_package_review_data_view(self, package_id, version)?;
@@ -2316,6 +4233,14 @@ impl TenderStore {
                     |row| row.get(0),
                 )
                 .map_err(sql_error)?;
+            let has_approval: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM bid_decision_approval_records
+                       WHERE package_id = ?1 AND package_version = ?2)",
+                    params![package_id, version],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
             let has_unresolved_indeterminate: bool = transaction
                 .query_row(
                     "SELECT EXISTS(
@@ -2330,7 +4255,11 @@ impl TenderStore {
                     |row| row.get(0),
                 )
                 .map_err(sql_error)?;
-            if current_version != version || has_review || has_unresolved_indeterminate {
+            if current_version != version
+                || has_review
+                || has_approval
+                || has_unresolved_indeterminate
+            {
                 return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
             }
             let tender_revision: u32 = transaction
@@ -2650,10 +4579,12 @@ impl TenderStore {
                 return Ok(false);
             }
         }
+        let mut previous_dependency_snapshot: Option<(u32, Vec<RecordInventoryObservation>)> = None;
         for (package_id, version) in versions {
             check()?;
             let (
                 tender_revision,
+                record_inventory_json,
                 record_inventory_sha256,
                 capabilities_json,
                 resource_implications_json,
@@ -2661,10 +4592,20 @@ impl TenderStore {
                 blocker_count,
                 manifest_json,
                 manifest_sha256,
-            ): (u32, String, String, String, String, u32, String, String) = self
+            ): (
+                u32,
+                String,
+                String,
+                String,
+                String,
+                String,
+                u32,
+                String,
+                String,
+            ) = self
                 .connection
                 .query_row(
-                    "SELECT tender_revision, record_inventory_sha256,
+                    "SELECT tender_revision, record_inventory_json, record_inventory_sha256,
                             capability_demands_json, resource_implications_json,
                             recommendation_json, analysis_blocker_count,
                             manifest_json, manifest_sha256
@@ -2681,16 +4622,25 @@ impl TenderStore {
                             row.get(5)?,
                             row.get(6)?,
                             row.get(7)?,
+                            row.get(8)?,
                         ))
                     },
                 )
                 .map_err(sql_error)?;
             if manifest_json.len() > MAX_PACKAGE_MANIFEST_BYTES
+                || record_inventory_json.len() > MAX_PACKAGE_MANIFEST_BYTES
                 || capabilities_json.len() > MAX_PACKAGE_MANIFEST_BYTES
                 || resource_implications_json.len() > MAX_PACKAGE_MANIFEST_BYTES
                 || recommendation_json.len() > MAX_PACKAGE_MANIFEST_BYTES
                 || !valid_sha256(&record_inventory_sha256)
                 || !valid_sha256(&manifest_sha256)
+            {
+                return Ok(false);
+            }
+            let record_inventory: Vec<RecordInventoryObservation> =
+                parse_canonical_json(&record_inventory_json)?;
+            if record_inventory.len() > MAX_COMPLIANCE_ROWS
+                || sha256_hex(record_inventory_json.as_bytes()) != record_inventory_sha256
             {
                 return Ok(false);
             }
@@ -2706,6 +4656,23 @@ impl TenderStore {
             let rows = load_stored_rows_with_check(&self.connection, &package_id, version, check)?;
             let bindings =
                 load_stored_bindings_with_check(&self.connection, &package_id, version, check)?;
+            let return_rework_basis =
+                return_rework_basis_for_package(&self.connection, &package_id, version)?;
+            let material_change_basis =
+                material_change_basis_for_package(&self.connection, &package_id, version)?;
+            if let Some(basis) = &material_change_basis {
+                let Some((prior_revision, prior_inventory)) = &previous_dependency_snapshot else {
+                    return Ok(false);
+                };
+                let changed_records = changed_record_references(prior_inventory, &record_inventory);
+                if changed_records.is_empty()
+                    || changed_records != basis.changed_records
+                    || (*prior_revision == tender_revision
+                        && canonical_json(prior_inventory)? == record_inventory_json)
+                {
+                    return Ok(false);
+                }
+            }
             if rows.len() > MAX_COMPLIANCE_ROWS {
                 return Ok(false);
             }
@@ -2722,6 +4689,8 @@ impl TenderStore {
                     analysis_blocker_count: usize::try_from(blocker_count)
                         .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
                     record_inventory_sha256: &record_inventory_sha256,
+                    return_rework_basis: return_rework_basis.as_ref(),
+                    material_change_basis: material_change_basis.as_ref(),
                 },
                 check,
             )?;
@@ -2748,8 +4717,261 @@ impl TenderStore {
                     return Ok(false);
                 }
             }
+            previous_dependency_snapshot = Some((tender_revision, record_inventory));
+        }
+        if !self.bid_decision_approvals_are_valid_with_check(package_count, check)? {
+            return Ok(false);
         }
         check()?;
+        Ok(true)
+    }
+
+    fn bid_decision_approvals_are_valid_with_check(
+        &self,
+        package_count: u32,
+        check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+    ) -> Result<bool, TenderCommandError> {
+        check()?;
+        let approval_count: u32 = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM bid_decision_approval_records",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if usize::try_from(approval_count)
+            .ok()
+            .is_none_or(|count| count > MAX_APPROVAL_RECORDS)
+        {
+            return Ok(false);
+        }
+        let lifecycle_phase = TenderLifecyclePhase::parse(
+            &self
+                .connection
+                .query_row(
+                    "SELECT lifecycle_phase FROM tender WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(sql_error)?,
+        )?;
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT package_id, package_version FROM bid_decision_approval_records
+                 ORDER BY approval_sequence",
+            )
+            .map_err(sql_error)?;
+        let mapped = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+            })
+            .map_err(sql_error)?;
+        let mut approvals = Vec::with_capacity(approval_count as usize);
+        for key in mapped {
+            check()?;
+            if approvals.len() >= MAX_PACKAGE_VERSIONS {
+                return Ok(false);
+            }
+            let (package_id, version) = key.map_err(sql_error)?;
+            let Some(approval) = load_package_approval(&self.connection, &package_id, version)?
+            else {
+                return Ok(false);
+            };
+            approvals.push(approval);
+        }
+        drop(statement);
+        if approvals.len() != approval_count as usize {
+            return Ok(false);
+        }
+        let mut expected_hash = ZERO_APPROVAL_HASH.to_owned();
+        let mut previous_version = 0;
+        for (index, approval) in approvals.iter().enumerate() {
+            check()?;
+            if approval.approval_sequence != (index + 1) as u32
+                || approval.preceding_approval_hash != expected_hash
+                || approval.package_version <= previous_version
+                || index + 1 < approvals.len()
+                    && approval.decision != BidDecisionApprovalDecision::Return
+                    && !(approval.decision == BidDecisionApprovalDecision::Accept
+                        && approval.invalidation.is_some())
+            {
+                return Ok(false);
+            }
+            let package: Option<(u32, String, u32)> = self
+                .connection
+                .query_row(
+                    "SELECT tender_revision, manifest_sha256, analysis_blocker_count
+                     FROM bid_decision_package_versions
+                     WHERE package_id = ?1 AND version = ?2",
+                    params![approval.package_id, approval.package_version],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()
+                .map_err(sql_error)?;
+            let Some((tender_revision, package_sha256, blocker_count)) = package else {
+                return Ok(false);
+            };
+            if tender_revision != approval.tender_revision
+                || package_sha256 != approval.package_manifest_sha256
+                || matches!(
+                    approval.decision,
+                    BidDecisionApprovalDecision::Accept | BidDecisionApprovalDecision::Reject
+                ) && (blocker_count != 0
+                    || !self
+                        .connection
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM bid_decision_package_reviews
+                         WHERE package_id = ?1 AND package_version = ?2 AND outcome = 'passed')",
+                            params![approval.package_id, approval.package_version],
+                            |row| row.get::<_, bool>(0),
+                        )
+                        .map_err(sql_error)?)
+            {
+                return Ok(false);
+            }
+            let return_rework =
+                load_return_rework_disposition(&self.connection, &approval.approval_id)?;
+            if return_rework.is_some() && approval.decision != BidDecisionApprovalDecision::Return {
+                return Ok(false);
+            }
+            if let Some(disposition) = return_rework {
+                if disposition.approval_sha256 != approval.approval_sha256
+                    || disposition.items.len() != approval.required_rework.len()
+                    || disposition
+                        .items
+                        .iter()
+                        .zip(&approval.required_rework)
+                        .any(|(item, required)| &item.required_rework != required)
+                {
+                    return Ok(false);
+                }
+                let rework_audit_count: u32 = self
+                    .connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM audit_events
+                         WHERE event_type = 'bid_decision_return_rework_resolved'
+                           AND created_at = ?1
+                           AND json_extract(payload_json, '$.change.approval_id') = ?2
+                           AND json_extract(payload_json, '$.change.disposition_id') = ?3
+                           AND json_extract(payload_json, '$.change.manifest_sha256') = ?4",
+                        params![
+                            disposition.created_at,
+                            approval.approval_id,
+                            disposition.disposition_id,
+                            disposition.manifest_sha256,
+                        ],
+                        |row| row.get(0),
+                    )
+                    .map_err(sql_error)?;
+                if rework_audit_count != 1 {
+                    return Ok(false);
+                }
+            }
+            if approval.invalidation.is_some()
+                && approval.decision != BidDecisionApprovalDecision::Accept
+            {
+                return Ok(false);
+            }
+            if let Some(invalidation) = &approval.invalidation {
+                if invalidation.approval_sha256 != approval.approval_sha256 {
+                    return Ok(false);
+                }
+                let invalidation_audit_count: u32 = self
+                    .connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM audit_events
+                         WHERE event_type = 'bid_decision_approval_invalidated'
+                           AND created_at = ?1
+                           AND json_extract(payload_json, '$.change.approval_id') = ?2
+                           AND json_extract(payload_json, '$.change.approval_sha256') = ?3
+                           AND json_extract(payload_json, '$.change.invalidation_id') = ?4
+                           AND json_extract(payload_json, '$.change.manifest_sha256') = ?5",
+                        params![
+                            invalidation.created_at,
+                            approval.approval_id,
+                            approval.approval_sha256,
+                            invalidation.invalidation_id,
+                            invalidation.manifest_sha256,
+                        ],
+                        |row| row.get(0),
+                    )
+                    .map_err(sql_error)?;
+                if invalidation_audit_count != 1 {
+                    return Ok(false);
+                }
+            }
+            let audit_count: u32 = self
+                .connection
+                .query_row(
+                    "SELECT COUNT(*) FROM audit_events
+                     WHERE event_type = 'bid_decision_approval_recorded'
+                       AND aggregate_revision = ?1 AND created_at = ?2
+                       AND json_extract(payload_json, '$.change.approval_id') = ?3
+                       AND json_extract(payload_json, '$.change.approval_sha256') = ?4
+                       AND json_extract(payload_json, '$.change.decision') = ?5
+                       AND json_extract(payload_json, '$.change.package_id') = ?6
+                       AND json_extract(payload_json, '$.change.package_manifest_sha256') = ?7
+                       AND json_extract(payload_json, '$.change.package_version') = ?8",
+                    params![
+                        approval.tender_revision,
+                        approval.created_at,
+                        approval.approval_id,
+                        approval.approval_sha256,
+                        approval.decision.as_str(),
+                        approval.package_id,
+                        approval.package_manifest_sha256,
+                        approval.package_version.to_string(),
+                    ],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            if audit_count != 1 {
+                return Ok(false);
+            }
+            expected_hash.clone_from(&approval.approval_sha256);
+            previous_version = approval.package_version;
+        }
+        let expected_lifecycle = approvals.last().map_or_else(
+            || {
+                if package_count == 0 {
+                    TenderLifecyclePhase::Intake
+                } else {
+                    TenderLifecyclePhase::BidDecision
+                }
+            },
+            |approval| {
+                if approval.invalidation.is_some() {
+                    TenderLifecyclePhase::BidDecision
+                } else {
+                    approval.lifecycle_after
+                }
+            },
+        );
+        if let Some(terminal) = approvals.last().filter(|approval| {
+            approval.invalidation.is_none()
+                && matches!(
+                    approval.decision,
+                    BidDecisionApprovalDecision::Accept | BidDecisionApprovalDecision::Reject
+                )
+        }) {
+            let head: Option<(String, u32)> = self
+                .connection
+                .query_row(
+                    "SELECT package_id, current_version FROM bid_decision_package_heads",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(sql_error)?;
+            if head != Some((terminal.package_id.clone(), terminal.package_version)) {
+                return Ok(false);
+            }
+        }
+        if lifecycle_phase != expected_lifecycle {
+            return Ok(false);
+        }
         Ok(true)
     }
 }
@@ -2790,6 +5012,9 @@ pub(crate) fn bid_decision_package_review_target_is_open(
              ) AND NOT EXISTS(
                SELECT 1 FROM bid_decision_package_reviews
                WHERE package_id = ?1 AND package_version = ?2
+             ) AND NOT EXISTS(
+               SELECT 1 FROM bid_decision_approval_records
+               WHERE package_id = ?1 AND package_version = ?2
              )",
             params![package_id, version],
             |row| row.get(0),
@@ -2803,7 +5028,7 @@ pub(crate) fn bid_decision_package_review_target_is_current(
 ) -> Result<bool, TenderCommandError> {
     let (package_id, version) = exact_package_target(task)?;
     let package = store.inspect_bid_decision_package(package_id, version)?;
-    Ok(package.current && package.review.is_none())
+    Ok(package.current && package.review.is_none() && package.approval.is_none())
 }
 
 pub(crate) fn publish_bid_decision_package_review(
@@ -3016,4 +5241,27 @@ fn load_stored_bindings_with_check(
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
     Ok(bindings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn material_change_lineage_accepts_a_bounded_diff_larger_than_human_text_lists() {
+        let current = (0..33)
+            .map(|index| RecordInventoryObservation {
+                record: TenderRecordVersionReference {
+                    record_id: format!("{index:032x}"),
+                    version: 1,
+                },
+                kind: TenderRecordKind::Risk,
+                verification_status: VerificationStatus::Proposed,
+                trust_class: TenderRecordTrustClass::AiProposal,
+            })
+            .collect::<Vec<_>>();
+        let changed = changed_record_references(&[], &current);
+        assert_eq!(changed.len(), 33);
+        assert!(valid_material_change_record_count(&changed));
+    }
 }

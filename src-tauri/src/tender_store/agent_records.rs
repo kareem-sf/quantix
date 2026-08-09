@@ -28,8 +28,9 @@ use super::bid_decisions::{
 };
 use super::tender_records::{
     publish_tender_record_candidates, publish_tender_record_review,
-    tender_record_review_target_is_open, TenderRecordCandidateBatch, TenderRecordReviewCandidate,
-    RECORD_EXTRACTION_CAPABILITY, RECORD_REVIEW_CAPABILITY,
+    tender_record_candidates_fit_decision_inventory, tender_record_review_target_is_open,
+    TenderRecordCandidateBatch, TenderRecordReviewCandidate, RECORD_EXTRACTION_CAPABILITY,
+    RECORD_REVIEW_CAPABILITY,
 };
 use super::{
     append_audit_event, metadata_is_unsafe_storage_link, random_identifier, sql_error,
@@ -82,7 +83,7 @@ impl TenderStore {
         tender_id: &TenderId,
         retry_of_run_id: Option<&str>,
     ) -> Result<PreparedAgentRun, TenderCommandError> {
-        self.require_writable()?;
+        self.require_pre_bid_writable()?;
         let run_id = random_identifier(&self.connection)?;
         let application_home = self
             .root
@@ -373,7 +374,7 @@ impl TenderStore {
         prepared: &PreparedAgentRun,
         mut execution: ProviderExecution,
     ) -> Result<(), TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         if execution.state == AgentRunState::Running
             || (execution.state == AgentRunState::Completed
                 && (execution.failure.is_some() || execution.candidate_payload_json.is_none()))
@@ -384,6 +385,7 @@ impl TenderStore {
         let mut tender_record_candidate: Option<TenderRecordCandidateBatch> = None;
         let mut tender_record_review: Option<TenderRecordReviewCandidate> = None;
         let mut bid_package_review: Option<BidDecisionPackageReviewCandidate> = None;
+        let mut denied_record_publication_count = None;
         if execution.state == AgentRunState::Completed
             && prepared
                 .profile
@@ -600,6 +602,38 @@ impl TenderStore {
                     "Independent package review rejected because its exact target is no longer open".into();
             }
         }
+        if execution.state == AgentRunState::Completed
+            && tender_record_candidate.is_some()
+            && !tender_record_candidates_fit_decision_inventory(
+                &transaction,
+                tender_record_candidate
+                    .as_ref()
+                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            )?
+        {
+            denied_record_publication_count = tender_record_candidate
+                .as_ref()
+                .map(|candidate| candidate.records.len());
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Select a bounded material-change batch that keeps the exact Bid Decision inventory within its limit.",
+                Some("The candidate Tender Records would exceed the exact Bid Decision inventory limit."),
+            ));
+            execution.candidate_payload_json = None;
+            tender_record_candidate = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary =
+                    "Candidate Tender Records rejected because the decision inventory is full"
+                        .into();
+            }
+        }
         dispose_workspace(
             &self.root,
             &prepared.workspace,
@@ -649,6 +683,20 @@ impl TenderStore {
             }
         }
         let completed_at = sqlite_timestamp(&transaction)?;
+        if let Some(candidate_count) = denied_record_publication_count {
+            append_audit_event(
+                &transaction,
+                tender_id.as_str(),
+                "tender_record_publication_denied",
+                tender_revision,
+                json!({
+                    "candidate_record_count": candidate_count.to_string(),
+                    "reason": "bid_decision_record_inventory_limit",
+                    "run_id": prepared.run_id,
+                }),
+                &completed_at,
+            )?;
+        }
         if let Some(thread_ref) = execution.provider_thread_ref.as_deref() {
             transaction
                 .execute(
@@ -808,7 +856,7 @@ impl TenderStore {
         thread_ref: &str,
         resumed: bool,
     ) -> Result<(), TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -892,7 +940,7 @@ impl TenderStore {
         prepared: &PreparedAgentRun,
         thread_ref: &str,
     ) -> Result<(), TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         if prepared.provider_thread_to_archive.as_deref() != Some(thread_ref)
             || prepared.provider_thread_ref.is_some()
         {
@@ -948,7 +996,7 @@ impl TenderStore {
         run_id: &str,
         turn_ref: &str,
     ) -> Result<(), TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -987,7 +1035,7 @@ impl TenderStore {
         &mut self,
         run_id: &str,
     ) -> Result<(), TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1031,7 +1079,7 @@ impl TenderStore {
         event: &PendingProviderEvent,
         usage: &ProviderUsage,
     ) -> Result<(), TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         if !matches!(
             event.kind,
             ProviderEventKind::UsageObserved
@@ -1068,7 +1116,7 @@ impl TenderStore {
         run_id: &str,
         event: &PendingProviderEvent,
     ) -> Result<(), TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         if event.kind != ProviderEventKind::ControlRequestDenied {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
@@ -1139,7 +1187,7 @@ impl TenderStore {
         tender_id: &TenderId,
         command: RequestAgentAccessCommand,
     ) -> Result<AgentAccessRequestView, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1220,7 +1268,7 @@ impl TenderStore {
         command: ApproveAgentAccessCommand,
         run_is_active: bool,
     ) -> Result<AgentAccessRequestView, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1353,7 +1401,7 @@ impl TenderStore {
         correlation_id: &str,
         tool_name: &str,
     ) -> Result<bool, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let Some(definition) = bootstrap_tool_catalogue()
             .into_iter()
             .find(|tool| tool.name == tool_name)
@@ -1508,7 +1556,7 @@ impl TenderStore {
         tool_name: &str,
         succeeded: bool,
     ) -> Result<(), TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let definition = bootstrap_tool_catalogue()
             .into_iter()
             .find(|tool| tool.name == tool_name)
@@ -1594,7 +1642,7 @@ impl TenderStore {
         tender_id: &TenderId,
         command: ResolveIndeterminateAgentRunCommand,
     ) -> Result<AgentRunRecoveryDecision, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let rationale = command.rationale.trim().to_owned();
         let transaction = self
             .connection
@@ -1676,7 +1724,7 @@ impl TenderStore {
         tender_id: &TenderId,
         command: ResolveAgentAccessCommand,
     ) -> Result<AgentAccessRequestView, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1791,7 +1839,7 @@ impl TenderStore {
         tender_id: &TenderId,
         run_id: &str,
     ) -> Result<bool, TenderCommandError> {
-        self.require_writable()?;
+        self.require_change_intake_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -2096,7 +2144,7 @@ impl TenderStore {
         &mut self,
         tender_id: &TenderId,
     ) -> Result<(), TenderCommandError> {
-        self.require_writable()?;
+        self.require_storage_writable()?;
         let runs = {
             let mut statement = self
                 .connection

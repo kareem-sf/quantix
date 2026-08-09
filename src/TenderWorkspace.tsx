@@ -403,6 +403,7 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                     {tender.summary ? (
                       <small>
                         Revision {tender.summary.revision} ·{" "}
+                        {tender.summary.lifecycle_phase.replace(/_/g, " ")} ·{" "}
                         {tender.summary.audit_event_count} audit events
                       </small>
                     ) : (
@@ -428,6 +429,10 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                 <div>
                   <dt>Audit events</dt>
                   <dd>{selected.audit_event_count}</dd>
+                </div>
+                <div>
+                  <dt>Lifecycle</dt>
+                  <dd>{selected.lifecycle_phase.replace(/_/g, " ")}</dd>
                 </div>
                 <div>
                   <dt>Chain head</dt>
