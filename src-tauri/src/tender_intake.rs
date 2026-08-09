@@ -139,6 +139,14 @@ impl SourceRelationshipKind {
             Self::Replacement => "replacement",
         }
     }
+
+    pub(crate) fn parse(value: &str) -> Result<Self, TenderCommandError> {
+        match value {
+            "addendum" => Ok(Self::Addendum),
+            "replacement" => Ok(Self::Replacement),
+            _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

@@ -6,7 +6,7 @@ use std::{
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
@@ -354,6 +354,21 @@ pub(crate) struct BootstrapGrantRequest<'a> {
     pub issued_at: &'a str,
 }
 
+pub(crate) struct PreBidDataGrantRequest<'a> {
+    pub run_id: &'a str,
+    pub grant_id: String,
+    pub application_home: &'a Path,
+    pub tender_id: &'a str,
+    pub profile: &'a AgentProfileVersionView,
+    pub task: &'a TenderTaskView,
+    pub issued_at: &'a str,
+    pub data_scope: &'a str,
+    pub allowed_action: &'a str,
+    pub relative_path: &'a str,
+    pub view_id: &'a str,
+    pub payload: &'a Value,
+}
+
 pub(crate) fn derive_bootstrap_grant(
     request: BootstrapGrantRequest<'_>,
 ) -> Result<(PermissionGrant, PathBuf), TenderCommandError> {
@@ -477,6 +492,111 @@ pub(crate) fn derive_bootstrap_grant(
                 data_classifications: vec![DataClassification::TenderInternal],
                 allowed_actions: vec![PROPOSE_INTAKE_ACTION.into()],
                 allowed_tools: ceiling_allowed_tools,
+            },
+            resource_budget: request.task.resource_budget.clone(),
+            issued_at: request.issued_at.into(),
+            expires_at: request.task.deadline.clone(),
+        };
+        grant.thread_exposure = ThreadExposureSet::from_grant(&grant);
+        Ok(grant)
+    })();
+    match materialized {
+        Ok(grant) => Ok((grant, workspace)),
+        Err(error) => {
+            let _ = fs::remove_dir_all(&workspace);
+            Err(error)
+        }
+    }
+}
+
+pub(crate) fn derive_pre_bid_data_grant(
+    request: PreBidDataGrantRequest<'_>,
+) -> Result<(PermissionGrant, PathBuf), TenderCommandError> {
+    let expected_permissions = AgentRunPermissions {
+        data_scopes: vec![request.data_scope.into()],
+        data_classifications: vec![DataClassification::TenderInternal],
+        allowed_actions: vec![request.allowed_action.into()],
+        allowed_tools: Vec::new(),
+        network_allowed: false,
+        workspace_write_allowed: true,
+    };
+    if request.profile.permissions != expected_permissions
+        || request.task.permissions != expected_permissions
+        || request.profile.profile_id != request.task.profile_id
+        || request.profile.version != request.task.profile_version
+        || request.relative_path.contains(['/', '\\'])
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+
+    let workspace = request
+        .application_home
+        .join("staging")
+        .join(format!("agent-{}-{}", request.tender_id, request.run_id));
+    let inputs = workspace.join("inputs");
+    let working = workspace.join("working");
+    let outputs = workspace.join("outputs");
+    fs::create_dir(&workspace).map_err(store_unavailable)?;
+    let materialized = (|| {
+        fs::create_dir(&inputs).map_err(store_unavailable)?;
+        fs::create_dir(&working).map_err(store_unavailable)?;
+        fs::create_dir(&outputs).map_err(store_unavailable)?;
+        let payload = serde_json_canonicalizer::to_string(request.payload)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?
+            .into_bytes();
+        if payload.len() > 4 * 1024 * 1024 {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let relative_path = format!("inputs/{}", request.relative_path);
+        let path = workspace.join(&relative_path);
+        fs::write(&path, &payload).map_err(store_unavailable)?;
+        let mut permissions = fs::metadata(&path)
+            .map_err(store_unavailable)?
+            .permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).map_err(store_unavailable)?;
+
+        let view = DataViewManifest {
+            view_id: request.view_id.into(),
+            schema_version: 1,
+            relative_path,
+            sha256: Sha256::digest(&payload)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+            data_scope: request.data_scope.into(),
+            data_classification: DataClassification::TenderInternal,
+            exact_inputs: request.task.exact_inputs.clone(),
+        };
+        let mut grant = PermissionGrant {
+            grant_id: request.grant_id,
+            policy_version: PERMISSION_POLICY_VERSION,
+            capability_catalogue_version: CAPABILITY_CATALOGUE_VERSION,
+            work_plan_version: BOOTSTRAP_WORK_PLAN_VERSION,
+            profile_id: request.profile.profile_id.clone(),
+            profile_version: request.profile.version,
+            task_id: request.task.task_id.clone(),
+            purpose: request.task.objective.clone(),
+            data_scopes: expected_permissions.data_scopes.clone(),
+            data_classifications: expected_permissions.data_classifications.clone(),
+            allowed_actions: expected_permissions.allowed_actions.clone(),
+            typed_tools: Vec::new(),
+            network_allowed: false,
+            workspace_write_allowed: true,
+            data_views: vec![view],
+            thread_exposure: ThreadExposureSet::default(),
+            workspace: AgentRunWorkspaceManifest {
+                workspace_id: request.run_id.into(),
+                read_only_inputs: "inputs".into(),
+                working_area: "working".into(),
+                staged_outputs: "outputs".into(),
+            },
+            access_ceiling: PermissionCeiling {
+                exact_inputs: request.task.exact_inputs.clone(),
+                data_scopes: expected_permissions.data_scopes,
+                data_classifications: expected_permissions.data_classifications,
+                allowed_actions: expected_permissions.allowed_actions,
+                allowed_tools: Vec::new(),
             },
             resource_budget: request.task.resource_budget.clone(),
             issued_at: request.issued_at.into(),

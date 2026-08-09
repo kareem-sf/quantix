@@ -7,6 +7,12 @@ use std::{
 
 fn main() {
     if let Err(error) = run() {
+        if let Ok(executable) = env::current_exe() {
+            let _ = fs::write(
+                executable.with_extension("fixture-error"),
+                error.to_string(),
+            );
+        }
         eprintln!("runtime fixture failed: {error}");
         process::exit(29);
     }
@@ -427,15 +433,25 @@ fn run_agent_turn(
     if !matches!(thread_method, "thread/start" | "thread/resume") {
         return Err("expected thread start or resume".into());
     }
+    let is_record_scenario =
+        scenario.starts_with("record-extraction") || scenario.starts_with("record-review");
+    let dynamic_tools_are_exact = if is_record_scenario {
+        thread_request
+            .pointer("/params/dynamicTools")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(Vec::is_empty)
+    } else {
+        thread_request.pointer("/params/dynamicTools/0/name")
+            == Some(&serde_json::Value::String(
+                "quantix_read_tender_metadata".into(),
+            ))
+    };
     if thread_method == "thread/start"
         && (thread_request.pointer("/params/sandbox")
             != Some(&serde_json::Value::String("workspaceWrite".into()))
             || thread_request.pointer("/params/approvalPolicy")
                 != Some(&serde_json::Value::String("never".into()))
-            || thread_request.pointer("/params/dynamicTools/0/name")
-                != Some(&serde_json::Value::String(
-                    "quantix_read_tender_metadata".into(),
-                )))
+            || !dynamic_tools_are_exact)
     {
         return Err("thread lacks its default-deny sandbox contract".into());
     }
@@ -524,7 +540,15 @@ fn run_agent_turn(
             .ok_or("turn cwd")?,
     );
     let workspace = working.parent().ok_or("Agent Run Workspace")?;
-    let input = workspace.join("inputs").join("tender-metadata-v1.json");
+    let input = workspace
+        .join("inputs")
+        .join(if scenario.starts_with("record-extraction") {
+            "tender-evidence-v1.json"
+        } else if scenario.starts_with("record-review") {
+            "tender-record-review-v1.json"
+        } else {
+            "tender-metadata-v1.json"
+        });
     let output = workspace.join("outputs");
     if working.file_name().and_then(|name| name.to_str()) != Some("working")
         || turn_request.pointer("/params/sandboxPolicy/writableRoots/0")
@@ -562,6 +586,7 @@ fn run_agent_turn(
     }
     let tender_name = provider_data_view
         .pointer("/tender/name")
+        .or_else(|| provider_data_view.pointer("/record/title"))
         .and_then(serde_json::Value::as_str)
         .ok_or("provider-visible Tender name")?
         .to_owned();
@@ -675,7 +700,7 @@ fn run_agent_turn(
         }
         return Ok(false);
     }
-    if scenario == "malformed-after-turn" {
+    if scenario.ends_with("malformed-after-turn") {
         println!("not-json");
         io::stdout().flush()?;
         return Ok(false);
@@ -803,6 +828,12 @@ fn run_agent_turn(
             | "model-second-page"
             | "usage-stream"
             | "output-invalid"
+            | "record-extraction"
+            | "record-extraction-delayed"
+            | "record-extraction-duplicate-citation"
+            | "record-extraction-invalid"
+            | "record-review"
+            | "record-review-delayed"
     ) {
         return Err(format!("unknown agent fixture scenario {scenario}").into());
     }
@@ -1129,6 +1160,55 @@ fn run_agent_turn(
     }
     let candidate = if scenario == "output-invalid" {
         serde_json::json!({ "summary": "Missing the required next action." })
+    } else if scenario == "record-extraction-delayed" {
+        fs::write(
+            executable.with_extension("record-output-waiting"),
+            b"waiting",
+        )?;
+        for _ in 0..2_000 {
+            if executable.with_extension("record-output-release").is_file() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        if !executable.with_extension("record-output-release").is_file() {
+            return Err("timed out waiting to release Tender Record output".into());
+        }
+        record_extraction_candidate(provider_data_view)?
+    } else if scenario == "record-extraction" {
+        record_extraction_candidate(provider_data_view)?
+    } else if scenario == "record-extraction-invalid" {
+        let mut candidate = record_extraction_candidate(provider_data_view)?;
+        candidate["records"][0]["fields"][0]["evidence"][0]["ordinal"] = serde_json::json!(999_999);
+        candidate
+    } else if scenario == "record-extraction-duplicate-citation" {
+        let mut candidate = record_extraction_candidate(provider_data_view)?;
+        let first = candidate["records"][2]["contradictions"][0]["evidence"][0].clone();
+        candidate["records"][2]["contradictions"][0]["evidence"][1] = first;
+        candidate
+    } else if scenario == "record-review-delayed" {
+        fs::write(
+            executable.with_extension("record-review-waiting"),
+            b"waiting",
+        )?;
+        for _ in 0..2_000 {
+            if executable.with_extension("record-review-release").is_file() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        if !executable.with_extension("record-review-release").is_file() {
+            return Err("timed out waiting to release Tender Record review".into());
+        }
+        serde_json::json!({
+            "outcome": "verified",
+            "rationale": "Every material field resolves to the exact supplied authoritative Evidence."
+        })
+    } else if scenario == "record-review" {
+        serde_json::json!({
+            "outcome": "verified",
+            "rationale": "Every material field resolves to the exact supplied authoritative Evidence."
+        })
     } else {
         serde_json::json!({
             "summary": format!("{tender_name} is ready for controlled intake analysis."),
@@ -1170,6 +1250,161 @@ fn run_agent_turn(
         }
     }))?;
     Ok(true)
+}
+
+fn record_extraction_candidate(
+    data_view: &serde_json::Value,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let evidence = data_view
+        .get("evidence")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("Tender Evidence Data View")?;
+    let authoritative_item = evidence
+        .iter()
+        .find(|item| {
+            item.pointer("/location/language")
+                .and_then(serde_json::Value::as_str)
+                == Some("arabic")
+                && item
+                    .pointer("/location/translated_text")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+        })
+        .or_else(|| evidence.first())
+        .ok_or("authoritative record evidence")?;
+    let authoritative = authoritative_item
+        .get("reference")
+        .cloned()
+        .ok_or("authoritative record reference")?;
+    let authoritative_text = authoritative_item
+        .pointer("/location/original_text")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("authoritative original text")?;
+    let deadline_evidence = evidence
+        .iter()
+        .filter(|item| {
+            item.pointer("/location/original_text")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|text| text.contains("Submission deadline"))
+        })
+        .filter_map(|item| item.get("reference").cloned())
+        .collect::<Vec<_>>();
+    let deadline = deadline_evidence
+        .first()
+        .cloned()
+        .unwrap_or_else(|| authoritative.clone());
+    let conflicting_deadline = deadline_evidence
+        .last()
+        .cloned()
+        .unwrap_or_else(|| authoritative.clone());
+    let mut candidate = serde_json::json!({
+        "records": [
+            {
+                "stable_key": "authoritative_notice",
+                "kind": "clause",
+                "title": "Exact authoritative notice",
+                "fields": [{
+                    "name": "text",
+                    "value": authoritative_text,
+                    "basis_kind": "evidence",
+                    "basis_reference": null,
+                    "basis_description": null,
+                    "original_expression": null,
+                    "normalized_value": null,
+                    "timezone": null,
+                    "uncertainty": null,
+                    "evidence": [authoritative.clone()]
+                }],
+                "contradictions": []
+            },
+            {
+                "stable_key": "bid_security_required",
+                "kind": "requirement",
+                "title": "Bid security requirement",
+                "fields": [{
+                    "name": "requirement",
+                    "value": "Bid security is required.",
+                    "basis_kind": "evidence",
+                    "basis_reference": null,
+                    "basis_description": null,
+                    "original_expression": null,
+                    "normalized_value": null,
+                    "timezone": null,
+                    "uncertainty": null,
+                    "evidence": [authoritative]
+                }],
+                "contradictions": []
+            },
+            {
+                "stable_key": "submission_deadline",
+                "kind": "deadline",
+                "title": "Submission deadline",
+                "fields": [{
+                    "name": "deadline",
+                    "value": "15 May 2026 at 14:00 Cairo time",
+                    "basis_kind": "evidence",
+                    "basis_reference": null,
+                    "basis_description": null,
+                    "original_expression": "15 May 2026 at 14:00 Cairo time",
+                    "normalized_value": "2026-05-15T14:00:00+03:00",
+                    "timezone": "Africa/Cairo",
+                    "uncertainty": "A conflicting supplied expression requires resolution.",
+                    "evidence": [deadline]
+                }],
+                "contradictions": [{
+                    "field_name": "deadline",
+                    "summary": "The supplied Evidence contains conflicting submission dates.",
+                    "evidence": [deadline, conflicting_deadline]
+                }]
+            },
+            {
+                "stable_key": "crane_capacity",
+                "kind": "assumption",
+                "title": "Crane capacity remains unknown",
+                "fields": [{
+                    "name": "capacity",
+                    "value": null,
+                    "basis_kind": "assumption",
+                    "basis_reference": "crane_capacity",
+                    "basis_description": "No supplied Evidence states the required crane capacity.",
+                    "original_expression": null,
+                    "normalized_value": null,
+                    "timezone": null,
+                    "uncertainty": "Unresolved evidence gap",
+                    "evidence": []
+                }],
+                "contradictions": []
+            }
+        ]
+    });
+    if let Some(authority) = data_view
+        .get("authorities")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|authorities| authorities.first())
+    {
+        candidate["records"]
+            .as_array_mut()
+            .ok_or("Tender Record candidate records")?
+            .push(serde_json::json!({
+                "stable_key": "engineer_entry_basis",
+                "kind": "project_characteristic",
+                "title": "Attributable Engineer entry",
+                "fields": [{
+                    "name": "engineer_value",
+                    "value": authority.get("value").cloned().ok_or("authority value")?,
+                    "basis_kind": authority.get("kind").cloned().ok_or("authority kind")?,
+                    "basis_reference": authority.get("authority_id").cloned().ok_or("authority id")?,
+                    "basis_description": authority.get("description").cloned().ok_or("authority description")?,
+                    "original_expression": null,
+                    "normalized_value": null,
+                    "timezone": null,
+                    "uncertainty": null,
+                    "evidence": []
+                }],
+                "contradictions": []
+            }));
+    }
+    Ok(candidate)
 }
 
 fn read_json_request(
@@ -1467,11 +1702,18 @@ fn run_docling(arguments: &[std::ffi::OsString]) -> Result<(), Box<dyn std::erro
         )?;
         return Ok(());
     }
-    let document = match input_format {
-        "pdf" => bilingual_pdf_document(name),
-        "docx" => bilingual_docx_document(name),
-        "xlsx" => bilingual_xlsx_document(name),
-        _ => return Err(format!("unsupported fixture input format {input_format}").into()),
+    let document = if source_bytes
+        .windows(b"TENDER_RECORD_GOLDEN".len())
+        .any(|window| window == b"TENDER_RECORD_GOLDEN")
+    {
+        tender_record_pdf_document(name)
+    } else {
+        match input_format {
+            "pdf" => bilingual_pdf_document(name),
+            "docx" => bilingual_docx_document(name),
+            "xlsx" => bilingual_xlsx_document(name),
+            _ => return Err(format!("unsupported fixture input format {input_format}").into()),
+        }
     };
     fs::write(
         output.join(format!("{name}.json")),
@@ -1595,6 +1837,99 @@ fn bilingual_pdf_document(name: &str) -> serde_json::Value {
                 ]
             }
         }],
+        "pages": {
+            "1": { "page_no": 1, "size": { "width": 200, "height": 100 } },
+            "2": { "page_no": 2, "size": { "width": 200, "height": 100 } }
+        }
+    })
+}
+
+fn tender_record_pdf_document(name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "schema_name": "DoclingDocument",
+        "version": "1.10.0",
+        "name": name,
+        "origin": { "mimetype": "application/pdf", "filename": format!("{name}.pdf") },
+        "body": {
+            "self_ref": "#/body",
+            "children": [{ "$ref": "#/groups/0" }]
+        },
+        "groups": [{
+            "self_ref": "#/groups/0",
+            "parent": { "$ref": "#/body" },
+            "children": [
+                { "$ref": "#/texts/0" },
+                { "$ref": "#/texts/1" },
+                { "$ref": "#/texts/2" },
+                { "$ref": "#/texts/3" },
+                { "$ref": "#/texts/4" }
+            ],
+            "name": "Tender Conditions",
+            "label": "section"
+        }],
+        "texts": [
+            {
+                "self_ref": "#/texts/0",
+                "parent": { "$ref": "#/groups/0" },
+                "label": "section_header",
+                "orig": "Tender Conditions",
+                "text": "Tender Conditions",
+                "prov": [{
+                    "page_no": 1,
+                    "charspan": [0, 17],
+                    "bbox": { "l": 10, "t": 90, "r": 190, "b": 70, "coord_origin": "BOTTOMLEFT" }
+                }]
+            },
+            {
+                "self_ref": "#/texts/1",
+                "parent": { "$ref": "#/groups/0" },
+                "label": "text",
+                "orig": "Bid security is required.",
+                "text": "Bid security is required.",
+                "prov": [{
+                    "page_no": 1,
+                    "charspan": [0, 25],
+                    "bbox": { "l": 10, "t": 65, "r": 190, "b": 45, "coord_origin": "BOTTOMLEFT" }
+                }]
+            },
+            {
+                "self_ref": "#/texts/2",
+                "parent": { "$ref": "#/groups/0" },
+                "label": "text",
+                "orig": "\u{0636}\u{0645}\u{0627}\u{0646} \u{0627}\u{0644}\u{0639}\u{0637}\u{0627}\u{0621} \u{0645}\u{0637}\u{0644}\u{0648}\u{0628}.",
+                "text": "Bid security is required.",
+                "prov": [{
+                    "page_no": 2,
+                    "charspan": [0, 19],
+                    "bbox": { "l": 10, "t": 90, "r": 190, "b": 70, "coord_origin": "BOTTOMLEFT" }
+                }]
+            },
+            {
+                "self_ref": "#/texts/3",
+                "parent": { "$ref": "#/groups/0" },
+                "label": "text",
+                "orig": "Submission deadline: 15 May 2026 at 14:00 Cairo time.",
+                "text": "Submission deadline: 15 May 2026 at 14:00 Cairo time.",
+                "prov": [{
+                    "page_no": 1,
+                    "charspan": [0, 57],
+                    "bbox": { "l": 10, "t": 40, "r": 190, "b": 25, "coord_origin": "BOTTOMLEFT" }
+                }]
+            },
+            {
+                "self_ref": "#/texts/4",
+                "parent": { "$ref": "#/groups/0" },
+                "label": "text",
+                "orig": "Submission deadline: 16 May 2026 at 14:00 Cairo time.",
+                "text": "Submission deadline: 16 May 2026 at 14:00 Cairo time.",
+                "prov": [{
+                    "page_no": 2,
+                    "charspan": [0, 57],
+                    "bbox": { "l": 10, "t": 65, "r": 190, "b": 45, "coord_origin": "BOTTOMLEFT" }
+                }]
+            }
+        ],
+        "tables": [],
         "pages": {
             "1": { "page_no": 1, "size": { "width": 200, "height": 100 } },
             "2": { "page_no": 2, "size": { "width": 200, "height": 100 } }

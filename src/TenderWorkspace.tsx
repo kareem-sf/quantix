@@ -14,6 +14,7 @@ import { AgentRunOffice } from "./AgentRunOffice";
 import { DocumentEvidenceOffice } from "./DocumentEvidenceOffice";
 import { TenderBackupPanel } from "./TenderBackupPanel";
 import { TenderRecoveryPanel } from "./TenderRecoveryPanel";
+import { TenderRecordsPanel } from "./TenderRecordsPanel";
 import {
   chooseAndImportTenderPackage,
   confirmSourceRelationship,
@@ -649,6 +650,13 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                   </form>
                 ) : null}
               </section>
+              <TenderRecordsPanel
+                key={`records-${selected.tender_id}`}
+                tenderId={selected.tender_id}
+                runtimeReady={runtimeReady}
+                register={documentRegister}
+                reportCommandFailure={reportCommandFailure}
+              />
             </>
           ) : recovery ? (
             <>

@@ -2,20 +2,54 @@ use serde_json::json;
 
 use super::{
     permissions::TENDER_METADATA_TOOL_NAME, AgentProfileVersionView, AgentResourceBudget,
-    AgentRunPermissions, AgentTaskInputReference, DataClassification, TenderTaskView,
+    AgentRunPermissions, AgentTaskInputReference, BootstrapRole, DataClassification,
+    TenderTaskView,
 };
 
-pub(crate) fn bootstrap_profile(profile_id: String) -> AgentProfileVersionView {
+pub(crate) fn bootstrap_profile(
+    role: BootstrapRole,
+    profile_id: String,
+) -> AgentProfileVersionView {
+    let (identity, profession, capabilities, instructions, review_policy) = match role {
+        BootstrapRole::TenderOfficeCoordinator => (
+            "Tender Office Coordinator",
+            "Tender Coordination Engineer",
+            vec!["coordinate_pre_bid_analysis".into()],
+            "Coordinate only restricted pre-bid analysis, dependencies, deadlines, and escalations. Make no Tendering Manager decision and activate no production work.",
+            "Coordinator output remains Proposed and cannot replace independent review or an Engineer User decision.",
+        ),
+        BootstrapRole::DocumentController => (
+            "Document Controller",
+            "Tender Document Controller",
+            vec!["control_tender_sources".into()],
+            "Control exact Source Artifact Versions, relationships, the Document Register, and evidence locations without deciding technical or commercial meaning.",
+            "Document-control output remains Proposed where it interprets content and requires independent review before reliance.",
+        ),
+        BootstrapRole::TenderAnalyst => (
+            "Bootstrap Tender Analyst",
+            "Tender Engineer",
+            vec!["analyze_tender_intake_readiness".into()],
+            "Assess only the supplied exact Tender revision and propose the next controlled intake action. State uncertainty explicitly and make no approval decision.",
+            "Independent review is required before this Proposed result can support Tender work.",
+        ),
+        BootstrapRole::IndependentReviewer => (
+            "Independent Reviewer",
+            "Independent Tender Reviewer",
+            vec!["independently_review_pre_bid_analysis".into()],
+            "Review exact proposed pre-bid records produced by another Agent Profile. Do not edit the target, close findings, or approve.",
+            "Review outcomes bind exact target versions and remain non-approving recommendations to the Engineer User.",
+        ),
+    };
     AgentProfileVersionView {
         profile_id,
         version: 1,
-        identity: "Bootstrap Tender Analyst".into(),
-        profession: "Tender Engineer".into(),
-        capabilities: vec!["analyze_tender_intake_readiness".into()],
-        instructions: "Assess only the supplied exact Tender revision and propose the next controlled intake action. State uncertainty explicitly and make no approval decision.".into(),
+        identity: identity.into(),
+        profession: profession.into(),
+        capabilities,
+        instructions: instructions.into(),
         output_contract_json: bootstrap_output_contract(),
-        review_policy: "Independent review is required before this Proposed result can support Tender work.".into(),
-        permissions: bootstrap_permissions(),
+        review_policy: review_policy.into(),
+        permissions: bootstrap_permissions(role),
         resource_budget: bootstrap_resource_budget(),
     }
 }
@@ -48,12 +82,34 @@ pub(crate) fn bootstrap_task(
     }
 }
 
-fn bootstrap_permissions() -> AgentRunPermissions {
+fn bootstrap_permissions(role: BootstrapRole) -> AgentRunPermissions {
+    let (data_scopes, allowed_actions, allowed_tools) = match role {
+        BootstrapRole::TenderOfficeCoordinator => (
+            vec!["tender_analysis".into()],
+            vec!["coordinate_pre_bid_analysis".into()],
+            Vec::new(),
+        ),
+        BootstrapRole::DocumentController => (
+            vec!["tender_sources".into()],
+            vec!["control_tender_sources".into()],
+            Vec::new(),
+        ),
+        BootstrapRole::TenderAnalyst => (
+            vec!["tender_metadata".into()],
+            vec!["propose_intake_readiness".into()],
+            vec![TENDER_METADATA_TOOL_NAME.into()],
+        ),
+        BootstrapRole::IndependentReviewer => (
+            vec!["tender_analysis".into()],
+            vec!["review_pre_bid_analysis".into()],
+            Vec::new(),
+        ),
+    };
     AgentRunPermissions {
-        data_scopes: vec!["tender_metadata".into()],
+        data_scopes,
         data_classifications: vec![DataClassification::TenderInternal],
-        allowed_actions: vec!["propose_intake_readiness".into()],
-        allowed_tools: vec![TENDER_METADATA_TOOL_NAME.into()],
+        allowed_actions,
+        allowed_tools,
         network_allowed: false,
         workspace_write_allowed: true,
     }

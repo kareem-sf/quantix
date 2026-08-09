@@ -13,13 +13,19 @@ use crate::agent_runtime::{
     },
     AccessApproval, AccessRequest, AgentAccessRequestStatus, AgentAccessRequestView,
     AgentProfileVersionView, AgentRunInspection, AgentRunRecoveryDecision,
-    AgentRunRecoveryDisposition, AgentRunState, ApproveAgentAccessCommand, DataClassification,
-    PendingProviderEvent, PermissionGrant, PreparedAgentRun, ProposedAgentResult, ProviderEvent,
-    ProviderEventKind, ProviderExecution, ProviderFailure, ProviderFailureCategory, ProviderUsage,
-    RequestAgentAccessCommand, ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand,
-    TenderTaskView, ThreadExposureSet, VerificationStatus,
+    AgentRunRecoveryDisposition, AgentRunState, ApproveAgentAccessCommand, BootstrapAuthority,
+    BootstrapRole, BootstrapTeamMember, DataClassification, PendingProviderEvent, PermissionGrant,
+    PreparedAgentRun, ProposedAgentResult, ProviderEvent, ProviderEventKind, ProviderExecution,
+    ProviderFailure, ProviderFailureCategory, ProviderUsage, RequestAgentAccessCommand,
+    ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand, TenderTaskView,
+    ThreadExposureSet, VerificationStatus,
 };
 
+use super::tender_records::{
+    publish_tender_record_candidates, publish_tender_record_review,
+    tender_record_review_target_is_open, TenderRecordCandidateBatch, TenderRecordReviewCandidate,
+    RECORD_EXTRACTION_CAPABILITY, RECORD_REVIEW_CAPABILITY,
+};
 use super::{
     append_audit_event, metadata_is_unsafe_storage_link, random_identifier, sql_error,
     sqlite_timestamp, store_unavailable, TenderCommandError, TenderErrorCode, TenderId,
@@ -32,7 +38,40 @@ const MAX_PROVIDER_EVENTS_PER_RUN: usize = 10_000;
 const MAX_PROVIDER_EVENT_FIELD_BYTES: u64 = 64 * 1024;
 const MAX_PROVIDER_EVENT_BYTES_PER_RUN: u64 = 16 * 1024 * 1024;
 
+fn profile_supports_linked_retry(profile: &AgentProfileVersionView) -> bool {
+    !profile.capabilities.iter().any(|capability| {
+        matches!(
+            capability.as_str(),
+            RECORD_EXTRACTION_CAPABILITY | RECORD_REVIEW_CAPABILITY
+        )
+    })
+}
+
 impl TenderStore {
+    pub(crate) fn inspect_bootstrap_team(
+        &self,
+    ) -> Result<Vec<BootstrapTeamMember>, TenderCommandError> {
+        BootstrapRole::ALL
+            .into_iter()
+            .map(|role| {
+                let profile_id: String = self
+                    .connection
+                    .query_row(
+                        "SELECT profile_id FROM agent_profiles WHERE stable_identity = ?1",
+                        [role.stable_identity()],
+                        |row| row.get(0),
+                    )
+                    .map_err(sql_error)?;
+                Ok(BootstrapTeamMember {
+                    role,
+                    authority: BootstrapAuthority::PreBidAnalysis,
+                    active: true,
+                    profile: load_profile(&self.connection, (profile_id, 1))?,
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn prepare_bootstrap_agent_run(
         &mut self,
         tender_id: &TenderId,
@@ -152,8 +191,16 @@ impl TenderStore {
                 let profile = if let Some(profile_id) = profile_id {
                     load_profile(&transaction, (profile_id, 1))?
                 } else {
-                    let profile = bootstrap_profile(random_identifier(&transaction)?);
-                    insert_profile(&transaction, &profile, &created_at)?;
+                    let profile = bootstrap_profile(
+                        BootstrapRole::TenderAnalyst,
+                        random_identifier(&transaction)?,
+                    );
+                    insert_profile(
+                        &transaction,
+                        BootstrapRole::TenderAnalyst.stable_identity(),
+                        &profile,
+                        &created_at,
+                    )?;
                     profile
                 };
                 let deadline: String = transaction
@@ -329,6 +376,85 @@ impl TenderStore {
         {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
+        let mut tender_record_candidate: Option<TenderRecordCandidateBatch> = None;
+        let mut tender_record_review: Option<TenderRecordReviewCandidate> = None;
+        if execution.state == AgentRunState::Completed
+            && prepared
+                .profile
+                .capabilities
+                .iter()
+                .any(|capability| capability == RECORD_EXTRACTION_CAPABILITY)
+        {
+            let validation = execution
+                .candidate_payload_json
+                .as_deref()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                .and_then(|payload| self.validate_tender_record_candidate(&prepared.task, payload));
+            match validation {
+                Ok(candidate) => tender_record_candidate = Some(candidate),
+                Err(_) => {
+                    execution.state = AgentRunState::Failed;
+                    execution.failure = Some(ProviderFailure::new(
+                        ProviderFailureCategory::OutputInvalid,
+                        true,
+                        "Run the Tender Record extraction again with complete exact provenance.",
+                        Some("The candidate Tender Records failed Quantix provenance validation."),
+                    ));
+                    execution.candidate_payload_json = None;
+                    if let Some(event) = execution
+                        .events
+                        .iter_mut()
+                        .rev()
+                        .find(|event| event.kind == ProviderEventKind::Terminal)
+                    {
+                        event.summary =
+                            "Candidate Tender Records failed provenance validation".into();
+                    }
+                }
+            }
+        }
+        if execution.state == AgentRunState::Completed
+            && prepared
+                .profile
+                .capabilities
+                .iter()
+                .any(|capability| capability == RECORD_REVIEW_CAPABILITY)
+        {
+            let validation = execution
+                .candidate_payload_json
+                .as_deref()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                .and_then(|payload| {
+                    self.validate_tender_record_review_candidate(
+                        &prepared.task,
+                        &prepared.profile.profile_id,
+                        payload,
+                    )
+                });
+            match validation {
+                Ok(candidate) => tender_record_review = Some(candidate),
+                Err(_) => {
+                    execution.state = AgentRunState::Failed;
+                    execution.failure = Some(ProviderFailure::new(
+                        ProviderFailureCategory::OutputInvalid,
+                        true,
+                        "Review the exact Tender Record again without filling provenance gaps.",
+                        Some(
+                            "The independent review outcome failed Quantix provenance validation.",
+                        ),
+                    ));
+                    execution.candidate_payload_json = None;
+                    if let Some(event) = execution
+                        .events
+                        .iter_mut()
+                        .rev()
+                        .find(|event| event.kind == ProviderEventKind::Terminal)
+                    {
+                        event.summary = "Independent review failed provenance validation".into();
+                    }
+                }
+            }
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -349,6 +475,8 @@ impl TenderStore {
                 Some("The Engineer User interrupted the Agent Run."),
             ));
             execution.candidate_payload_json = None;
+            tender_record_candidate = None;
+            tender_record_review = None;
             if let Some(event) = execution
                 .events
                 .iter_mut()
@@ -356,6 +484,29 @@ impl TenderStore {
                 .find(|event| event.kind == ProviderEventKind::Terminal)
             {
                 event.summary = "Provider outcome discarded after Engineer interruption".into();
+            }
+        }
+        if execution.state == AgentRunState::Completed
+            && tender_record_review.is_some()
+            && !tender_record_review_target_is_open(&transaction, &prepared.task)?
+        {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Inspect the current exact Tender Record and its existing decision.",
+                Some("The review target was decided or superseded before review publication."),
+            ));
+            execution.candidate_payload_json = None;
+            tender_record_review = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary =
+                    "Independent review rejected because its exact target is no longer open".into();
             }
         }
         dispose_workspace(
@@ -371,6 +522,40 @@ impl TenderStore {
                 |row| row.get(0),
             )
             .map_err(sql_error)?;
+        let task_tender_revision = prepared
+            .task
+            .exact_inputs
+            .iter()
+            .find(|input| input.kind == "tender_revision" && input.reference == tender_id.as_str())
+            .map(|input| input.version);
+        if execution.state == AgentRunState::Completed
+            && prepared
+                .profile
+                .capabilities
+                .iter()
+                .any(|capability| capability == RECORD_EXTRACTION_CAPABILITY)
+            && task_tender_revision.is_some_and(|version| version != tender_revision)
+        {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                true,
+                "Run the task again against the current exact Tender revision.",
+                Some("The Agent Run output became stale before canonical publication."),
+            ));
+            execution.candidate_payload_json = None;
+            tender_record_candidate = None;
+            tender_record_review = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary =
+                    "Agent Run output rejected because its Tender revision is stale".into();
+            }
+        }
         let completed_at = sqlite_timestamp(&transaction)?;
         if let Some(thread_ref) = execution.provider_thread_ref.as_deref() {
             transaction
@@ -466,6 +651,33 @@ impl TenderStore {
         } else {
             None
         };
+        if let Some(candidate) = tender_record_candidate.as_ref() {
+            if result_id.is_none() {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            publish_tender_record_candidates(
+                &transaction,
+                tender_id,
+                tender_revision,
+                &prepared.run_id,
+                candidate,
+                &completed_at,
+            )?;
+        }
+        if let Some(candidate) = tender_record_review.as_ref() {
+            if result_id.is_none() {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            publish_tender_record_review(
+                &transaction,
+                tender_id,
+                tender_revision,
+                &prepared.run_id,
+                &prepared.task,
+                candidate,
+                &completed_at,
+            )?;
+        }
         append_audit_event(
             &transaction,
             tender_id.as_str(),
@@ -1297,6 +1509,12 @@ impl TenderStore {
             .map_err(sql_error)?;
         let task_id =
             task_id.ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let profile = load_profile(&transaction, task_profile(&transaction, &task_id)?)?;
+        if command.disposition == AgentRunRecoveryDisposition::RetryTask
+            && !profile_supports_linked_retry(&profile)
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
         let decided_at = sqlite_timestamp(&transaction)?;
         if transaction
             .execute(
@@ -1739,10 +1957,18 @@ impl TenderStore {
         if recovery_decision.is_some() && state != AgentRunState::Indeterminate {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
+        let linked_retry_supported = profile_supports_linked_retry(&profile);
+        if recovery_decision.as_ref().is_some_and(|decision| {
+            decision.disposition == AgentRunRecoveryDisposition::RetryTask
+                && !linked_retry_supported
+        }) {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
         check()?;
         Ok(AgentRunInspection {
             run_id: run_id.to_owned(),
             retry_of_run_id: row.retry_of_run_id,
+            linked_retry_supported,
             state,
             profile,
             task,
@@ -1945,8 +2171,9 @@ struct RawTenderTask {
     resource_budget_json: String,
 }
 
-fn insert_profile(
+pub(super) fn insert_profile(
     transaction: &rusqlite::Transaction<'_>,
+    stable_identity: &str,
     profile: &AgentProfileVersionView,
     created_at: &str,
 ) -> Result<(), TenderCommandError> {
@@ -1954,9 +2181,17 @@ fn insert_profile(
         .execute(
             "INSERT INTO agent_profiles (profile_id, stable_identity, created_at)
              VALUES (?1, ?2, ?3)",
-            params![profile.profile_id, BOOTSTRAP_STABLE_IDENTITY, created_at],
+            params![profile.profile_id, stable_identity, created_at],
         )
         .map_err(sql_error)?;
+    insert_profile_version(transaction, profile, created_at)
+}
+
+pub(super) fn insert_profile_version(
+    transaction: &rusqlite::Transaction<'_>,
+    profile: &AgentProfileVersionView,
+    created_at: &str,
+) -> Result<(), TenderCommandError> {
     transaction
         .execute(
             "INSERT INTO agent_profile_versions (
@@ -1982,7 +2217,7 @@ fn insert_profile(
     Ok(())
 }
 
-fn insert_task(
+pub(super) fn insert_task(
     transaction: &rusqlite::Transaction<'_>,
     task: &TenderTaskView,
     created_at: &str,
@@ -2041,7 +2276,7 @@ fn exact_tender_revision(
     }
 }
 
-fn load_profile(
+pub(super) fn load_profile(
     connection: &rusqlite::Connection,
     key: (String, u32),
 ) -> Result<AgentProfileVersionView, TenderCommandError> {
@@ -2082,7 +2317,7 @@ fn load_profile(
     })
 }
 
-fn load_task(
+pub(super) fn load_task(
     connection: &rusqlite::Connection,
     task_id: &str,
 ) -> Result<TenderTaskView, TenderCommandError> {
@@ -2336,7 +2571,7 @@ fn load_access_requests(
         .collect()
 }
 
-fn load_thread_exposure(
+pub(super) fn load_thread_exposure(
     connection: &rusqlite::Connection,
     thread_ref: &str,
 ) -> Result<ThreadExposureSet, TenderCommandError> {
@@ -2377,7 +2612,7 @@ fn next_provider_event_sequence(
         .map_err(sql_error)
 }
 
-fn ensure_agent_run_capacity(
+pub(super) fn ensure_agent_run_capacity(
     transaction: &rusqlite::Transaction<'_>,
 ) -> Result<(), TenderCommandError> {
     let run_count: i64 = transaction
@@ -2453,7 +2688,7 @@ fn ensure_provider_event_capacity(
     Ok(())
 }
 
-fn insert_event(
+pub(super) fn insert_event(
     transaction: &rusqlite::Transaction<'_>,
     run_id: &str,
     sequence: u32,

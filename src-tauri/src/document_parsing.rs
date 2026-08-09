@@ -938,11 +938,12 @@ impl<'a> ExtractionState<'a> {
         context: &StructureContext,
     ) -> Result<(), ParseExceptionCode> {
         let label = required_str(text, "label")?;
+        let rendered_text = required_str(text, "text")?;
         let original_text = text
             .get("orig")
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
-            .unwrap_or(required_str(text, "text")?)
+            .unwrap_or(rendered_text)
             .to_owned();
         if original_text.trim().is_empty() {
             return Ok(());
@@ -955,6 +956,9 @@ impl<'a> ExtractionState<'a> {
         };
         let provenance = evidence_provenance(text, self.pages)?;
         let (language, direction) = classify_text(&original_text);
+        let translated_text = (rendered_text != original_text
+            && classify_text(rendered_text).0 != language)
+            .then(|| rendered_text.to_owned());
         self.locations.push(EvidenceLocation {
             ordinal: next_ordinal(&self.locations)?,
             kind,
@@ -967,7 +971,7 @@ impl<'a> ExtractionState<'a> {
             sheet_name: context.sheet_name.clone(),
             cell_range: None,
             original_text,
-            translated_text: None,
+            translated_text,
             language,
             direction,
         });

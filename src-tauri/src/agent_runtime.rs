@@ -15,7 +15,12 @@ use ts_rs::TS;
 
 use crate::{
     process_supervisor::{ProcessError, ProcessSpec, ProcessTermination, SupervisedConversation},
-    tender_store::{require_setup, TenderCommandError, TenderErrorCode, TenderId, TenderStore},
+    tender_store::{
+        require_setup, CreateTenderEngineerEntryCommand, DecideTenderRecordCommand,
+        RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, TenderCommandError,
+        TenderErrorCode, TenderId, TenderRecordAuthority, TenderRecordDecisionResult,
+        TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult, TenderStore,
+    },
     QuantixHost,
 };
 
@@ -224,6 +229,54 @@ impl AgentRunState {
 #[ts(export)]
 pub enum VerificationStatus {
     Proposed,
+    Verified,
+    Rejected,
+    Stale,
+    Superseded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum BootstrapRole {
+    TenderOfficeCoordinator,
+    DocumentController,
+    TenderAnalyst,
+    IndependentReviewer,
+}
+
+impl BootstrapRole {
+    pub(crate) const ALL: [Self; 4] = [
+        Self::TenderOfficeCoordinator,
+        Self::DocumentController,
+        Self::TenderAnalyst,
+        Self::IndependentReviewer,
+    ];
+
+    pub(crate) const fn stable_identity(self) -> &'static str {
+        match self {
+            Self::TenderOfficeCoordinator => "quantix.bootstrap.tender-office-coordinator",
+            Self::DocumentController => "quantix.bootstrap.document-controller",
+            Self::TenderAnalyst => "quantix.bootstrap.tender-analyst",
+            Self::IndependentReviewer => "quantix.bootstrap.independent-reviewer",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum BootstrapAuthority {
+    PreBidAnalysis,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BootstrapTeamMember {
+    pub role: BootstrapRole,
+    pub authority: BootstrapAuthority,
+    pub active: bool,
+    pub profile: AgentProfileVersionView,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -439,6 +492,7 @@ pub struct ProposedAgentResult {
 pub struct AgentRunInspection {
     pub run_id: String,
     pub retry_of_run_id: Option<String>,
+    pub linked_retry_supported: bool,
     pub state: AgentRunState,
     pub profile: AgentProfileVersionView,
     pub task: TenderTaskView,
@@ -539,6 +593,20 @@ impl Drop for ActiveAgentRunGuard {
 }
 
 impl QuantixHost {
+    pub fn inspect_bootstrap_team(
+        &self,
+        tender_id: &str,
+    ) -> Result<Vec<BootstrapTeamMember>, TenderCommandError> {
+        require_setup(self)?;
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let team = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .inspect_bootstrap_team()?;
+        Ok(team)
+    }
+
     pub async fn run_bootstrap_agent(
         &self,
         command: RunBootstrapAgentCommand,
@@ -576,6 +644,139 @@ impl QuantixHost {
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .inspect_agent_run(&prepared.run_id)?;
         Ok(inspection)
+    }
+
+    pub async fn run_tender_record_extraction(
+        &self,
+        command: RunTenderRecordExtractionCommand,
+    ) -> Result<TenderRecordExtractionResult, TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let cancellation = self.begin_active_agent_run(tender_id.as_str())?;
+        let _active = ActiveAgentRunGuard { host: self.clone() };
+        let store = self.tender_store(&tender_id)?;
+        let prepared = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .prepare_tender_record_extraction_run(
+                &tender_id,
+                &command.evidence,
+                &command.authorities,
+            )?;
+        self.identify_active_agent_run(&prepared.run_id)?;
+
+        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let mut store = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        store.complete_agent_run(&tender_id, &prepared, execution)?;
+        Ok(TenderRecordExtractionResult {
+            run: store.inspect_agent_run(&prepared.run_id)?,
+            published_record_count: store.count_tender_records_by_run(&prepared.run_id)?,
+        })
+    }
+
+    pub async fn run_tender_record_review(
+        &self,
+        command: RunTenderRecordReviewCommand,
+    ) -> Result<TenderRecordReviewResult, TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        if !valid_identifier(&command.record_id) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let cancellation = self.begin_active_agent_run(tender_id.as_str())?;
+        let _active = ActiveAgentRunGuard { host: self.clone() };
+        let store = self.tender_store(&tender_id)?;
+        let prepared = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .prepare_tender_record_review_run(&tender_id, &command.record_id, command.version)?;
+        self.identify_active_agent_run(&prepared.run_id)?;
+        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let mut store = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        store.complete_agent_run(&tender_id, &prepared, execution)?;
+        Ok(TenderRecordReviewResult {
+            run: store.inspect_agent_run(&prepared.run_id)?,
+            record: store.inspect_tender_record_version(&command.record_id, command.version)?,
+        })
+    }
+
+    pub fn inspect_tender_record_page(
+        &self,
+        tender_id: &str,
+        cursor: Option<&str>,
+        limit: u32,
+    ) -> Result<TenderRecordPage, TenderCommandError> {
+        require_setup(self)?;
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let page = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .inspect_tender_record_page(cursor, limit)?;
+        Ok(page)
+    }
+
+    pub fn create_tender_engineer_entry(
+        &self,
+        command: CreateTenderEngineerEntryCommand,
+    ) -> Result<TenderRecordAuthority, TenderCommandError> {
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let authority = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .create_tender_engineer_entry(&tender_id, &command)?;
+        Ok(authority)
+    }
+
+    pub fn inspect_tender_record_authorities(
+        &self,
+        tender_id: &str,
+    ) -> Result<Vec<TenderRecordAuthority>, TenderCommandError> {
+        require_setup(self)?;
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let authorities = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .inspect_tender_record_authorities()?;
+        Ok(authorities)
+    }
+
+    pub fn decide_tender_record(
+        &self,
+        command: DecideTenderRecordCommand,
+    ) -> Result<TenderRecordDecisionResult, TenderCommandError> {
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        if !valid_identifier(&command.record_id) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let store = self.tender_store(&tender_id)?;
+        let result = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .decide_tender_record(&tender_id, &command)?;
+        Ok(result)
     }
 
     pub fn inspect_agent_runs(

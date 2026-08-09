@@ -17,6 +17,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
+use crate::agent_runtime::{bootstrap_profile, BootstrapRole};
 use crate::document_parsing::{
     DocumentParseResult, EvidenceDocument, EvidenceLanguage, EvidenceLocation,
     EvidenceLocationKind, EvidenceRegion, EvidenceSearchHit, EvidenceSearchResult,
@@ -32,11 +33,22 @@ use crate::{setup::SetupState, QuantixHost};
 
 mod agent_records;
 pub(crate) mod backups;
+mod tender_records;
 
 pub use backups::{
     CreateTenderBackupCommand, PrepareTenderRecoveryCommand, ResolveTenderRecoveryCommand,
     TenderBackupRecord, TenderBackupState, TenderRecoveryDecision, TenderRecoveryDecisionRecord,
     TenderRecoveryRecord, TenderRecoveryState,
+};
+pub use tender_records::{
+    CreateTenderEngineerEntryCommand, DecideTenderRecordCommand, InspectTenderRecordsCommand,
+    RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, TenderEvidenceReference,
+    TenderRecordAuthority, TenderRecordAuthorityKind, TenderRecordAuthorityReference,
+    TenderRecordBasisKind, TenderRecordContradiction, TenderRecordDecisionResult,
+    TenderRecordEngineerDecisionKind, TenderRecordEvidence, TenderRecordExtractionResult,
+    TenderRecordField, TenderRecordInspection, TenderRecordKind, TenderRecordPage,
+    TenderRecordReview, TenderRecordReviewOutcome, TenderRecordReviewResult,
+    TenderRecordSourceRelationship, TenderRecordTrustClass,
 };
 
 #[cfg(test)]
@@ -45,7 +57,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 8;
+const TENDER_SCHEMA_VERSION: i64 = 10;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -398,6 +410,68 @@ CREATE TABLE proposed_agent_results (
   created_at TEXT NOT NULL,
   FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
 );
+CREATE TABLE tender_record_authorities (
+  authority_id TEXT PRIMARY KEY CHECK (length(authority_id) = 32),
+  kind TEXT NOT NULL CHECK (kind IN ('engineer_entry', 'calculation_run')),
+  value TEXT NOT NULL CHECK (length(CAST(value AS BLOB)) BETWEEN 1 AND 4000),
+  description TEXT NOT NULL CHECK (length(CAST(description AS BLOB)) BETWEEN 1 AND 2000),
+  manifest_sha256 TEXT,
+  tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  created_by TEXT NOT NULL CHECK (length(CAST(created_by AS BLOB)) BETWEEN 1 AND 200),
+  created_at TEXT NOT NULL,
+  CHECK (
+    (kind = 'engineer_entry' AND manifest_sha256 IS NULL)
+    OR (kind = 'calculation_run' AND length(manifest_sha256) = 64)
+  ),
+  FOREIGN KEY (tender_revision) REFERENCES tender_revisions(revision)
+);
+CREATE TABLE tender_records (
+  record_id TEXT PRIMARY KEY CHECK (length(record_id) = 32),
+  stable_key TEXT NOT NULL UNIQUE CHECK (length(CAST(stable_key AS BLOB)) BETWEEN 1 AND 100),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE tender_record_versions (
+  record_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  kind TEXT NOT NULL CHECK (kind IN (
+    'requirement', 'evaluation_criterion', 'deliverable', 'deadline', 'form',
+    'clause', 'risk', 'assumption', 'tender_query', 'project_characteristic'
+  )),
+  title TEXT NOT NULL CHECK (length(CAST(title AS BLOB)) BETWEEN 1 AND 500),
+  fields_json TEXT NOT NULL CHECK (json_valid(fields_json)),
+  contradictions_json TEXT NOT NULL CHECK (json_valid(contradictions_json)),
+  author_run_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (record_id, version),
+  FOREIGN KEY (record_id) REFERENCES tender_records(record_id),
+  FOREIGN KEY (author_run_id) REFERENCES agent_runs(run_id)
+);
+CREATE TABLE tender_record_heads (
+  record_id TEXT PRIMARY KEY,
+  current_version INTEGER NOT NULL CHECK (current_version > 0),
+  FOREIGN KEY (record_id, current_version)
+    REFERENCES tender_record_versions(record_id, version)
+);
+CREATE TABLE tender_record_reviews (
+  review_id TEXT PRIMARY KEY CHECK (length(review_id) = 32),
+  record_id TEXT NOT NULL,
+  record_version INTEGER NOT NULL CHECK (record_version > 0),
+  reviewer_kind TEXT NOT NULL CHECK (reviewer_kind IN ('independent_reviewer', 'engineer_user')),
+  reviewer_run_id TEXT,
+  outcome TEXT NOT NULL CHECK (outcome IN ('verified', 'rejected', 'approved_assumption')),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  decided_by TEXT NOT NULL CHECK (length(CAST(decided_by AS BLOB)) BETWEEN 1 AND 200),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (record_id, record_version)
+    REFERENCES tender_record_versions(record_id, version),
+  FOREIGN KEY (reviewer_run_id) REFERENCES agent_runs(run_id),
+  CHECK (
+    (reviewer_kind = 'independent_reviewer' AND reviewer_run_id IS NOT NULL
+      AND outcome IN ('verified', 'rejected'))
+    OR
+    (reviewer_kind = 'engineer_user' AND reviewer_run_id IS NULL)
+  )
+);
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
   event_type TEXT NOT NULL,
@@ -720,6 +794,46 @@ BEFORE DELETE ON proposed_agent_results
 BEGIN
   SELECT RAISE(ABORT, 'Proposed Agent Results are immutable');
 END;
+CREATE TRIGGER tender_records_no_update
+BEFORE UPDATE ON tender_records
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Records are immutable');
+END;
+CREATE TRIGGER tender_records_no_delete
+BEFORE DELETE ON tender_records
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Records are immutable');
+END;
+CREATE TRIGGER tender_record_authorities_no_update
+BEFORE UPDATE ON tender_record_authorities
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Record authorities are immutable');
+END;
+CREATE TRIGGER tender_record_authorities_no_delete
+BEFORE DELETE ON tender_record_authorities
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Record authorities are immutable');
+END;
+CREATE TRIGGER tender_record_versions_no_update
+BEFORE UPDATE ON tender_record_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Record Versions are immutable');
+END;
+CREATE TRIGGER tender_record_versions_no_delete
+BEFORE DELETE ON tender_record_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Record Versions are immutable');
+END;
+CREATE TRIGGER tender_record_reviews_no_update
+BEFORE UPDATE ON tender_record_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Record Reviews are immutable');
+END;
+CREATE TRIGGER tender_record_reviews_no_delete
+BEFORE DELETE ON tender_record_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Record Reviews are immutable');
+END;
 CREATE TRIGGER audit_events_no_update
 BEFORE UPDATE ON audit_events
 BEGIN
@@ -1031,6 +1145,15 @@ impl TenderStore {
                 params![tender_id.as_str(), name, created_at],
             )
             .map_err(sql_error)?;
+        for role in BootstrapRole::ALL {
+            let profile = bootstrap_profile(role, random_identifier(&transaction)?);
+            agent_records::insert_profile(
+                &transaction,
+                role.stable_identity(),
+                &profile,
+                &created_at,
+            )?;
+        }
         append_audit_event(
             &transaction,
             tender_id.as_str(),
@@ -1448,6 +1571,9 @@ impl TenderStore {
     ) -> Result<bool, TenderCommandError> {
         check()?;
         if !self.agent_run_manifests_are_valid_with_check(check)? {
+            return Ok(false);
+        }
+        if !self.tender_record_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
         let mut statement = self

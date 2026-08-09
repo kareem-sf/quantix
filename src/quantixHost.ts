@@ -7,11 +7,14 @@ import type { ChooseTenderPackageCommand } from "./bindings/ChooseTenderPackageC
 import type { ConfirmSourceRelationshipCommand } from "./bindings/ConfirmSourceRelationshipCommand";
 import type { CreateTenderBackupCommand } from "./bindings/CreateTenderBackupCommand";
 import type { CreateTenderCommand } from "./bindings/CreateTenderCommand";
+import type { CreateTenderEngineerEntryCommand } from "./bindings/CreateTenderEngineerEntryCommand";
 import type { DocumentRegister } from "./bindings/DocumentRegister";
 import type { DocumentParseResult } from "./bindings/DocumentParseResult";
+import type { DecideTenderRecordCommand } from "./bindings/DecideTenderRecordCommand";
 import type { EvidenceDocument } from "./bindings/EvidenceDocument";
 import type { EvidenceSearchResult } from "./bindings/EvidenceSearchResult";
 import type { InterruptAgentRunCommand } from "./bindings/InterruptAgentRunCommand";
+import type { InspectTenderRecordsCommand } from "./bindings/InspectTenderRecordsCommand";
 import type { OpenTenderCommand } from "./bindings/OpenTenderCommand";
 import type { ParseSourceArtifactCommand } from "./bindings/ParseSourceArtifactCommand";
 import type { PrepareTenderRecoveryCommand } from "./bindings/PrepareTenderRecoveryCommand";
@@ -20,6 +23,8 @@ import type { ResolveIndeterminateAgentRunCommand } from "./bindings/ResolveInde
 import type { ResolveTenderRecoveryCommand } from "./bindings/ResolveTenderRecoveryCommand";
 import type { RuntimeReadiness } from "./bindings/RuntimeReadiness";
 import type { RunBootstrapAgentCommand } from "./bindings/RunBootstrapAgentCommand";
+import type { RunTenderRecordExtractionCommand } from "./bindings/RunTenderRecordExtractionCommand";
+import type { RunTenderRecordReviewCommand } from "./bindings/RunTenderRecordReviewCommand";
 import type { SearchEvidenceCommand } from "./bindings/SearchEvidenceCommand";
 import type { SetupOutcome } from "./bindings/SetupOutcome";
 import type { SourceRelationshipKind } from "./bindings/SourceRelationshipKind";
@@ -27,10 +32,18 @@ import type { TenderSummary } from "./bindings/TenderSummary";
 import type { TenderCatalogueEntry } from "./bindings/TenderCatalogueEntry";
 import type { TenderBackupRecord } from "./bindings/TenderBackupRecord";
 import type { TenderIntegrityReport } from "./bindings/TenderIntegrityReport";
+import type { TenderEvidenceReference } from "./bindings/TenderEvidenceReference";
 import type { TenderPackageImportResult } from "./bindings/TenderPackageImportResult";
 import type { TenderPackageSourceKind } from "./bindings/TenderPackageSourceKind";
 import type { TenderRecoveryDecision } from "./bindings/TenderRecoveryDecision";
 import type { TenderRecoveryRecord } from "./bindings/TenderRecoveryRecord";
+import type { TenderRecordDecisionResult } from "./bindings/TenderRecordDecisionResult";
+import type { TenderRecordAuthority } from "./bindings/TenderRecordAuthority";
+import type { TenderRecordAuthorityReference } from "./bindings/TenderRecordAuthorityReference";
+import type { TenderRecordEngineerDecisionKind } from "./bindings/TenderRecordEngineerDecisionKind";
+import type { TenderRecordExtractionResult } from "./bindings/TenderRecordExtractionResult";
+import type { TenderRecordPage } from "./bindings/TenderRecordPage";
+import type { TenderRecordReviewResult } from "./bindings/TenderRecordReviewResult";
 
 export function ensureQuantixSetup(): Promise<SetupOutcome> {
   return invoke<SetupOutcome>("ensure_quantix_setup");
@@ -229,6 +242,94 @@ export function runBootstrapAgent(
     retry_of_run_id: retryOfRunId,
   };
   return invoke<AgentRunInspection>("run_bootstrap_agent", { command });
+}
+
+export function runTenderRecordExtraction(
+  tenderId: string,
+  evidence: TenderEvidenceReference[],
+  authorities: TenderRecordAuthorityReference[],
+): Promise<TenderRecordExtractionResult> {
+  const command: RunTenderRecordExtractionCommand = {
+    tender_id: tenderId,
+    evidence,
+    authorities,
+  };
+  return invoke<TenderRecordExtractionResult>("run_tender_record_extraction", {
+    command,
+  });
+}
+
+export function createTenderEngineerEntry(
+  tenderId: string,
+  value: string,
+  description: string,
+): Promise<TenderRecordAuthority> {
+  const command: CreateTenderEngineerEntryCommand = {
+    tender_id: tenderId,
+    value,
+    description,
+  };
+  return invoke<TenderRecordAuthority>("create_tender_engineer_entry", {
+    command,
+  });
+}
+
+export function inspectTenderRecordAuthorities(
+  tenderId: string,
+): Promise<TenderRecordAuthority[]> {
+  const command: OpenTenderCommand = { tender_id: tenderId };
+  return invoke<TenderRecordAuthority[]>("inspect_tender_record_authorities", {
+    command,
+  });
+}
+
+export function runTenderRecordReview(
+  tenderId: string,
+  recordId: string,
+  version: number,
+): Promise<TenderRecordReviewResult> {
+  const command: RunTenderRecordReviewCommand = {
+    tender_id: tenderId,
+    record_id: recordId,
+    version,
+  };
+  return invoke<TenderRecordReviewResult>("run_tender_record_review", {
+    command,
+  });
+}
+
+export function inspectTenderRecords(
+  tenderId: string,
+  cursor: string | null,
+  limit: number,
+): Promise<TenderRecordPage> {
+  const command: InspectTenderRecordsCommand = {
+    tender_id: tenderId,
+    cursor,
+    limit,
+  };
+  return invoke<TenderRecordPage>("inspect_tender_records", {
+    command,
+  });
+}
+
+export function decideTenderRecord(
+  tenderId: string,
+  recordId: string,
+  version: number,
+  decision: TenderRecordEngineerDecisionKind,
+  rationale: string,
+): Promise<TenderRecordDecisionResult> {
+  const command: DecideTenderRecordCommand = {
+    tender_id: tenderId,
+    record_id: recordId,
+    version,
+    decision,
+    rationale,
+  };
+  return invoke<TenderRecordDecisionResult>("decide_tender_record", {
+    command,
+  });
 }
 
 export function inspectAgentRuns(

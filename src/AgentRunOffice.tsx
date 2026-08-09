@@ -40,6 +40,7 @@ export function AgentRunOffice({
   const pendingRecoveryRetries = runs.filter(
     (run) =>
       run.state === "indeterminate" &&
+      run.linked_retry_supported &&
       run.recovery_decision?.disposition === "retry_task" &&
       !runs.some((candidate) => candidate.retry_of_run_id === run.run_id),
   );
@@ -208,7 +209,7 @@ export function AgentRunOffice({
                         : "Interrupt"}
                     </button>
                   ) : null}
-                  {run.failure?.retry_safe ? (
+                  {run.failure?.retry_safe && run.linked_retry_supported ? (
                     <button
                       type="button"
                       onClick={() => void executeAgentRun(run.run_id)}
@@ -223,6 +224,7 @@ export function AgentRunOffice({
                     </button>
                   ) : null}
                   {run.recovery_decision?.disposition === "retry_task" &&
+                  run.linked_retry_supported &&
                   !runs.some(
                     (candidate) => candidate.retry_of_run_id === run.run_id,
                   ) ? (
@@ -290,18 +292,25 @@ export function AgentRunOffice({
                     />
                   </label>
                   <div className="agent-run__controls">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void resolveRecovery(run.run_id, "retry_task")
-                      }
-                      disabled={
-                        resolvingRunId === run.run_id ||
-                        !recoveryRationale.trim()
-                      }
-                    >
-                      Authorize one linked retry
-                    </button>
+                    {run.linked_retry_supported ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void resolveRecovery(run.run_id, "retry_task")
+                        }
+                        disabled={
+                          resolvingRunId === run.run_id ||
+                          !recoveryRationale.trim()
+                        }
+                      >
+                        Authorize one linked retry
+                      </button>
+                    ) : (
+                      <span>
+                        This task type must be rerun from its exact record
+                        workflow after closure.
+                      </span>
+                    )}
                     <button
                       type="button"
                       className="button-secondary"
