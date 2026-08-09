@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type { AgentRunInspection } from "./bindings/AgentRunInspection";
+import type { AgentRunRecoveryDecision } from "./bindings/AgentRunRecoveryDecision";
+import type { AgentRunRecoveryDisposition } from "./bindings/AgentRunRecoveryDisposition";
 import type { ChooseTenderPackageCommand } from "./bindings/ChooseTenderPackageCommand";
 import type { ConfirmSourceRelationshipCommand } from "./bindings/ConfirmSourceRelationshipCommand";
 import type { CreateTenderCommand } from "./bindings/CreateTenderCommand";
@@ -12,12 +14,15 @@ import type { InterruptAgentRunCommand } from "./bindings/InterruptAgentRunComma
 import type { OpenTenderCommand } from "./bindings/OpenTenderCommand";
 import type { ParseSourceArtifactCommand } from "./bindings/ParseSourceArtifactCommand";
 import type { ReviseTenderCommand } from "./bindings/ReviseTenderCommand";
+import type { ResolveIndeterminateAgentRunCommand } from "./bindings/ResolveIndeterminateAgentRunCommand";
 import type { RuntimeReadiness } from "./bindings/RuntimeReadiness";
 import type { RunBootstrapAgentCommand } from "./bindings/RunBootstrapAgentCommand";
 import type { SearchEvidenceCommand } from "./bindings/SearchEvidenceCommand";
 import type { SetupOutcome } from "./bindings/SetupOutcome";
 import type { SourceRelationshipKind } from "./bindings/SourceRelationshipKind";
 import type { TenderSummary } from "./bindings/TenderSummary";
+import type { TenderCatalogueEntry } from "./bindings/TenderCatalogueEntry";
+import type { TenderIntegrityReport } from "./bindings/TenderIntegrityReport";
 import type { TenderPackageImportResult } from "./bindings/TenderPackageImportResult";
 import type { TenderPackageSourceKind } from "./bindings/TenderPackageSourceKind";
 
@@ -42,8 +47,8 @@ export function createTender(name: string): Promise<TenderSummary> {
   return invoke<TenderSummary>("create_tender", { command });
 }
 
-export function listTenders(): Promise<TenderSummary[]> {
-  return invoke<TenderSummary[]>("list_tenders");
+export function listTenders(): Promise<TenderCatalogueEntry[]> {
+  return invoke<TenderCatalogueEntry[]>("list_tenders");
 }
 
 export function openTender(tenderId: string): Promise<TenderSummary> {
@@ -51,6 +56,13 @@ export function openTender(tenderId: string): Promise<TenderSummary> {
   return invoke<TenderSummary>("open_tender", {
     command,
   });
+}
+
+export function inspectTenderIntegrity(
+  tenderId: string,
+): Promise<TenderIntegrityReport> {
+  const command: OpenTenderCommand = { tender_id: tenderId };
+  return invoke<TenderIntegrityReport>("inspect_tender_integrity", { command });
 }
 
 export function reviseTender(
@@ -169,6 +181,23 @@ export function inspectAgentRuns(
 ): Promise<AgentRunInspection[]> {
   const command: OpenTenderCommand = { tender_id: tenderId };
   return invoke<AgentRunInspection[]>("inspect_agent_runs", { command });
+}
+
+export function resolveIndeterminateAgentRun(
+  tenderId: string,
+  runId: string,
+  disposition: AgentRunRecoveryDisposition,
+  rationale: string,
+): Promise<AgentRunRecoveryDecision> {
+  const command: ResolveIndeterminateAgentRunCommand = {
+    tender_id: tenderId,
+    run_id: runId,
+    disposition,
+    rationale,
+  };
+  return invoke<AgentRunRecoveryDecision>("resolve_indeterminate_agent_run", {
+    command,
+  });
 }
 
 export function interruptAgentRun(

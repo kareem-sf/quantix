@@ -139,6 +139,55 @@ pub struct ResolveAgentAccessCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
+pub enum AgentRunRecoveryDisposition {
+    RetryTask,
+    CloseTask,
+}
+
+impl AgentRunRecoveryDisposition {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::RetryTask => "retry_task",
+            Self::CloseTask => "close_task",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Result<Self, TenderCommandError> {
+        match value {
+            "retry_task" => Ok(Self::RetryTask),
+            "close_task" => Ok(Self::CloseTask),
+            _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ResolveIndeterminateAgentRunCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub run_id: String,
+    #[garde(skip)]
+    pub disposition: AgentRunRecoveryDisposition,
+    #[garde(length(bytes, min = 1, max = 500))]
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AgentRunRecoveryDecision {
+    pub run_id: String,
+    pub disposition: AgentRunRecoveryDisposition,
+    pub rationale: String,
+    pub decided_by: String,
+    pub decided_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum AgentRunState {
     Running,
     Completed,
@@ -401,6 +450,7 @@ pub struct AgentRunInspection {
     pub usage: ProviderUsage,
     pub failure: Option<ProviderFailure>,
     pub proposed_result: Option<ProposedAgentResult>,
+    pub recovery_decision: Option<AgentRunRecoveryDecision>,
     pub started_at: String,
     pub completed_at: Option<String>,
 }
@@ -532,7 +582,6 @@ impl QuantixHost {
         &self,
         tender_id: &str,
     ) -> Result<Vec<AgentRunInspection>, TenderCommandError> {
-        self.require_runtime_verified()?;
         require_setup(self)?;
         let tender_id = TenderId::parse(tender_id)?;
         let store = self.tender_store(&tender_id)?;
@@ -541,6 +590,26 @@ impl QuantixHost {
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .inspect_agent_runs()?;
         Ok(runs)
+    }
+
+    pub fn resolve_indeterminate_agent_run(
+        &self,
+        command: ResolveIndeterminateAgentRunCommand,
+    ) -> Result<AgentRunRecoveryDecision, TenderCommandError> {
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        if !valid_identifier(&command.run_id) || command.rationale.trim().is_empty() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let store = self.tender_store(&tender_id)?;
+        let decision = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .resolve_indeterminate_agent_run(&tender_id, command)?;
+        Ok(decision)
     }
 
     pub fn request_agent_access(

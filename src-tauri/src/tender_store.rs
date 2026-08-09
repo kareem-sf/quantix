@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 7;
+const TENDER_SCHEMA_VERSION: i64 = 8;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -281,6 +281,14 @@ CREATE TABLE agent_runs (
     (status IN ('interrupted', 'failed', 'indeterminate') AND completed_at IS NOT NULL
       AND failure_json IS NOT NULL)
   )
+);
+CREATE TABLE agent_run_recovery_dispositions (
+  run_id TEXT PRIMARY KEY,
+  disposition TEXT NOT NULL CHECK (disposition IN ('retry_task', 'close_task')),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 500),
+  decided_by TEXT NOT NULL CHECK (decided_by = 'engineer_user'),
+  decided_at TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
 );
 CREATE TABLE agent_access_requests (
   request_id TEXT PRIMARY KEY CHECK (length(request_id) = 32),
@@ -618,6 +626,16 @@ BEFORE DELETE ON agent_runs
 BEGIN
   SELECT RAISE(ABORT, 'Agent Runs are immutable');
 END;
+CREATE TRIGGER agent_run_recovery_dispositions_no_update
+BEFORE UPDATE ON agent_run_recovery_dispositions
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Run recovery dispositions are immutable');
+END;
+CREATE TRIGGER agent_run_recovery_dispositions_no_delete
+BEFORE DELETE ON agent_run_recovery_dispositions
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Run recovery dispositions are immutable');
+END;
 CREATE TRIGGER agent_access_requests_only_decide
 BEFORE UPDATE ON agent_access_requests
 WHEN OLD.status != 'blocked'
@@ -758,6 +776,14 @@ pub struct TenderSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
+pub struct TenderCatalogueEntry {
+    pub tender_id: String,
+    pub summary: Option<TenderSummary>,
+    pub integrity: TenderIntegrityReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct ContentVersionSummary {
     pub logical_id: String,
     pub revision: u32,
@@ -774,6 +800,52 @@ pub struct TenderInspection {
     pub content_version_count: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TenderIntegrityState {
+    Ready,
+    RecoveryRequired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TenderIntegrityIssue {
+    AuditChainInvalid,
+    DatabaseIntegrityInvalid,
+    InspectionUnavailable,
+    ReferencedContentMissing,
+    ReferencedContentMismatch,
+    ManifestInvalid,
+    SchemaMismatch,
+    StorageLayoutInvalid,
+    TenderIdentityMismatch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TenderRecoveryChoice {
+    RestoreVerifiedBackup,
+    PurgeTender,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TenderIntegrityReport {
+    pub tender_id: String,
+    pub state: TenderIntegrityState,
+    pub issues: Vec<TenderIntegrityIssue>,
+    pub recovery_choices: Vec<TenderRecoveryChoice>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct StartupReconciliationReport {
+    pub removed_tender_candidates: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -781,6 +853,7 @@ pub enum TenderErrorCode {
     IntegrityFailed,
     InvalidCommand,
     NotFound,
+    RecoveryRequired,
     RuntimeRequired,
     SetupRequired,
     StoreUnavailable,
@@ -830,6 +903,7 @@ impl TenderId {
 pub(crate) struct TenderStore {
     root: std::path::PathBuf,
     connection: Connection,
+    recovery_required: bool,
 }
 
 struct RawDocumentRegisterEntry {
@@ -960,6 +1034,7 @@ impl TenderStore {
         Ok(Self {
             root: root.to_path_buf(),
             connection,
+            recovery_required: false,
         })
     }
 
@@ -967,6 +1042,7 @@ impl TenderStore {
         &mut self,
         tender_id: &TenderId,
     ) -> Result<(), TenderCommandError> {
+        self.require_writable()?;
         let attempts = {
             let mut statement = self
                 .connection
@@ -1005,7 +1081,7 @@ impl TenderStore {
                 Ok(metadata)
                     if !metadata_is_unsafe_storage_link(&metadata) && metadata.is_dir() =>
                 {
-                    fs::remove_dir_all(staging_root).map_err(store_unavailable)?;
+                    remove_verified_directory(&self.root.join("staging"), &staging_root)?;
                 }
                 Ok(_) => {
                     return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
@@ -1057,25 +1133,348 @@ impl TenderStore {
         transaction.commit().map_err(sql_error)
     }
 
+    fn reconcile_uncommitted_parse_staging(&self) -> Result<(), TenderCommandError> {
+        let staging_root = self.root.join("staging");
+        for entry in fs::read_dir(&staging_root).map_err(store_unavailable)? {
+            let entry = entry.map_err(store_unavailable)?;
+            let metadata = fs::symlink_metadata(entry.path()).map_err(store_unavailable)?;
+            if metadata_is_unsafe_storage_link(&metadata) || !metadata.is_dir() {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            let name = entry.file_name();
+            let Some(attempt_id) = name.to_str().and_then(|name| name.strip_prefix("parse-"))
+            else {
+                continue;
+            };
+            if !valid_identifier(attempt_id) {
+                continue;
+            }
+            remove_verified_directory(&staging_root, &entry.path())?;
+        }
+        Ok(())
+    }
+
     fn open(root: &Path, expected_tender_id: &TenderId) -> Result<Self, TenderCommandError> {
         #[cfg(test)]
         TENDER_STORE_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
-        validate_tender_store_layout(root)?;
+        validate_tender_store_layout(root).map_err(recovery_required_if_integrity)?;
         let database = root.join("tender.sqlite");
         let connection = Connection::open_with_flags(
             database,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
-        .map_err(|_| TenderCommandError::new(TenderErrorCode::NotFound))?;
-        configure_writer(&connection)?;
-        validate_store(&connection, expected_tender_id)?;
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::RecoveryRequired))?;
+        configure_writer(&connection)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::RecoveryRequired))?;
+        if inspect_store_structure(&connection, expected_tender_id)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::RecoveryRequired))?
+            .is_some()
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
+        }
+        verify_audit_chain(&connection).map_err(recovery_required_if_integrity)?;
+        if inspect_referenced_content(&connection, &root.join("content"))?.is_some() {
+            return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
+        }
         let mut store = Self {
             root: root.to_path_buf(),
             connection,
+            recovery_required: false,
         };
-        store.reconcile_interrupted_parses(expected_tender_id)?;
-        store.reconcile_interrupted_agent_runs(expected_tender_id)?;
+        store
+            .reconcile_uncommitted_content(expected_tender_id)
+            .map_err(recovery_required_if_integrity)?;
+        if !store.semantic_manifests_are_valid()? {
+            return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
+        }
+        store
+            .reconcile_interrupted_parses(expected_tender_id)
+            .map_err(recovery_required_if_integrity)?;
+        store
+            .reconcile_uncommitted_parse_staging()
+            .map_err(recovery_required_if_integrity)?;
+        store
+            .reconcile_interrupted_agent_runs(expected_tender_id)
+            .map_err(recovery_required_if_integrity)?;
+        verify_audit_chain(&store.connection).map_err(recovery_required_if_integrity)?;
+        if inspect_referenced_content(&store.connection, &store.root.join("content"))?.is_some()
+            || !store.semantic_manifests_are_valid()?
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
+        }
         Ok(store)
+    }
+
+    fn reconcile_uncommitted_content(
+        &mut self,
+        tender_id: &TenderId,
+    ) -> Result<(), TenderCommandError> {
+        self.require_writable()?;
+        let referenced = {
+            let mut statement = self
+                .connection
+                .prepare("SELECT sha256 FROM content_objects")
+                .map_err(sql_error)?;
+            let values = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(sql_error)?
+                .collect::<rusqlite::Result<HashSet<_>>>()
+                .map_err(sql_error)?;
+            values
+        };
+        let content_root = self.root.join("content");
+        let content_v2 = content_root.join("content-v2");
+        let mut removed_digests = Vec::new();
+        if let Some(content_v2_root) =
+            canonical_direct_storage_directory(&content_root, &content_v2)?
+        {
+            let hash_root = content_v2_root.join("sha256");
+            if let Some(hash_root) =
+                canonical_direct_storage_directory(&content_v2_root, &hash_root)?
+            {
+                for entry in walkdir::WalkDir::new(&hash_root)
+                    .min_depth(1)
+                    .follow_links(false)
+                {
+                    let entry = entry.map_err(|error| {
+                        error
+                            .into_io_error()
+                            .map(store_unavailable)
+                            .unwrap_or_else(|| {
+                                TenderCommandError::new(TenderErrorCode::IntegrityFailed)
+                            })
+                    })?;
+                    let metadata = fs::symlink_metadata(entry.path()).map_err(store_unavailable)?;
+                    if metadata_is_unsafe_storage_link(&metadata) {
+                        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+                    }
+                    if !metadata.is_file() {
+                        continue;
+                    }
+                    let relative = entry
+                        .path()
+                        .strip_prefix(&hash_root)
+                        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+                    let components = relative
+                        .components()
+                        .map(|component| component.as_os_str().to_str())
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+                    if components.len() != 3 {
+                        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+                    }
+                    let digest = components.concat();
+                    if digest.len() != 64
+                        || !digest
+                            .bytes()
+                            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+                    {
+                        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+                    }
+                    if !referenced.contains(&digest) {
+                        fs::remove_file(entry.path()).map_err(store_unavailable)?;
+                        removed_digests.push(digest);
+                    }
+                }
+            }
+        }
+        let temporary = content_root.join("tmp");
+        let removed_temporary = match fs::symlink_metadata(&temporary) {
+            Ok(metadata) if !metadata_is_unsafe_storage_link(&metadata) && metadata.is_dir() => {
+                let count = walkdir::WalkDir::new(&temporary)
+                    .min_depth(1)
+                    .follow_links(false)
+                    .into_iter()
+                    .map(|entry| {
+                        let entry = entry.map_err(walkdir_error)?;
+                        let metadata =
+                            fs::symlink_metadata(entry.path()).map_err(store_unavailable)?;
+                        if metadata_is_unsafe_storage_link(&metadata) {
+                            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+                        }
+                        Ok(())
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .len();
+                if count > 0 {
+                    remove_verified_directory(&content_root, &temporary)?;
+                }
+                count
+            }
+            Ok(_) => return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(store_unavailable(error)),
+        };
+        if removed_digests.is_empty() && removed_temporary == 0 {
+            return Ok(());
+        }
+        removed_digests.sort();
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let tender_revision: u32 = transaction
+            .query_row(
+                "SELECT current_revision FROM tender
+                 WHERE singleton = 1 AND tender_id = ?1",
+                [tender_id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        let reconciled_at = sqlite_timestamp(&transaction)?;
+        append_audit_event(
+            &transaction,
+            tender_id.as_str(),
+            "uncommitted_content_reconciled",
+            tender_revision,
+            json!({
+                "removed_digests": removed_digests,
+                "removed_temporary_entries": removed_temporary.to_string(),
+            }),
+            &reconciled_at,
+        )?;
+        transaction.commit().map_err(sql_error)
+    }
+
+    fn inspect_integrity(
+        root: &Path,
+        expected_tender_id: &TenderId,
+    ) -> Result<TenderIntegrityReport, TenderCommandError> {
+        #[cfg(feature = "runtime-fixture")]
+        if let Ok(failure) = std::env::var("QUANTIX_STORAGE_INSPECTION_FAIL_TENDER") {
+            if failure == expected_tender_id.as_str() {
+                return Err(TenderCommandError::new(TenderErrorCode::StoreUnavailable));
+            }
+            if failure == format!("not_found:{}", expected_tender_id.as_str()) {
+                return Err(TenderCommandError::new(TenderErrorCode::NotFound));
+            }
+        }
+        if let Err(error) = validate_tender_store_layout(root) {
+            return if error.code == TenderErrorCode::NotFound {
+                Err(error)
+            } else {
+                Ok(recovery_report(
+                    expected_tender_id,
+                    vec![TenderIntegrityIssue::StorageLayoutInvalid],
+                ))
+            };
+        }
+        let connection = match Connection::open_with_flags(
+            root.join("tender.sqlite"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ) {
+            Ok(connection) => connection,
+            Err(_) => {
+                return Ok(recovery_report(
+                    expected_tender_id,
+                    vec![TenderIntegrityIssue::DatabaseIntegrityInvalid],
+                ));
+            }
+        };
+        match inspect_store_structure(&connection, expected_tender_id) {
+            Ok(None) => {}
+            Ok(Some(issue)) => return Ok(recovery_report(expected_tender_id, vec![issue])),
+            Err(_) => {
+                return Ok(recovery_report(
+                    expected_tender_id,
+                    vec![TenderIntegrityIssue::DatabaseIntegrityInvalid],
+                ));
+            }
+        }
+        let mut issues = Vec::new();
+        match verify_audit_chain(&connection) {
+            Ok(()) => {}
+            Err(error) if error.code == TenderErrorCode::IntegrityFailed => {
+                issues.push(TenderIntegrityIssue::AuditChainInvalid);
+            }
+            Err(error) => return Err(error),
+        }
+        if let Some(issue) = inspect_referenced_content(&connection, &root.join("content"))? {
+            issues.push(issue);
+        }
+        let store = Self {
+            root: root.to_path_buf(),
+            connection,
+            recovery_required: false,
+        };
+        if !store.semantic_manifests_are_valid()? {
+            issues.push(TenderIntegrityIssue::ManifestInvalid);
+        }
+        let state = if issues.is_empty() {
+            TenderIntegrityState::Ready
+        } else {
+            TenderIntegrityState::RecoveryRequired
+        };
+        let recovery_choices = if issues.is_empty() {
+            Vec::new()
+        } else {
+            vec![
+                TenderRecoveryChoice::RestoreVerifiedBackup,
+                TenderRecoveryChoice::PurgeTender,
+            ]
+        };
+        Ok(TenderIntegrityReport {
+            tender_id: expected_tender_id.as_str().to_owned(),
+            state,
+            issues,
+            recovery_choices,
+        })
+    }
+
+    fn semantic_manifests_are_valid(&self) -> Result<bool, TenderCommandError> {
+        if self.inspect_agent_runs().is_err() {
+            return Ok(false);
+        }
+        let parsed_documents = {
+            let mut statement = self
+                .connection
+                .prepare(
+                    "SELECT artifact_id, version, location_count
+                     FROM parsed_documents ORDER BY artifact_id, version",
+                )
+                .map_err(sql_error)?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, u32>(1)?,
+                        row.get::<_, u32>(2)?,
+                    ))
+                })
+                .map_err(sql_error)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(sql_error)?;
+            rows
+        };
+        for (artifact_id, version, location_count) in parsed_documents {
+            let command = ParseSourceArtifactCommand {
+                tender_id: String::new(),
+                artifact_id,
+                version,
+            };
+            let Ok(document) = self.evidence_document(&command) else {
+                return Ok(false);
+            };
+            if usize::try_from(location_count).ok() != Some(document.locations.len()) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn require_writable(&self) -> Result<(), TenderCommandError> {
+        if self.recovery_required {
+            Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn latch_recovery_required(&mut self) -> Result<(), TenderCommandError> {
+        self.recovery_required = true;
+        self.connection
+            .pragma_update(None, "query_only", true)
+            .map_err(sql_error)
     }
 
     fn summary(&self) -> Result<TenderSummary, TenderCommandError> {
@@ -1116,6 +1515,7 @@ impl TenderStore {
         &mut self,
         command: &ReviseTenderCommand,
     ) -> Result<TenderSummary, TenderCommandError> {
+        self.require_writable()?;
         let name = command.name.trim();
         let transaction = self
             .connection
@@ -1168,6 +1568,7 @@ impl TenderStore {
         &mut self,
         command: &RegisterTenderContentCommand,
     ) -> Result<ContentVersionSummary, TenderCommandError> {
+        self.require_writable()?;
         let content_root = self.root.join("content");
         let integrity = match cacache::write_hash_sync(&content_root, &command.bytes) {
             Ok(integrity) => integrity,
@@ -1196,6 +1597,7 @@ impl TenderStore {
                 TenderCommandError::new(TenderErrorCode::IntegrityFailed),
             );
         }
+        storage_publication_failpoint("content_after_cache_write");
         let sha256 = sha256_hex(&command.bytes);
         let size_bytes = i64::try_from(command.bytes.len())
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
@@ -1280,6 +1682,7 @@ impl TenderStore {
             &created_at,
         )?;
         transaction.commit().map_err(sql_error)?;
+        storage_publication_failpoint("content_after_database_commit");
 
         Ok(ContentVersionSummary {
             logical_id: command.logical_id.clone(),
@@ -1298,6 +1701,7 @@ impl TenderStore {
         reason: &str,
         error: TenderCommandError,
     ) -> Result<T, TenderCommandError> {
+        self.require_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1332,6 +1736,7 @@ impl TenderStore {
         &mut self,
         source: &Path,
     ) -> Result<TenderPackageImportResult, TenderCommandError> {
+        self.require_writable()?;
         let prepared = prepare_package(source, &self.root.join("content"))?;
         self.publish_intake(prepared)
     }
@@ -1341,6 +1746,7 @@ impl TenderStore {
         command: &ParseSourceArtifactCommand,
         tender_id: &TenderId,
     ) -> Result<ParseJob, TenderCommandError> {
+        self.require_writable()?;
         let (document_type, integrity, expected_sha256): (String, String, String) = self
             .connection
             .query_row(
@@ -1471,6 +1877,7 @@ impl TenderStore {
         job: &ParseJob,
         prepared: PreparedParseOutput,
     ) -> Result<DocumentParseResult, TenderCommandError> {
+        self.require_writable()?;
         let integrity = cacache::write_hash_sync(self.root.join("content"), &prepared.json_bytes)
             .map_err(content_store_error)?;
         let verified = cacache::read_hash_sync(self.root.join("content"), &integrity)
@@ -1629,6 +2036,7 @@ impl TenderStore {
         state: ParseState,
         exception: ParseExceptionCode,
     ) -> Result<DocumentParseResult, TenderCommandError> {
+        self.require_writable()?;
         if !matches!(
             state,
             ParseState::Failed | ParseState::Interrupted | ParseState::Quarantined
@@ -1798,6 +2206,7 @@ impl TenderStore {
         &mut self,
         prepared: PreparedIntake,
     ) -> Result<TenderPackageImportResult, TenderCommandError> {
+        self.require_writable()?;
         let discovered_count = u32::try_from(prepared.documents.len())
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         let registered_count = u32::try_from(
@@ -2090,6 +2499,7 @@ impl TenderStore {
         &mut self,
         command: &ConfirmSourceRelationshipCommand,
     ) -> Result<DocumentRegister, TenderCommandError> {
+        self.require_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -2168,6 +2578,7 @@ impl TenderStore {
         expected_tender_id: &TenderId,
         command_name: &str,
     ) -> Result<(), TenderCommandError> {
+        self.require_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -2255,7 +2666,9 @@ impl QuantixHost {
         };
         let summary = store.summary()?;
         drop(store);
+        storage_publication_failpoint("tender_after_stage");
         fs::rename(&stage_root, &final_root).map_err(store_unavailable)?;
+        storage_publication_failpoint("tender_after_publish");
         Ok(summary)
     }
 
@@ -2345,7 +2758,6 @@ impl QuantixHost {
         &self,
         tender_id: &str,
     ) -> Result<DocumentRegister, TenderCommandError> {
-        self.require_runtime_verified()?;
         require_setup(self)?;
         let tender_id = TenderId::parse(tender_id)?;
         let store = self.tender_store(&tender_id)?;
@@ -2380,7 +2792,6 @@ impl QuantixHost {
     }
 
     pub fn inspect_tender(&self, tender_id: &str) -> Result<TenderInspection, TenderCommandError> {
-        self.require_runtime_verified()?;
         require_setup(self)?;
         let tender_id = TenderId::parse(tender_id)?;
         let store = self.tender_store(&tender_id)?;
@@ -2391,8 +2802,65 @@ impl QuantixHost {
         Ok(inspection)
     }
 
+    pub fn inspect_tender_integrity(
+        &self,
+        tender_id: &str,
+    ) -> Result<TenderIntegrityReport, TenderCommandError> {
+        require_setup(self)?;
+        let tender_id = TenderId::parse(tender_id)?;
+        let root = self
+            .application_home()
+            .join("tenders")
+            .join(tender_id.as_str());
+        let cached = self
+            .open_tender_stores()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .get(&tender_id)
+            .cloned();
+        let report = if let Some(cached) = &cached {
+            let mut guard = match cached.lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    self.mark_tender_recovery_required(&tender_id);
+                    return Ok(recovery_report(
+                        &tender_id,
+                        vec![TenderIntegrityIssue::InspectionUnavailable],
+                    ));
+                }
+            };
+            let mut report = inspection_result_or_recovery(
+                &tender_id,
+                TenderStore::inspect_integrity(&root, &tender_id),
+                true,
+            )?;
+            if report.state == TenderIntegrityState::RecoveryRequired {
+                if guard.latch_recovery_required().is_err()
+                    && !report
+                        .issues
+                        .contains(&TenderIntegrityIssue::InspectionUnavailable)
+                {
+                    report
+                        .issues
+                        .push(TenderIntegrityIssue::InspectionUnavailable);
+                }
+                self.mark_tender_recovery_required(&tender_id);
+            }
+            report
+        } else {
+            inspection_result_or_recovery(
+                &tender_id,
+                TenderStore::inspect_integrity(&root, &tender_id),
+                false,
+            )?
+        };
+        if cached.is_none() && report.state == TenderIntegrityState::RecoveryRequired {
+            self.mark_tender_recovery_required(&tender_id);
+        }
+        Ok(report)
+    }
+
     pub fn open_tender(&self, tender_id: &str) -> Result<TenderSummary, TenderCommandError> {
-        self.require_runtime_verified()?;
         require_setup(self)?;
         let tender_id = TenderId::parse(tender_id)?;
         let store = self.tender_store(&tender_id)?;
@@ -2403,18 +2871,14 @@ impl QuantixHost {
         Ok(summary)
     }
 
-    pub fn list_tenders(&self) -> Result<Vec<TenderSummary>, TenderCommandError> {
-        self.require_runtime_verified()?;
+    pub fn list_tenders(&self) -> Result<Vec<TenderCatalogueEntry>, TenderCommandError> {
         require_setup(self)?;
-        let mut summaries = Vec::new();
+        let mut catalogue = Vec::new();
+        let mut verified_summaries = Vec::new();
         let entries =
             fs::read_dir(self.application_home().join("tenders")).map_err(store_unavailable)?;
         for entry in entries {
             let entry = entry.map_err(store_unavailable)?;
-            let metadata = fs::symlink_metadata(entry.path()).map_err(store_unavailable)?;
-            if metadata_is_unsafe_storage_link(&metadata) || !metadata.is_dir() {
-                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-            }
             let tender_id = entry
                 .file_name()
                 .to_str()
@@ -2423,17 +2887,52 @@ impl QuantixHost {
                     TenderId::parse(value)
                         .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
                 })?;
-            summaries.push(self.open_tender(tender_id.as_str())?);
+            let metadata = fs::symlink_metadata(entry.path()).map_err(store_unavailable)?;
+            if metadata_is_unsafe_storage_link(&metadata) || !metadata.is_dir() {
+                catalogue.push(TenderCatalogueEntry {
+                    tender_id: tender_id.as_str().to_owned(),
+                    summary: None,
+                    integrity: recovery_report(
+                        &tender_id,
+                        vec![TenderIntegrityIssue::StorageLayoutInvalid],
+                    ),
+                });
+                continue;
+            }
+            let integrity = self.inspect_tender_integrity(tender_id.as_str())?;
+            let summary = if integrity.state == TenderIntegrityState::Ready {
+                let store = self.tender_store(&tender_id)?;
+                let summary = store
+                    .lock()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                    .summary()?;
+                verified_summaries.push(summary.clone());
+                Some(summary)
+            } else {
+                None
+            };
+            catalogue.push(TenderCatalogueEntry {
+                tender_id: tender_id.as_str().to_owned(),
+                summary,
+                integrity,
+            });
         }
-        summaries.sort_by(|left, right| left.tender_id.cmp(&right.tender_id));
-        let _ = self.replace_catalogue(&summaries);
-        Ok(summaries)
+        catalogue.sort_by(|left, right| left.tender_id.cmp(&right.tender_id));
+        let _ = self.replace_catalogue(&verified_summaries);
+        Ok(catalogue)
     }
 
     pub(crate) fn tender_store(
         &self,
         tender_id: &TenderId,
     ) -> Result<Arc<Mutex<TenderStore>>, TenderCommandError> {
+        let recovery_required = self
+            .recovery_required_tenders()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        if recovery_required.contains(tender_id) {
+            return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
+        }
         let mut stores = self
             .open_tender_stores()
             .lock()
@@ -2449,6 +2948,19 @@ impl QuantixHost {
         let store = Arc::new(Mutex::new(TenderStore::open(&root, tender_id)?));
         stores.insert(tender_id.clone(), Arc::clone(&store));
         Ok(store)
+    }
+
+    fn mark_tender_recovery_required(&self, tender_id: &TenderId) {
+        let mut recovery_required = self
+            .recovery_required_tenders()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        recovery_required.insert(tender_id.clone());
+        let mut stores = self
+            .open_tender_stores()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        stores.remove(tender_id);
     }
 
     fn reject_tender_command<T>(
@@ -2496,16 +3008,44 @@ impl QuantixHost {
                 )
                 .map_err(sql_error)?;
         }
-        transaction.commit().map_err(sql_error)
+        transaction.commit().map_err(sql_error)?;
+        storage_publication_failpoint("catalogue_after_commit");
+        Ok(())
     }
 }
 
 pub(crate) fn require_setup(host: &QuantixHost) -> Result<(), TenderCommandError> {
     let outcome = host.ensure_setup();
     match outcome.state {
-        SetupState::Ready | SetupState::Warning => Ok(()),
+        SetupState::Ready | SetupState::Warning => host.reconcile_startup_once(),
         _ => Err(TenderCommandError::new(TenderErrorCode::SetupRequired)),
     }
+}
+
+pub(crate) fn reconcile_application_staging(
+    application_home: &Path,
+) -> Result<u32, TenderCommandError> {
+    let staging = application_home.join("staging");
+    let mut removed_tender_candidates = 0_u32;
+    for entry in fs::read_dir(&staging).map_err(store_unavailable)? {
+        let entry = entry.map_err(store_unavailable)?;
+        let name = entry.file_name();
+        let Some(tender_id) = name.to_str().and_then(|name| name.strip_prefix("tender-")) else {
+            continue;
+        };
+        if !valid_identifier(tender_id) {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(entry.path()).map_err(store_unavailable)?;
+        if metadata_is_unsafe_storage_link(&metadata) || !metadata.is_dir() {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        remove_verified_directory(&staging, &entry.path())?;
+        removed_tender_candidates = removed_tender_candidates
+            .checked_add(1)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+    }
+    Ok(removed_tender_candidates)
 }
 
 fn valid_logical_id(logical_id: &str) -> bool {
@@ -2521,6 +3061,79 @@ fn valid_identifier(value: &str) -> bool {
         && value
             .chars()
             .all(|character| character.is_ascii_digit() || matches!(character, 'a'..='f'))
+}
+
+fn storage_publication_failpoint(name: &str) {
+    #[cfg(feature = "runtime-fixture")]
+    if std::env::var("QUANTIX_STORAGE_FAILPOINT").as_deref() == Ok(name) {
+        std::process::abort();
+    }
+    #[cfg(not(feature = "runtime-fixture"))]
+    let _ = name;
+}
+
+fn walkdir_error(error: walkdir::Error) -> TenderCommandError {
+    error
+        .into_io_error()
+        .map(store_unavailable)
+        .unwrap_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+}
+
+fn canonical_direct_storage_directory(
+    parent: &Path,
+    target: &Path,
+) -> Result<Option<PathBuf>, TenderCommandError> {
+    if target.parent() != Some(parent) {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let metadata = match fs::symlink_metadata(target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(store_unavailable(error)),
+    };
+    if metadata_is_unsafe_storage_link(&metadata) || !metadata.is_dir() {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let canonical_parent = fs::canonicalize(parent).map_err(store_unavailable)?;
+    let canonical_target = fs::canonicalize(target).map_err(store_unavailable)?;
+    if canonical_target.parent() != Some(canonical_parent.as_path()) {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(Some(canonical_target))
+}
+
+fn validate_content_cache_roots(content_root: &Path) -> Result<(), TenderCommandError> {
+    let content_v2 = content_root.join("content-v2");
+    let Some(content_v2_root) = canonical_direct_storage_directory(content_root, &content_v2)?
+    else {
+        return Ok(());
+    };
+    let hash_root = content_v2_root.join("sha256");
+    canonical_direct_storage_directory(&content_v2_root, &hash_root)?;
+    Ok(())
+}
+
+fn remove_verified_directory(parent: &Path, target: &Path) -> Result<(), TenderCommandError> {
+    if target.parent() != Some(parent) {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let canonical_parent = fs::canonicalize(parent).map_err(store_unavailable)?;
+    let canonical_target = fs::canonicalize(target).map_err(store_unavailable)?;
+    if canonical_target.parent() != Some(canonical_parent.as_path()) {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    for entry in walkdir::WalkDir::new(&canonical_target)
+        .follow_links(false)
+        .into_iter()
+        .skip(1)
+    {
+        let entry = entry.map_err(walkdir_error)?;
+        let metadata = fs::symlink_metadata(entry.path()).map_err(store_unavailable)?;
+        if metadata_is_unsafe_storage_link(&metadata) {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+    }
+    fs::remove_dir_all(canonical_target).map_err(store_unavailable)
 }
 
 fn valid_media_type(media_type: &str) -> bool {
@@ -2634,28 +3247,28 @@ pub(crate) fn metadata_is_unsafe_storage_link(metadata: &fs::Metadata) -> bool {
     false
 }
 
-fn validate_store(
+fn inspect_store_structure(
     connection: &Connection,
     expected_tender_id: &TenderId,
-) -> Result<(), TenderCommandError> {
+) -> Result<Option<TenderIntegrityIssue>, TenderCommandError> {
     let version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(sql_error)?;
     if version != TENDER_SCHEMA_VERSION {
-        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        return Ok(Some(TenderIntegrityIssue::SchemaMismatch));
     }
     let expected_schema = Connection::open_in_memory().map_err(sql_error)?;
     expected_schema
         .execute_batch(TENDER_SCHEMA)
         .map_err(sql_error)?;
     if tender_schema_objects(connection)? != tender_schema_objects(&expected_schema)? {
-        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        return Ok(Some(TenderIntegrityIssue::SchemaMismatch));
     }
     let quick_check: String = connection
         .query_row("PRAGMA quick_check", [], |row| row.get(0))
         .map_err(sql_error)?;
     if quick_check != "ok" {
-        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        return Ok(Some(TenderIntegrityIssue::DatabaseIntegrityInvalid));
     }
     let foreign_key_failure: Option<i64> = connection
         .query_row(
@@ -2666,7 +3279,7 @@ fn validate_store(
         .optional()
         .map_err(sql_error)?;
     if foreign_key_failure.is_some() {
-        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        return Ok(Some(TenderIntegrityIssue::DatabaseIntegrityInvalid));
     }
     let stored_tender_id: String = connection
         .query_row(
@@ -2676,9 +3289,56 @@ fn validate_store(
         )
         .map_err(sql_error)?;
     if stored_tender_id != expected_tender_id.as_str() {
-        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        return Ok(Some(TenderIntegrityIssue::TenderIdentityMismatch));
     }
-    verify_audit_chain(connection)
+    Ok(None)
+}
+
+fn recovery_report(
+    tender_id: &TenderId,
+    issues: Vec<TenderIntegrityIssue>,
+) -> TenderIntegrityReport {
+    TenderIntegrityReport {
+        tender_id: tender_id.as_str().to_owned(),
+        state: TenderIntegrityState::RecoveryRequired,
+        issues,
+        recovery_choices: vec![
+            TenderRecoveryChoice::RestoreVerifiedBackup,
+            TenderRecoveryChoice::PurgeTender,
+        ],
+    }
+}
+
+fn inspection_result_or_recovery(
+    tender_id: &TenderId,
+    result: Result<TenderIntegrityReport, TenderCommandError>,
+    recover_not_found: bool,
+) -> Result<TenderIntegrityReport, TenderCommandError> {
+    match result {
+        Ok(report) => Ok(report),
+        Err(error)
+            if matches!(
+                error.code,
+                TenderErrorCode::IntegrityFailed
+                    | TenderErrorCode::RecoveryRequired
+                    | TenderErrorCode::StoreUnavailable
+            ) || (recover_not_found && error.code == TenderErrorCode::NotFound) =>
+        {
+            Ok(recovery_report(
+                tender_id,
+                vec![TenderIntegrityIssue::InspectionUnavailable],
+            ))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn recovery_required_if_integrity(error: TenderCommandError) -> TenderCommandError {
+    if error.code == TenderErrorCode::IntegrityFailed {
+        TenderCommandError::new(TenderErrorCode::RecoveryRequired)
+    } else {
+        error
+    }
 }
 
 type SchemaObject = (String, String, String, Option<String>);
@@ -2834,6 +3494,51 @@ fn verify_audit_chain(connection: &Connection) -> Result<(), TenderCommandError>
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
     Ok(())
+}
+
+fn inspect_referenced_content(
+    connection: &Connection,
+    content_root: &Path,
+) -> Result<Option<TenderIntegrityIssue>, TenderCommandError> {
+    if let Err(error) = validate_content_cache_roots(content_root) {
+        return if error.code == TenderErrorCode::IntegrityFailed {
+            Ok(Some(TenderIntegrityIssue::StorageLayoutInvalid))
+        } else {
+            Err(error)
+        };
+    }
+    let mut statement = connection
+        .prepare("SELECT sha256, integrity, size_bytes FROM content_objects ORDER BY sha256")
+        .map_err(sql_error)?;
+    let objects = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(sql_error)?;
+    for object in objects {
+        let (expected_sha256, integrity, expected_size) = object.map_err(sql_error)?;
+        let integrity = match integrity.parse::<cacache::Integrity>() {
+            Ok(integrity) => integrity,
+            Err(_) => return Ok(Some(TenderIntegrityIssue::ReferencedContentMismatch)),
+        };
+        if !cacache::exists_sync(content_root, &integrity) {
+            return Ok(Some(TenderIntegrityIssue::ReferencedContentMissing));
+        }
+        let bytes = match cacache::read_hash_sync(content_root, &integrity) {
+            Ok(bytes) => bytes,
+            Err(_) => return Ok(Some(TenderIntegrityIssue::ReferencedContentMismatch)),
+        };
+        if u64::try_from(expected_size).ok() != Some(bytes.len() as u64)
+            || sha256_hex(&bytes) != expected_sha256
+        {
+            return Ok(Some(TenderIntegrityIssue::ReferencedContentMismatch));
+        }
+    }
+    Ok(None)
 }
 
 fn sqlite_timestamp(transaction: &Transaction<'_>) -> Result<String, TenderCommandError> {

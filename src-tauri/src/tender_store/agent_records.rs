@@ -12,10 +12,11 @@ use crate::agent_runtime::{
         permission_duration, BootstrapGrantRequest,
     },
     AccessApproval, AccessRequest, AgentAccessRequestStatus, AgentAccessRequestView,
-    AgentProfileVersionView, AgentRunInspection, AgentRunState, ApproveAgentAccessCommand,
-    DataClassification, PendingProviderEvent, PermissionGrant, PreparedAgentRun,
-    ProposedAgentResult, ProviderEvent, ProviderEventKind, ProviderExecution, ProviderFailure,
-    ProviderFailureCategory, ProviderUsage, RequestAgentAccessCommand, ResolveAgentAccessCommand,
+    AgentProfileVersionView, AgentRunInspection, AgentRunRecoveryDecision,
+    AgentRunRecoveryDisposition, AgentRunState, ApproveAgentAccessCommand, DataClassification,
+    PendingProviderEvent, PermissionGrant, PreparedAgentRun, ProposedAgentResult, ProviderEvent,
+    ProviderEventKind, ProviderExecution, ProviderFailure, ProviderFailureCategory, ProviderUsage,
+    RequestAgentAccessCommand, ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand,
     TenderTaskView, ThreadExposureSet, VerificationStatus,
 };
 
@@ -33,6 +34,7 @@ impl TenderStore {
         tender_id: &TenderId,
         retry_of_run_id: Option<&str>,
     ) -> Result<PreparedAgentRun, TenderCommandError> {
+        self.require_writable()?;
         let run_id = random_identifier(&self.connection)?;
         let application_home = self
             .root
@@ -58,7 +60,12 @@ impl TenderStore {
             let has_unresolved_indeterminate: bool = transaction
                 .query_row(
                     "SELECT EXISTS(
-                       SELECT 1 FROM agent_runs WHERE status = 'indeterminate'
+                       SELECT 1 FROM agent_runs
+                       WHERE status = 'indeterminate'
+                         AND NOT EXISTS (
+                           SELECT 1 FROM agent_run_recovery_dispositions
+                           WHERE agent_run_recovery_dispositions.run_id = agent_runs.run_id
+                         )
                      )",
                     [],
                     |row| row.get(0),
@@ -67,19 +74,62 @@ impl TenderStore {
             if has_unresolved_indeterminate {
                 return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
             }
+            let pending_recovery_retry: Option<String> = transaction
+                .query_row(
+                    "SELECT agent_runs.run_id
+                     FROM agent_runs
+                     JOIN agent_run_recovery_dispositions
+                       ON agent_run_recovery_dispositions.run_id = agent_runs.run_id
+                     WHERE agent_runs.status = 'indeterminate'
+                       AND agent_run_recovery_dispositions.disposition = 'retry_task'
+                       AND NOT EXISTS (
+                         SELECT 1 FROM agent_runs AS linked_retry
+                         WHERE linked_retry.retry_of_run_id = agent_runs.run_id
+                       )
+                     ORDER BY agent_runs.run_sequence
+                     LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(sql_error)?;
+            if pending_recovery_retry.as_deref() != retry_of_run_id
+                && pending_recovery_retry.is_some()
+            {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
 
             let (profile, task) = if let Some(retry_of_run_id) = retry_of_run_id {
-                let prior: Option<(String, String)> = transaction
+                let prior: Option<(String, String, Option<String>)> = transaction
                     .query_row(
-                        "SELECT status, task_id FROM agent_runs WHERE run_id = ?1",
+                        "SELECT status, task_id,
+                                (SELECT disposition FROM agent_run_recovery_dispositions
+                                 WHERE agent_run_recovery_dispositions.run_id = agent_runs.run_id)
+                         FROM agent_runs WHERE run_id = ?1",
                         [retry_of_run_id],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                     )
                     .optional()
                     .map_err(sql_error)?;
-                let (prior_status, task_id) = prior
+                let (prior_status, task_id, recovery_disposition) = prior
                     .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-                if prior_status == "running" {
+                if prior_status == "running"
+                    || (prior_status == "indeterminate"
+                        && recovery_disposition.as_deref() != Some("retry_task"))
+                {
+                    return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+                }
+                if prior_status == "indeterminate"
+                    && transaction
+                        .query_row(
+                            "SELECT EXISTS(
+                               SELECT 1 FROM agent_runs WHERE retry_of_run_id = ?1
+                             )",
+                            [retry_of_run_id],
+                            |row| row.get::<_, bool>(0),
+                        )
+                        .map_err(sql_error)?
+                {
                     return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
                 }
                 (
@@ -260,6 +310,7 @@ impl TenderStore {
         prepared: &PreparedAgentRun,
         mut execution: ProviderExecution,
     ) -> Result<(), TenderCommandError> {
+        self.require_writable()?;
         if execution.state == AgentRunState::Running
             || (execution.state == AgentRunState::Completed
                 && (execution.failure.is_some() || execution.candidate_payload_json.is_none()))
@@ -428,6 +479,7 @@ impl TenderStore {
         thread_ref: &str,
         resumed: bool,
     ) -> Result<(), TenderCommandError> {
+        self.require_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -511,6 +563,7 @@ impl TenderStore {
         prepared: &PreparedAgentRun,
         thread_ref: &str,
     ) -> Result<(), TenderCommandError> {
+        self.require_writable()?;
         if prepared.provider_thread_to_archive.as_deref() != Some(thread_ref)
             || prepared.provider_thread_ref.is_some()
         {
@@ -566,6 +619,7 @@ impl TenderStore {
         run_id: &str,
         turn_ref: &str,
     ) -> Result<(), TenderCommandError> {
+        self.require_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -604,6 +658,7 @@ impl TenderStore {
         &mut self,
         run_id: &str,
     ) -> Result<(), TenderCommandError> {
+        self.require_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -647,6 +702,7 @@ impl TenderStore {
         event: &PendingProviderEvent,
         usage: &ProviderUsage,
     ) -> Result<(), TenderCommandError> {
+        self.require_writable()?;
         if !matches!(
             event.kind,
             ProviderEventKind::UsageObserved
@@ -683,6 +739,7 @@ impl TenderStore {
         run_id: &str,
         event: &PendingProviderEvent,
     ) -> Result<(), TenderCommandError> {
+        self.require_writable()?;
         if event.kind != ProviderEventKind::ControlRequestDenied {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
@@ -753,6 +810,7 @@ impl TenderStore {
         tender_id: &TenderId,
         command: RequestAgentAccessCommand,
     ) -> Result<AgentAccessRequestView, TenderCommandError> {
+        self.require_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -833,6 +891,7 @@ impl TenderStore {
         command: ApproveAgentAccessCommand,
         run_is_active: bool,
     ) -> Result<AgentAccessRequestView, TenderCommandError> {
+        self.require_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -965,6 +1024,7 @@ impl TenderStore {
         correlation_id: &str,
         tool_name: &str,
     ) -> Result<bool, TenderCommandError> {
+        self.require_writable()?;
         let Some(definition) = bootstrap_tool_catalogue()
             .into_iter()
             .find(|tool| tool.name == tool_name)
@@ -1119,6 +1179,7 @@ impl TenderStore {
         tool_name: &str,
         succeeded: bool,
     ) -> Result<(), TenderCommandError> {
+        self.require_writable()?;
         let definition = bootstrap_tool_catalogue()
             .into_iter()
             .find(|tool| tool.name == tool_name)
@@ -1199,11 +1260,88 @@ impl TenderStore {
         transaction.commit().map_err(sql_error)
     }
 
+    pub(crate) fn resolve_indeterminate_agent_run(
+        &mut self,
+        tender_id: &TenderId,
+        command: ResolveIndeterminateAgentRunCommand,
+    ) -> Result<AgentRunRecoveryDecision, TenderCommandError> {
+        self.require_writable()?;
+        let rationale = command.rationale.trim().to_owned();
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let task_id: Option<String> = transaction
+            .query_row(
+                "SELECT task_id FROM agent_runs
+                 WHERE run_id = ?1 AND status = 'indeterminate'
+                   AND NOT EXISTS (
+                     SELECT 1 FROM agent_run_recovery_dispositions
+                     WHERE agent_run_recovery_dispositions.run_id = agent_runs.run_id
+                   )",
+                [&command.run_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let task_id =
+            task_id.ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let decided_at = sqlite_timestamp(&transaction)?;
+        if transaction
+            .execute(
+                "INSERT INTO agent_run_recovery_dispositions (
+                   run_id, disposition, rationale, decided_by, decided_at
+                 ) VALUES (?1, ?2, ?3, 'engineer_user', ?4)",
+                params![
+                    command.run_id,
+                    command.disposition.as_str(),
+                    rationale,
+                    decided_at
+                ],
+            )
+            .map_err(sql_error)?
+            != 1
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let tender_revision: u32 = transaction
+            .query_row(
+                "SELECT current_revision FROM tender
+                 WHERE singleton = 1 AND tender_id = ?1",
+                [tender_id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        append_audit_event(
+            &transaction,
+            tender_id.as_str(),
+            "indeterminate_agent_run_resolved",
+            tender_revision,
+            json!({
+                "decided_by": "engineer_user",
+                "disposition": command.disposition.as_str(),
+                "rationale": rationale,
+                "run_id": command.run_id,
+                "task_id": task_id,
+            }),
+            &decided_at,
+        )?;
+        transaction.commit().map_err(sql_error)?;
+        Ok(AgentRunRecoveryDecision {
+            run_id: command.run_id,
+            disposition: command.disposition,
+            rationale,
+            decided_by: "engineer_user".into(),
+            decided_at,
+        })
+    }
+
     pub(crate) fn resolve_agent_access_request(
         &mut self,
         tender_id: &TenderId,
         command: ResolveAgentAccessCommand,
     ) -> Result<AgentAccessRequestView, TenderCommandError> {
+        self.require_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1318,6 +1456,7 @@ impl TenderStore {
         tender_id: &TenderId,
         run_id: &str,
     ) -> Result<bool, TenderCommandError> {
+        self.require_writable()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1514,6 +1653,36 @@ impl TenderStore {
         }
         let access_requests =
             load_access_requests(&self.connection, run_id, state == AgentRunState::Running)?;
+        let recovery_decision = self
+            .connection
+            .query_row(
+                "SELECT disposition, rationale, decided_by, decided_at
+                 FROM agent_run_recovery_dispositions WHERE run_id = ?1",
+                [run_id],
+                |decision| {
+                    Ok((
+                        decision.get::<_, String>(0)?,
+                        decision.get::<_, String>(1)?,
+                        decision.get::<_, String>(2)?,
+                        decision.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(sql_error)?
+            .map(|(disposition, rationale, decided_by, decided_at)| {
+                Ok(AgentRunRecoveryDecision {
+                    run_id: run_id.to_owned(),
+                    disposition: AgentRunRecoveryDisposition::parse(&disposition)?,
+                    rationale,
+                    decided_by,
+                    decided_at,
+                })
+            })
+            .transpose()?;
+        if recovery_decision.is_some() && state != AgentRunState::Indeterminate {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
         Ok(AgentRunInspection {
             run_id: run_id.to_owned(),
             retry_of_run_id: row.retry_of_run_id,
@@ -1528,6 +1697,7 @@ impl TenderStore {
             usage,
             failure,
             proposed_result,
+            recovery_decision,
             started_at: row.started_at,
             completed_at: row.completed_at,
         })
@@ -1537,6 +1707,7 @@ impl TenderStore {
         &mut self,
         tender_id: &TenderId,
     ) -> Result<(), TenderCommandError> {
+        self.require_writable()?;
         let runs = {
             let mut statement = self
                 .connection

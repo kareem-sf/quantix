@@ -2,16 +2,20 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import type { DocumentRegister } from "./bindings/DocumentRegister";
 import type { SourceRelationshipKind } from "./bindings/SourceRelationshipKind";
+import type { TenderCatalogueEntry } from "./bindings/TenderCatalogueEntry";
+import type { TenderIntegrityReport } from "./bindings/TenderIntegrityReport";
 import type { TenderPackageImportResult } from "./bindings/TenderPackageImportResult";
 import type { TenderPackageSourceKind } from "./bindings/TenderPackageSourceKind";
 import type { TenderSummary } from "./bindings/TenderSummary";
 import { AgentRunOffice } from "./AgentRunOffice";
 import { DocumentEvidenceOffice } from "./DocumentEvidenceOffice";
+import { TenderRecoveryPanel } from "./TenderRecoveryPanel";
 import {
   chooseAndImportTenderPackage,
   confirmSourceRelationship,
   createTender,
   inspectDocumentRegister,
+  inspectTenderIntegrity,
   listTenders,
   openTender,
   reviseTender,
@@ -19,14 +23,19 @@ import {
 
 type CatalogueState =
   | { kind: "loading" }
-  | { kind: "ready"; tenders: TenderSummary[] }
+  | { kind: "ready"; tenders: TenderCatalogueEntry[] }
   | { kind: "error" };
 
-export function TenderWorkspace() {
+interface TenderWorkspaceProps {
+  runtimeReady: boolean;
+}
+
+export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
   const [catalogue, setCatalogue] = useState<CatalogueState>({
     kind: "loading",
   });
   const [selected, setSelected] = useState<TenderSummary>();
+  const [recovery, setRecovery] = useState<TenderIntegrityReport>();
   const [documentRegister, setDocumentRegister] = useState<DocumentRegister>();
   const [lastIntake, setLastIntake] = useState<TenderPackageImportResult>();
   const [newName, setNewName] = useState("");
@@ -56,13 +65,28 @@ export function TenderWorkspace() {
   const updateTender = (tender: TenderSummary) => {
     setCatalogue((current) => {
       if (current.kind !== "ready") return current;
+      const updated: TenderCatalogueEntry = {
+        tender_id: tender.tender_id,
+        summary: tender,
+        integrity: {
+          tender_id: tender.tender_id,
+          state: "ready",
+          issues: [],
+          recovery_choices: [],
+        },
+      };
       const tenders = current.tenders
         .filter((candidate) => candidate.tender_id !== tender.tender_id)
-        .concat(tender)
-        .sort((left, right) => left.name.localeCompare(right.name));
+        .concat(updated)
+        .sort((left, right) =>
+          (left.summary?.name ?? left.tender_id).localeCompare(
+            right.summary?.name ?? right.tender_id,
+          ),
+        );
       return { kind: "ready", tenders };
     });
     setSelected(tender);
+    setRecovery(undefined);
     setRevisionName(tender.name);
   };
 
@@ -112,6 +136,34 @@ export function TenderWorkspace() {
       updateTender(await openTender(tenderId));
       setDocumentRegister(await inspectDocumentRegister(tenderId));
       setLastIntake(undefined);
+    } catch {
+      try {
+        const integrity = await inspectTenderIntegrity(tenderId);
+        if (integrity.state === "recovery_required") {
+          setSelected(undefined);
+          setRecovery(integrity);
+          return;
+        }
+      } catch {
+        // The command failure below remains the authoritative UI state.
+      }
+      setCommandFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const inspectRecovery = async (tenderId: string) => {
+    setBusy(true);
+    setCommandFailed(false);
+    try {
+      const integrity = await inspectTenderIntegrity(tenderId);
+      if (integrity.state === "ready") {
+        await handleOpen(tenderId);
+      } else {
+        setSelected(undefined);
+        setRecovery(integrity);
+      }
     } catch {
       setCommandFailed(true);
     } finally {
@@ -213,13 +265,23 @@ export function TenderWorkspace() {
                 onChange={(event) => setNewName(event.target.value)}
                 maxLength={200}
                 autoComplete="off"
-                disabled={busy}
+                disabled={busy || !runtimeReady}
               />
-              <button type="submit" disabled={busy || !newName.trim()}>
+              <button
+                type="submit"
+                disabled={busy || !runtimeReady || !newName.trim()}
+              >
                 Create Tender
               </button>
             </div>
           </form>
+
+          {!runtimeReady ? (
+            <p className="catalogue-message" role="status">
+              Local Tender inspection and recovery remain available. New work
+              waits for Provider runtime readiness.
+            </p>
+          ) : null}
 
           {catalogue.kind === "loading" ? (
             <p className="catalogue-message" aria-live="polite">
@@ -244,18 +306,30 @@ export function TenderWorkspace() {
                   <button
                     type="button"
                     className={
-                      selected?.tender_id === tender.tender_id
+                      selected?.tender_id === tender.tender_id ||
+                      recovery?.tender_id === tender.tender_id
                         ? "tender-row tender-row--selected"
                         : "tender-row"
                     }
-                    onClick={() => void handleOpen(tender.tender_id)}
+                    onClick={() =>
+                      void (tender.summary
+                        ? handleOpen(tender.tender_id)
+                        : inspectRecovery(tender.tender_id))
+                    }
                     disabled={busy}
                   >
-                    <span>{tender.name}</span>
-                    <small>
-                      Revision {tender.revision} · {tender.audit_event_count}{" "}
-                      audit events
-                    </small>
+                    <span>
+                      {tender.summary?.name ??
+                        `Tender ${tender.tender_id.slice(0, 12)}`}
+                    </span>
+                    {tender.summary ? (
+                      <small>
+                        Revision {tender.summary.revision} ·{" "}
+                        {tender.summary.audit_event_count} audit events
+                      </small>
+                    ) : (
+                      <small>Recovery Required · read-only</small>
+                    )}
                   </button>
                 </li>
               ))}
@@ -290,9 +364,12 @@ export function TenderWorkspace() {
                   onChange={(event) => setRevisionName(event.target.value)}
                   maxLength={200}
                   autoComplete="off"
-                  disabled={busy}
+                  disabled={busy || !runtimeReady}
                 />
-                <button type="submit" disabled={busy || !revisionName.trim()}>
+                <button
+                  type="submit"
+                  disabled={busy || !runtimeReady || !revisionName.trim()}
+                >
                   Save immutable revision
                 </button>
               </form>
@@ -326,7 +403,7 @@ export function TenderWorkspace() {
                   <button
                     type="button"
                     onClick={() => void handlePackageChoice("directory")}
-                    disabled={busy}
+                    disabled={busy || !runtimeReady}
                   >
                     Choose project directory
                   </button>
@@ -334,7 +411,7 @@ export function TenderWorkspace() {
                     type="button"
                     className="button-secondary"
                     onClick={() => void handlePackageChoice("zip_archive")}
-                    disabled={busy}
+                    disabled={busy || !runtimeReady}
                   >
                     Choose ZIP archive
                   </button>
@@ -350,6 +427,7 @@ export function TenderWorkspace() {
               <AgentRunOffice
                 key={`agents-${selected.tender_id}`}
                 tenderId={selected.tender_id}
+                runtimeReady={runtimeReady}
                 reportCommandFailure={reportCommandFailure}
               />
               <section
@@ -367,6 +445,7 @@ export function TenderWorkspace() {
                   <DocumentEvidenceOffice
                     key={selected.tender_id}
                     tenderId={selected.tender_id}
+                    runtimeReady={runtimeReady}
                     register={documentRegister}
                     updateRegister={setDocumentRegister}
                     reportCommandFailure={reportCommandFailure}
@@ -400,7 +479,7 @@ export function TenderWorkspace() {
                           onChange={(event) =>
                             setPriorVersionKey(event.target.value)
                           }
-                          disabled={busy}
+                          disabled={busy || !runtimeReady}
                         >
                           <option value="">Select prior document</option>
                           {registeredDocuments.map((document) => (
@@ -428,7 +507,7 @@ export function TenderWorkspace() {
                               event.target.value as SourceRelationshipKind,
                             )
                           }
-                          disabled={busy}
+                          disabled={busy || !runtimeReady}
                         >
                           <option value="replacement">Replacement</option>
                           <option value="addendum">Addendum</option>
@@ -441,7 +520,7 @@ export function TenderWorkspace() {
                           onChange={(event) =>
                             setReplacementVersionKey(event.target.value)
                           }
-                          disabled={busy}
+                          disabled={busy || !runtimeReady}
                         >
                           <option value="">Select new document</option>
                           {registeredDocuments.map((document) => (
@@ -465,6 +544,7 @@ export function TenderWorkspace() {
                       type="submit"
                       disabled={
                         busy ||
+                        !runtimeReady ||
                         !priorVersionKey ||
                         !replacementVersionKey ||
                         priorVersionKey === replacementVersionKey
@@ -476,6 +556,12 @@ export function TenderWorkspace() {
                 ) : null}
               </section>
             </>
+          ) : recovery ? (
+            <TenderRecoveryPanel
+              report={recovery}
+              refreshing={busy}
+              onRefresh={() => void inspectRecovery(recovery.tender_id)}
+            />
           ) : (
             <div className="tender-detail__empty">
               <p className="section-label">Tender detail</p>

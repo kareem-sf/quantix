@@ -13,6 +13,7 @@ import {
 
 interface DocumentEvidenceOfficeProps {
   tenderId: string;
+  runtimeReady: boolean;
   register: DocumentRegister;
   updateRegister: (register: DocumentRegister) => void;
   reportCommandFailure: () => void;
@@ -27,6 +28,7 @@ const readableState = (value: string) => value.replace(/_/g, " ");
 
 export function DocumentEvidenceOffice({
   tenderId,
+  runtimeReady,
   register,
   updateRegister,
   reportCommandFailure,
@@ -162,7 +164,7 @@ export function DocumentEvidenceOffice({
                         <button
                           type="button"
                           className="table-action"
-                          disabled={Boolean(parsingTarget)}
+                          disabled={!runtimeReady || Boolean(parsingTarget)}
                           onClick={() => void parseDocument(document)}
                         >
                           {document.parse_state === "not_requested"

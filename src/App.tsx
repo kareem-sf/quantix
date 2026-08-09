@@ -171,7 +171,9 @@ function App() {
         <RuntimeReadinessPanel onReadyChange={setRuntimeReady} />
       ) : null}
 
-      {runtimeReady ? <TenderWorkspace /> : null}
+      {outcome && (outcome.state === "ready" || outcome.state === "warning") ? (
+        <TenderWorkspace runtimeReady={runtimeReady} />
+      ) : null}
 
       <div className="structural-rail" aria-hidden="true" />
     </div>

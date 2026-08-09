@@ -1,12 +1,14 @@
 use std::{fs, io, path::Path, sync::Arc, time::Duration};
 
 use quantix_lib::{
-    ensure_quantix_setup, AgentAccessRequestStatus, AgentAccessResolution, AgentRunState,
-    ApproveAgentAccessCommand, CreateTenderCommand, DataClassification, DeviceProtection,
-    InterruptAgentRunCommand, PermissionDenialReason, ProviderEventKind, ProviderFailureCategory,
-    ProviderRateLimitState, QuantixHost, RequestAgentAccessCommand, ResolveAgentAccessCommand,
+    ensure_quantix_setup, AgentAccessRequestStatus, AgentAccessResolution,
+    AgentRunRecoveryDisposition, AgentRunState, ApproveAgentAccessCommand, CreateTenderCommand,
+    DataClassification, DeviceProtection, InterruptAgentRunCommand, PermissionDenialReason,
+    ProviderEventKind, ProviderFailureCategory, ProviderRateLimitState, QuantixHost,
+    RequestAgentAccessCommand, ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand,
     ReviseTenderCommand, RunBootstrapAgentCommand, RuntimeLayout, SetupPlatform, SetupState,
-    StoragePermissions, TenderErrorCode, VerificationStatus, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    StoragePermissions, TenderErrorCode, TenderIntegrityIssue, TenderIntegrityState,
+    VerificationStatus, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 struct ReadySetupPlatform;
@@ -1229,6 +1231,202 @@ async fn unresolved_indeterminate_run_blocks_new_and_linked_execution() {
         fs::read_to_string(harness.codex.with_extension("agent-start-count"))
             .expect("read app-server start count"),
         "1"
+    );
+}
+
+#[tokio::test]
+async fn engineer_disposition_permits_one_attributable_linked_retry() {
+    let harness = Harness::new("malformed-after-turn");
+    let indeterminate = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("record indeterminate Agent Run");
+    assert_eq!(indeterminate.state, AgentRunState::Indeterminate);
+
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close Tender before Host restart");
+    let resources = harness
+        .codex
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .expect("fixture resources")
+        .to_path_buf();
+    let restarted = QuantixHost::with_setup_platform_and_runtime(
+        &harness.application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(resources),
+    );
+    let before_decision = restarted
+        .inspect_agent_runs(&harness.tender_id)
+        .expect("inspect indeterminate run without Provider readiness");
+    assert_eq!(before_decision[0].state, AgentRunState::Indeterminate);
+
+    let decision = restarted
+        .resolve_indeterminate_agent_run(ResolveIndeterminateAgentRunCommand {
+            tender_id: harness.tender_id.clone(),
+            run_id: indeterminate.run_id.clone(),
+            disposition: AgentRunRecoveryDisposition::RetryTask,
+            rationale: "The quarantined candidate was inspected and must not be published.".into(),
+        })
+        .expect("record attributable Engineer disposition");
+    assert_eq!(decision.run_id, indeterminate.run_id);
+    assert_eq!(decision.disposition, AgentRunRecoveryDisposition::RetryTask);
+    assert_eq!(decision.decided_by, "engineer_user");
+    let inspected = restarted
+        .inspect_agent_runs(&harness.tender_id)
+        .expect("inspect recovery decision");
+    assert_eq!(
+        inspected[0].recovery_decision.as_ref(),
+        Some(&decision),
+        "the Engineer disposition must be visible at the Agent Run boundary"
+    );
+
+    harness.set_scenario("success");
+    restarted.accept_runtime_fixture();
+    let unlinked = restarted
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect_err("retry disposition requires the exact linked run");
+    assert_eq!(unlinked.code, TenderErrorCode::InvalidCommand);
+    let retry = restarted
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: Some(indeterminate.run_id.clone()),
+        })
+        .await
+        .expect("run one separate linked retry after Engineer disposition");
+    assert_eq!(retry.state, AgentRunState::Completed, "{retry:#?}");
+    assert_eq!(
+        retry.retry_of_run_id.as_deref(),
+        Some(indeterminate.run_id.as_str())
+    );
+    let second_retry = restarted
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: Some(indeterminate.run_id.clone()),
+        })
+        .await
+        .expect_err("one Engineer disposition permits only one linked retry");
+    assert_eq!(second_retry.code, TenderErrorCode::InvalidCommand);
+
+    let duplicate = restarted
+        .resolve_indeterminate_agent_run(ResolveIndeterminateAgentRunCommand {
+            tender_id: harness.tender_id.clone(),
+            run_id: indeterminate.run_id,
+            disposition: AgentRunRecoveryDisposition::RetryTask,
+            rationale: "A second disposition must not rewrite history.".into(),
+        })
+        .expect_err("Engineer disposition is immutable");
+    assert_eq!(duplicate.code, TenderErrorCode::InvalidCommand);
+}
+
+#[tokio::test]
+async fn close_task_disposition_never_authorizes_a_linked_retry() {
+    let harness = Harness::new("malformed-after-turn");
+    let indeterminate = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("record indeterminate Agent Run");
+    harness
+        .host
+        .resolve_indeterminate_agent_run(ResolveIndeterminateAgentRunCommand {
+            tender_id: harness.tender_id.clone(),
+            run_id: indeterminate.run_id.clone(),
+            disposition: AgentRunRecoveryDisposition::CloseTask,
+            rationale: "The Engineer closed this task without accepting quarantined output.".into(),
+        })
+        .expect("close the uncertain task");
+
+    harness.set_scenario("success");
+    let linked = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: Some(indeterminate.run_id),
+        })
+        .await
+        .expect_err("closed uncertain task cannot be retried");
+    assert_eq!(linked.code, TenderErrorCode::InvalidCommand);
+
+    let separate = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("separate task may run after uncertainty is closed");
+    assert_eq!(separate.state, AgentRunState::Completed, "{separate:#?}");
+}
+
+#[tokio::test]
+async fn semantically_invalid_agent_manifest_requires_tender_recovery() {
+    let harness = Harness::new("malformed-after-turn");
+    let run = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("record Agent Run");
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close Tender");
+    let connection = harness.database();
+    let trigger_sql: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema
+             WHERE type = 'trigger' AND name = 'agent_runs_terminal_facts_no_rewrite'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("Agent Run immutability trigger");
+    connection
+        .execute_batch("DROP TRIGGER agent_runs_terminal_facts_no_rewrite")
+        .expect("inject manifest mutation capability");
+    connection
+        .execute(
+            "UPDATE agent_runs SET permission_grant_json = '{}' WHERE run_id = ?1",
+            [&run.run_id],
+        )
+        .expect("replace permission manifest with semantically invalid JSON");
+    connection
+        .execute_batch(&trigger_sql)
+        .expect("restore exact Agent Run trigger");
+    drop(connection);
+
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("inspect semantic manifests");
+    assert_eq!(integrity.state, TenderIntegrityState::RecoveryRequired);
+    assert_eq!(
+        integrity.issues,
+        vec![TenderIntegrityIssue::ManifestInvalid]
+    );
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect_err("invalid canonical manifest cannot reopen")
+            .code,
+        TenderErrorCode::RecoveryRequired
     );
 }
 

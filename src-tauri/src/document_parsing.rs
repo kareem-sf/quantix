@@ -453,7 +453,6 @@ impl QuantixHost {
         command
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-        self.require_runtime_verified()?;
         crate::tender_store::require_setup(self)?;
         TenderId::parse(&command.tender_id)?;
         Ok(self.cancel_active_parse(&ParseTargetKey::new(
@@ -470,7 +469,6 @@ impl QuantixHost {
         command
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-        self.require_runtime_verified()?;
         crate::tender_store::require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         self.tender_store(&tender_id)?
@@ -489,7 +487,6 @@ impl QuantixHost {
         if command.query.trim().is_empty() {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        self.require_runtime_verified()?;
         crate::tender_store::require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         self.tender_store(&tender_id)?

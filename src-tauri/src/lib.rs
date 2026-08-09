@@ -10,12 +10,13 @@ mod tender_store;
 pub use agent_runtime::{
     approve_one_run_access, AccessApproval, AccessRequest, AgentAccessRequestStatus,
     AgentAccessRequestView, AgentAccessResolution, AgentProfileVersionView, AgentResourceBudget,
-    AgentRunInspection, AgentRunPermissions, AgentRunState, AgentRunWorkspaceManifest,
-    AgentTaskInputReference, ApproveAgentAccessCommand, DataClassification, DataViewManifest,
-    InterruptAgentRunCommand, OneRunAccessGrant, PermissionCeiling, PermissionDenialReason,
-    PermissionGrant, ProposedAgentResult, ProviderEvent, ProviderEventKind, ProviderFailure,
-    ProviderFailureCategory, ProviderRateLimit, ProviderRateLimitState, ProviderRateLimitWindow,
-    ProviderUsage, RequestAgentAccessCommand, ResolveAgentAccessCommand, RunBootstrapAgentCommand,
+    AgentRunInspection, AgentRunPermissions, AgentRunRecoveryDecision, AgentRunRecoveryDisposition,
+    AgentRunState, AgentRunWorkspaceManifest, AgentTaskInputReference, ApproveAgentAccessCommand,
+    DataClassification, DataViewManifest, InterruptAgentRunCommand, OneRunAccessGrant,
+    PermissionCeiling, PermissionDenialReason, PermissionGrant, ProposedAgentResult, ProviderEvent,
+    ProviderEventKind, ProviderFailure, ProviderFailureCategory, ProviderRateLimit,
+    ProviderRateLimitState, ProviderRateLimitWindow, ProviderUsage, RequestAgentAccessCommand,
+    ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand, RunBootstrapAgentCommand,
     TenderTaskView, ThreadExposureSet, ToolIdempotency, ToolSideEffectClass, TypedToolDefinition,
     TypedToolQuota, VerificationStatus,
 };
@@ -40,7 +41,9 @@ pub use tender_intake::{
 };
 pub use tender_store::{
     ContentVersionSummary, CreateTenderCommand, OpenTenderCommand, RegisterTenderContentCommand,
-    ReviseTenderCommand, TenderCommandError, TenderErrorCode, TenderInspection, TenderSummary,
+    ReviseTenderCommand, StartupReconciliationReport, TenderCatalogueEntry, TenderCommandError,
+    TenderErrorCode, TenderInspection, TenderIntegrityIssue, TenderIntegrityReport,
+    TenderIntegrityState, TenderRecoveryChoice, TenderSummary,
 };
 
 use tauri::Manager;
@@ -48,13 +51,14 @@ use tauri::Manager;
 mod tauri_commands {
     use super::{
         ensure_quantix_setup as ensure_setup, AgentAccessRequestView, AgentRunInspection,
-        ApproveAgentAccessCommand, ChooseTenderPackageCommand, ConfirmSourceRelationshipCommand,
-        CreateTenderCommand, DocumentParseResult, DocumentRegister, EvidenceDocument,
-        EvidenceSearchResult, ImportTenderPackageCommand, InterruptAgentRunCommand,
-        OpenTenderCommand, ParseSourceArtifactCommand, QuantixHost, RequestAgentAccessCommand,
-        ResolveAgentAccessCommand, ReviseTenderCommand, RunBootstrapAgentCommand, RuntimeReadiness,
-        SearchEvidenceCommand, SetupOutcome, TenderCommandError, TenderErrorCode,
-        TenderPackageImportResult, TenderPackageSourceKind, TenderSummary,
+        AgentRunRecoveryDecision, ApproveAgentAccessCommand, ChooseTenderPackageCommand,
+        ConfirmSourceRelationshipCommand, CreateTenderCommand, DocumentParseResult,
+        DocumentRegister, EvidenceDocument, EvidenceSearchResult, ImportTenderPackageCommand,
+        InterruptAgentRunCommand, OpenTenderCommand, ParseSourceArtifactCommand, QuantixHost,
+        RequestAgentAccessCommand, ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand,
+        ReviseTenderCommand, RunBootstrapAgentCommand, RuntimeReadiness, SearchEvidenceCommand,
+        SetupOutcome, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
+        TenderIntegrityReport, TenderPackageImportResult, TenderPackageSourceKind, TenderSummary,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -84,7 +88,7 @@ mod tauri_commands {
     #[tauri::command]
     pub(super) async fn list_tenders(
         host: tauri::State<'_, QuantixHost>,
-    ) -> Result<Vec<TenderSummary>, TenderCommandError> {
+    ) -> Result<Vec<TenderCatalogueEntry>, TenderCommandError> {
         let host = host.inner().clone();
         tauri::async_runtime::spawn_blocking(move || host.list_tenders())
             .await
@@ -104,6 +108,21 @@ mod tauri_commands {
             .map_err(|_| TenderCommandError {
                 code: TenderErrorCode::StoreUnavailable,
             })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_tender_integrity(
+        host: tauri::State<'_, QuantixHost>,
+        command: OpenTenderCommand,
+    ) -> Result<TenderIntegrityReport, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.inspect_tender_integrity(&command.tender_id)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?
     }
 
     #[tauri::command]
@@ -309,6 +328,19 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn resolve_indeterminate_agent_run(
+        host: tauri::State<'_, QuantixHost>,
+        command: ResolveIndeterminateAgentRunCommand,
+    ) -> Result<AgentRunRecoveryDecision, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.resolve_indeterminate_agent_run(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
     pub(super) fn interrupt_agent_run(
         host: tauri::State<'_, QuantixHost>,
         command: InterruptAgentRunCommand,
@@ -323,6 +355,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
         tauri_commands::create_tender,
         tauri_commands::list_tenders,
         tauri_commands::open_tender,
+        tauri_commands::inspect_tender_integrity,
         tauri_commands::revise_tender,
         tauri_commands::choose_and_import_tender_package,
         tauri_commands::inspect_document_register,
@@ -339,6 +372,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
         tauri_commands::request_agent_access,
         tauri_commands::approve_agent_access,
         tauri_commands::resolve_agent_access,
+        tauri_commands::resolve_indeterminate_agent_run,
         tauri_commands::interrupt_agent_run
     ])
 }

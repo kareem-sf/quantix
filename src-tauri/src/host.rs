@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -13,14 +13,19 @@ use crate::agent_runtime::CodexProvider;
 use crate::process_supervisor::ProcessSupervisor;
 use crate::runtime_readiness::RuntimeLayout;
 use crate::setup::{ensure_application_home, SetupOutcome, SetupPlatform, SystemSetupPlatform};
-use crate::tender_store::{OpenTenderStores, TenderCommandError, TenderErrorCode, TenderId};
+use crate::tender_store::{
+    OpenTenderStores, StartupReconciliationReport, TenderCommandError, TenderErrorCode, TenderId,
+};
 
 struct QuantixHostInner {
     application_home: PathBuf,
     setup_platform: Arc<dyn SetupPlatform>,
     setup_lock: Mutex<()>,
+    startup_reconciled: Mutex<bool>,
+    startup_reconciliation: Mutex<StartupReconciliationReport>,
     catalogue_lock: Mutex<()>,
     open_tender_stores: OpenTenderStores,
+    recovery_required_tenders: Mutex<HashSet<TenderId>>,
     runtime_layout: RuntimeLayout,
     process_supervisor: ProcessSupervisor,
     runtime_preparation: Mutex<Option<CancellationToken>>,
@@ -92,8 +97,11 @@ impl QuantixHost {
                 application_home: application_home.as_ref().to_path_buf(),
                 setup_platform,
                 setup_lock: Mutex::new(()),
+                startup_reconciled: Mutex::new(false),
+                startup_reconciliation: Mutex::new(Default::default()),
                 catalogue_lock: Mutex::new(()),
                 open_tender_stores: Mutex::new(Default::default()),
+                recovery_required_tenders: Mutex::new(Default::default()),
                 runtime_layout,
                 process_supervisor: ProcessSupervisor,
                 runtime_preparation: Mutex::new(None),
@@ -121,8 +129,42 @@ impl QuantixHost {
         )
     }
 
+    pub(crate) fn reconcile_startup_once(&self) -> Result<(), TenderCommandError> {
+        let mut reconciled = self
+            .inner
+            .startup_reconciled
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        if !*reconciled {
+            let removed_tender_candidates =
+                crate::tender_store::reconcile_application_staging(&self.inner.application_home)?;
+            *self
+                .inner
+                .startup_reconciliation
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))? =
+                StartupReconciliationReport {
+                    removed_tender_candidates,
+                };
+            *reconciled = true;
+        }
+        Ok(())
+    }
+
+    pub fn inspect_startup_reconciliation(&self) -> StartupReconciliationReport {
+        self.inner
+            .startup_reconciliation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
     pub(crate) fn open_tender_stores(&self) -> &OpenTenderStores {
         &self.inner.open_tender_stores
+    }
+
+    pub(crate) fn recovery_required_tenders(&self) -> &Mutex<HashSet<TenderId>> {
+        &self.inner.recovery_required_tenders
     }
 
     pub(crate) fn catalogue_lock(&self) -> &Mutex<()> {

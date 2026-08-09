@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { AgentRunInspection } from "./bindings/AgentRunInspection";
+import type { AgentRunRecoveryDisposition } from "./bindings/AgentRunRecoveryDisposition";
 import {
   inspectAgentRuns,
   interruptAgentRun,
+  resolveIndeterminateAgentRun,
   runBootstrapAgent,
 } from "./quantixHost";
 
 interface AgentRunOfficeProps {
   tenderId: string;
+  runtimeReady: boolean;
   reportCommandFailure: () => void;
 }
 
@@ -21,14 +24,27 @@ const readable = (value: string) => value.replace(/_/g, " ");
 
 export function AgentRunOffice({
   tenderId,
+  runtimeReady,
   reportCommandFailure,
 }: AgentRunOfficeProps) {
   const [runsState, setRunsState] = useState<RunsState>({ kind: "loading" });
   const [runningCommand, setRunningCommand] = useState(false);
   const [interruptingRunId, setInterruptingRunId] = useState<string>();
+  const [resolvingRunId, setResolvingRunId] = useState<string>();
+  const [recoveryRationale, setRecoveryRationale] = useState("");
   const runs = runsState.kind === "ready" ? runsState.runs : [];
   const hasRunningRun = runs.some((run) => run.state === "running");
-  const hasIndeterminateRun = runs.some((run) => run.state === "indeterminate");
+  const unresolvedIndeterminateRuns = runs.filter(
+    (run) => run.state === "indeterminate" && !run.recovery_decision,
+  );
+  const pendingRecoveryRetries = runs.filter(
+    (run) =>
+      run.state === "indeterminate" &&
+      run.recovery_decision?.disposition === "retry_task" &&
+      !runs.some((candidate) => candidate.retry_of_run_id === run.run_id),
+  );
+  const recoveryBlocksNewRun =
+    unresolvedIndeterminateRuns.length > 0 || pendingRecoveryRetries.length > 0;
 
   const refresh = useCallback(async () => {
     try {
@@ -78,6 +94,29 @@ export function AgentRunOffice({
     }
   };
 
+  const resolveRecovery = async (
+    runId: string,
+    disposition: AgentRunRecoveryDisposition,
+  ) => {
+    const rationale = recoveryRationale.trim();
+    if (!rationale) return;
+    setResolvingRunId(runId);
+    try {
+      await resolveIndeterminateAgentRun(
+        tenderId,
+        runId,
+        disposition,
+        rationale,
+      );
+      setRecoveryRationale("");
+      await refresh();
+    } catch {
+      reportCommandFailure();
+    } finally {
+      setResolvingRunId(undefined);
+    }
+  };
+
   return (
     <section className="agent-office" aria-labelledby="agent-office-title">
       <div className="agent-office__heading">
@@ -95,7 +134,12 @@ export function AgentRunOffice({
         <button
           type="button"
           onClick={() => void executeAgentRun()}
-          disabled={runningCommand || hasRunningRun || hasIndeterminateRun}
+          disabled={
+            !runtimeReady ||
+            runningCommand ||
+            hasRunningRun ||
+            recoveryBlocksNewRun
+          }
         >
           {runningCommand || hasRunningRun
             ? "Agent Turn running"
@@ -111,10 +155,10 @@ export function AgentRunOffice({
         </button>
       </div>
 
-      {hasIndeterminateRun ? (
+      {unresolvedIndeterminateRuns.length > 0 ? (
         <p className="catalogue-error" role="status">
-          Resolve the quarantined indeterminate Agent Run before starting or
-          retrying this profile.
+          An accepted Provider Turn has an unknown outcome. Inspect its facts
+          and record an Engineer disposition before any further task runs.
         </p>
       ) : null}
 
@@ -169,10 +213,30 @@ export function AgentRunOffice({
                       type="button"
                       onClick={() => void executeAgentRun(run.run_id)}
                       disabled={
-                        runningCommand || hasRunningRun || hasIndeterminateRun
+                        !runtimeReady ||
+                        runningCommand ||
+                        hasRunningRun ||
+                        recoveryBlocksNewRun
                       }
                     >
                       Create linked retry
+                    </button>
+                  ) : null}
+                  {run.recovery_decision?.disposition === "retry_task" &&
+                  !runs.some(
+                    (candidate) => candidate.retry_of_run_id === run.run_id,
+                  ) ? (
+                    <button
+                      type="button"
+                      onClick={() => void executeAgentRun(run.run_id)}
+                      disabled={
+                        !runtimeReady ||
+                        runningCommand ||
+                        hasRunningRun ||
+                        unresolvedIndeterminateRuns.length > 0
+                      }
+                    >
+                      Create attributable retry
                     </button>
                   ) : null}
                 </div>
@@ -209,6 +273,62 @@ export function AgentRunOffice({
                 <div className="agent-run__failure" role="status">
                   <strong>{readable(run.failure.category)}</strong>
                   <span>{run.failure.required_user_action}</span>
+                </div>
+              ) : null}
+              {run.state === "indeterminate" && !run.recovery_decision ? (
+                <div className="agent-run__recovery" role="group">
+                  <strong>Engineer disposition required</strong>
+                  <label>
+                    Evidence-based rationale
+                    <textarea
+                      value={recoveryRationale}
+                      onChange={(event) =>
+                        setRecoveryRationale(event.target.value)
+                      }
+                      maxLength={500}
+                      disabled={resolvingRunId === run.run_id}
+                    />
+                  </label>
+                  <div className="agent-run__controls">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void resolveRecovery(run.run_id, "retry_task")
+                      }
+                      disabled={
+                        resolvingRunId === run.run_id ||
+                        !recoveryRationale.trim()
+                      }
+                    >
+                      Authorize one linked retry
+                    </button>
+                    <button
+                      type="button"
+                      className="button-secondary"
+                      onClick={() =>
+                        void resolveRecovery(run.run_id, "close_task")
+                      }
+                      disabled={
+                        resolvingRunId === run.run_id ||
+                        !recoveryRationale.trim()
+                      }
+                    >
+                      Close uncertain task
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {run.recovery_decision ? (
+                <div className="agent-run__recovery" role="status">
+                  <strong>
+                    Engineer disposition:{" "}
+                    {readable(run.recovery_decision.disposition)}
+                  </strong>
+                  <span>{run.recovery_decision.rationale}</span>
+                  <small>
+                    {run.recovery_decision.decided_by} ·{" "}
+                    {run.recovery_decision.decided_at}
+                  </small>
                 </div>
               ) : null}
               {run.proposed_result ? (

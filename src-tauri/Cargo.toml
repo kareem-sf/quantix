@@ -17,6 +17,13 @@ required-features = ["runtime-fixture"]
 test = false
 bench = false
 
+[[bin]]
+name = "quantix-storage-fixture"
+path = "tests/support/storage_fixture.rs"
+required-features = ["runtime-fixture"]
+test = false
+bench = false
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]

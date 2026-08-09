@@ -57,10 +57,9 @@ fn engineer_can_create_close_and_reopen_a_tender_through_host_commands() {
         .expect("reopen Tender from its self-contained store");
 
     assert_eq!(reopened, created);
-    assert_eq!(
-        host.list_tenders().expect("Tender Catalogue"),
-        vec![created]
-    );
+    let catalogue = host.list_tenders().expect("Tender Catalogue");
+    assert_eq!(catalogue.len(), 1);
+    assert_eq!(catalogue[0].summary.as_ref(), Some(&created));
 }
 
 #[test]
@@ -86,10 +85,9 @@ fn installation_catalogue_is_rebuilt_from_tender_store_truth() {
         .expect("simulate rebuildable catalogue loss");
     drop(catalogue);
 
-    assert_eq!(
-        host.list_tenders().expect("rebuilt Tender Catalogue"),
-        vec![created.clone()]
-    );
+    let rebuilt = host.list_tenders().expect("rebuilt Tender Catalogue");
+    assert_eq!(rebuilt.len(), 1);
+    assert_eq!(rebuilt[0].summary.as_ref(), Some(&created));
     let catalogue = rusqlite::Connection::open(application_home.join("installation.sqlite"))
         .expect("rebuilt installation catalogue");
     let rebuilt_name: String = catalogue
@@ -275,7 +273,7 @@ fn altered_tender_store_schema_fails_closed_on_reopen() {
     let error = host
         .open_tender(&tender.tender_id)
         .expect_err("altered schema must fail closed");
-    assert_eq!(error.code, TenderErrorCode::IntegrityFailed);
+    assert_eq!(error.code, TenderErrorCode::RecoveryRequired);
 }
 
 #[test]
@@ -407,7 +405,7 @@ fn requested_directory_identity_must_match_the_immutable_tender_identity() {
     let error = host
         .open_tender(conflicting_id)
         .expect_err("directory identity mismatch must fail closed");
-    assert_eq!(error.code, TenderErrorCode::IntegrityFailed);
+    assert_eq!(error.code, TenderErrorCode::RecoveryRequired);
 }
 
 #[test]
@@ -431,7 +429,16 @@ fn linked_tender_root_outside_application_home_fails_closed() {
     let error = host
         .open_tender(&tender.tender_id)
         .expect_err("linked Tender root must fail closed");
-    assert_eq!(error.code, TenderErrorCode::IntegrityFailed);
+    assert_eq!(error.code, TenderErrorCode::RecoveryRequired);
+    let catalogue = host
+        .list_tenders()
+        .expect("unsafe Tender must not hide the healthy catalogue boundary");
+    assert_eq!(catalogue.len(), 1);
+    assert!(catalogue[0].summary.is_none());
+    assert_eq!(
+        catalogue[0].integrity.issues,
+        vec![quantix_lib::TenderIntegrityIssue::StorageLayoutInvalid]
+    );
 }
 
 #[cfg(unix)]
