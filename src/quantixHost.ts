@@ -1,5 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import type { ApproveCalculationRuleCommand } from "./bindings/ApproveCalculationRuleCommand";
+import type { ApproveControlledBoqCalculationRunCommand } from "./bindings/ApproveControlledBoqCalculationRunCommand";
+import type { CostEstimatorCalculationResult } from "./bindings/CostEstimatorCalculationResult";
+import type { CreateCalculationScenarioCommand } from "./bindings/CreateCalculationScenarioCommand";
+import type { CalculationRuleReviewResult } from "./bindings/CalculationRuleReviewResult";
+import type { CalculationRuleVersion } from "./bindings/CalculationRuleVersion";
+import type { CalculationScenarioVersion } from "./bindings/CalculationScenarioVersion";
+import type { CalculationWorkspaceInspection } from "./bindings/CalculationWorkspaceInspection";
+import type { ControlledBoqCalculationRun } from "./bindings/ControlledBoqCalculationRun";
+import type { InspectCalculationWorkspaceCommand } from "./bindings/InspectCalculationWorkspaceCommand";
+import type { ProposeBoqCalculationRuleCommand } from "./bindings/ProposeBoqCalculationRuleCommand";
+import type { RunCalculationRuleReviewCommand } from "./bindings/RunCalculationRuleReviewCommand";
+import type { RunCostEstimatorCalculationCommand } from "./bindings/RunCostEstimatorCalculationCommand";
 import type { AgentRunInspection } from "./bindings/AgentRunInspection";
 import type { AgentRunActivity } from "./bindings/AgentRunActivity";
 import type { AgentRunHistoryPage } from "./bindings/AgentRunHistoryPage";
@@ -330,6 +343,76 @@ export function interpretExternalRfiResponse(
   return invoke<ExternalRfiDraft>("interpret_external_rfi_response", {
     command,
   });
+}
+
+export function proposeBoqCalculationRule(
+  command: ProposeBoqCalculationRuleCommand,
+): Promise<CalculationRuleVersion> {
+  return invoke<CalculationRuleVersion>("propose_boq_calculation_rule", {
+    command,
+  });
+}
+
+export function runCalculationRuleReview(
+  command: RunCalculationRuleReviewCommand,
+): Promise<CalculationRuleReviewResult> {
+  return invoke<CalculationRuleReviewResult>("run_calculation_rule_review", {
+    command,
+  });
+}
+
+export function approveCalculationRule(
+  command: ApproveCalculationRuleCommand,
+): Promise<CalculationRuleVersion> {
+  return invoke<CalculationRuleVersion>("approve_calculation_rule", {
+    command,
+  });
+}
+
+export function createCalculationScenario(
+  command: CreateCalculationScenarioCommand,
+): Promise<CalculationScenarioVersion> {
+  return invoke<CalculationScenarioVersion>("create_calculation_scenario", {
+    command,
+  });
+}
+
+export function runCostEstimatorCalculation(
+  command: RunCostEstimatorCalculationCommand,
+): Promise<CostEstimatorCalculationResult> {
+  return invoke<CostEstimatorCalculationResult>(
+    "run_cost_estimator_calculation",
+    {
+      command,
+    },
+  );
+}
+
+export function approveControlledBoqCalculationRun(
+  command: ApproveControlledBoqCalculationRunCommand,
+): Promise<ControlledBoqCalculationRun> {
+  return invoke<ControlledBoqCalculationRun>(
+    "approve_controlled_boq_calculation_run",
+    { command },
+  );
+}
+
+export function inspectCalculationWorkspace(
+  tenderId: string,
+  scenarioOffset = 0,
+  runOffset = 0,
+): Promise<CalculationWorkspaceInspection> {
+  const command: InspectCalculationWorkspaceCommand = {
+    tender_id: tenderId,
+    scenario_offset: scenarioOffset,
+    run_offset: runOffset,
+  };
+  return invoke<CalculationWorkspaceInspection>(
+    "inspect_calculation_workspace",
+    {
+      command,
+    },
+  );
 }
 
 export function chooseAndImportTenderPackage(

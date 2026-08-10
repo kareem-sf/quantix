@@ -450,6 +450,8 @@ fn run_agent_turn(
         || scenario.starts_with("record-review")
         || scenario.starts_with("bid-package-review")
         || scenario.starts_with("external-rfi-review")
+        || scenario.starts_with("calculation-rule-review")
+        || scenario.starts_with("cost-estimator-calculation")
         || scenario.starts_with("production-task");
     let dynamic_tools_are_exact = if is_record_scenario {
         thread_request
@@ -909,6 +911,15 @@ fn run_agent_turn(
             | "external-rfi-review"
             | "external-rfi-review-failed"
             | "external-rfi-review-delayed"
+            | "calculation-rule-review"
+            | "calculation-rule-review-failed"
+            | "cost-estimator-calculation"
+            | "cost-estimator-calculation-zero"
+            | "cost-estimator-calculation-missing"
+            | "cost-estimator-calculation-ambiguous"
+            | "cost-estimator-calculation-unavailable"
+            | "cost-estimator-calculation-invalid"
+            | "cost-estimator-calculation-delayed"
             | "production-task"
             | "production-task-delayed-a"
             | "production-task-delayed-b"
@@ -1485,6 +1496,73 @@ fn run_agent_turn(
         })
     } else if scenario == "external-rfi-review" {
         serde_json::json!({ "outcome": "passed", "findings": [] })
+    } else if scenario == "calculation-rule-review-failed" {
+        serde_json::json!({
+            "outcome": "failed",
+            "findings": [{
+                "code": "rounding_policy_ambiguous",
+                "summary": "The exact rule does not establish one reproducible rounding boundary."
+            }]
+        })
+    } else if scenario == "calculation-rule-review" {
+        serde_json::json!({ "outcome": "passed", "findings": [] })
+    } else if scenario.starts_with("cost-estimator-calculation") {
+        if scenario == "cost-estimator-calculation-delayed" {
+            fs::write(
+                executable.with_extension("cost-estimator-output-waiting"),
+                b"waiting",
+            )?;
+            for _ in 0..2_000 {
+                if executable
+                    .with_extension("cost-estimator-output-release")
+                    .is_file()
+                {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            if !executable
+                .with_extension("cost-estimator-output-release")
+                .is_file()
+            {
+                return Err("timed out waiting to release Cost Estimator output".into());
+            }
+        }
+        let quantity_evidence = provider_data_view
+            .pointer("/quantity_evidence/0/reference")
+            .cloned()
+            .ok_or("Cost Estimator quantity Evidence")?;
+        let unit_rate_evidence = provider_data_view
+            .pointer("/unit_rate_evidence/0/reference")
+            .cloned()
+            .ok_or("Cost Estimator unit-rate Evidence")?;
+        let quantity = match scenario {
+            "cost-estimator-calculation-missing" => {
+                serde_json::json!({ "state": "missing", "value": null, "evidence": [] })
+            }
+            "cost-estimator-calculation-ambiguous" => {
+                serde_json::json!({ "state": "ambiguous", "value": null, "evidence": [quantity_evidence] })
+            }
+            "cost-estimator-calculation-unavailable" => {
+                serde_json::json!({ "state": "unavailable", "value": null, "evidence": [quantity_evidence] })
+            }
+            "cost-estimator-calculation-invalid" => {
+                serde_json::json!({ "state": "provided", "value": "not-a-decimal", "evidence": [quantity_evidence] })
+            }
+            _ => serde_json::json!({
+                "state": "provided",
+                "value": if scenario == "cost-estimator-calculation-zero" { "0" } else { "1250" },
+                "evidence": [quantity_evidence]
+            }),
+        };
+        serde_json::json!({
+            "quantity": quantity,
+            "unit_rate": {
+                "state": "provided",
+                "value": "2.40",
+                "evidence": [unit_rate_evidence]
+            }
+        })
     } else if scenario == "production-task-output-over-budget" {
         serde_json::json!({
             "evidence_references": (0..256)

@@ -34,6 +34,7 @@ use crate::{setup::SetupState, QuantixHost};
 mod agent_records;
 pub(crate) mod backups;
 mod bid_decisions;
+mod calculations;
 mod external_rfis;
 mod production_scheduler;
 mod team_composer;
@@ -61,6 +62,17 @@ pub use bid_decisions::{
     InspectComplianceMatrixCommand, InvalidateBidDecisionApprovalCommand,
     ManagerCapabilityDemandInput, ResolveBidDecisionReturnReworkCommand, ResourceImplication,
     ReviewFindingSeverity, RunBidDecisionPackageReviewCommand, TenderRecordVersionReference,
+};
+pub use calculations::{
+    ApproveCalculationRuleCommand, ApproveControlledBoqCalculationRunCommand,
+    CalculationDecimalInput, CalculationInputState, CalculationRoundingMode,
+    CalculationRuleApproval, CalculationRuleReview, CalculationRuleReviewFinding,
+    CalculationRuleReviewOutcome, CalculationRuleReviewResult, CalculationRuleTestResult,
+    CalculationRuleVersion, CalculationScenarioVersion, CalculationWorkspaceInspection,
+    ControlledBoqCalculationRun, ControlledBoqCalculationStatus, CostEstimatorCalculationResult,
+    CreateCalculationScenarioCommand, ExchangeRateType, InspectCalculationWorkspaceCommand,
+    ProposeBoqCalculationRuleCommand, RunCalculationRuleReviewCommand,
+    RunCostEstimatorCalculationCommand,
 };
 pub use external_rfis::{
     ApproveExternalRfiForIssueCommand, CreateExternalRfiDraftCommand,
@@ -114,7 +126,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 17;
+const TENDER_SCHEMA_VERSION: i64 = 18;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -391,6 +403,145 @@ CREATE TABLE external_rfi_response_interpretations (
     REFERENCES tender_query_versions(query_id, version),
   FOREIGN KEY (query_decision_id)
     REFERENCES tender_query_treatment_decisions(decision_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE calculation_rules (
+  rule_id TEXT PRIMARY KEY CHECK (length(rule_id) = 32),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE calculation_rule_versions (
+  rule_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 32),
+  name TEXT NOT NULL CHECK (length(CAST(name AS BLOB)) BETWEEN 1 AND 200),
+  formula TEXT NOT NULL CHECK (length(CAST(formula AS BLOB)) BETWEEN 1 AND 1000),
+  engine_version TEXT NOT NULL CHECK (length(CAST(engine_version AS BLOB)) BETWEEN 1 AND 64),
+  supported_units_json TEXT NOT NULL CHECK (json_valid(supported_units_json)),
+  supported_rounding_json TEXT NOT NULL CHECK (json_valid(supported_rounding_json)),
+  deterministic_tests_json TEXT NOT NULL CHECK (json_valid(deterministic_tests_json)),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_by TEXT NOT NULL CHECK (created_by = 'engineer_user'),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (rule_id, version),
+  FOREIGN KEY (rule_id) REFERENCES calculation_rules(rule_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE calculation_rule_heads (
+  rule_id TEXT PRIMARY KEY,
+  current_version INTEGER NOT NULL CHECK (current_version BETWEEN 1 AND 32),
+  FOREIGN KEY (rule_id, current_version)
+    REFERENCES calculation_rule_versions(rule_id, version)
+);
+CREATE TABLE calculation_rule_reviews (
+  review_id TEXT PRIMARY KEY CHECK (length(review_id) = 32),
+  rule_id TEXT NOT NULL,
+  rule_version INTEGER NOT NULL CHECK (rule_version BETWEEN 1 AND 32),
+  rule_manifest_sha256 TEXT NOT NULL CHECK (length(rule_manifest_sha256) = 64),
+  reviewer_run_id TEXT NOT NULL UNIQUE,
+  reviewer_profile_id TEXT NOT NULL CHECK (length(reviewer_profile_id) = 32),
+  reviewer_profile_version INTEGER NOT NULL CHECK (reviewer_profile_version > 0),
+  outcome TEXT NOT NULL CHECK (outcome IN ('passed', 'failed')),
+  findings_json TEXT NOT NULL CHECK (json_valid(findings_json)),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (rule_id, rule_version),
+  FOREIGN KEY (rule_id, rule_version)
+    REFERENCES calculation_rule_versions(rule_id, version),
+  FOREIGN KEY (reviewer_run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (reviewer_profile_id, reviewer_profile_version)
+    REFERENCES agent_profile_versions(profile_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE calculation_rule_approvals (
+  approval_id TEXT PRIMARY KEY CHECK (length(approval_id) = 32),
+  rule_id TEXT NOT NULL,
+  rule_version INTEGER NOT NULL CHECK (rule_version BETWEEN 1 AND 32),
+  rule_manifest_sha256 TEXT NOT NULL CHECK (length(rule_manifest_sha256) = 64),
+  review_id TEXT NOT NULL UNIQUE,
+  review_manifest_sha256 TEXT NOT NULL CHECK (length(review_manifest_sha256) = 64),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  approved_by TEXT NOT NULL CHECK (approved_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'engineer_in_the_loop'),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (rule_id, rule_version),
+  FOREIGN KEY (rule_id, rule_version)
+    REFERENCES calculation_rule_versions(rule_id, version),
+  FOREIGN KEY (review_id) REFERENCES calculation_rule_reviews(review_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE calculation_scenario_versions (
+  scenario_id TEXT NOT NULL CHECK (length(scenario_id) = 32),
+  version INTEGER NOT NULL CHECK (version = 1),
+  name TEXT NOT NULL CHECK (length(CAST(name AS BLOB)) BETWEEN 1 AND 100),
+  quantity_unit TEXT NOT NULL CHECK (length(CAST(quantity_unit AS BLOB)) BETWEEN 1 AND 16),
+  rate_basis_unit TEXT NOT NULL CHECK (length(CAST(rate_basis_unit AS BLOB)) BETWEEN 1 AND 16),
+  rate_currency TEXT NOT NULL CHECK (length(rate_currency) = 3),
+  exchange_rate_id TEXT NOT NULL CHECK (length(exchange_rate_id) = 32),
+  exchange_rate_version INTEGER NOT NULL CHECK (exchange_rate_version = 1),
+  exchange_rate_json TEXT NOT NULL CHECK (json_valid(exchange_rate_json)),
+  exchange_rate_effective_date TEXT CHECK (exchange_rate_effective_date IS NULL OR length(exchange_rate_effective_date) = 10),
+  pricing_date TEXT NOT NULL CHECK (length(pricing_date) = 10),
+  exchange_rate_type TEXT CHECK (exchange_rate_type IS NULL OR exchange_rate_type IN ('spot', 'contract', 'budget', 'central_bank')),
+  output_currency TEXT NOT NULL CHECK (length(output_currency) = 3),
+  rounding_policy_id TEXT NOT NULL CHECK (length(rounding_policy_id) = 32),
+  rounding_policy_version INTEGER NOT NULL CHECK (rounding_policy_version = 1),
+  precision INTEGER NOT NULL CHECK (precision BETWEEN 0 AND 12),
+  rounding_mode TEXT NOT NULL CHECK (rounding_mode IN ('midpoint_away_from_zero', 'midpoint_nearest_even')),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  approved_by TEXT NOT NULL CHECK (approved_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'engineer_in_the_loop'),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (scenario_id, version),
+  UNIQUE (exchange_rate_id, exchange_rate_version),
+  UNIQUE (rounding_policy_id, rounding_policy_version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE calculation_runs (
+  calculation_run_id TEXT PRIMARY KEY CHECK (length(calculation_run_id) = 32),
+  cost_estimator_run_id TEXT NOT NULL UNIQUE,
+  rule_id TEXT NOT NULL,
+  rule_version INTEGER NOT NULL CHECK (rule_version BETWEEN 1 AND 32),
+  rule_approval_id TEXT NOT NULL,
+  scenario_id TEXT NOT NULL,
+  scenario_version INTEGER NOT NULL CHECK (scenario_version = 1),
+  status TEXT NOT NULL CHECK (status IN (
+    'completed', 'missing_input', 'unavailable_input', 'ambiguous_input',
+    'invalid_input', 'dimension_mismatch'
+  )),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (rule_id, rule_version)
+    REFERENCES calculation_rule_versions(rule_id, version),
+  FOREIGN KEY (rule_approval_id) REFERENCES calculation_rule_approvals(approval_id),
+  FOREIGN KEY (scenario_id, scenario_version)
+    REFERENCES calculation_scenario_versions(scenario_id, version),
+  FOREIGN KEY (cost_estimator_run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE calculation_run_approvals (
+  approval_id TEXT PRIMARY KEY CHECK (length(approval_id) = 32),
+  calculation_run_id TEXT NOT NULL UNIQUE,
+  run_manifest_sha256 TEXT NOT NULL CHECK (length(run_manifest_sha256) = 64),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  approved_by TEXT NOT NULL CHECK (approved_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'engineer_in_the_loop'),
+  tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (calculation_run_id) REFERENCES calculation_runs(calculation_run_id),
   FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
 );
 CREATE TABLE source_artifacts (
@@ -1281,6 +1432,87 @@ CREATE TRIGGER external_rfi_response_interpretations_no_delete
 BEFORE DELETE ON external_rfi_response_interpretations
 BEGIN
   SELECT RAISE(ABORT, 'External RFI Response interpretations are immutable');
+END;
+CREATE TRIGGER calculation_rules_no_update
+BEFORE UPDATE ON calculation_rules
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Rules are immutable');
+END;
+CREATE TRIGGER calculation_rules_no_delete
+BEFORE DELETE ON calculation_rules
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Rules are immutable');
+END;
+CREATE TRIGGER calculation_rule_versions_no_update
+BEFORE UPDATE ON calculation_rule_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Rule Versions are immutable');
+END;
+CREATE TRIGGER calculation_rule_versions_no_delete
+BEFORE DELETE ON calculation_rule_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Rule Versions are immutable');
+END;
+CREATE TRIGGER calculation_rule_heads_identity_immutable
+BEFORE UPDATE ON calculation_rule_heads
+WHEN NEW.rule_id != OLD.rule_id
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Rule head identity is immutable');
+END;
+CREATE TRIGGER calculation_rule_heads_no_delete
+BEFORE DELETE ON calculation_rule_heads
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Rule heads cannot be deleted');
+END;
+CREATE TRIGGER calculation_rule_reviews_no_update
+BEFORE UPDATE ON calculation_rule_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Rule Reviews are immutable');
+END;
+CREATE TRIGGER calculation_rule_reviews_no_delete
+BEFORE DELETE ON calculation_rule_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Rule Reviews are immutable');
+END;
+CREATE TRIGGER calculation_rule_approvals_no_update
+BEFORE UPDATE ON calculation_rule_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Rule Approvals are immutable');
+END;
+CREATE TRIGGER calculation_rule_approvals_no_delete
+BEFORE DELETE ON calculation_rule_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Rule Approvals are immutable');
+END;
+CREATE TRIGGER calculation_scenario_versions_no_update
+BEFORE UPDATE ON calculation_scenario_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Scenario Versions are immutable');
+END;
+CREATE TRIGGER calculation_scenario_versions_no_delete
+BEFORE DELETE ON calculation_scenario_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Scenario Versions are immutable');
+END;
+CREATE TRIGGER calculation_runs_no_update
+BEFORE UPDATE ON calculation_runs
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Runs are immutable');
+END;
+CREATE TRIGGER calculation_runs_no_delete
+BEFORE DELETE ON calculation_runs
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Runs are immutable');
+END;
+CREATE TRIGGER calculation_run_approvals_no_update
+BEFORE UPDATE ON calculation_run_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Run approvals are immutable');
+END;
+CREATE TRIGGER calculation_run_approvals_no_delete
+BEFORE DELETE ON calculation_run_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Calculation Run approvals are immutable');
 END;
 CREATE TRIGGER source_artifacts_no_update
 BEFORE UPDATE ON source_artifacts
@@ -2577,6 +2809,9 @@ impl TenderStore {
             return Ok(false);
         }
         if !self.external_rfi_manifests_are_valid_with_check(check)? {
+            return Ok(false);
+        }
+        if !self.calculation_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
         if !self.bid_decision_manifests_are_valid_with_check(check)? {

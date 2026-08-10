@@ -49,6 +49,7 @@ jsonschema = { version = "0.40.0", default-features = false }
 jiff = { version = "0.2.35", default-features = false, features = ["std"] }
 processkit = { version = "=3.2.0", default-features = false }
 rusqlite = { version = "0.40.1", features = ["backup", "bundled", "limits"] }
+rust_decimal = { version = "1.42.1", default-features = false, features = ["std"] }
 semver = "1.0.27"
 serde_json_canonicalizer = "0.3.2"
 sha2 = "0.11.0"

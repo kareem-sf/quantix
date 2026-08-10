@@ -1845,14 +1845,21 @@ pub(crate) fn query_evidence_reference_exists(
                 |row| row.get(0),
             )
             .map_err(sql_error),
-        "engineer_entry" | "approved_calculation_run" => connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM tender_record_authorities
-                 WHERE authority_id = ?1 AND tender_revision = ?2)",
-                params![reference.reference, reference.version],
-                |row| row.get(0),
-            )
-            .map_err(sql_error),
+        "engineer_entry" | "approved_calculation_run" => {
+            let expected_kind = if reference.kind == "engineer_entry" {
+                "engineer_entry"
+            } else {
+                "calculation_run"
+            };
+            connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tender_record_authorities
+                     WHERE authority_id = ?1 AND tender_revision = ?2 AND kind = ?3)",
+                    params![reference.reference, reference.version, expected_kind],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)
+        }
         "source_evidence" => {
             let Some((artifact_id, ordinal)) = reference.reference.rsplit_once('#') else {
                 return Ok(false);

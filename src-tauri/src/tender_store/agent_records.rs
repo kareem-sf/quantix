@@ -27,6 +27,11 @@ use super::bid_decisions::{
     publish_bid_decision_package_review, BidDecisionPackageReviewCandidate,
     BID_PACKAGE_REVIEW_CAPABILITY,
 };
+use super::calculations::{
+    calculation_rule_review_target_is_open, cost_estimator_calculation_target_is_open,
+    publish_calculation_rule_review, publish_cost_estimator_calculation,
+    CalculationRuleReviewCandidate, CostEstimatorCalculationCandidate,
+};
 use super::external_rfis::{
     external_rfi_review_target_is_open, publish_external_rfi_review, ExternalRfiReviewCandidate,
     ExternalRfiReviewPublication,
@@ -59,8 +64,22 @@ fn task_is_external_rfi_review(task: &TenderTaskView) -> bool {
         .any(|input| input.kind == "external_rfi_version")
 }
 
+fn task_is_calculation_rule_review(task: &TenderTaskView) -> bool {
+    task.exact_inputs
+        .iter()
+        .any(|input| input.kind == "calculation_rule_version")
+}
+
+fn task_is_cost_estimator_calculation(task: &TenderTaskView) -> bool {
+    task.exact_inputs
+        .iter()
+        .any(|input| input.kind == "calculation_scenario_version")
+}
+
 fn profile_supports_linked_retry(profile: &AgentProfileVersionView, task: &TenderTaskView) -> bool {
     !task_is_external_rfi_review(task)
+        && !task_is_calculation_rule_review(task)
+        && !task_is_cost_estimator_calculation(task)
         && !profile.capabilities.iter().any(|capability| {
             matches!(
                 capability.as_str(),
@@ -417,6 +436,8 @@ impl TenderStore {
         let mut tender_record_review: Option<TenderRecordReviewCandidate> = None;
         let mut bid_package_review: Option<BidDecisionPackageReviewCandidate> = None;
         let mut external_rfi_review: Option<ExternalRfiReviewCandidate> = None;
+        let mut calculation_rule_review: Option<CalculationRuleReviewCandidate> = None;
+        let mut cost_estimator_calculation: Option<CostEstimatorCalculationCandidate> = None;
         let mut denied_record_publication_count = None;
         if execution.state == AgentRunState::Completed
             && prepared
@@ -523,6 +544,71 @@ impl TenderStore {
             }
         }
         if execution.state == AgentRunState::Completed
+            && task_is_calculation_rule_review(&prepared.task)
+        {
+            let validation = execution
+                .candidate_payload_json
+                .as_deref()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                .and_then(|payload| {
+                    self.validate_calculation_rule_review_candidate(&prepared.task, payload)
+                });
+            match validation {
+                Ok(candidate) => calculation_rule_review = Some(candidate),
+                Err(_) => {
+                    execution.state = AgentRunState::Failed;
+                    execution.failure = Some(ProviderFailure::new(
+                        ProviderFailureCategory::OutputInvalid,
+                        true,
+                        "Review the exact Calculation Rule again with a bounded attributable verdict.",
+                        Some("The independent Calculation Rule review failed Quantix validation."),
+                    ));
+                    execution.candidate_payload_json = None;
+                    if let Some(event) = execution
+                        .events
+                        .iter_mut()
+                        .rev()
+                        .find(|event| event.kind == ProviderEventKind::Terminal)
+                    {
+                        event.summary =
+                            "Independent Calculation Rule review failed validation".into();
+                    }
+                }
+            }
+        }
+        if execution.state == AgentRunState::Completed
+            && task_is_cost_estimator_calculation(&prepared.task)
+        {
+            let validation = execution
+                .candidate_payload_json
+                .as_deref()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                .and_then(|payload| {
+                    self.validate_cost_estimator_calculation_candidate(&prepared.task, payload)
+                });
+            match validation {
+                Ok(candidate) => cost_estimator_calculation = Some(candidate),
+                Err(_) => {
+                    execution.state = AgentRunState::Failed;
+                    execution.failure = Some(ProviderFailure::new(
+                        ProviderFailureCategory::OutputInvalid,
+                        false,
+                        "Start a new Cost Estimator run against an exact approved scenario and evidence basket.",
+                        Some("The proposed BOQ inputs failed Quantix provenance validation."),
+                    ));
+                    execution.candidate_payload_json = None;
+                    if let Some(event) = execution
+                        .events
+                        .iter_mut()
+                        .rev()
+                        .find(|event| event.kind == ProviderEventKind::Terminal)
+                    {
+                        event.summary = "Cost Estimator BOQ inputs failed validation".into();
+                    }
+                }
+            }
+        }
+        if execution.state == AgentRunState::Completed
             && prepared
                 .profile
                 .capabilities
@@ -612,6 +698,53 @@ impl TenderStore {
                         .into();
             }
         }
+        if execution.state == AgentRunState::Completed
+            && calculation_rule_review.is_some()
+            && !self.calculation_rule_review_target_is_current(&prepared.task)?
+        {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Inspect and review the current exact Calculation Rule version.",
+                Some("The Calculation Rule changed before review publication."),
+            ));
+            execution.candidate_payload_json = None;
+            calculation_rule_review = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary =
+                    "Independent Calculation Rule review rejected because its basis is stale"
+                        .into();
+            }
+        }
+        if execution.state == AgentRunState::Completed
+            && cost_estimator_calculation.is_some()
+            && !self.cost_estimator_calculation_target_is_current(&prepared.task)?
+        {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Start a new Cost Estimator run against the current approved Work Plan and Calculation Scenario.",
+                Some("The Cost Estimator calculation basis changed before publication."),
+            ));
+            execution.candidate_payload_json = None;
+            cost_estimator_calculation = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary =
+                    "Cost Estimator calculation rejected because its basis is stale".into();
+            }
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -636,6 +769,8 @@ impl TenderStore {
             tender_record_review = None;
             bid_package_review = None;
             external_rfi_review = None;
+            calculation_rule_review = None;
+            cost_estimator_calculation = None;
             if let Some(event) = execution
                 .events
                 .iter_mut()
@@ -711,6 +846,56 @@ impl TenderStore {
                 .find(|event| event.kind == ProviderEventKind::Terminal)
             {
                 event.summary = "Independent External RFI review rejected because its exact target is no longer open".into();
+            }
+        }
+        if execution.state == AgentRunState::Completed
+            && calculation_rule_review.is_some()
+            && !calculation_rule_review_target_is_open(&transaction, &prepared.task)?
+        {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Inspect the current Calculation Rule and its existing review or activation.",
+                Some("The Calculation Rule was superseded, reviewed, or activated before publication."),
+            ));
+            execution.candidate_payload_json = None;
+            calculation_rule_review = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary = "Independent Calculation Rule review rejected because its target is no longer open".into();
+            }
+        }
+        if execution.state == AgentRunState::Completed
+            && cost_estimator_calculation.is_some()
+            && !cost_estimator_calculation_target_is_open(
+                &transaction,
+                &prepared.task,
+                &prepared.run_id,
+            )?
+        {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Start a new Cost Estimator run against the current exact scenario and Work Plan.",
+                Some("The Cost Estimator calculation target is no longer open."),
+            ));
+            execution.candidate_payload_json = None;
+            cost_estimator_calculation = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary =
+                    "Cost Estimator calculation rejected because its target is no longer open"
+                        .into();
             }
         }
         if execution.state == AgentRunState::Completed
@@ -992,6 +1177,36 @@ impl TenderStore {
                     created_at: &completed_at,
                 },
                 candidate,
+            )?;
+        }
+        if let Some(candidate) = calculation_rule_review.as_ref() {
+            if result_id.is_none() {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            publish_calculation_rule_review(
+                &transaction,
+                tender_id,
+                tender_revision,
+                &prepared.run_id,
+                &prepared.profile,
+                &prepared.task,
+                candidate,
+                &completed_at,
+            )?;
+        }
+        if let Some(candidate) = cost_estimator_calculation.as_ref() {
+            if result_id.is_none() {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            publish_cost_estimator_calculation(
+                &transaction,
+                tender_id,
+                tender_revision,
+                &prepared.run_id,
+                &prepared.profile,
+                &prepared.task,
+                candidate,
+                &completed_at,
             )?;
         }
         finish_production_task(

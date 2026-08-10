@@ -12,6 +12,7 @@ import type { TenderRecoveryDecision } from "./bindings/TenderRecoveryDecision";
 import type { TenderRecoveryRecord } from "./bindings/TenderRecoveryRecord";
 import { AgentRunOffice } from "./AgentRunOffice";
 import { BidDecisionPanel } from "./BidDecisionPanel";
+import { ControlledBoqCalculationPanel } from "./ControlledBoqCalculationPanel";
 import { DocumentEvidenceOffice } from "./DocumentEvidenceOffice";
 import { ExternalRfiPanel } from "./ExternalRfiPanel";
 import { TenderBackupPanel } from "./TenderBackupPanel";
@@ -706,6 +707,14 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                 refreshToken={tenderStateVersion}
                 onTenderStateChange={reportTenderStateChange}
                 onProductionSchedulingChange={setProductionScheduling}
+              />
+              <ControlledBoqCalculationPanel
+                key={`controlled-boq-${selected.tender_id}`}
+                tenderId={selected.tender_id}
+                runtimeReady={runtimeReady}
+                refreshToken={tenderStateVersion}
+                reportCommandFailure={reportCommandFailure}
+                onTenderStateChange={reportTenderStateChange}
               />
             </>
           ) : recovery ? (

@@ -6,26 +6,32 @@ use sha2::{Digest, Sha256};
 use quantix_lib::{
     ensure_quantix_setup, ActivateTenderProductionCommand, AgentProfileStatus,
     AgentRunRecoveryDisposition, AgentRunState, AgentTaskInputReference,
+    ApproveCalculationRuleCommand, ApproveControlledBoqCalculationRunCommand,
     ApproveExternalRfiForIssueCommand, ApproveProductionFindingExceptionCommand,
     BidDecisionApprovalDecision, BidDecisionPackageInspection, BidDecisionPackageReviewOutcome,
-    BidRecommendationOutcome, ComplianceDisposition, ComplianceDispositionUpdate,
-    ComposeTenderOfficeCommand, CreateBidDecisionPackageCommand, CreateExternalRfiDraftCommand,
-    CreateTenderCommand, CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
-    DecideBidDecisionPackageCommand, DecideTenderQueryTreatmentCommand, DecideTenderRecordCommand,
-    DecideWorkPlanProposalCommand, DeviceProtection, ExportApprovedExternalRfiCommand,
-    ExternalRfiQueryReference, ExternalRfiRecipient, ImportTenderPackageCommand,
-    InspectBidDecisionApprovalHistoryCommand, InspectExternalRfiResponseCandidatesCommand,
+    BidRecommendationOutcome, CalculationDecimalInput, CalculationInputState,
+    CalculationRoundingMode, CalculationRuleReviewOutcome, ComplianceDisposition,
+    ComplianceDispositionUpdate, ComposeTenderOfficeCommand, ControlledBoqCalculationStatus,
+    CreateBidDecisionPackageCommand, CreateCalculationScenarioCommand,
+    CreateExternalRfiDraftCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
+    CreateTenderQueryCommand, DecideBidDecisionPackageCommand, DecideTenderQueryTreatmentCommand,
+    DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DeviceProtection, ExchangeRateType,
+    ExportApprovedExternalRfiCommand, ExternalRfiQueryReference, ExternalRfiRecipient,
+    ImportTenderPackageCommand, InspectBidDecisionApprovalHistoryCommand,
+    InspectCalculationWorkspaceCommand, InspectExternalRfiResponseCandidatesCommand,
     InspectExternalRfisCommand, InspectProductionTaskReviewCommand, InspectTenderQueriesCommand,
     InterpretExternalRfiResponseCommand, InvalidateBidDecisionApprovalCommand, MajorFindingPolicy,
     ManagerCapabilityDemandInput, ParseSourceArtifactCommand, ProductionFindingDispositionKind,
-    ProductionFindingSeverity, ProductionTaskState, ProviderFailureCategory, QuantixHost,
-    RegisterExternalRfiResponseCommand, ResolveBidDecisionReturnReworkCommand,
-    ResolveIndeterminateAgentRunCommand, ReviseExternalRfiDraftCommand, ReviseTenderCommand,
-    ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand, RunBidDecisionPackageReviewCommand,
-    RunBootstrapAgentCommand, RunExternalRfiReviewCommand, RunProductionTaskCommand,
-    RunTenderRecordExtractionCommand, RuntimeLayout, SetupPlatform, SetupState, StoragePermissions,
-    TenderErrorCode, TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase,
-    TenderQuery, TenderQueryTreatment, TenderQueryTreatmentProposalInput, TenderQueryType,
+    ProductionFindingSeverity, ProductionTaskState, ProposeBoqCalculationRuleCommand,
+    ProviderFailureCategory, QuantixHost, RegisterExternalRfiResponseCommand,
+    ResolveBidDecisionReturnReworkCommand, ResolveIndeterminateAgentRunCommand,
+    ReviseExternalRfiDraftCommand, ReviseTenderCommand, ReviseTenderQueryCommand,
+    ReviseWorkPlanProposalCommand, RunBidDecisionPackageReviewCommand, RunBootstrapAgentCommand,
+    RunCalculationRuleReviewCommand, RunCostEstimatorCalculationCommand,
+    RunExternalRfiReviewCommand, RunProductionTaskCommand, RunTenderRecordExtractionCommand,
+    RuntimeLayout, SetupPlatform, SetupState, StoragePermissions, TenderErrorCode,
+    TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase, TenderQuery,
+    TenderQueryTreatment, TenderQueryTreatmentProposalInput, TenderQueryType,
     TenderRecordEngineerDecisionKind, TenderRecordInspection, TenderRecordKind,
     TenderRecordVersionReference, WorkPlanDecision, WorkPlanRevisionAction,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
@@ -2513,7 +2519,13 @@ async fn critical_finding_requires_immutable_author_remediation_and_a_new_exact_
         .await
         .expect("publish the attributable critical review finding");
 
-    assert_eq!(reviewed.run.state, AgentRunState::Completed);
+    assert_eq!(
+        reviewed.run.state,
+        AgentRunState::Completed,
+        "{reviewed:#?}; fixture={}",
+        fs::read_to_string(harness.codex.with_extension("fixture-error"))
+            .unwrap_or_else(|_| "none".into())
+    );
     assert_eq!(reviewed.task.state, ProductionTaskState::RemediationReady);
     assert_eq!(reviewed.task.run_ids.len(), 2);
     assert_eq!(reviewed.task.artifact_version_count, 1);
@@ -4347,6 +4359,752 @@ async fn active_production(
         })
         .expect("activate exact approved Work Plan");
     (approved, production)
+}
+
+async fn run_cost_estimator_fixture(
+    harness: &Harness,
+    fixture_scenario: &str,
+    scenario_id: String,
+    scenario_version: u32,
+    description: &str,
+    evidence: &AgentTaskInputReference,
+) -> quantix_lib::ControlledBoqCalculationRun {
+    harness.set_agent_scenario(fixture_scenario);
+    harness
+        .host
+        .run_cost_estimator_calculation(RunCostEstimatorCalculationCommand {
+            tender_id: harness.tender_id.clone(),
+            scenario_id,
+            scenario_version,
+            description: description.into(),
+            quantity_evidence: vec![evidence.clone()],
+            unit_rate_evidence: vec![evidence.clone()],
+        })
+        .await
+        .expect("Cost Estimator input proposal and Host calculation")
+        .calculation
+        .expect("Host publishes a Calculation Run for a valid candidate")
+}
+
+#[tokio::test]
+async fn controlled_boq_calculation_is_reviewed_exact_replayable_and_tamper_evident() {
+    let harness = Harness::new("record-extraction");
+    active_production(&harness).await;
+    let rule = harness
+        .host
+        .propose_boq_calculation_rule(ProposeBoqCalculationRuleCommand {
+            tender_id: harness.tender_id.clone(),
+            supported_rounding: vec![
+                CalculationRoundingMode::MidpointAwayFromZero,
+                CalculationRoundingMode::MidpointNearestEven,
+            ],
+            change_rationale: "Establish both controlled commercial rounding policies.".into(),
+        })
+        .expect("propose deterministic BOQ rule");
+    assert!(rule.deterministic_tests.iter().all(|test| test.passed));
+    assert_eq!(
+        harness
+            .host
+            .approve_calculation_rule(ApproveCalculationRuleCommand {
+                tender_id: harness.tender_id.clone(),
+                rule_id: rule.rule_id.clone(),
+                version: rule.version,
+                manifest_sha256: rule.manifest_sha256.clone(),
+                rationale: "Activation without independent review must fail closed.".into(),
+            })
+            .expect_err("independent review is mandatory")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    harness.set_agent_scenario("calculation-rule-review");
+    let reviewed = harness
+        .host
+        .run_calculation_rule_review(RunCalculationRuleReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            rule_id: rule.rule_id.clone(),
+            version: rule.version,
+        })
+        .await
+        .expect("review exact Calculation Rule");
+    assert_eq!(reviewed.run.state, AgentRunState::Completed);
+    assert_eq!(
+        reviewed.rule.review.as_ref().map(|review| review.outcome),
+        Some(CalculationRuleReviewOutcome::Passed)
+    );
+    let active_rule = harness
+        .host
+        .approve_calculation_rule(ApproveCalculationRuleCommand {
+            tender_id: harness.tender_id.clone(),
+            rule_id: rule.rule_id,
+            version: rule.version,
+            manifest_sha256: rule.manifest_sha256,
+            rationale: "EITL activates the exact independently reviewed deterministic rule.".into(),
+        })
+        .expect("activate exact reviewed Calculation Rule");
+    assert!(active_rule.active);
+
+    let source = harness
+        .host
+        .inspect_document_register(&harness.tender_id)
+        .expect("inspect Source Artifact Register")
+        .documents
+        .into_iter()
+        .next()
+        .expect("parsed source");
+    let location = harness
+        .host
+        .inspect_evidence(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: source.artifact_id.clone(),
+            version: source.version,
+        })
+        .expect("inspect exact Evidence")
+        .locations
+        .into_iter()
+        .next()
+        .expect("Evidence location");
+    let evidence = AgentTaskInputReference {
+        kind: "source_evidence".into(),
+        reference: format!("{}#{}", source.artifact_id, location.ordinal),
+        version: source.version,
+    };
+    let fx_scenario = harness
+        .host
+        .create_calculation_scenario(CreateCalculationScenarioCommand {
+            tender_id: harness.tender_id.clone(),
+            name: "Base USD to EGP".into(),
+            quantity_unit: "mm".into(),
+            rate_basis_unit: "m".into(),
+            rate_currency: "USD".into(),
+            exchange_rate: CalculationDecimalInput {
+                state: CalculationInputState::Provided,
+                value: Some("50".into()),
+                evidence: vec![evidence.clone()],
+            },
+            exchange_rate_effective_date: Some("2026-08-01".into()),
+            pricing_date: "2026-08-10".into(),
+            exchange_rate_type: Some(ExchangeRateType::Spot),
+            output_currency: "EGP".into(),
+            precision: 2,
+            rounding_mode: CalculationRoundingMode::MidpointAwayFromZero,
+            rationale: "Approve exact FX direction and commercial rounding policy.".into(),
+        })
+        .expect("approve exact versioned scenario");
+    assert_eq!(
+        harness
+            .host
+            .create_calculation_scenario(CreateCalculationScenarioCommand {
+                tender_id: harness.tender_id.clone(),
+                name: "Invalid currency".into(),
+                quantity_unit: "mm".into(),
+                rate_basis_unit: "m".into(),
+                rate_currency: "AAA".into(),
+                exchange_rate: CalculationDecimalInput {
+                    state: CalculationInputState::Provided,
+                    value: Some("50".into()),
+                    evidence: vec![evidence.clone()],
+                },
+                exchange_rate_effective_date: Some("2026-08-01".into()),
+                pricing_date: "2026-08-10".into(),
+                exchange_rate_type: Some(ExchangeRateType::Spot),
+                output_currency: "EGP".into(),
+                precision: 2,
+                rounding_mode: CalculationRoundingMode::MidpointAwayFromZero,
+                rationale: "Invalid currency must be rejected.".into(),
+            })
+            .expect_err("unrecognized currency is invalid")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+
+    let exact = run_cost_estimator_fixture(
+        &harness,
+        "cost-estimator-calculation",
+        fx_scenario.scenario_id.clone(),
+        fx_scenario.version,
+        "BOQ item 1 — cable containment",
+        &evidence,
+    )
+    .await;
+    assert_eq!(exact.status, ControlledBoqCalculationStatus::Completed);
+    assert_eq!(exact.normalized_quantity.as_deref(), Some("1.25"));
+    assert_eq!(exact.unrounded_source_amount.as_deref(), Some("3"));
+    assert_eq!(exact.unrounded_output_amount.as_deref(), Some("150"));
+    assert_eq!(exact.final_amount.as_deref(), Some("150.00"));
+    assert!(harness
+        .host
+        .inspect_tender_record_authorities(&harness.tender_id)
+        .expect("inspect authorities before value approval")
+        .into_iter()
+        .all(|authority| authority.authority_id != exact.calculation_run_id));
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(&database).expect("open approval-boundary store");
+    let original_manifest: String = connection
+        .query_row(
+            "SELECT manifest_json FROM calculation_runs WHERE calculation_run_id = ?1",
+            [&exact.calculation_run_id],
+            |row| row.get(0),
+        )
+        .expect("load exact run manifest before corruption");
+    let immutable_trigger: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger'
+             AND name = 'calculation_runs_no_update'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("load Calculation Run immutability trigger");
+    connection
+        .execute_batch("DROP TRIGGER calculation_runs_no_update;")
+        .expect("open corruption seam for approval regression");
+    connection
+        .execute(
+            "UPDATE calculation_runs
+             SET manifest_json = json_set(manifest_json, '$.final_amount', '999999.99')
+             WHERE calculation_run_id = ?1",
+            [&exact.calculation_run_id],
+        )
+        .expect("corrupt deterministic output before approval");
+    drop(connection);
+    assert_eq!(
+        harness
+            .host
+            .approve_controlled_boq_calculation_run(ApproveControlledBoqCalculationRunCommand {
+                tender_id: harness.tender_id.clone(),
+                calculation_run_id: exact.calculation_run_id.clone(),
+                manifest_sha256: exact.manifest_sha256.clone(),
+                rationale: "A corrupted result must never become authority.".into(),
+            })
+            .expect_err("approval revalidates stored hash and arithmetic")
+            .code,
+        TenderErrorCode::IntegrityFailed
+    );
+    let connection =
+        rusqlite::Connection::open(&database).expect("restore approval-boundary store");
+    connection
+        .execute(
+            "UPDATE calculation_runs SET manifest_json = ?1 WHERE calculation_run_id = ?2",
+            rusqlite::params![original_manifest, exact.calculation_run_id],
+        )
+        .expect("restore exact run manifest");
+    connection
+        .execute_batch(&immutable_trigger)
+        .expect("restore Calculation Run immutability trigger");
+    drop(connection);
+    let approved_exact = harness
+        .host
+        .approve_controlled_boq_calculation_run(ApproveControlledBoqCalculationRunCommand {
+            tender_id: harness.tender_id.clone(),
+            calculation_run_id: exact.calculation_run_id.clone(),
+            manifest_sha256: exact.manifest_sha256.clone(),
+            rationale: "EITL approves the exact evidence-backed canonical value.".into(),
+        })
+        .expect("approve exact canonical Calculation Run");
+    assert!(approved_exact.approval.is_some());
+    let authority = harness
+        .host
+        .inspect_tender_record_authorities(&harness.tender_id)
+        .expect("inspect approved Calculation Run authority")
+        .into_iter()
+        .find(|authority| authority.authority_id == exact.calculation_run_id)
+        .expect("only the approved run is registered as a deterministic authority");
+    assert_eq!(authority.value, "150.00 EGP");
+
+    let zero = run_cost_estimator_fixture(
+        &harness,
+        "cost-estimator-calculation-zero",
+        fx_scenario.scenario_id.clone(),
+        fx_scenario.version,
+        "Explicit zero quantity",
+        &evidence,
+    )
+    .await;
+    assert_eq!(zero.status, ControlledBoqCalculationStatus::Completed);
+    assert_eq!(zero.final_amount.as_deref(), Some("0.00"));
+    let missing = run_cost_estimator_fixture(
+        &harness,
+        "cost-estimator-calculation-missing",
+        fx_scenario.scenario_id.clone(),
+        fx_scenario.version,
+        "Visible missing quantity",
+        &evidence,
+    )
+    .await;
+    assert_eq!(missing.status, ControlledBoqCalculationStatus::MissingInput);
+    assert!(missing.final_amount.is_none());
+    let ambiguous = run_cost_estimator_fixture(
+        &harness,
+        "cost-estimator-calculation-ambiguous",
+        fx_scenario.scenario_id.clone(),
+        fx_scenario.version,
+        "Visible ambiguous quantity",
+        &evidence,
+    )
+    .await;
+    assert_eq!(
+        ambiguous.status,
+        ControlledBoqCalculationStatus::AmbiguousInput
+    );
+    assert!(ambiguous.final_amount.is_none());
+    let unavailable = run_cost_estimator_fixture(
+        &harness,
+        "cost-estimator-calculation-unavailable",
+        fx_scenario.scenario_id.clone(),
+        fx_scenario.version,
+        "Visible unavailable quantity",
+        &evidence,
+    )
+    .await;
+    assert_eq!(
+        unavailable.status,
+        ControlledBoqCalculationStatus::UnavailableInput
+    );
+    assert!(unavailable.final_amount.is_none());
+    let invalid = run_cost_estimator_fixture(
+        &harness,
+        "cost-estimator-calculation-invalid",
+        fx_scenario.scenario_id,
+        fx_scenario.version,
+        "Visible invalid quantity",
+        &evidence,
+    )
+    .await;
+    assert_eq!(invalid.status, ControlledBoqCalculationStatus::InvalidInput);
+    assert!(invalid.final_amount.is_none());
+
+    for (state, expected_status, name) in [
+        (
+            CalculationInputState::Missing,
+            ControlledBoqCalculationStatus::MissingInput,
+            "Missing exchange rate",
+        ),
+        (
+            CalculationInputState::Ambiguous,
+            ControlledBoqCalculationStatus::AmbiguousInput,
+            "Ambiguous exchange rate",
+        ),
+        (
+            CalculationInputState::Unavailable,
+            ControlledBoqCalculationStatus::UnavailableInput,
+            "Unavailable exchange rate",
+        ),
+    ] {
+        let scenario = harness
+            .host
+            .create_calculation_scenario(CreateCalculationScenarioCommand {
+                tender_id: harness.tender_id.clone(),
+                name: name.into(),
+                quantity_unit: "mm".into(),
+                rate_basis_unit: "m".into(),
+                rate_currency: "USD".into(),
+                exchange_rate: CalculationDecimalInput {
+                    state,
+                    value: None,
+                    evidence: if state == CalculationInputState::Missing {
+                        Vec::new()
+                    } else {
+                        vec![evidence.clone()]
+                    },
+                },
+                exchange_rate_effective_date: None,
+                pricing_date: "2026-08-10".into(),
+                exchange_rate_type: Some(ExchangeRateType::Spot),
+                output_currency: "EGP".into(),
+                precision: 2,
+                rounding_mode: CalculationRoundingMode::MidpointAwayFromZero,
+                rationale: format!("Record {name} as a distinct governed scenario state."),
+            })
+            .expect("approve visible exchange-rate state");
+        let run = run_cost_estimator_fixture(
+            &harness,
+            "cost-estimator-calculation",
+            scenario.scenario_id,
+            scenario.version,
+            name,
+            &evidence,
+        )
+        .await;
+        assert_eq!(run.status, expected_status);
+        assert!(run.final_amount.is_none());
+    }
+
+    let mismatch_scenario = harness
+        .host
+        .create_calculation_scenario(CreateCalculationScenarioCommand {
+            tender_id: harness.tender_id.clone(),
+            name: "Dimension mismatch".into(),
+            quantity_unit: "m".into(),
+            rate_basis_unit: "each".into(),
+            rate_currency: "EGP".into(),
+            exchange_rate: CalculationDecimalInput {
+                state: CalculationInputState::NotApplicable,
+                value: None,
+                evidence: Vec::new(),
+            },
+            exchange_rate_effective_date: None,
+            pricing_date: "2026-08-10".into(),
+            exchange_rate_type: None,
+            output_currency: "EGP".into(),
+            precision: 2,
+            rounding_mode: CalculationRoundingMode::MidpointAwayFromZero,
+            rationale: "Record dimension incompatibility visibly rather than coercing it.".into(),
+        })
+        .expect("approve explicit incompatible scenario");
+    let mismatch = run_cost_estimator_fixture(
+        &harness,
+        "cost-estimator-calculation",
+        mismatch_scenario.scenario_id,
+        mismatch_scenario.version,
+        "Visible dimensional mismatch",
+        &evidence,
+    )
+    .await;
+    assert_eq!(
+        mismatch.status,
+        ControlledBoqCalculationStatus::DimensionMismatch
+    );
+    assert!(mismatch.final_amount.is_none());
+
+    for index in 1..=4 {
+        harness
+            .host
+            .create_calculation_scenario(CreateCalculationScenarioCommand {
+                tender_id: harness.tender_id.clone(),
+                name: format!("Bounded scenario page {index}"),
+                quantity_unit: "each".into(),
+                rate_basis_unit: "each".into(),
+                rate_currency: "EGP".into(),
+                exchange_rate: CalculationDecimalInput {
+                    state: CalculationInputState::NotApplicable,
+                    value: None,
+                    evidence: Vec::new(),
+                },
+                exchange_rate_effective_date: None,
+                pricing_date: "2026-08-10".into(),
+                exchange_rate_type: None,
+                output_currency: "EGP".into(),
+                precision: 2,
+                rounding_mode: CalculationRoundingMode::MidpointAwayFromZero,
+                rationale: "Exercise bounded immutable scenario navigation.".into(),
+            })
+            .expect("create scenario pagination fixture");
+    }
+
+    let inspection = harness
+        .host
+        .inspect_calculation_workspace(InspectCalculationWorkspaceCommand {
+            tender_id: harness.tender_id.clone(),
+            scenario_offset: 0,
+            run_offset: 0,
+        })
+        .expect("inspect canonical Calculation Runs");
+    assert_eq!(inspection.total_run_count, 10);
+    assert_eq!(inspection.total_scenario_count, 9);
+    assert_eq!(inspection.recent_scenarios.len(), 8);
+    assert!(inspection.has_older_scenarios);
+    assert_eq!(inspection.recent_runs.len(), 8);
+    assert!(inspection.has_older_runs);
+    let older_runs = harness
+        .host
+        .inspect_calculation_workspace(InspectCalculationWorkspaceCommand {
+            tender_id: harness.tender_id.clone(),
+            scenario_offset: 0,
+            run_offset: 8,
+        })
+        .expect("inspect bounded older Calculation Runs");
+    assert_eq!(older_runs.recent_runs.len(), 2);
+    assert!(!older_runs.has_older_runs);
+    assert!(older_runs.recent_runs.iter().any(|run| {
+        run.calculation_run_id == exact.calculation_run_id && run.approval.is_some()
+    }));
+    let older_scenarios = harness
+        .host
+        .inspect_calculation_workspace(InspectCalculationWorkspaceCommand {
+            tender_id: harness.tender_id.clone(),
+            scenario_offset: 8,
+            run_offset: 0,
+        })
+        .expect("inspect bounded older Calculation Scenarios");
+    assert_eq!(older_scenarios.recent_scenarios.len(), 1);
+    assert!(!older_scenarios.has_older_scenarios);
+
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close Tender before cold replay");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("replay calculation integrity");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open calculation store");
+    connection
+        .execute(
+            "INSERT INTO tender_record_authorities (
+               authority_id, kind, value, description, manifest_sha256,
+               tender_revision, created_by, created_at
+             ) VALUES ('00000000000000000000000000000000', 'calculation_run',
+                       '1.00 EGP', 'Orphan injected authority',
+                       '0000000000000000000000000000000000000000000000000000000000000000',
+                       (SELECT current_revision FROM tender WHERE singleton = 1),
+                       'tamper-fixture', '2026-08-10T00:00:00Z')",
+            [],
+        )
+        .expect("inject orphan Calculation authority");
+    drop(connection);
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("detect orphan Calculation authority");
+    assert_eq!(integrity.state, TenderIntegrityState::RecoveryRequired);
+}
+
+#[tokio::test]
+async fn cost_estimator_output_cannot_publish_as_a_newer_tender_revision() {
+    let harness = Harness::new("record-extraction");
+    active_production(&harness).await;
+    let rule = harness
+        .host
+        .propose_boq_calculation_rule(ProposeBoqCalculationRuleCommand {
+            tender_id: harness.tender_id.clone(),
+            supported_rounding: vec![CalculationRoundingMode::MidpointAwayFromZero],
+            change_rationale: "Establish one exact controlled commercial rounding policy.".into(),
+        })
+        .expect("propose controlled rule for revision race");
+    harness.set_agent_scenario("calculation-rule-review");
+    harness
+        .host
+        .run_calculation_rule_review(RunCalculationRuleReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            rule_id: rule.rule_id.clone(),
+            version: rule.version,
+        })
+        .await
+        .expect("review controlled rule for revision race");
+    harness
+        .host
+        .approve_calculation_rule(ApproveCalculationRuleCommand {
+            tender_id: harness.tender_id.clone(),
+            rule_id: rule.rule_id,
+            version: rule.version,
+            manifest_sha256: rule.manifest_sha256,
+            rationale: "Activate the independently reviewed exact rule.".into(),
+        })
+        .expect("activate controlled rule for revision race");
+    let source = harness
+        .host
+        .inspect_document_register(&harness.tender_id)
+        .expect("inspect source for revision race")
+        .documents
+        .into_iter()
+        .next()
+        .expect("parsed source for revision race");
+    let location = harness
+        .host
+        .inspect_evidence(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: source.artifact_id.clone(),
+            version: source.version,
+        })
+        .expect("inspect evidence for revision race")
+        .locations
+        .into_iter()
+        .next()
+        .expect("evidence for revision race");
+    let evidence = AgentTaskInputReference {
+        kind: "source_evidence".into(),
+        reference: format!("{}#{}", source.artifact_id, location.ordinal),
+        version: source.version,
+    };
+    let scenario = harness
+        .host
+        .create_calculation_scenario(CreateCalculationScenarioCommand {
+            tender_id: harness.tender_id.clone(),
+            name: "Revision-race scenario".into(),
+            quantity_unit: "mm".into(),
+            rate_basis_unit: "m".into(),
+            rate_currency: "USD".into(),
+            exchange_rate: CalculationDecimalInput {
+                state: CalculationInputState::Provided,
+                value: Some("50".into()),
+                evidence: vec![evidence.clone()],
+            },
+            exchange_rate_effective_date: Some("2026-08-01".into()),
+            pricing_date: "2026-08-10".into(),
+            exchange_rate_type: Some(ExchangeRateType::Spot),
+            output_currency: "EGP".into(),
+            precision: 2,
+            rounding_mode: CalculationRoundingMode::MidpointAwayFromZero,
+            rationale: "Bind the revision-race fixture to one exact scenario.".into(),
+        })
+        .expect("approve revision-race scenario");
+    harness.set_agent_scenario("cost-estimator-calculation-delayed");
+    let host = harness.host.clone();
+    let command = RunCostEstimatorCalculationCommand {
+        tender_id: harness.tender_id.clone(),
+        scenario_id: scenario.scenario_id,
+        scenario_version: scenario.version,
+        description: "Stale Cost Estimator output".into(),
+        quantity_evidence: vec![evidence.clone()],
+        unit_rate_evidence: vec![evidence],
+    };
+    let calculation =
+        tokio::spawn(async move { host.run_cost_estimator_calculation(command).await });
+    wait_for_fixture_path(
+        &harness
+            .codex
+            .with_extension("cost-estimator-output-waiting"),
+    )
+    .await;
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open revision-race store");
+    let prior_revision: u32 = connection
+        .query_row(
+            "SELECT current_revision FROM tender WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read revision-race basis");
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE tender SET current_revision = ?1 WHERE singleton = 1",
+                [prior_revision + 1],
+            )
+            .expect("advance revision during provider turn"),
+        1
+    );
+    fs::write(
+        harness
+            .codex
+            .with_extension("cost-estimator-output-release"),
+        b"release",
+    )
+    .expect("release stale Cost Estimator output");
+    let result = calculation
+        .await
+        .expect("join delayed Cost Estimator")
+        .expect("stale completion is recorded as a terminal run");
+    assert_eq!(result.run.state, AgentRunState::Failed);
+    assert!(result.calculation.is_none());
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM calculation_runs", [], |row| {
+                row.get::<_, u32>(0)
+            })
+            .expect("count canonical calculations after stale completion"),
+        0
+    );
+}
+
+#[tokio::test]
+async fn failed_calculation_rule_review_allows_one_exact_successor() {
+    let harness = Harness::new("record-extraction");
+    active_production(&harness).await;
+    let first = harness
+        .host
+        .propose_boq_calculation_rule(ProposeBoqCalculationRuleCommand {
+            tender_id: harness.tender_id.clone(),
+            supported_rounding: vec![
+                CalculationRoundingMode::MidpointAwayFromZero,
+                CalculationRoundingMode::MidpointNearestEven,
+            ],
+            change_rationale: "Establish both controlled commercial rounding policies.".into(),
+        })
+        .expect("propose first rule version");
+    harness.set_agent_scenario("calculation-rule-review-failed");
+    let failed = harness
+        .host
+        .run_calculation_rule_review(RunCalculationRuleReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            rule_id: first.rule_id.clone(),
+            version: first.version,
+        })
+        .await
+        .expect("publish attributable failed review");
+    assert_eq!(
+        failed.rule.review.as_ref().map(|review| review.outcome),
+        Some(CalculationRuleReviewOutcome::Failed)
+    );
+    assert_eq!(
+        harness
+            .host
+            .propose_boq_calculation_rule(ProposeBoqCalculationRuleCommand {
+                tender_id: harness.tender_id.clone(),
+                supported_rounding: vec![
+                    CalculationRoundingMode::MidpointAwayFromZero,
+                    CalculationRoundingMode::MidpointNearestEven,
+                ],
+                change_rationale: "Retry the unchanged rule.".into(),
+            })
+            .expect_err("an unchanged failed rule cannot be re-reviewed")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let successor = harness
+        .host
+        .propose_boq_calculation_rule(ProposeBoqCalculationRuleCommand {
+            tender_id: harness.tender_id.clone(),
+            supported_rounding: vec![CalculationRoundingMode::MidpointAwayFromZero],
+            change_rationale:
+                "Resolve the independent finding by allowing one unambiguous rounding policy."
+                    .into(),
+        })
+        .expect("failed review permits exact successor");
+    assert_eq!(successor.rule_id, first.rule_id);
+    assert_eq!(successor.version, first.version + 1);
+    harness.set_agent_scenario("calculation-rule-review");
+    let reviewed = harness
+        .host
+        .run_calculation_rule_review(RunCalculationRuleReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            rule_id: successor.rule_id.clone(),
+            version: successor.version,
+        })
+        .await
+        .expect("review successor");
+    harness
+        .host
+        .approve_calculation_rule(ApproveCalculationRuleCommand {
+            tender_id: harness.tender_id.clone(),
+            rule_id: successor.rule_id,
+            version: successor.version,
+            manifest_sha256: successor.manifest_sha256,
+            rationale: "Activate only the exact successor that passed independent review.".into(),
+        })
+        .expect("activate successor");
+    assert_eq!(reviewed.run.state, AgentRunState::Completed);
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close before cold verification");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("verify failed historical review and active successor");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
 }
 
 fn approval_command(
