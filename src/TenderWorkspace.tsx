@@ -13,6 +13,7 @@ import type { TenderRecoveryRecord } from "./bindings/TenderRecoveryRecord";
 import { AgentRunOffice } from "./AgentRunOffice";
 import { BidDecisionPanel } from "./BidDecisionPanel";
 import { DocumentEvidenceOffice } from "./DocumentEvidenceOffice";
+import { ExternalRfiPanel } from "./ExternalRfiPanel";
 import { TenderBackupPanel } from "./TenderBackupPanel";
 import { TenderRecoveryPanel } from "./TenderRecoveryPanel";
 import { TenderRecordsPanel } from "./TenderRecordsPanel";
@@ -677,6 +678,15 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                 key={`queries-${selected.tender_id}`}
                 tenderId={selected.tender_id}
                 runtimeReady={runtimeReady}
+                refreshToken={tenderStateVersion}
+                reportCommandFailure={reportCommandFailure}
+                onTenderStateChange={reportTenderStateChange}
+              />
+              <ExternalRfiPanel
+                key={`external-rfis-${selected.tender_id}`}
+                tenderId={selected.tender_id}
+                runtimeReady={runtimeReady}
+                register={documentRegister}
                 refreshToken={tenderStateVersion}
                 reportCommandFailure={reportCommandFailure}
                 onTenderStateChange={reportTenderStateChange}

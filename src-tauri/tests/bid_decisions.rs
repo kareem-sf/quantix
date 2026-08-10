@@ -6,23 +6,26 @@ use sha2::{Digest, Sha256};
 use quantix_lib::{
     ensure_quantix_setup, ActivateTenderProductionCommand, AgentProfileStatus,
     AgentRunRecoveryDisposition, AgentRunState, AgentTaskInputReference,
-    ApproveProductionFindingExceptionCommand, BidDecisionApprovalDecision,
-    BidDecisionPackageInspection, BidDecisionPackageReviewOutcome, BidRecommendationOutcome,
-    ComplianceDisposition, ComplianceDispositionUpdate, ComposeTenderOfficeCommand,
-    CreateBidDecisionPackageCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
-    CreateTenderQueryCommand, DecideBidDecisionPackageCommand, DecideTenderQueryTreatmentCommand,
-    DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DeviceProtection,
-    ImportTenderPackageCommand, InspectBidDecisionApprovalHistoryCommand,
-    InspectProductionTaskReviewCommand, InspectTenderQueriesCommand,
-    InvalidateBidDecisionApprovalCommand, MajorFindingPolicy, ManagerCapabilityDemandInput,
-    ParseSourceArtifactCommand, ProductionFindingDispositionKind, ProductionFindingSeverity,
-    ProductionTaskState, ProviderFailureCategory, QuantixHost,
-    ResolveBidDecisionReturnReworkCommand, ResolveIndeterminateAgentRunCommand,
-    ReviseTenderCommand, ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand,
-    RunBidDecisionPackageReviewCommand, RunBootstrapAgentCommand, RunProductionTaskCommand,
+    ApproveExternalRfiForIssueCommand, ApproveProductionFindingExceptionCommand,
+    BidDecisionApprovalDecision, BidDecisionPackageInspection, BidDecisionPackageReviewOutcome,
+    BidRecommendationOutcome, ComplianceDisposition, ComplianceDispositionUpdate,
+    ComposeTenderOfficeCommand, CreateBidDecisionPackageCommand, CreateExternalRfiDraftCommand,
+    CreateTenderCommand, CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
+    DecideBidDecisionPackageCommand, DecideTenderQueryTreatmentCommand, DecideTenderRecordCommand,
+    DecideWorkPlanProposalCommand, DeviceProtection, ExportApprovedExternalRfiCommand,
+    ExternalRfiQueryReference, ExternalRfiRecipient, ImportTenderPackageCommand,
+    InspectBidDecisionApprovalHistoryCommand, InspectExternalRfiResponseCandidatesCommand,
+    InspectExternalRfisCommand, InspectProductionTaskReviewCommand, InspectTenderQueriesCommand,
+    InterpretExternalRfiResponseCommand, InvalidateBidDecisionApprovalCommand, MajorFindingPolicy,
+    ManagerCapabilityDemandInput, ParseSourceArtifactCommand, ProductionFindingDispositionKind,
+    ProductionFindingSeverity, ProductionTaskState, ProviderFailureCategory, QuantixHost,
+    RegisterExternalRfiResponseCommand, ResolveBidDecisionReturnReworkCommand,
+    ResolveIndeterminateAgentRunCommand, ReviseExternalRfiDraftCommand, ReviseTenderCommand,
+    ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand, RunBidDecisionPackageReviewCommand,
+    RunBootstrapAgentCommand, RunExternalRfiReviewCommand, RunProductionTaskCommand,
     RunTenderRecordExtractionCommand, RuntimeLayout, SetupPlatform, SetupState, StoragePermissions,
     TenderErrorCode, TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase,
-    TenderQueryTreatment, TenderQueryTreatmentProposalInput, TenderQueryType,
+    TenderQuery, TenderQueryTreatment, TenderQueryTreatmentProposalInput, TenderQueryType,
     TenderRecordEngineerDecisionKind, TenderRecordInspection, TenderRecordKind,
     TenderRecordVersionReference, WorkPlanDecision, WorkPlanRevisionAction,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
@@ -6247,6 +6250,771 @@ async fn agent_query_blocks_exact_work_until_manager_treatment_is_applied_and_re
             .state,
         TenderIntegrityState::RecoveryRequired
     );
+}
+
+async fn external_rfi_drafting_query(harness: &Harness) -> TenderQuery {
+    let (_, production) = active_production(harness).await;
+    let target = production
+        .tasks
+        .iter()
+        .find(|task| task.state == ProductionTaskState::Ready)
+        .expect("ready task for External RFI Query")
+        .clone();
+    harness.set_agent_scenario("production-task-query-proposal");
+    let proposed = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: target.production_task_id,
+        })
+        .await
+        .expect("publish specialist Query proposal");
+    assert_eq!(proposed.run.state, AgentRunState::Completed);
+    let query = harness
+        .host
+        .inspect_tender_queries(InspectTenderQueriesCommand {
+            tender_id: harness.tender_id.clone(),
+            cursor: None,
+            limit: 8,
+        })
+        .expect("inspect proposed External RFI Query")
+        .items
+        .into_iter()
+        .next()
+        .expect("External RFI Query");
+    harness
+        .host
+        .decide_tender_query_treatment(DecideTenderQueryTreatmentCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: query.query_id.clone(),
+            query_version: query.version,
+            treatment: TenderQueryTreatment::ExternalRfiDrafting,
+            rationale: "The exact ambiguity requires a controlled question to the Employer.".into(),
+            treatment_details:
+                "Draft, independently review, and obtain Manager approval before human issue."
+                    .into(),
+            closes_query: false,
+        })
+        .expect("authorize External RFI drafting")
+}
+
+fn external_rfi_create_command(
+    harness: &Harness,
+    query: &TenderQuery,
+) -> CreateExternalRfiDraftCommand {
+    let source = harness
+        .host
+        .inspect_document_register(&harness.tender_id)
+        .expect("inspect exact Source Artifact Register")
+        .documents
+        .into_iter()
+        .next()
+        .expect("registered source for External RFI attachment");
+    CreateExternalRfiDraftCommand {
+        tender_id: harness.tender_id.clone(),
+        query_refs: vec![ExternalRfiQueryReference {
+            query_id: query.query_id.clone(),
+            version: query.version,
+            manifest_sha256: query.manifest_sha256.clone(),
+        }],
+        additional_evidence: Vec::new(),
+        contractual_context: "The tender documents require the bidder to price and programme the exact stated obligation, but the cited wording leaves the responsibility boundary unresolved.".into(),
+        response_need: "Confirm the responsible party and the exact basis the bidder must use in its submission.".into(),
+        attachments: vec![AgentTaskInputReference {
+            kind: "source_artifact".into(),
+            reference: source.artifact_id,
+            version: source.version,
+        }],
+        due_at: "2030-01-01T00:00:00Z".into(),
+        recipient: ExternalRfiRecipient {
+            organization: "Employer Procurement Team".into(),
+            attention: "Tender Clarifications Manager".into(),
+            email: Some("clarifications@example.com".into()),
+        },
+        affected_commitments: vec![
+            "Tender price qualification".into(),
+            "Submission programme basis".into(),
+        ],
+    }
+}
+
+#[tokio::test]
+async fn external_rfi_is_versioned_reviewed_approved_exported_and_reconciled_through_intake() {
+    let harness = Harness::new("record-extraction");
+    let query = external_rfi_drafting_query(&harness).await;
+
+    let failed_v1 = harness
+        .host
+        .create_external_rfi_draft(external_rfi_create_command(&harness, &query))
+        .expect("create first External RFI draft");
+    let failed = harness
+        .host
+        .revise_external_rfi_draft(ReviseExternalRfiDraftCommand {
+            tender_id: harness.tender_id.clone(),
+            rfi_id: failed_v1.rfi_id.clone(),
+            base_version: failed_v1.version,
+            query_refs: failed_v1.query_refs.clone(),
+            additional_evidence: Vec::new(),
+            contractual_context: format!(
+                "{} The response must distinguish design responsibility from installation responsibility.",
+                failed_v1.contractual_context
+            ),
+            response_need: failed_v1.response_need.clone(),
+            attachments: failed_v1.attachments.clone(),
+            due_at: failed_v1.due_at.clone(),
+            recipient: failed_v1.recipient.clone(),
+            affected_commitments: failed_v1.affected_commitments.clone(),
+        })
+        .expect("publish immutable External RFI successor");
+    assert_eq!(failed.version, 2);
+    harness.set_agent_scenario("external-rfi-review-failed");
+    let failed_review = harness
+        .host
+        .run_external_rfi_review(RunExternalRfiReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            rfi_id: failed.rfi_id.clone(),
+            version: failed.version,
+        })
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "record failed independent review: {error:?}; fixture={}",
+                fs::read_to_string(harness.codex.with_extension("fixture-error"))
+                    .unwrap_or_else(|_| "none".into())
+            )
+        });
+    assert_eq!(
+        failed_review.run.state,
+        AgentRunState::Completed,
+        "{failed_review:#?}; fixture={}",
+        fs::read_to_string(harness.codex.with_extension("fixture-error"))
+            .unwrap_or_else(|_| "none".into())
+    );
+    assert_eq!(
+        failed_review
+            .rfi
+            .review
+            .as_ref()
+            .map(|review| review.outcome),
+        Some(quantix_lib::ExternalRfiReviewOutcome::Failed)
+    );
+    assert_eq!(
+        harness
+            .host
+            .approve_external_rfi_for_issue(ApproveExternalRfiForIssueCommand {
+                tender_id: harness.tender_id.clone(),
+                rfi_id: failed.rfi_id,
+                version: failed.version,
+                manifest_sha256: failed.manifest_sha256,
+                rationale: "A failed review must never authorize issue.".into(),
+            })
+            .expect_err("failed review blocks Manager approval")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+
+    let draft = harness
+        .host
+        .create_external_rfi_draft(external_rfi_create_command(&harness, &query))
+        .expect("create reviewable External RFI draft");
+    let stale_candidate = harness
+        .host
+        .create_external_rfi_draft(external_rfi_create_command(&harness, &query))
+        .expect("create draft that will become stale after response interpretation");
+    harness.set_agent_scenario("external-rfi-review");
+    let reviewed = harness
+        .host
+        .run_external_rfi_review(RunExternalRfiReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            rfi_id: draft.rfi_id.clone(),
+            version: draft.version,
+        })
+        .await
+        .expect("independently review exact External RFI draft");
+    assert_eq!(
+        reviewed.run.state,
+        AgentRunState::Completed,
+        "{reviewed:#?}; fixture={}",
+        fs::read_to_string(harness.codex.with_extension("fixture-error"))
+            .unwrap_or_else(|_| "none".into())
+    );
+    assert_eq!(
+        reviewed.rfi.review.as_ref().map(|review| review.outcome),
+        Some(quantix_lib::ExternalRfiReviewOutcome::Passed)
+    );
+    assert!(reviewed
+        .run
+        .profile
+        .capabilities
+        .contains(&"review_query_rfi_control".to_owned()));
+    assert!(reviewed
+        .run
+        .task
+        .exact_inputs
+        .iter()
+        .any(|input| input.kind == "work_plan_version"));
+    assert!(reviewed.rfi.approval.is_none());
+
+    let approved = harness
+        .host
+        .approve_external_rfi_for_issue(ApproveExternalRfiForIssueCommand {
+            tender_id: harness.tender_id.clone(),
+            rfi_id: draft.rfi_id.clone(),
+            version: draft.version,
+            manifest_sha256: draft.manifest_sha256.clone(),
+            rationale: "The Tendering Manager approves this exact independently reviewed wording for human issue.".into(),
+        })
+        .expect("approve exact reviewed External RFI");
+    assert!(approved.approved_for_issue);
+    let approval = approved.approval.as_ref().expect("Manager approval");
+    assert_eq!(
+        harness
+            .host
+            .revise_external_rfi_draft(ReviseExternalRfiDraftCommand {
+                tender_id: harness.tender_id.clone(),
+                rfi_id: approved.rfi_id.clone(),
+                base_version: approved.version,
+                query_refs: approved.query_refs.clone(),
+                additional_evidence: Vec::new(),
+                contractual_context: approved.contractual_context.clone(),
+                response_need: approved.response_need.clone(),
+                attachments: approved.attachments.clone(),
+                due_at: approved.due_at.clone(),
+                recipient: approved.recipient.clone(),
+                affected_commitments: approved.affected_commitments.clone(),
+            })
+            .expect_err("an approved and possibly human-issued RFI remains the visible exact head")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let exported = harness
+        .host
+        .export_approved_external_rfi(ExportApprovedExternalRfiCommand {
+            tender_id: harness.tender_id.clone(),
+            rfi_id: approved.rfi_id.clone(),
+            version: approved.version,
+            approval_sha256: approval.approval_sha256.clone(),
+        })
+        .expect("export exact approved bytes for human issue");
+    assert!(exported.bytes_verified);
+    let exported_bytes = fs::read(&exported.path).expect("read exported RFI bytes");
+    let exported_sha256 = Sha256::digest(&exported_bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(exported_sha256, exported.bytes_sha256);
+    let exported_text = String::from_utf8(exported_bytes).expect("External RFI text export");
+    assert!(exported_text.contains("Quantix did not send or submit this RFI"));
+    for _ in 1..64 {
+        harness
+            .host
+            .export_approved_external_rfi(ExportApprovedExternalRfiCommand {
+                tender_id: harness.tender_id.clone(),
+                rfi_id: approved.rfi_id.clone(),
+                version: approved.version,
+                approval_sha256: approval.approval_sha256.clone(),
+            })
+            .expect("publish bounded repeated verified export");
+    }
+    assert_eq!(
+        harness
+            .host
+            .export_approved_external_rfi(ExportApprovedExternalRfiCommand {
+                tender_id: harness.tender_id.clone(),
+                rfi_id: approved.rfi_id.clone(),
+                version: approved.version,
+                approval_sha256: approval.approval_sha256.clone(),
+            })
+            .expect_err("65th export exceeds the immutable per-approval bound")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+
+    let original_source = harness
+        .host
+        .inspect_document_register(&harness.tender_id)
+        .expect("inspect original Intake sources")
+        .documents
+        .into_iter()
+        .next()
+        .expect("original Tender source");
+    assert_eq!(
+        harness
+            .host
+            .register_external_rfi_response(RegisterExternalRfiResponseCommand {
+                tender_id: harness.tender_id.clone(),
+                rfi_id: approved.rfi_id.clone(),
+                rfi_version: approved.version,
+                approval_id: approval.approval_id.clone(),
+                source_artifact_id: original_source.artifact_id,
+                source_artifact_version: original_source.version,
+            })
+            .expect_err("an original Tender input is not a received RFI response")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+
+    let response_source = harness._root.path().join("external-rfi-response");
+    fs::create_dir(&response_source).expect("response package directory");
+    for index in 0..65 {
+        fs::write(
+            response_source.join(format!("employer-response-{index:02}.pdf")),
+            format!(
+                "%PDF-1.7\nThe Employer response {index} confirms the bidder responsibility boundary.\n%%EOF\n"
+            ),
+        )
+        .expect("External RFI response fixture");
+    }
+    let response_import = harness
+        .host
+        .import_tender_package(ImportTenderPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            source_path: response_source.to_string_lossy().into_owned(),
+        })
+        .expect("register External RFI response through Intake");
+    assert_eq!(response_import.documents.len(), 65);
+    let response_candidates = harness
+        .host
+        .inspect_external_rfi_response_candidates(InspectExternalRfiResponseCandidatesCommand {
+            tender_id: harness.tender_id.clone(),
+            approval_id: approval.approval_id.clone(),
+            cursor: None,
+            limit: 64,
+        })
+        .expect("inspect the Host-authorized post-approval Intake response page");
+    assert_eq!(response_candidates.items.len(), 64);
+    assert!(response_candidates.next_cursor.is_some());
+    assert!(response_candidates.items.iter().all(|candidate| {
+        response_import.documents.iter().any(|document| {
+            candidate.source_artifact_id == document.artifact_id
+                && candidate.source_artifact_version == document.version
+        })
+    }));
+    let later_response_candidates = harness
+        .host
+        .inspect_external_rfi_response_candidates(InspectExternalRfiResponseCandidatesCommand {
+            tender_id: harness.tender_id.clone(),
+            approval_id: approval.approval_id.clone(),
+            cursor: response_candidates.next_cursor.clone(),
+            limit: 64,
+        })
+        .expect("advance the Host-authorized post-approval Intake response page");
+    assert_eq!(later_response_candidates.items.len(), 1);
+    assert!(later_response_candidates.next_cursor.is_none());
+    let advanced_query = harness
+        .host
+        .revise_tender_query(ReviseTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: query.query_id.clone(),
+            base_version: query.version,
+            query_type: query.query_type,
+            question: query.question.clone(),
+            ambiguity_or_gap: format!(
+                "{} The external response remains pending.",
+                query.ambiguity_or_gap
+            ),
+            owner_profile_id: query.owner_profile_id.clone(),
+            owner_profile_version: query.owner_profile_version,
+            evidence: query.evidence.clone(),
+            affected_records: query.affected_records.clone(),
+            affected_task_keys: query.affected_task_keys.clone(),
+            due_at: query.due_at.clone(),
+            material: query.material,
+            release_blocking: query.release_blocking,
+            proposed_treatments: query
+                .proposed_treatments
+                .iter()
+                .map(|proposal| TenderQueryTreatmentProposalInput {
+                    treatment: proposal.treatment,
+                    rationale: proposal.rationale.clone(),
+                })
+                .collect(),
+            response: None,
+            response_evidence: Vec::new(),
+        })
+        .expect("advance the Query while the human-issued RFI is outstanding");
+    let advanced_query = harness
+        .host
+        .decide_tender_query_treatment(DecideTenderQueryTreatmentCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: advanced_query.query_id.clone(),
+            query_version: advanced_query.version,
+            treatment: TenderQueryTreatment::ExternalRfiDrafting,
+            rationale: "The outstanding issued RFI still controls this current Query basis.".into(),
+            treatment_details:
+                "Retain the exact issued basis while awaiting the registered response.".into(),
+            closes_query: false,
+        })
+        .expect("retain External RFI control on the current Query head");
+    let revised_stale = harness
+        .host
+        .revise_external_rfi_draft(ReviseExternalRfiDraftCommand {
+            tender_id: harness.tender_id.clone(),
+            rfi_id: stale_candidate.rfi_id.clone(),
+            base_version: stale_candidate.version,
+            query_refs: vec![ExternalRfiQueryReference {
+                query_id: advanced_query.query_id.clone(),
+                version: advanced_query.version,
+                manifest_sha256: advanced_query.manifest_sha256.clone(),
+            }],
+            additional_evidence: stale_candidate.source_evidence.clone(),
+            contractual_context: stale_candidate.contractual_context.clone(),
+            response_need: stale_candidate.response_need.clone(),
+            attachments: stale_candidate.attachments.clone(),
+            due_at: stale_candidate.due_at.clone(),
+            recipient: stale_candidate.recipient.clone(),
+            affected_commitments: stale_candidate.affected_commitments.clone(),
+        })
+        .expect("revise a stale RFI identity onto the current Query basis");
+    assert!(revised_stale.evidence_current);
+
+    let mut first_response = None;
+    for document in response_import.documents.iter().take(64) {
+        let linked = harness
+            .host
+            .register_external_rfi_response(RegisterExternalRfiResponseCommand {
+                tender_id: harness.tender_id.clone(),
+                rfi_id: approved.rfi_id.clone(),
+                rfi_version: approved.version,
+                approval_id: approval.approval_id.clone(),
+                source_artifact_id: document.artifact_id.clone(),
+                source_artifact_version: document.version,
+            })
+            .expect("link bounded immutable Intake response to exact RFI");
+        first_response.get_or_insert_with(|| {
+            linked
+                .responses
+                .first()
+                .expect("first External RFI response link")
+                .clone()
+        });
+    }
+    let overflow_response = &response_import.documents[64];
+    assert_eq!(
+        harness
+            .host
+            .register_external_rfi_response(RegisterExternalRfiResponseCommand {
+                tender_id: harness.tender_id.clone(),
+                rfi_id: approved.rfi_id.clone(),
+                rfi_version: approved.version,
+                approval_id: approval.approval_id.clone(),
+                source_artifact_id: overflow_response.artifact_id.clone(),
+                source_artifact_version: overflow_response.version,
+            })
+            .expect_err("65th response exceeds the immutable per-approval bound")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let response = first_response.expect("External RFI response link");
+    let interpretation_command = InterpretExternalRfiResponseCommand {
+        tender_id: harness.tender_id.clone(),
+        response_link_id: response.response_link_id.clone(),
+        query_id: query.query_id.clone(),
+        issued_query_version: query.version,
+        base_query_version: advanced_query.version,
+        base_query_manifest_sha256: advanced_query.manifest_sha256.clone(),
+        material: true,
+        interpretation: "The response confirms the bidder carries installation responsibility while the Employer retains design responsibility.".into(),
+        treatment: TenderQueryTreatment::Qualification,
+        rationale: "Preserve the exact responsibility split in the bid basis.".into(),
+        treatment_details: "Qualify the price and programme against the confirmed responsibility split and rework dependent outputs.".into(),
+        closes_query: false,
+    };
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let fault_connection = rusqlite::Connection::open(&database).expect("open fault connection");
+    fault_connection
+        .execute_batch(
+            "CREATE TRIGGER injected_external_rfi_interpretation_failure
+             BEFORE INSERT ON external_rfi_response_interpretations
+             BEGIN SELECT RAISE(ABORT, 'injected interpretation publication failure'); END;",
+        )
+        .expect("inject late interpretation failure");
+    harness
+        .host
+        .interpret_external_rfi_response(interpretation_command.clone())
+        .expect_err("late publication failure rolls back the complete Query successor");
+    let after_injected_failure = harness
+        .host
+        .inspect_tender_queries(InspectTenderQueriesCommand {
+            tender_id: harness.tender_id.clone(),
+            cursor: None,
+            limit: 8,
+        })
+        .expect("inspect Query after injected interpretation failure")
+        .items
+        .into_iter()
+        .find(|candidate| candidate.query_id == query.query_id)
+        .expect("current Query after injected failure");
+    assert_eq!(after_injected_failure.version, advanced_query.version);
+    fault_connection
+        .execute_batch("DROP TRIGGER injected_external_rfi_interpretation_failure;")
+        .expect("remove interpretation fault injection");
+    let interpreted = harness
+        .host
+        .interpret_external_rfi_response(interpretation_command)
+        .expect("record Manager interpretation and exact Query successor");
+    assert_eq!(interpreted.interpretations.len(), 1);
+    let interpretation = &interpreted.interpretations[0];
+    assert_eq!(interpretation.source_query_version, query.version);
+    assert_eq!(interpretation.base_query_version, advanced_query.version);
+    assert_eq!(
+        interpretation.resulting_query_version,
+        advanced_query.version + 1
+    );
+    assert!(interpretation.material);
+
+    let page = harness
+        .host
+        .inspect_external_rfis(InspectExternalRfisCommand {
+            tender_id: harness.tender_id.clone(),
+            cursor: None,
+            limit: 8,
+        })
+        .expect("inspect bounded External RFI Register");
+    assert_eq!(page.total_current_count, 3);
+    assert_eq!(page.approved_for_issue_count, 0, "the interpreted Query successor makes the issued draft historical rather than silently current");
+    let stale = page
+        .items
+        .iter()
+        .find(|item| item.rfi_id == stale_candidate.rfi_id)
+        .expect("stale exact draft");
+    assert!(!stale.evidence_current);
+    assert_eq!(
+        harness
+            .host
+            .run_external_rfi_review(RunExternalRfiReviewCommand {
+                tender_id: harness.tender_id.clone(),
+                rfi_id: stale.rfi_id.clone(),
+                version: stale.version,
+            })
+            .await
+            .expect_err("stale Evidence cannot be independently reviewed")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close External RFI Tender");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify External RFI lineage");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close verified External RFI Tender before corruption probe");
+    fault_connection
+        .execute_batch("DROP TRIGGER agent_runs_terminal_facts_no_rewrite;")
+        .expect("disable Agent Run immutability only for corruption fixture");
+    fault_connection
+        .execute(
+            "UPDATE agent_runs
+             SET permission_grant_json = json_set(
+               permission_grant_json, '$.network_allowed', json('true')
+             )
+             WHERE run_id = ?1",
+            [&reviewed.run.run_id],
+        )
+        .expect("corrupt the exact RFI review authority ceiling");
+    let corrupted = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("inspect corrupted External RFI review authority");
+    assert_eq!(corrupted.state, TenderIntegrityState::RecoveryRequired);
+    fault_connection
+        .execute(
+            "UPDATE agent_runs
+             SET permission_grant_json = json_set(
+               json_set(permission_grant_json, '$.network_allowed', json('false')),
+               '$.data_views[0].sha256', ?2
+             )
+             WHERE run_id = ?1",
+            rusqlite::params![reviewed.run.run_id, "0".repeat(64)],
+        )
+        .expect("restore authority and corrupt the exact review Data View digest");
+    let fresh_host =
+        QuantixHost::with_setup_platform(&harness.application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&fresh_host).state, SetupState::Ready);
+    let digest_corrupted = fresh_host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("inspect corrupted External RFI review Data View digest");
+    assert_eq!(
+        digest_corrupted.state,
+        TenderIntegrityState::RecoveryRequired
+    );
+}
+
+#[tokio::test]
+async fn external_rfi_review_cannot_publish_after_its_approved_work_plan_is_suspended() {
+    let harness = Harness::new("record-extraction");
+    let query = external_rfi_drafting_query(&harness).await;
+    let draft = harness
+        .host
+        .create_external_rfi_draft(external_rfi_create_command(&harness, &query))
+        .expect("create External RFI for authorization race");
+    harness.set_agent_scenario("external-rfi-review-delayed");
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let rfi_id = draft.rfi_id.clone();
+    let version = draft.version;
+    let review = tokio::spawn(async move {
+        host.run_external_rfi_review(RunExternalRfiReviewCommand {
+            tender_id,
+            rfi_id,
+            version,
+        })
+        .await
+    });
+    wait_for_fixture_path(&harness.codex.with_extension("external-rfi-review-waiting")).await;
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(&database).expect("open authorization race store");
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE production_activations SET status = 'suspended'
+                 WHERE status = 'active'",
+                [],
+            )
+            .expect("suspend exact approved activation"),
+        1
+    );
+    fs::write(
+        harness.codex.with_extension("external-rfi-review-release"),
+        b"release",
+    )
+    .expect("release delayed External RFI review");
+    let result = review
+        .await
+        .expect("join delayed External RFI review")
+        .expect("record stale-authority review as a terminal run");
+    assert_eq!(result.run.state, AgentRunState::Failed);
+    assert!(result.rfi.review.is_none());
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE production_activations SET status = 'active'
+                 WHERE status = 'suspended'",
+                [],
+            )
+            .expect("restore activation after race fixture"),
+        1
+    );
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close authorization race Tender");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify rejected stale-authority review");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+}
+
+#[tokio::test]
+async fn external_rfi_cold_integrity_rejects_a_successor_after_manager_approval() {
+    let harness = Harness::new("record-extraction");
+    let query = external_rfi_drafting_query(&harness).await;
+    let draft = harness
+        .host
+        .create_external_rfi_draft(external_rfi_create_command(&harness, &query))
+        .expect("create External RFI for approved-head corruption coverage");
+    harness.set_agent_scenario("external-rfi-review");
+    let reviewed = harness
+        .host
+        .run_external_rfi_review(RunExternalRfiReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            rfi_id: draft.rfi_id.clone(),
+            version: draft.version,
+        })
+        .await
+        .expect("review External RFI before approved-head corruption");
+    assert_eq!(reviewed.run.state, AgentRunState::Completed);
+    harness
+        .host
+        .approve_external_rfi_for_issue(ApproveExternalRfiForIssueCommand {
+            tender_id: harness.tender_id.clone(),
+            rfi_id: draft.rfi_id.clone(),
+            version: draft.version,
+            manifest_sha256: draft.manifest_sha256.clone(),
+            rationale: "Approve the exact reviewed RFI for the cold-integrity fixture.".into(),
+        })
+        .expect("approve exact External RFI before corruption");
+
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let fault_connection =
+        rusqlite::Connection::open(&database).expect("open approved-head corruption fixture store");
+    fault_connection
+        .execute_batch(
+            "CREATE TEMP TABLE saved_external_rfi_review AS
+               SELECT * FROM external_rfi_reviews;
+             CREATE TEMP TABLE saved_external_rfi_approval AS
+               SELECT * FROM external_rfi_approvals;
+             DROP TRIGGER external_rfi_approvals_no_delete;
+             DROP TRIGGER external_rfi_reviews_no_delete;
+             DELETE FROM external_rfi_approvals;
+             DELETE FROM external_rfi_reviews;",
+        )
+        .expect("temporarily remove immutable decision facts for corruption fixture");
+    let successor = harness
+        .host
+        .revise_external_rfi_draft(ReviseExternalRfiDraftCommand {
+            tender_id: harness.tender_id.clone(),
+            rfi_id: draft.rfi_id.clone(),
+            base_version: draft.version,
+            query_refs: draft.query_refs.clone(),
+            additional_evidence: Vec::new(),
+            contractual_context: format!(
+                "{} This forged successor must never coexist with the approval.",
+                draft.contractual_context
+            ),
+            response_need: draft.response_need.clone(),
+            attachments: draft.attachments.clone(),
+            due_at: draft.due_at.clone(),
+            recipient: draft.recipient.clone(),
+            affected_commitments: draft.affected_commitments.clone(),
+        })
+        .expect("publish otherwise-valid successor while approval facts are hidden");
+    assert_eq!(successor.version, 2);
+    fault_connection
+        .execute_batch(
+            "INSERT INTO external_rfi_reviews
+               SELECT * FROM saved_external_rfi_review;
+             INSERT INTO external_rfi_approvals
+               SELECT * FROM saved_external_rfi_approval;",
+        )
+        .expect("restore exact historical review and approval facts");
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close approved-head corruption Tender");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-inspect RFI approval superseded by a valid-looking successor");
+    assert_eq!(integrity.state, TenderIntegrityState::RecoveryRequired);
 }
 
 fn install_codex_fixture(resources: &Path, scenario: &str) -> std::path::PathBuf {

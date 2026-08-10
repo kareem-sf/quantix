@@ -22,10 +22,10 @@ use crate::{
         BidDecisionPackageRecordPage, BidDecisionPackageReviewResult,
         BidDecisionReturnReworkResult, BidPackageOperationBudget, ComplianceMatrixPage,
         CreateBidDecisionPackageCommand, CreateTenderEngineerEntryCommand,
-        DecideBidDecisionPackageCommand, DecideTenderRecordCommand,
+        DecideBidDecisionPackageCommand, DecideTenderRecordCommand, ExternalRfiReviewResult,
         InspectBidDecisionApprovalHistoryCommand, InvalidateBidDecisionApprovalCommand,
         ProductionTaskRunResult, ProductionTaskState, ResolveBidDecisionReturnReworkCommand,
-        RunBidDecisionPackageReviewCommand, RunProductionTaskCommand,
+        RunBidDecisionPackageReviewCommand, RunExternalRfiReviewCommand, RunProductionTaskCommand,
         RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, TenderCommandError,
         TenderErrorCode, TenderId, TenderRecordAuthority, TenderRecordDecisionResult,
         TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult, TenderStore,
@@ -1039,6 +1039,45 @@ impl QuantixHost {
         Ok(TenderRecordReviewResult {
             run: store.inspect_agent_run(&prepared.run_id)?,
             record: store.inspect_tender_record_version(&command.record_id, command.version)?,
+        })
+    }
+
+    pub async fn run_external_rfi_review(
+        &self,
+        command: RunExternalRfiReviewCommand,
+    ) -> Result<ExternalRfiReviewResult, TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        if !valid_identifier(&command.rfi_id) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        let _active = ActiveAgentRunGuard {
+            host: self.clone(),
+            lease_id: lease_id.clone(),
+        };
+        let store = self.tender_store(&tender_id)?;
+        let prepared = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .prepare_external_rfi_review_run(&tender_id, &command.rfi_id, command.version)?;
+        self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
+        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let mut store = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        store.complete_agent_run(&tender_id, &prepared, execution)?;
+        Ok(ExternalRfiReviewResult {
+            run: store.inspect_agent_run(&prepared.run_id)?,
+            rfi: store.load_external_rfi(
+                &command.rfi_id,
+                command.version,
+                BidPackageOperationBudget::for_tender(&tender_id),
+            )?,
         })
     }
 

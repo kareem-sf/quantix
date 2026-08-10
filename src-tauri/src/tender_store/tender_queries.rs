@@ -1778,7 +1778,7 @@ fn validate_query_publication_targets_with_check(
     Ok(())
 }
 
-fn query_evidence_reference_exists(
+pub(crate) fn query_evidence_reference_exists(
     connection: &rusqlite::Connection,
     reference: &AgentTaskInputReference,
 ) -> Result<bool, TenderCommandError> {
@@ -1869,6 +1869,14 @@ fn query_evidence_reference_exists(
                 )
                 .map_err(sql_error)
         }
+        "source_artifact" => connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM source_artifact_versions
+                 WHERE artifact_id = ?1 AND version = ?2 AND registration_state = 'registered')",
+                params![reference.reference, reference.version],
+                |row| row.get(0),
+            )
+            .map_err(sql_error),
         _ => Ok(false),
     }
 }
@@ -3833,6 +3841,281 @@ pub(crate) fn approved_query_treatments_for_inputs(
                 .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
         })
         .collect()
+}
+
+pub(crate) struct ExternalRfiInterpretationInput<'a> {
+    pub response_link_id: &'a str,
+    pub query_id: &'a str,
+    pub issued_query_version: u32,
+    pub base_query_version: u32,
+    pub base_query_manifest_sha256: &'a str,
+    pub response_source_artifact_id: &'a str,
+    pub response_source_artifact_version: u32,
+    pub material: bool,
+    pub interpretation: &'a str,
+    pub treatment: TenderQueryTreatment,
+    pub rationale: &'a str,
+    pub treatment_details: &'a str,
+    pub closes_query: bool,
+    pub created_at: &'a str,
+}
+
+pub(crate) struct PublishedExternalRfiInterpretation {
+    pub query_version: u32,
+    pub decision_id: String,
+}
+
+pub(crate) fn publish_external_rfi_interpretation(
+    transaction: &Transaction<'_>,
+    tender_id: &TenderId,
+    input: ExternalRfiInterpretationInput<'_>,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<PublishedExternalRfiInterpretation, TenderCommandError> {
+    check()?;
+    if input.interpretation.is_empty()
+        || input.interpretation.len() > 8_000
+        || input.rationale.is_empty()
+        || input.rationale.len() > 4_000
+        || input.treatment_details.is_empty()
+        || input.treatment_details.len() > 4_000
+        || !valid_identifier(input.query_id)
+        || !valid_identifier(input.response_source_artifact_id)
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let Some(current) =
+        load_query_version_row(transaction, input.query_id, input.base_query_version)?
+    else {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    };
+    let head: Option<u32> = transaction
+        .query_row(
+            "SELECT current_version FROM tender_query_heads WHERE query_id = ?1",
+            [input.query_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let prior_treatment: Option<(String, bool)> = transaction
+        .query_row(
+            "SELECT treatment, closes_query FROM tender_query_treatment_decisions
+             WHERE query_id = ?1 AND query_version = ?2",
+            params![input.query_id, input.issued_query_version],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let response_source_exists: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM source_artifact_versions
+             WHERE artifact_id = ?1 AND version = ?2 AND registration_state = 'registered')",
+            params![
+                input.response_source_artifact_id,
+                input.response_source_artifact_version,
+            ],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    let already_interpreted: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM external_rfi_response_interpretations
+             WHERE response_link_id = ?1 AND query_id = ?2)",
+            params![input.response_link_id, input.query_id],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if head != Some(input.base_query_version)
+        || current.manifest_sha256 != input.base_query_manifest_sha256
+        || input.base_query_version >= MAX_QUERY_VERSIONS
+        || prior_treatment
+            .as_ref()
+            .map(|(treatment, closes)| (treatment.as_str(), *closes))
+            != Some(("external_rfi_drafting", false))
+        || !response_source_exists
+        || already_interpreted
+        || (input.closes_query && !input.treatment.permits_dependent_work())
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let response_reference = AgentTaskInputReference {
+        kind: "source_artifact".into(),
+        reference: input.response_source_artifact_id.into(),
+        version: input.response_source_artifact_version,
+    };
+    let mut evidence = current.evidence.clone();
+    if !evidence.contains(&response_reference) {
+        evidence.push(response_reference.clone());
+    }
+    let mut responses = current.responses.clone();
+    responses.push(TenderQueryResponse {
+        response_id: random_identifier(transaction)?,
+        response: input.interpretation.to_owned(),
+        evidence: vec![response_reference],
+        registered_by: "engineer_user".into(),
+        created_at: input.created_at.to_owned(),
+    });
+    let candidate = QueryCandidateRef {
+        question: &current.question,
+        ambiguity_or_gap: &current.ambiguity_or_gap,
+        owner_profile_id: &current.owner_profile_id,
+        owner_profile_version: current.owner_profile_version,
+        evidence: &evidence,
+        affected_records: &current.affected_records,
+        affected_task_keys: &current.affected_task_keys,
+        due_at: &current.due_at,
+        proposed_treatments: &current.proposed_treatments,
+        responses: &responses,
+    };
+    validate_query_candidate_with_check(transaction, candidate, check)?;
+    if !query_context_candidates_fit(
+        transaction,
+        &[(
+            Some(input.query_id),
+            query_candidate_context_bound(candidate)?,
+        )],
+    )? || !query_publication_has_capacity(
+        transaction,
+        &current.affected_records,
+        &current.affected_task_keys,
+    )? {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let version = input.base_query_version + 1;
+    let invalidation_targets = collect_query_invalidation_targets_with_check(
+        transaction,
+        &current.affected_records,
+        &current.affected_task_keys,
+        check,
+    )?;
+    let query_manifest_sha256 = insert_query_version(
+        transaction,
+        QueryVersionInsert {
+            query_id: input.query_id,
+            version,
+            query_type: current.query_type,
+            question: &current.question,
+            ambiguity_or_gap: &current.ambiguity_or_gap,
+            owner_profile_id: &current.owner_profile_id,
+            owner_profile_version: current.owner_profile_version,
+            evidence: &evidence,
+            affected_records: &current.affected_records,
+            affected_task_keys: &current.affected_task_keys,
+            invalidation_targets: &invalidation_targets,
+            due_at: &current.due_at,
+            material: input.material,
+            release_blocking: current.release_blocking,
+            proposed_treatments: &current.proposed_treatments,
+            responses: &responses,
+            source_run_id: None,
+            created_by: "engineer_user",
+            created_at: input.created_at,
+        },
+    )?;
+    if transaction
+        .execute(
+            "UPDATE tender_query_heads SET current_version = ?2
+             WHERE query_id = ?1 AND current_version = ?3",
+            params![input.query_id, version, input.base_query_version],
+        )
+        .map_err(sql_error)?
+        != 1
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    append_query_event(
+        transaction,
+        tender_id,
+        "tender_query_revised",
+        input.query_id,
+        version,
+        &query_manifest_sha256,
+        input.created_at,
+    )?;
+    let decision_id = random_identifier(transaction)?;
+    let decision_manifest = QueryTreatmentManifest {
+        schema_version: 1,
+        decision_id: &decision_id,
+        query_id: input.query_id,
+        query_version: version,
+        query_manifest_sha256: &query_manifest_sha256,
+        treatment: input.treatment,
+        rationale: input.rationale,
+        treatment_details: input.treatment_details,
+        closes_query: input.closes_query,
+        decided_by: "engineer_user",
+        acting_role: "tendering_manager",
+        invalidation_targets: &[],
+        created_at: input.created_at,
+    };
+    let decision_manifest_json = canonical_json(&decision_manifest)?;
+    let decision_manifest_sha256 = sha256_hex(decision_manifest_json.as_bytes());
+    let tender_revision: u32 = transaction
+        .query_row(
+            "SELECT current_revision FROM tender WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    let audit_sequence = append_audit_event_with_sequence(
+        transaction,
+        tender_id.as_str(),
+        "tender_query_treatment_decided",
+        tender_revision,
+        json!({
+            "acting_role": "tendering_manager",
+            "closes_query": input.closes_query,
+            "decided_by": "engineer_user",
+            "decision_id": decision_id,
+            "manifest_sha256": decision_manifest_sha256,
+            "query_id": input.query_id,
+            "query_version": version.to_string(),
+            "treatment": input.treatment.as_str(),
+        }),
+        input.created_at,
+    )?;
+    transaction
+        .execute(
+            "INSERT INTO tender_query_treatment_decisions (
+               decision_id, query_id, query_version, treatment, rationale,
+               treatment_details, closes_query, decided_by, acting_role,
+               audit_sequence, invalidation_targets_json, manifest_json,
+               manifest_sha256, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7,
+                       'engineer_user', 'tendering_manager', ?8, '[]', ?9, ?10, ?11)",
+            params![
+                decision_id,
+                input.query_id,
+                version,
+                input.treatment.as_str(),
+                input.rationale,
+                input.treatment_details,
+                input.closes_query,
+                audit_sequence,
+                decision_manifest_json,
+                decision_manifest_sha256,
+                input.created_at,
+            ],
+        )
+        .map_err(sql_error)?;
+    invalidate_query_targets(
+        transaction,
+        QueryTargetInvalidation {
+            query_id: input.query_id,
+            query_version: version,
+            targets: &invalidation_targets,
+            reason: "response_added",
+            blocks_dependent_work: !input.treatment.permits_dependent_work(),
+            created_at: input.created_at,
+        },
+    )?;
+    if input.treatment.permits_dependent_work() {
+        release_query_blocked_tasks(transaction, &current.affected_task_keys, input.created_at)?;
+    }
+    check()?;
+    Ok(PublishedExternalRfiInterpretation {
+        query_version: version,
+        decision_id,
+    })
 }
 
 fn append_query_event(

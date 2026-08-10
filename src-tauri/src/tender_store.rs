@@ -34,6 +34,7 @@ use crate::{setup::SetupState, QuantixHost};
 mod agent_records;
 pub(crate) mod backups;
 mod bid_decisions;
+mod external_rfis;
 mod production_scheduler;
 mod team_composer;
 mod tender_queries;
@@ -60,6 +61,18 @@ pub use bid_decisions::{
     InspectComplianceMatrixCommand, InvalidateBidDecisionApprovalCommand,
     ManagerCapabilityDemandInput, ResolveBidDecisionReturnReworkCommand, ResourceImplication,
     ReviewFindingSeverity, RunBidDecisionPackageReviewCommand, TenderRecordVersionReference,
+};
+pub use external_rfis::{
+    ApproveExternalRfiForIssueCommand, CreateExternalRfiDraftCommand,
+    ExportApprovedExternalRfiCommand, ExternalRfiApproval, ExternalRfiDraft,
+    ExternalRfiEligibleQuery, ExternalRfiEligibleQueryPage, ExternalRfiExportRecord,
+    ExternalRfiFindingSeverity, ExternalRfiPage, ExternalRfiQueryReference, ExternalRfiQuestion,
+    ExternalRfiRecipient, ExternalRfiResponseCandidatePage, ExternalRfiResponseInterpretation,
+    ExternalRfiResponseLink, ExternalRfiReview, ExternalRfiReviewFinding, ExternalRfiReviewOutcome,
+    ExternalRfiReviewResult, InspectExternalRfiEligibleQueriesCommand,
+    InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
+    InterpretExternalRfiResponseCommand, RegisterExternalRfiResponseCommand,
+    ReviseExternalRfiDraftCommand, RunExternalRfiReviewCommand,
 };
 pub use production_scheduler::{
     ActivateTenderProductionCommand, ApproveProductionFindingExceptionCommand,
@@ -101,7 +114,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 16;
+const TENDER_SCHEMA_VERSION: i64 = 17;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -242,6 +255,143 @@ CREATE TABLE tender_query_target_invalidations (
   UNIQUE (query_id, query_version, target_kind, target_id, target_version),
   FOREIGN KEY (query_id, query_version)
     REFERENCES tender_query_versions(query_id, version)
+);
+CREATE TABLE external_rfis (
+  rfi_id TEXT PRIMARY KEY CHECK (length(rfi_id) = 32),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE external_rfi_versions (
+  rfi_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 32),
+  query_refs_json TEXT NOT NULL CHECK (json_valid(query_refs_json)),
+  questions_json TEXT NOT NULL CHECK (json_valid(questions_json)),
+  source_evidence_json TEXT NOT NULL CHECK (json_valid(source_evidence_json)),
+  contractual_context TEXT NOT NULL CHECK (
+    length(CAST(contractual_context AS BLOB)) BETWEEN 1 AND 8000
+  ),
+  response_need TEXT NOT NULL CHECK (
+    length(CAST(response_need AS BLOB)) BETWEEN 1 AND 4000
+  ),
+  attachments_json TEXT NOT NULL CHECK (json_valid(attachments_json)),
+  due_at TEXT NOT NULL,
+  recipient_json TEXT NOT NULL CHECK (json_valid(recipient_json)),
+  affected_task_keys_json TEXT NOT NULL CHECK (json_valid(affected_task_keys_json)),
+  affected_commitments_json TEXT NOT NULL CHECK (json_valid(affected_commitments_json)),
+  created_by TEXT NOT NULL CHECK (created_by = 'engineer_user'),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (rfi_id, version),
+  FOREIGN KEY (rfi_id) REFERENCES external_rfis(rfi_id)
+);
+CREATE TABLE external_rfi_heads (
+  rfi_id TEXT PRIMARY KEY,
+  current_version INTEGER NOT NULL CHECK (current_version BETWEEN 1 AND 32),
+  FOREIGN KEY (rfi_id, current_version)
+    REFERENCES external_rfi_versions(rfi_id, version)
+);
+CREATE TABLE external_rfi_reviews (
+  review_id TEXT PRIMARY KEY CHECK (length(review_id) = 32),
+  rfi_id TEXT NOT NULL,
+  rfi_version INTEGER NOT NULL CHECK (rfi_version BETWEEN 1 AND 32),
+  rfi_manifest_sha256 TEXT NOT NULL CHECK (length(rfi_manifest_sha256) = 64),
+  reviewer_run_id TEXT NOT NULL UNIQUE,
+  reviewer_profile_id TEXT NOT NULL CHECK (length(reviewer_profile_id) = 32),
+  reviewer_profile_version INTEGER NOT NULL CHECK (reviewer_profile_version > 0),
+  outcome TEXT NOT NULL CHECK (outcome IN ('passed', 'failed')),
+  findings_json TEXT NOT NULL CHECK (json_valid(findings_json)),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (rfi_id, rfi_version),
+  FOREIGN KEY (rfi_id, rfi_version)
+    REFERENCES external_rfi_versions(rfi_id, version),
+  FOREIGN KEY (reviewer_run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (reviewer_profile_id, reviewer_profile_version)
+    REFERENCES agent_profile_versions(profile_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE external_rfi_approvals (
+  approval_id TEXT PRIMARY KEY CHECK (length(approval_id) = 32),
+  rfi_id TEXT NOT NULL,
+  rfi_version INTEGER NOT NULL CHECK (rfi_version BETWEEN 1 AND 32),
+  rfi_manifest_sha256 TEXT NOT NULL CHECK (length(rfi_manifest_sha256) = 64),
+  review_id TEXT NOT NULL UNIQUE,
+  review_manifest_sha256 TEXT NOT NULL CHECK (length(review_manifest_sha256) = 64),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  approved_by TEXT NOT NULL CHECK (approved_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  approval_sha256 TEXT NOT NULL CHECK (length(approval_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (rfi_id, rfi_version),
+  FOREIGN KEY (rfi_id, rfi_version)
+    REFERENCES external_rfi_versions(rfi_id, version),
+  FOREIGN KEY (review_id) REFERENCES external_rfi_reviews(review_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE external_rfi_exports (
+  export_id TEXT PRIMARY KEY CHECK (length(export_id) = 32),
+  approval_id TEXT NOT NULL,
+  relative_path TEXT NOT NULL UNIQUE,
+  bytes_sha256 TEXT NOT NULL CHECK (length(bytes_sha256) = 64),
+  size_bytes INTEGER NOT NULL CHECK (size_bytes BETWEEN 1 AND 524288),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (approval_id) REFERENCES external_rfi_approvals(approval_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE external_rfi_responses (
+  response_link_id TEXT PRIMARY KEY CHECK (length(response_link_id) = 32),
+  rfi_id TEXT NOT NULL,
+  rfi_version INTEGER NOT NULL CHECK (rfi_version BETWEEN 1 AND 32),
+  approval_id TEXT NOT NULL,
+  source_artifact_id TEXT NOT NULL,
+  source_artifact_version INTEGER NOT NULL CHECK (source_artifact_version > 0),
+  registered_by TEXT NOT NULL CHECK (registered_by = 'engineer_user'),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (rfi_id, rfi_version, source_artifact_id, source_artifact_version),
+  FOREIGN KEY (rfi_id, rfi_version)
+    REFERENCES external_rfi_versions(rfi_id, version),
+  FOREIGN KEY (approval_id) REFERENCES external_rfi_approvals(approval_id),
+  FOREIGN KEY (source_artifact_id, source_artifact_version)
+    REFERENCES source_artifact_versions(artifact_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE external_rfi_response_interpretations (
+  interpretation_id TEXT PRIMARY KEY CHECK (length(interpretation_id) = 32),
+  response_link_id TEXT NOT NULL,
+  query_id TEXT NOT NULL,
+  source_query_version INTEGER NOT NULL CHECK (source_query_version BETWEEN 1 AND 32),
+  base_query_version INTEGER NOT NULL CHECK (base_query_version BETWEEN 1 AND 32),
+  resulting_query_version INTEGER NOT NULL CHECK (resulting_query_version BETWEEN 1 AND 32),
+  query_decision_id TEXT NOT NULL UNIQUE,
+  material INTEGER NOT NULL CHECK (material IN (0, 1)),
+  interpretation TEXT NOT NULL CHECK (length(CAST(interpretation AS BLOB)) BETWEEN 1 AND 8000),
+  decided_by TEXT NOT NULL CHECK (decided_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (response_link_id, query_id),
+  FOREIGN KEY (response_link_id) REFERENCES external_rfi_responses(response_link_id),
+  FOREIGN KEY (query_id, source_query_version)
+    REFERENCES tender_query_versions(query_id, version),
+  FOREIGN KEY (query_id, base_query_version)
+    REFERENCES tender_query_versions(query_id, version),
+  FOREIGN KEY (query_id, resulting_query_version)
+    REFERENCES tender_query_versions(query_id, version),
+  FOREIGN KEY (query_decision_id)
+    REFERENCES tender_query_treatment_decisions(decision_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
 );
 CREATE TABLE source_artifacts (
   artifact_id TEXT PRIMARY KEY CHECK (length(artifact_id) = 32),
@@ -1061,6 +1211,76 @@ CREATE TRIGGER tender_query_target_invalidations_no_delete
 BEFORE DELETE ON tender_query_target_invalidations
 BEGIN
   SELECT RAISE(ABORT, 'Tender Query invalidations are immutable');
+END;
+CREATE TRIGGER external_rfis_no_update
+BEFORE UPDATE ON external_rfis
+BEGIN
+  SELECT RAISE(ABORT, 'External RFI identities are immutable');
+END;
+CREATE TRIGGER external_rfis_no_delete
+BEFORE DELETE ON external_rfis
+BEGIN
+  SELECT RAISE(ABORT, 'External RFI identities are immutable');
+END;
+CREATE TRIGGER external_rfi_versions_no_update
+BEFORE UPDATE ON external_rfi_versions
+BEGIN
+  SELECT RAISE(ABORT, 'External RFI Versions are immutable');
+END;
+CREATE TRIGGER external_rfi_versions_no_delete
+BEFORE DELETE ON external_rfi_versions
+BEGIN
+  SELECT RAISE(ABORT, 'External RFI Versions are immutable');
+END;
+CREATE TRIGGER external_rfi_reviews_no_update
+BEFORE UPDATE ON external_rfi_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'External RFI Reviews are immutable');
+END;
+CREATE TRIGGER external_rfi_reviews_no_delete
+BEFORE DELETE ON external_rfi_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'External RFI Reviews are immutable');
+END;
+CREATE TRIGGER external_rfi_approvals_no_update
+BEFORE UPDATE ON external_rfi_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'External RFI Approvals are immutable');
+END;
+CREATE TRIGGER external_rfi_approvals_no_delete
+BEFORE DELETE ON external_rfi_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'External RFI Approvals are immutable');
+END;
+CREATE TRIGGER external_rfi_exports_no_update
+BEFORE UPDATE ON external_rfi_exports
+BEGIN
+  SELECT RAISE(ABORT, 'External RFI Exports are immutable');
+END;
+CREATE TRIGGER external_rfi_exports_no_delete
+BEFORE DELETE ON external_rfi_exports
+BEGIN
+  SELECT RAISE(ABORT, 'External RFI Exports are immutable');
+END;
+CREATE TRIGGER external_rfi_responses_no_update
+BEFORE UPDATE ON external_rfi_responses
+BEGIN
+  SELECT RAISE(ABORT, 'External RFI Response links are immutable');
+END;
+CREATE TRIGGER external_rfi_responses_no_delete
+BEFORE DELETE ON external_rfi_responses
+BEGIN
+  SELECT RAISE(ABORT, 'External RFI Response links are immutable');
+END;
+CREATE TRIGGER external_rfi_response_interpretations_no_update
+BEFORE UPDATE ON external_rfi_response_interpretations
+BEGIN
+  SELECT RAISE(ABORT, 'External RFI Response interpretations are immutable');
+END;
+CREATE TRIGGER external_rfi_response_interpretations_no_delete
+BEFORE DELETE ON external_rfi_response_interpretations
+BEGIN
+  SELECT RAISE(ABORT, 'External RFI Response interpretations are immutable');
 END;
 CREATE TRIGGER source_artifacts_no_update
 BEFORE UPDATE ON source_artifacts
@@ -2354,6 +2574,9 @@ impl TenderStore {
             return Ok(false);
         }
         if !self.tender_query_manifests_are_valid_with_check(check)? {
+            return Ok(false);
+        }
+        if !self.external_rfi_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
         if !self.bid_decision_manifests_are_valid_with_check(check)? {

@@ -27,6 +27,10 @@ use super::bid_decisions::{
     publish_bid_decision_package_review, BidDecisionPackageReviewCandidate,
     BID_PACKAGE_REVIEW_CAPABILITY,
 };
+use super::external_rfis::{
+    external_rfi_review_target_is_open, publish_external_rfi_review, ExternalRfiReviewCandidate,
+    ExternalRfiReviewPublication,
+};
 use super::production_scheduler::{
     finish_production_task, production_completion_payload_is_valid, production_task_for_run,
     work_plan_package_dependencies_are_current,
@@ -49,13 +53,22 @@ const MAX_PROVIDER_EVENTS_PER_RUN: usize = 10_000;
 const MAX_PROVIDER_EVENT_FIELD_BYTES: u64 = 64 * 1024;
 const MAX_PROVIDER_EVENT_BYTES_PER_RUN: u64 = 16 * 1024 * 1024;
 
-fn profile_supports_linked_retry(profile: &AgentProfileVersionView) -> bool {
-    !profile.capabilities.iter().any(|capability| {
-        matches!(
-            capability.as_str(),
-            RECORD_EXTRACTION_CAPABILITY | RECORD_REVIEW_CAPABILITY | BID_PACKAGE_REVIEW_CAPABILITY
-        )
-    })
+fn task_is_external_rfi_review(task: &TenderTaskView) -> bool {
+    task.exact_inputs
+        .iter()
+        .any(|input| input.kind == "external_rfi_version")
+}
+
+fn profile_supports_linked_retry(profile: &AgentProfileVersionView, task: &TenderTaskView) -> bool {
+    !task_is_external_rfi_review(task)
+        && !profile.capabilities.iter().any(|capability| {
+            matches!(
+                capability.as_str(),
+                RECORD_EXTRACTION_CAPABILITY
+                    | RECORD_REVIEW_CAPABILITY
+                    | BID_PACKAGE_REVIEW_CAPABILITY
+            )
+        })
 }
 
 impl TenderStore {
@@ -403,6 +416,7 @@ impl TenderStore {
         let mut tender_record_candidate: Option<TenderRecordCandidateBatch> = None;
         let mut tender_record_review: Option<TenderRecordReviewCandidate> = None;
         let mut bid_package_review: Option<BidDecisionPackageReviewCandidate> = None;
+        let mut external_rfi_review: Option<ExternalRfiReviewCandidate> = None;
         let mut denied_record_publication_count = None;
         if execution.state == AgentRunState::Completed
             && prepared
@@ -477,6 +491,38 @@ impl TenderStore {
             }
         }
         if execution.state == AgentRunState::Completed
+            && task_is_external_rfi_review(&prepared.task)
+        {
+            let validation = execution
+                .candidate_payload_json
+                .as_deref()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                .and_then(|payload| {
+                    self.validate_external_rfi_review_candidate(&prepared.task, payload)
+                });
+            match validation {
+                Ok(candidate) => external_rfi_review = Some(candidate),
+                Err(_) => {
+                    execution.state = AgentRunState::Failed;
+                    execution.failure = Some(ProviderFailure::new(
+                        ProviderFailureCategory::OutputInvalid,
+                        true,
+                        "Review the exact External RFI draft again with attributable bounded findings.",
+                        Some("The independent External RFI review failed Quantix validation."),
+                    ));
+                    execution.candidate_payload_json = None;
+                    if let Some(event) = execution
+                        .events
+                        .iter_mut()
+                        .rev()
+                        .find(|event| event.kind == ProviderEventKind::Terminal)
+                    {
+                        event.summary = "Independent External RFI review failed validation".into();
+                    }
+                }
+            }
+        }
+        if execution.state == AgentRunState::Completed
             && prepared
                 .profile
                 .capabilities
@@ -542,6 +588,30 @@ impl TenderStore {
                         .into();
             }
         }
+        if execution.state == AgentRunState::Completed
+            && external_rfi_review.is_some()
+            && !self.external_rfi_review_target_is_current(&prepared.task)?
+        {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Inspect and review the current exact External RFI draft and Query evidence.",
+                Some("The External RFI draft or its exact Query evidence changed before review publication."),
+            ));
+            execution.candidate_payload_json = None;
+            external_rfi_review = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary =
+                    "Independent External RFI review rejected because its exact basis is stale"
+                        .into();
+            }
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -565,6 +635,7 @@ impl TenderStore {
             tender_record_candidate = None;
             tender_record_review = None;
             bid_package_review = None;
+            external_rfi_review = None;
             if let Some(event) = execution
                 .events
                 .iter_mut()
@@ -618,6 +689,28 @@ impl TenderStore {
             {
                 event.summary =
                     "Independent package review rejected because its exact target is no longer open".into();
+            }
+        }
+        if execution.state == AgentRunState::Completed
+            && external_rfi_review.is_some()
+            && !external_rfi_review_target_is_open(&transaction, &prepared.task)?
+        {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Inspect the current External RFI draft and its existing review or approval.",
+                Some("The External RFI target was superseded, reviewed, or approved before review publication."),
+            ));
+            execution.candidate_payload_json = None;
+            external_rfi_review = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary = "Independent External RFI review rejected because its exact target is no longer open".into();
             }
         }
         if execution.state == AgentRunState::Completed
@@ -882,6 +975,23 @@ impl TenderStore {
                 &prepared.task,
                 candidate,
                 &completed_at,
+            )?;
+        }
+        if let Some(candidate) = external_rfi_review.as_ref() {
+            if result_id.is_none() {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            publish_external_rfi_review(
+                &transaction,
+                ExternalRfiReviewPublication {
+                    tender_id,
+                    tender_revision,
+                    reviewer_run_id: &prepared.run_id,
+                    reviewer_profile: &prepared.profile,
+                    task: &prepared.task,
+                    created_at: &completed_at,
+                },
+                candidate,
             )?;
         }
         finish_production_task(
@@ -1751,8 +1861,9 @@ impl TenderStore {
         let task_id =
             task_id.ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         let profile = load_profile(&transaction, task_profile(&transaction, &task_id)?)?;
+        let task = load_task(&transaction, &task_id)?;
         if command.disposition == AgentRunRecoveryDisposition::RetryTask
-            && !profile_supports_linked_retry(&profile)
+            && !profile_supports_linked_retry(&profile, &task)
         {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
@@ -2133,6 +2244,7 @@ impl TenderStore {
             &self.connection,
             (row.profile_id.clone(), row.profile_version),
         )?;
+        let task = load_task(&self.connection, &row.task_id)?;
         let usage = row
             .usage_json
             .as_deref()
@@ -2191,7 +2303,7 @@ impl TenderStore {
         if recovery_decision.is_some() && state != AgentRunState::Indeterminate {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
-        let linked_retry_supported = profile_supports_linked_retry(&profile);
+        let linked_retry_supported = profile_supports_linked_retry(&profile, &task);
         if recovery_decision.as_ref().is_some_and(|decision| {
             decision.disposition == AgentRunRecoveryDisposition::RetryTask
                 && !linked_retry_supported
@@ -2408,7 +2520,7 @@ impl TenderStore {
         if recovery_decision.is_some() && state != AgentRunState::Indeterminate {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
-        let linked_retry_supported = profile_supports_linked_retry(&profile);
+        let linked_retry_supported = profile_supports_linked_retry(&profile, &task);
         if recovery_decision.as_ref().is_some_and(|decision| {
             decision.disposition == AgentRunRecoveryDisposition::RetryTask
                 && !linked_retry_supported

@@ -7,6 +7,7 @@ import type { InspectAgentRunCommand } from "./bindings/InspectAgentRunCommand";
 import type { InspectAgentRunHistoryCommand } from "./bindings/InspectAgentRunHistoryCommand";
 import type { ActivateTenderProductionCommand } from "./bindings/ActivateTenderProductionCommand";
 import type { ApproveProductionFindingExceptionCommand } from "./bindings/ApproveProductionFindingExceptionCommand";
+import type { ApproveExternalRfiForIssueCommand } from "./bindings/ApproveExternalRfiForIssueCommand";
 import type { AgentRunRecoveryDecision } from "./bindings/AgentRunRecoveryDecision";
 import type { AgentRunRecoveryDisposition } from "./bindings/AgentRunRecoveryDisposition";
 import type { BidDecisionPackageInspection } from "./bindings/BidDecisionPackageInspection";
@@ -29,6 +30,7 @@ import type { CreateTenderBackupCommand } from "./bindings/CreateTenderBackupCom
 import type { CreateTenderCommand } from "./bindings/CreateTenderCommand";
 import type { CreateTenderEngineerEntryCommand } from "./bindings/CreateTenderEngineerEntryCommand";
 import type { CreateTenderQueryCommand } from "./bindings/CreateTenderQueryCommand";
+import type { CreateExternalRfiDraftCommand } from "./bindings/CreateExternalRfiDraftCommand";
 import type { DocumentRegister } from "./bindings/DocumentRegister";
 import type { DocumentParseResult } from "./bindings/DocumentParseResult";
 import type { DecideTenderRecordCommand } from "./bindings/DecideTenderRecordCommand";
@@ -36,9 +38,20 @@ import type { DecideTenderQueryTreatmentCommand } from "./bindings/DecideTenderQ
 import type { DecideWorkPlanProposalCommand } from "./bindings/DecideWorkPlanProposalCommand";
 import type { EvidenceDocument } from "./bindings/EvidenceDocument";
 import type { EvidenceSearchResult } from "./bindings/EvidenceSearchResult";
+import type { ExportApprovedExternalRfiCommand } from "./bindings/ExportApprovedExternalRfiCommand";
+import type { ExternalRfiDraft } from "./bindings/ExternalRfiDraft";
+import type { ExternalRfiEligibleQueryPage } from "./bindings/ExternalRfiEligibleQueryPage";
+import type { ExternalRfiExportRecord } from "./bindings/ExternalRfiExportRecord";
+import type { ExternalRfiPage } from "./bindings/ExternalRfiPage";
+import type { ExternalRfiResponseCandidatePage } from "./bindings/ExternalRfiResponseCandidatePage";
+import type { ExternalRfiReviewResult } from "./bindings/ExternalRfiReviewResult";
 import type { InterruptAgentRunCommand } from "./bindings/InterruptAgentRunCommand";
 import type { InspectTenderRecordsCommand } from "./bindings/InspectTenderRecordsCommand";
 import type { InspectTenderQueriesCommand } from "./bindings/InspectTenderQueriesCommand";
+import type { InspectExternalRfisCommand } from "./bindings/InspectExternalRfisCommand";
+import type { InspectExternalRfiEligibleQueriesCommand } from "./bindings/InspectExternalRfiEligibleQueriesCommand";
+import type { InspectExternalRfiResponseCandidatesCommand } from "./bindings/InspectExternalRfiResponseCandidatesCommand";
+import type { InterpretExternalRfiResponseCommand } from "./bindings/InterpretExternalRfiResponseCommand";
 import type { InspectBidDecisionPackageRecordsCommand } from "./bindings/InspectBidDecisionPackageRecordsCommand";
 import type { InspectBidDecisionApprovalHistoryCommand } from "./bindings/InspectBidDecisionApprovalHistoryCommand";
 import type { InvalidateBidDecisionApprovalCommand } from "./bindings/InvalidateBidDecisionApprovalCommand";
@@ -50,6 +63,7 @@ import type { ParseSourceArtifactCommand } from "./bindings/ParseSourceArtifactC
 import type { PrepareTenderRecoveryCommand } from "./bindings/PrepareTenderRecoveryCommand";
 import type { ReviseTenderCommand } from "./bindings/ReviseTenderCommand";
 import type { ReviseTenderQueryCommand } from "./bindings/ReviseTenderQueryCommand";
+import type { ReviseExternalRfiDraftCommand } from "./bindings/ReviseExternalRfiDraftCommand";
 import type { ReviseWorkPlanProposalCommand } from "./bindings/ReviseWorkPlanProposalCommand";
 import type { ResolveIndeterminateAgentRunCommand } from "./bindings/ResolveIndeterminateAgentRunCommand";
 import type { ResolveBidDecisionReturnReworkCommand } from "./bindings/ResolveBidDecisionReturnReworkCommand";
@@ -61,6 +75,8 @@ import type { ProductionTaskRunResult } from "./bindings/ProductionTaskRunResult
 import type { ProductionTaskReviewInspection } from "./bindings/ProductionTaskReviewInspection";
 import type { TenderProductionInspection } from "./bindings/TenderProductionInspection";
 import type { RunBidDecisionPackageReviewCommand } from "./bindings/RunBidDecisionPackageReviewCommand";
+import type { RunExternalRfiReviewCommand } from "./bindings/RunExternalRfiReviewCommand";
+import type { RegisterExternalRfiResponseCommand } from "./bindings/RegisterExternalRfiResponseCommand";
 import type { RunTenderRecordExtractionCommand } from "./bindings/RunTenderRecordExtractionCommand";
 import type { RunTenderRecordReviewCommand } from "./bindings/RunTenderRecordReviewCommand";
 import type { SearchEvidenceCommand } from "./bindings/SearchEvidenceCommand";
@@ -215,6 +231,105 @@ export function decideTenderQueryTreatment(
   command: DecideTenderQueryTreatmentCommand,
 ): Promise<TenderQuery> {
   return invoke<TenderQuery>("decide_tender_query_treatment", { command });
+}
+
+export function inspectExternalRfis(
+  tenderId: string,
+  cursor: string | null = null,
+  limit = 8,
+): Promise<ExternalRfiPage> {
+  const command: InspectExternalRfisCommand = {
+    tender_id: tenderId,
+    cursor,
+    limit,
+  };
+  return invoke<ExternalRfiPage>("inspect_external_rfis", { command });
+}
+
+export function inspectExternalRfiEligibleQueries(
+  tenderId: string,
+  cursor: string | null = null,
+  limit = 8,
+): Promise<ExternalRfiEligibleQueryPage> {
+  const command: InspectExternalRfiEligibleQueriesCommand = {
+    tender_id: tenderId,
+    cursor,
+    limit,
+  };
+  return invoke<ExternalRfiEligibleQueryPage>(
+    "inspect_external_rfi_eligible_queries",
+    { command },
+  );
+}
+
+export function inspectExternalRfiResponseCandidates(
+  tenderId: string,
+  approvalId: string,
+  cursor: string | null = null,
+  limit = 64,
+): Promise<ExternalRfiResponseCandidatePage> {
+  const command: InspectExternalRfiResponseCandidatesCommand = {
+    tender_id: tenderId,
+    approval_id: approvalId,
+    cursor,
+    limit,
+  };
+  return invoke<ExternalRfiResponseCandidatePage>(
+    "inspect_external_rfi_response_candidates",
+    { command },
+  );
+}
+
+export function createExternalRfiDraft(
+  command: CreateExternalRfiDraftCommand,
+): Promise<ExternalRfiDraft> {
+  return invoke<ExternalRfiDraft>("create_external_rfi_draft", { command });
+}
+
+export function reviseExternalRfiDraft(
+  command: ReviseExternalRfiDraftCommand,
+): Promise<ExternalRfiDraft> {
+  return invoke<ExternalRfiDraft>("revise_external_rfi_draft", { command });
+}
+
+export function runExternalRfiReview(
+  command: RunExternalRfiReviewCommand,
+): Promise<ExternalRfiReviewResult> {
+  return invoke<ExternalRfiReviewResult>("run_external_rfi_review", {
+    command,
+  });
+}
+
+export function approveExternalRfiForIssue(
+  command: ApproveExternalRfiForIssueCommand,
+): Promise<ExternalRfiDraft> {
+  return invoke<ExternalRfiDraft>("approve_external_rfi_for_issue", {
+    command,
+  });
+}
+
+export function exportApprovedExternalRfi(
+  command: ExportApprovedExternalRfiCommand,
+): Promise<ExternalRfiExportRecord> {
+  return invoke<ExternalRfiExportRecord>("export_approved_external_rfi", {
+    command,
+  });
+}
+
+export function registerExternalRfiResponse(
+  command: RegisterExternalRfiResponseCommand,
+): Promise<ExternalRfiDraft> {
+  return invoke<ExternalRfiDraft>("register_external_rfi_response", {
+    command,
+  });
+}
+
+export function interpretExternalRfiResponse(
+  command: InterpretExternalRfiResponseCommand,
+): Promise<ExternalRfiDraft> {
+  return invoke<ExternalRfiDraft>("interpret_external_rfi_response", {
+    command,
+  });
 }
 
 export function chooseAndImportTenderPackage(

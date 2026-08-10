@@ -44,49 +44,59 @@ pub use tender_intake::{
 };
 pub use tender_store::{
     ActivateTenderProductionCommand, AgentTenderQueryProposal, AgentTenderQueryUpdate,
-    ApproveProductionFindingExceptionCommand, ApprovedQueryTreatment, BidDecisionApprovalDecision,
-    BidDecisionApprovalHistoryPage, BidDecisionApprovalInvalidation,
-    BidDecisionApprovalInvalidationResult, BidDecisionApprovalRecord, BidDecisionApprovalResult,
-    BidDecisionGateBlocker, BidDecisionPackageChangeSummary, BidDecisionPackageInspection,
-    BidDecisionPackageRecordBinding, BidDecisionPackageRecordCategory,
-    BidDecisionPackageRecordPage, BidDecisionPackageReview, BidDecisionPackageReviewFinding,
-    BidDecisionPackageReviewOutcome, BidDecisionPackageReviewResult,
-    BidDecisionReturnReworkDisposition, BidDecisionReturnReworkItem, BidDecisionReturnReworkResult,
-    BidRecommendation, BidRecommendationOutcome, CapabilityDemand, CapabilityDemandClassification,
+    ApproveExternalRfiForIssueCommand, ApproveProductionFindingExceptionCommand,
+    ApprovedQueryTreatment, BidDecisionApprovalDecision, BidDecisionApprovalHistoryPage,
+    BidDecisionApprovalInvalidation, BidDecisionApprovalInvalidationResult,
+    BidDecisionApprovalRecord, BidDecisionApprovalResult, BidDecisionGateBlocker,
+    BidDecisionPackageChangeSummary, BidDecisionPackageInspection, BidDecisionPackageRecordBinding,
+    BidDecisionPackageRecordCategory, BidDecisionPackageRecordPage, BidDecisionPackageReview,
+    BidDecisionPackageReviewFinding, BidDecisionPackageReviewOutcome,
+    BidDecisionPackageReviewResult, BidDecisionReturnReworkDisposition,
+    BidDecisionReturnReworkItem, BidDecisionReturnReworkResult, BidRecommendation,
+    BidRecommendationOutcome, CapabilityDemand, CapabilityDemandClassification,
     ComplianceDisposition, ComplianceDispositionUpdate, ComplianceMatrixPage, ComplianceMatrixRow,
     ComposeTenderOfficeCommand, ContentVersionSummary, CreateBidDecisionPackageCommand,
-    CreateTenderBackupCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
-    CreateTenderQueryCommand, DecideBidDecisionPackageCommand, DecideTenderQueryTreatmentCommand,
-    DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
-    InspectBidDecisionApprovalHistoryCommand, InspectBidDecisionPackageRecordsCommand,
-    InspectComplianceMatrixCommand, InspectProductionTaskReviewCommand,
-    InspectTenderQueriesCommand, InspectTenderRecordsCommand, InvalidateBidDecisionApprovalCommand,
-    MajorFindingPolicy, ManagerCapabilityDemandInput, OpenTenderCommand,
-    PrepareTenderRecoveryCommand, ProductionArtifactPayload, ProductionArtifactVersion,
-    ProductionArtifactVersionSummary, ProductionFindingDisposition,
+    CreateExternalRfiDraftCommand, CreateTenderBackupCommand, CreateTenderCommand,
+    CreateTenderEngineerEntryCommand, CreateTenderQueryCommand, DecideBidDecisionPackageCommand,
+    DecideTenderQueryTreatmentCommand, DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
+    ExportApprovedExternalRfiCommand, ExternalRfiApproval, ExternalRfiDraft,
+    ExternalRfiEligibleQuery, ExternalRfiEligibleQueryPage, ExternalRfiExportRecord,
+    ExternalRfiFindingSeverity, ExternalRfiPage, ExternalRfiQueryReference, ExternalRfiQuestion,
+    ExternalRfiRecipient, ExternalRfiResponseCandidatePage, ExternalRfiResponseInterpretation,
+    ExternalRfiResponseLink, ExternalRfiReview, ExternalRfiReviewFinding, ExternalRfiReviewOutcome,
+    ExternalRfiReviewResult, InspectBidDecisionApprovalHistoryCommand,
+    InspectBidDecisionPackageRecordsCommand, InspectComplianceMatrixCommand,
+    InspectExternalRfiEligibleQueriesCommand, InspectExternalRfiResponseCandidatesCommand,
+    InspectExternalRfisCommand, InspectProductionTaskReviewCommand, InspectTenderQueriesCommand,
+    InspectTenderRecordsCommand, InterpretExternalRfiResponseCommand,
+    InvalidateBidDecisionApprovalCommand, MajorFindingPolicy, ManagerCapabilityDemandInput,
+    OpenTenderCommand, PrepareTenderRecoveryCommand, ProductionArtifactPayload,
+    ProductionArtifactVersion, ProductionArtifactVersionSummary, ProductionFindingDisposition,
     ProductionFindingDispositionKind, ProductionFindingSeverity, ProductionIntegrationReadiness,
     ProductionQueryTreatmentApplication, ProductionRemediation, ProductionReview,
     ProductionReviewFinding, ProductionReviewResult, ProductionTaskInspection,
     ProductionTaskReviewInspection, ProductionTaskRunResult, ProductionTaskState,
-    RegisterTenderContentCommand, ResolveBidDecisionReturnReworkCommand,
-    ResolveTenderRecoveryCommand, ResourceImplication, ReviewFindingSeverity, ReviseTenderCommand,
+    RegisterExternalRfiResponseCommand, RegisterTenderContentCommand,
+    ResolveBidDecisionReturnReworkCommand, ResolveTenderRecoveryCommand, ResourceImplication,
+    ReviewFindingSeverity, ReviseExternalRfiDraftCommand, ReviseTenderCommand,
     ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand, RunBidDecisionPackageReviewCommand,
-    RunProductionTaskCommand, RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand,
-    StartupReconciliationReport, TenderBackupRecord, TenderBackupState, TenderCatalogueEntry,
-    TenderCommandError, TenderErrorCode, TenderEvidenceReference, TenderInspection,
-    TenderIntegrityIssue, TenderIntegrityReport, TenderIntegrityState, TenderLifecyclePhase,
-    TenderProductionInspection, TenderQuery, TenderQueryInvalidation, TenderQueryPage,
-    TenderQueryResponse, TenderQueryStatus, TenderQueryTreatment, TenderQueryTreatmentProposal,
-    TenderQueryTreatmentProposalInput, TenderQueryType, TenderRecordAuthority,
-    TenderRecordAuthorityKind, TenderRecordAuthorityReference, TenderRecordBasisKind,
-    TenderRecordContradiction, TenderRecordDecisionResult, TenderRecordEngineerDecisionKind,
-    TenderRecordEvidence, TenderRecordExtractionResult, TenderRecordField, TenderRecordInspection,
-    TenderRecordKind, TenderRecordPage, TenderRecordReview, TenderRecordReviewOutcome,
-    TenderRecordReviewResult, TenderRecordSourceRelationship, TenderRecordTrustClass,
-    TenderRecordVersionReference, TenderRecoveryChoice, TenderRecoveryDecision,
-    TenderRecoveryDecisionRecord, TenderRecoveryRecord, TenderRecoveryState, TenderSummary,
-    WorkPlanApprovalRecord, WorkPlanCapabilityGap, WorkPlanDecision, WorkPlanProfileBinding,
-    WorkPlanProposalInspection, WorkPlanRevisionAction, WorkPlanTask, WorkPlanWorkstream,
+    RunExternalRfiReviewCommand, RunProductionTaskCommand, RunTenderRecordExtractionCommand,
+    RunTenderRecordReviewCommand, StartupReconciliationReport, TenderBackupRecord,
+    TenderBackupState, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
+    TenderEvidenceReference, TenderInspection, TenderIntegrityIssue, TenderIntegrityReport,
+    TenderIntegrityState, TenderLifecyclePhase, TenderProductionInspection, TenderQuery,
+    TenderQueryInvalidation, TenderQueryPage, TenderQueryResponse, TenderQueryStatus,
+    TenderQueryTreatment, TenderQueryTreatmentProposal, TenderQueryTreatmentProposalInput,
+    TenderQueryType, TenderRecordAuthority, TenderRecordAuthorityKind,
+    TenderRecordAuthorityReference, TenderRecordBasisKind, TenderRecordContradiction,
+    TenderRecordDecisionResult, TenderRecordEngineerDecisionKind, TenderRecordEvidence,
+    TenderRecordExtractionResult, TenderRecordField, TenderRecordInspection, TenderRecordKind,
+    TenderRecordPage, TenderRecordReview, TenderRecordReviewOutcome, TenderRecordReviewResult,
+    TenderRecordSourceRelationship, TenderRecordTrustClass, TenderRecordVersionReference,
+    TenderRecoveryChoice, TenderRecoveryDecision, TenderRecoveryDecisionRecord,
+    TenderRecoveryRecord, TenderRecoveryState, TenderSummary, WorkPlanApprovalRecord,
+    WorkPlanCapabilityGap, WorkPlanDecision, WorkPlanProfileBinding, WorkPlanProposalInspection,
+    WorkPlanRevisionAction, WorkPlanTask, WorkPlanWorkstream,
 };
 
 use tauri::Manager;
@@ -95,34 +105,40 @@ mod tauri_commands {
     use super::{
         ensure_quantix_setup as ensure_setup, ActivateTenderProductionCommand,
         AgentAccessRequestView, AgentRunActivity, AgentRunHistoryPage, AgentRunInspection,
-        AgentRunRecoveryDecision, ApproveAgentAccessCommand,
+        AgentRunRecoveryDecision, ApproveAgentAccessCommand, ApproveExternalRfiForIssueCommand,
         ApproveProductionFindingExceptionCommand, BidDecisionApprovalHistoryPage,
         BidDecisionApprovalInvalidationResult, BidDecisionApprovalResult,
         BidDecisionPackageInspection, BidDecisionPackageRecordPage, BidDecisionPackageReviewResult,
         BidDecisionReturnReworkResult, ChooseTenderPackageCommand, ComplianceMatrixPage,
         ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand,
-        CreateBidDecisionPackageCommand, CreateTenderBackupCommand, CreateTenderCommand,
-        CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
+        CreateBidDecisionPackageCommand, CreateExternalRfiDraftCommand, CreateTenderBackupCommand,
+        CreateTenderCommand, CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
         DecideBidDecisionPackageCommand, DecideTenderQueryTreatmentCommand,
         DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DocumentParseResult,
-        DocumentRegister, EvidenceDocument, EvidenceSearchResult, ImportTenderPackageCommand,
+        DocumentRegister, EvidenceDocument, EvidenceSearchResult, ExportApprovedExternalRfiCommand,
+        ExternalRfiDraft, ExternalRfiEligibleQueryPage, ExternalRfiExportRecord, ExternalRfiPage,
+        ExternalRfiResponseCandidatePage, ExternalRfiReviewResult, ImportTenderPackageCommand,
         InspectAgentRunCommand, InspectAgentRunHistoryCommand,
         InspectBidDecisionApprovalHistoryCommand, InspectBidDecisionPackageRecordsCommand,
-        InspectComplianceMatrixCommand, InspectProductionTaskReviewCommand,
-        InspectTenderQueriesCommand, InspectTenderRecordsCommand, InterruptAgentRunCommand,
+        InspectComplianceMatrixCommand, InspectExternalRfiEligibleQueriesCommand,
+        InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
+        InspectProductionTaskReviewCommand, InspectTenderQueriesCommand,
+        InspectTenderRecordsCommand, InterpretExternalRfiResponseCommand, InterruptAgentRunCommand,
         InvalidateBidDecisionApprovalCommand, OpenTenderCommand, ParseSourceArtifactCommand,
         PrepareTenderRecoveryCommand, ProductionTaskReviewInspection, ProductionTaskRunResult,
-        QuantixHost, RequestAgentAccessCommand, ResolveAgentAccessCommand,
-        ResolveBidDecisionReturnReworkCommand, ResolveIndeterminateAgentRunCommand,
-        ResolveTenderRecoveryCommand, ReviseTenderCommand, ReviseTenderQueryCommand,
+        QuantixHost, RegisterExternalRfiResponseCommand, RequestAgentAccessCommand,
+        ResolveAgentAccessCommand, ResolveBidDecisionReturnReworkCommand,
+        ResolveIndeterminateAgentRunCommand, ResolveTenderRecoveryCommand,
+        ReviseExternalRfiDraftCommand, ReviseTenderCommand, ReviseTenderQueryCommand,
         ReviseWorkPlanProposalCommand, RunBidDecisionPackageReviewCommand,
-        RunBootstrapAgentCommand, RunProductionTaskCommand, RunTenderRecordExtractionCommand,
-        RunTenderRecordReviewCommand, RuntimeReadiness, SearchEvidenceCommand, SetupOutcome,
-        TenderBackupRecord, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
-        TenderIntegrityReport, TenderPackageImportResult, TenderPackageSourceKind,
-        TenderProductionInspection, TenderQuery, TenderQueryPage, TenderRecordAuthority,
-        TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordPage,
-        TenderRecordReviewResult, TenderRecoveryRecord, TenderSummary, WorkPlanProposalInspection,
+        RunBootstrapAgentCommand, RunExternalRfiReviewCommand, RunProductionTaskCommand,
+        RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, RuntimeReadiness,
+        SearchEvidenceCommand, SetupOutcome, TenderBackupRecord, TenderCatalogueEntry,
+        TenderCommandError, TenderErrorCode, TenderIntegrityReport, TenderPackageImportResult,
+        TenderPackageSourceKind, TenderProductionInspection, TenderQuery, TenderQueryPage,
+        TenderRecordAuthority, TenderRecordDecisionResult, TenderRecordExtractionResult,
+        TenderRecordPage, TenderRecordReviewResult, TenderRecoveryRecord, TenderSummary,
+        WorkPlanProposalInspection,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -543,6 +559,141 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn create_external_rfi_draft(
+        host: tauri::State<'_, QuantixHost>,
+        command: CreateExternalRfiDraftCommand,
+    ) -> Result<ExternalRfiDraft, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.create_external_rfi_draft(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn revise_external_rfi_draft(
+        host: tauri::State<'_, QuantixHost>,
+        command: ReviseExternalRfiDraftCommand,
+    ) -> Result<ExternalRfiDraft, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.revise_external_rfi_draft(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_external_rfis(
+        host: tauri::State<'_, QuantixHost>,
+        command: InspectExternalRfisCommand,
+    ) -> Result<ExternalRfiPage, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.inspect_external_rfis(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_external_rfi_eligible_queries(
+        host: tauri::State<'_, QuantixHost>,
+        command: InspectExternalRfiEligibleQueriesCommand,
+    ) -> Result<ExternalRfiEligibleQueryPage, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.inspect_external_rfi_eligible_queries(command)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_external_rfi_response_candidates(
+        host: tauri::State<'_, QuantixHost>,
+        command: InspectExternalRfiResponseCandidatesCommand,
+    ) -> Result<ExternalRfiResponseCandidatePage, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.inspect_external_rfi_response_candidates(command)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn run_external_rfi_review(
+        host: tauri::State<'_, QuantixHost>,
+        command: RunExternalRfiReviewCommand,
+    ) -> Result<ExternalRfiReviewResult, TenderCommandError> {
+        host.inner().run_external_rfi_review(command).await
+    }
+
+    #[tauri::command]
+    pub(super) async fn approve_external_rfi_for_issue(
+        host: tauri::State<'_, QuantixHost>,
+        command: ApproveExternalRfiForIssueCommand,
+    ) -> Result<ExternalRfiDraft, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.approve_external_rfi_for_issue(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn export_approved_external_rfi(
+        host: tauri::State<'_, QuantixHost>,
+        command: ExportApprovedExternalRfiCommand,
+    ) -> Result<ExternalRfiExportRecord, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.export_approved_external_rfi(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn register_external_rfi_response(
+        host: tauri::State<'_, QuantixHost>,
+        command: RegisterExternalRfiResponseCommand,
+    ) -> Result<ExternalRfiDraft, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.register_external_rfi_response(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn interpret_external_rfi_response(
+        host: tauri::State<'_, QuantixHost>,
+        command: InterpretExternalRfiResponseCommand,
+    ) -> Result<ExternalRfiDraft, TenderCommandError> {
+        let host = host.inner().clone();
+        let scheduler_host = host.clone();
+        let tender_id = command.tender_id.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            host.interpret_external_rfi_response(command)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })??;
+        scheduler_host.start_production_scheduler(tender_id);
+        Ok(result)
+    }
+
+    #[tauri::command]
     pub(super) async fn create_bid_decision_package(
         host: tauri::State<'_, QuantixHost>,
         command: CreateBidDecisionPackageCommand,
@@ -949,6 +1100,16 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
         tauri_commands::revise_tender_query,
         tauri_commands::decide_tender_query_treatment,
         tauri_commands::inspect_tender_queries,
+        tauri_commands::create_external_rfi_draft,
+        tauri_commands::revise_external_rfi_draft,
+        tauri_commands::inspect_external_rfis,
+        tauri_commands::inspect_external_rfi_eligible_queries,
+        tauri_commands::inspect_external_rfi_response_candidates,
+        tauri_commands::run_external_rfi_review,
+        tauri_commands::approve_external_rfi_for_issue,
+        tauri_commands::export_approved_external_rfi,
+        tauri_commands::register_external_rfi_response,
+        tauri_commands::interpret_external_rfi_response,
         tauri_commands::create_bid_decision_package,
         tauri_commands::inspect_current_bid_decision_package,
         tauri_commands::compose_tender_office,

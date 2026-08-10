@@ -449,6 +449,7 @@ fn run_agent_turn(
     let is_record_scenario = scenario.starts_with("record-extraction")
         || scenario.starts_with("record-review")
         || scenario.starts_with("bid-package-review")
+        || scenario.starts_with("external-rfi-review")
         || scenario.starts_with("production-task");
     let dynamic_tools_are_exact = if is_record_scenario {
         thread_request
@@ -649,6 +650,7 @@ fn run_agent_turn(
         .pointer("/tender/name")
         .or_else(|| provider_data_view.pointer("/record/title"))
         .or_else(|| provider_data_view.pointer("/manifest/package_id"))
+        .or_else(|| provider_data_view.pointer("/external_rfi/rfi_id"))
         .and_then(serde_json::Value::as_str)
         .ok_or("provider-visible Tender name")?
         .to_owned();
@@ -904,6 +906,9 @@ fn run_agent_turn(
             | "bid-package-review"
             | "bid-package-review-failed"
             | "bid-package-review-delayed"
+            | "external-rfi-review"
+            | "external-rfi-review-failed"
+            | "external-rfi-review-delayed"
             | "production-task"
             | "production-task-delayed-a"
             | "production-task-delayed-b"
@@ -1441,6 +1446,44 @@ fn run_agent_turn(
             }]
         })
     } else if scenario == "bid-package-review" {
+        serde_json::json!({ "outcome": "passed", "findings": [] })
+    } else if scenario == "external-rfi-review-delayed" {
+        fs::write(
+            executable.with_extension("external-rfi-review-waiting"),
+            b"waiting",
+        )?;
+        for _ in 0..2_000 {
+            if executable
+                .with_extension("external-rfi-review-release")
+                .is_file()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        if !executable
+            .with_extension("external-rfi-review-release")
+            .is_file()
+        {
+            return Err("timed out waiting to release External RFI review".into());
+        }
+        serde_json::json!({ "outcome": "passed", "findings": [] })
+    } else if scenario == "external-rfi-review-failed" {
+        let evidence_reference = provider_data_view
+            .pointer("/external_rfi/source_evidence/0")
+            .or_else(|| provider_data_view.pointer("/external_rfi/attachments/0"))
+            .cloned()
+            .ok_or("External RFI review Evidence")?;
+        serde_json::json!({
+            "outcome": "failed",
+            "findings": [{
+                "severity": "major",
+                "code": "recipient_context_incomplete",
+                "summary": "The exact draft does not establish enough contractual context for external issue.",
+                "evidence_references": [evidence_reference]
+            }]
+        })
+    } else if scenario == "external-rfi-review" {
         serde_json::json!({ "outcome": "passed", "findings": [] })
     } else if scenario == "production-task-output-over-budget" {
         serde_json::json!({
