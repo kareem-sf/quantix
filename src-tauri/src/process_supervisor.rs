@@ -641,7 +641,7 @@ mod tests {
         let supervisor = ProcessSupervisor;
         let mut spec = fixture_spec("conversation_budget");
         spec.stdin.clear();
-        spec.timeout = Duration::from_millis(50);
+        spec.timeout = Duration::from_millis(500);
         spec.stdout_limit = 1536;
         let mut conversation = supervisor
             .start_conversation(spec, CancellationToken::new())
@@ -656,7 +656,7 @@ mod tests {
             read_fixture_line(&mut conversation, &first_output).await,
             first_output
         );
-        tokio::time::sleep(Duration::from_millis(75)).await;
+        tokio::time::sleep(Duration::from_millis(750)).await;
         conversation
             .begin_operation(Duration::from_secs(1), 1536, 4096)
             .expect("reset conversation operation budget");

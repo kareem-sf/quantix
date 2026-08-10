@@ -24,6 +24,7 @@ import {
   inspectTenderProduction,
   interruptAgentRun,
   reviseWorkPlanProposal,
+  runProductionTask,
 } from "./quantixHost";
 
 interface TenderOfficePanelProps {
@@ -75,6 +76,9 @@ export function TenderOfficePanel({
   const [reviewDetail, setReviewDetail] =
     useState<ProductionTaskReviewInspection | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
+  const [queryControlTaskId, setQueryControlTaskId] = useState<string | null>(
+    null,
+  );
   const [exceptionDrafts, setExceptionDrafts] = useState<
     Record<string, { rationale: string; consequence: string }>
   >({});
@@ -330,6 +334,19 @@ export function TenderOfficePanel({
       onTenderStateChange();
     } catch {
       reportCommandFailure();
+    }
+  };
+
+  const requestQueryOwnerUpdate = async (productionTaskId: string) => {
+    setQueryControlTaskId(productionTaskId);
+    try {
+      await runProductionTask(tenderId, productionTaskId);
+      onTenderStateChange();
+      await loadPlan();
+    } catch {
+      reportCommandFailure();
+    } finally {
+      setQueryControlTaskId(null);
     }
   };
 
@@ -655,6 +672,25 @@ export function TenderOfficePanel({
                           onClick={() => void cancelTask(runId)}
                         >
                           Cancel run
+                        </button>
+                      ) : null}
+                      {productionTask.state === "query_blocked" &&
+                      productionTask.query_control_available ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void requestQueryOwnerUpdate(
+                              productionTask.production_task_id,
+                            )
+                          }
+                          disabled={
+                            queryControlTaskId !== null || !runtimeReady
+                          }
+                        >
+                          {queryControlTaskId ===
+                          productionTask.production_task_id
+                            ? "Requesting specialist updateâ€¦"
+                            : "Request specialist Evidence/treatment proposal"}
                         </button>
                       ) : null}
                       {productionTask.artifact_version_count > 0 ? (

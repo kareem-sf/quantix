@@ -17,6 +17,7 @@ import { TenderBackupPanel } from "./TenderBackupPanel";
 import { TenderRecoveryPanel } from "./TenderRecoveryPanel";
 import { TenderRecordsPanel } from "./TenderRecordsPanel";
 import { TenderOfficePanel } from "./TenderOfficePanel";
+import { TenderQueryRegisterPanel } from "./TenderQueryRegisterPanel";
 import {
   chooseAndImportTenderPackage,
   confirmSourceRelationship,
@@ -671,6 +672,14 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                 runtimeReady={runtimeReady}
                 register={documentRegister}
                 reportCommandFailure={reportCommandFailure}
+              />
+              <TenderQueryRegisterPanel
+                key={`queries-${selected.tender_id}`}
+                tenderId={selected.tender_id}
+                runtimeReady={runtimeReady}
+                refreshToken={tenderStateVersion}
+                reportCommandFailure={reportCommandFailure}
+                onTenderStateChange={reportTenderStateChange}
               />
               <BidDecisionPanel
                 key={`bid-decision-${selected.tender_id}`}

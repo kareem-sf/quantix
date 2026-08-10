@@ -4,4 +4,4 @@ import type { ProductionReviewResult } from "./ProductionReviewResult";
 import type { ProductionTaskState } from "./ProductionTaskState";
 import type { WorkPlanTask } from "./WorkPlanTask";
 
-export type ProductionTaskInspection = { production_task_id: string, plan_manifest_sha256: string, task: WorkPlanTask, state: ProductionTaskState, run_ids: Array<string>, artifact_version_count: number, review_count: number, finding_count: number, open_blocking_finding_count: number, latest_artifact: ProductionArtifactVersionSummary | null, latest_review_result: ProductionReviewResult | null, ready_for_integration: boolean, created_at: string, updated_at: string, };
+export type ProductionTaskInspection = { production_task_id: string, plan_manifest_sha256: string, task: WorkPlanTask, state: ProductionTaskState, run_ids: Array<string>, artifact_version_count: number, review_count: number, finding_count: number, open_blocking_finding_count: number, latest_artifact: ProductionArtifactVersionSummary | null, latest_review_result: ProductionReviewResult | null, query_control_available: boolean, ready_for_integration: boolean, created_at: string, updated_at: string, };

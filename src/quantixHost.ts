@@ -28,14 +28,17 @@ import type { DecideBidDecisionPackageCommand } from "./bindings/DecideBidDecisi
 import type { CreateTenderBackupCommand } from "./bindings/CreateTenderBackupCommand";
 import type { CreateTenderCommand } from "./bindings/CreateTenderCommand";
 import type { CreateTenderEngineerEntryCommand } from "./bindings/CreateTenderEngineerEntryCommand";
+import type { CreateTenderQueryCommand } from "./bindings/CreateTenderQueryCommand";
 import type { DocumentRegister } from "./bindings/DocumentRegister";
 import type { DocumentParseResult } from "./bindings/DocumentParseResult";
 import type { DecideTenderRecordCommand } from "./bindings/DecideTenderRecordCommand";
+import type { DecideTenderQueryTreatmentCommand } from "./bindings/DecideTenderQueryTreatmentCommand";
 import type { DecideWorkPlanProposalCommand } from "./bindings/DecideWorkPlanProposalCommand";
 import type { EvidenceDocument } from "./bindings/EvidenceDocument";
 import type { EvidenceSearchResult } from "./bindings/EvidenceSearchResult";
 import type { InterruptAgentRunCommand } from "./bindings/InterruptAgentRunCommand";
 import type { InspectTenderRecordsCommand } from "./bindings/InspectTenderRecordsCommand";
+import type { InspectTenderQueriesCommand } from "./bindings/InspectTenderQueriesCommand";
 import type { InspectBidDecisionPackageRecordsCommand } from "./bindings/InspectBidDecisionPackageRecordsCommand";
 import type { InspectBidDecisionApprovalHistoryCommand } from "./bindings/InspectBidDecisionApprovalHistoryCommand";
 import type { InvalidateBidDecisionApprovalCommand } from "./bindings/InvalidateBidDecisionApprovalCommand";
@@ -46,6 +49,7 @@ import type { OpenTenderCommand } from "./bindings/OpenTenderCommand";
 import type { ParseSourceArtifactCommand } from "./bindings/ParseSourceArtifactCommand";
 import type { PrepareTenderRecoveryCommand } from "./bindings/PrepareTenderRecoveryCommand";
 import type { ReviseTenderCommand } from "./bindings/ReviseTenderCommand";
+import type { ReviseTenderQueryCommand } from "./bindings/ReviseTenderQueryCommand";
 import type { ReviseWorkPlanProposalCommand } from "./bindings/ReviseWorkPlanProposalCommand";
 import type { ResolveIndeterminateAgentRunCommand } from "./bindings/ResolveIndeterminateAgentRunCommand";
 import type { ResolveBidDecisionReturnReworkCommand } from "./bindings/ResolveBidDecisionReturnReworkCommand";
@@ -78,6 +82,8 @@ import type { TenderRecordEngineerDecisionKind } from "./bindings/TenderRecordEn
 import type { TenderRecordExtractionResult } from "./bindings/TenderRecordExtractionResult";
 import type { TenderRecordPage } from "./bindings/TenderRecordPage";
 import type { TenderRecordReviewResult } from "./bindings/TenderRecordReviewResult";
+import type { TenderQuery } from "./bindings/TenderQuery";
+import type { TenderQueryPage } from "./bindings/TenderQueryPage";
 import type { WorkPlanDecision } from "./bindings/WorkPlanDecision";
 import type { WorkPlanProposalInspection } from "./bindings/WorkPlanProposalInspection";
 import type { WorkPlanRevisionAction } from "./bindings/WorkPlanRevisionAction";
@@ -178,6 +184,37 @@ export function reviseTender(
   return invoke<TenderSummary>("revise_tender", {
     command,
   });
+}
+
+export function inspectTenderQueries(
+  tenderId: string,
+  cursor: string | null = null,
+  limit = 8,
+): Promise<TenderQueryPage> {
+  const command: InspectTenderQueriesCommand = {
+    tender_id: tenderId,
+    cursor,
+    limit,
+  };
+  return invoke<TenderQueryPage>("inspect_tender_queries", { command });
+}
+
+export function createTenderQuery(
+  command: CreateTenderQueryCommand,
+): Promise<TenderQuery> {
+  return invoke<TenderQuery>("create_tender_query", { command });
+}
+
+export function reviseTenderQuery(
+  command: ReviseTenderQueryCommand,
+): Promise<TenderQuery> {
+  return invoke<TenderQuery>("revise_tender_query", { command });
+}
+
+export function decideTenderQueryTreatment(
+  command: DecideTenderQueryTreatmentCommand,
+): Promise<TenderQuery> {
+  return invoke<TenderQuery>("decide_tender_query_treatment", { command });
 }
 
 export function chooseAndImportTenderPackage(

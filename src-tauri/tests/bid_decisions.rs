@@ -5,21 +5,24 @@ use sha2::{Digest, Sha256};
 
 use quantix_lib::{
     ensure_quantix_setup, ActivateTenderProductionCommand, AgentProfileStatus,
-    AgentRunRecoveryDisposition, AgentRunState, ApproveProductionFindingExceptionCommand,
-    BidDecisionApprovalDecision, BidDecisionPackageInspection, BidDecisionPackageReviewOutcome,
-    BidRecommendationOutcome, ComplianceDisposition, ComplianceDispositionUpdate,
-    ComposeTenderOfficeCommand, CreateBidDecisionPackageCommand, CreateTenderCommand,
-    CreateTenderEngineerEntryCommand, DecideBidDecisionPackageCommand, DecideTenderRecordCommand,
-    DecideWorkPlanProposalCommand, DeviceProtection, ImportTenderPackageCommand,
-    InspectBidDecisionApprovalHistoryCommand, InspectProductionTaskReviewCommand,
+    AgentRunRecoveryDisposition, AgentRunState, AgentTaskInputReference,
+    ApproveProductionFindingExceptionCommand, BidDecisionApprovalDecision,
+    BidDecisionPackageInspection, BidDecisionPackageReviewOutcome, BidRecommendationOutcome,
+    ComplianceDisposition, ComplianceDispositionUpdate, ComposeTenderOfficeCommand,
+    CreateBidDecisionPackageCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
+    CreateTenderQueryCommand, DecideBidDecisionPackageCommand, DecideTenderQueryTreatmentCommand,
+    DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DeviceProtection,
+    ImportTenderPackageCommand, InspectBidDecisionApprovalHistoryCommand,
+    InspectProductionTaskReviewCommand, InspectTenderQueriesCommand,
     InvalidateBidDecisionApprovalCommand, MajorFindingPolicy, ManagerCapabilityDemandInput,
     ParseSourceArtifactCommand, ProductionFindingDispositionKind, ProductionFindingSeverity,
     ProductionTaskState, ProviderFailureCategory, QuantixHost,
     ResolveBidDecisionReturnReworkCommand, ResolveIndeterminateAgentRunCommand,
-    ReviseTenderCommand, ReviseWorkPlanProposalCommand, RunBidDecisionPackageReviewCommand,
-    RunBootstrapAgentCommand, RunProductionTaskCommand, RunTenderRecordExtractionCommand,
-    RuntimeLayout, SetupPlatform, SetupState, StoragePermissions, TenderErrorCode,
-    TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase,
+    ReviseTenderCommand, ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand,
+    RunBidDecisionPackageReviewCommand, RunBootstrapAgentCommand, RunProductionTaskCommand,
+    RunTenderRecordExtractionCommand, RuntimeLayout, SetupPlatform, SetupState, StoragePermissions,
+    TenderErrorCode, TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase,
+    TenderQueryTreatment, TenderQueryTreatmentProposalInput, TenderQueryType,
     TenderRecordEngineerDecisionKind, TenderRecordInspection, TenderRecordKind,
     TenderRecordVersionReference, WorkPlanDecision, WorkPlanRevisionAction,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
@@ -1315,6 +1318,984 @@ async fn active_production_materializes_only_the_exact_approved_plan_and_ready_f
         .host
         .inspect_tender_integrity(&harness.tender_id)
         .expect("inspect Active Production integrity");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+}
+
+#[tokio::test]
+async fn intake_material_query_initializes_its_exact_global_scope_as_query_blocked() {
+    let harness = Harness::new("record-extraction");
+    let records = harness.extract_records().await;
+    harness.verify_records(&records, false);
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect Intake Query lifecycle")
+            .lifecycle_phase,
+        TenderLifecyclePhase::Intake
+    );
+    let owner = harness
+        .host
+        .inspect_tender_queries(InspectTenderQueriesCommand {
+            tender_id: harness.tender_id.clone(),
+            cursor: None,
+            limit: 8,
+        })
+        .expect("inspect Query Register during Intake")
+        .owner_profiles
+        .into_iter()
+        .next()
+        .expect("bootstrap Query owner");
+    let affected_record = records.first().expect("exact affected Tender Record");
+    let query = harness
+        .host
+        .create_tender_query(CreateTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_type: TenderQueryType::Ambiguity,
+            question: "Which exact responsibility basis governs future production work?".into(),
+            ambiguity_or_gap:
+                "The Intake evidence preserves two plausible responsibility readings.".into(),
+            owner_profile_id: owner.profile_id.clone(),
+            owner_profile_version: owner.version,
+            evidence: vec![AgentTaskInputReference {
+                kind: "tender_record_version".into(),
+                reference: affected_record.record_id.clone(),
+                version: affected_record.version,
+            }],
+            affected_records: vec![TenderRecordVersionReference {
+                record_id: affected_record.record_id.clone(),
+                version: affected_record.version,
+            }],
+            affected_task_keys: vec!["*".into()],
+            due_at: "2099-01-01T00:00:00.000Z".into(),
+            material: true,
+            release_blocking: true,
+            proposed_treatments: vec![TenderQueryTreatmentProposalInput {
+                treatment: TenderQueryTreatment::Qualification,
+                rationale: "Qualify all dependent work until evidence resolves it.".into(),
+            }],
+        })
+        .expect("register globally scoped material Query during Intake");
+    assert_eq!(query.owner_profile_id, owner.profile_id);
+    assert_eq!(query.affected_task_keys, vec!["*"]);
+
+    let package = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+            disposition_updates: complete_dispositions(&records),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("create decision package after Intake Query");
+    harness.set_agent_scenario("bid-package-review");
+    let package = harness
+        .host
+        .run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id,
+            version: package.version,
+        })
+        .await
+        .expect("review package after Intake Query")
+        .package;
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact package after Intake Query registration");
+    let plan = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose exact preproduction Work Plan");
+    let approved = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: plan.plan_id,
+            version: plan.version,
+            decision: WorkPlanDecision::Approve,
+            rationale: "Approve the exact plan while preserving preproduction Query control."
+                .into(),
+        })
+        .expect("approve exact preproduction Work Plan");
+    let production = harness
+        .host
+        .activate_tender_production(ActivateTenderProductionCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: approved.plan_id,
+            plan_version: approved.version,
+            plan_manifest_sha256: approved.manifest_sha256,
+        })
+        .expect("activate exact plan under preproduction Query control");
+    assert!(production
+        .tasks
+        .iter()
+        .all(|task| task.state == ProductionTaskState::QueryBlocked));
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close preproduction Query-controlled Tender");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold-verify preproduction Query activation")
+            .state,
+        TenderIntegrityState::Ready
+    );
+}
+
+#[tokio::test]
+async fn query_context_capacity_rejects_the_first_unmaterializable_global_successor() {
+    let harness = Harness::new("record-extraction");
+    let records = harness.extract_records().await;
+    let owner = harness
+        .host
+        .inspect_tender_queries(InspectTenderQueriesCommand {
+            tender_id: harness.tender_id.clone(),
+            cursor: None,
+            limit: 8,
+        })
+        .expect("inspect Query owner profiles")
+        .owner_profiles
+        .into_iter()
+        .next()
+        .expect("bounded Query owner");
+    let evidence = AgentTaskInputReference {
+        kind: "tender_record_version".into(),
+        reference: records
+            .first()
+            .expect("exact Query evidence")
+            .record_id
+            .clone(),
+        version: records.first().expect("exact Query evidence").version,
+    };
+    let mut accepted = 0usize;
+    for sequence in 0..256 {
+        let prefix = format!("Context {sequence:03}: ");
+        let question = format!("{prefix}{}", "q".repeat(4_000 - prefix.len()));
+        let gap = format!("{prefix}{}", "g".repeat(4_000 - prefix.len()));
+        match harness.host.create_tender_query(CreateTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_type: TenderQueryType::Ambiguity,
+            question,
+            ambiguity_or_gap: gap,
+            owner_profile_id: owner.profile_id.clone(),
+            owner_profile_version: owner.version,
+            evidence: vec![evidence.clone()],
+            affected_records: Vec::new(),
+            affected_task_keys: vec!["*".into()],
+            due_at: "2099-01-01T00:00:00.000Z".into(),
+            material: false,
+            release_blocking: false,
+            proposed_treatments: Vec::new(),
+        }) {
+            Ok(_) => accepted += 1,
+            Err(error) => {
+                assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+                break;
+            }
+        }
+    }
+    assert!(accepted > 1 && accepted < 256, "accepted={accepted}");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_queries(InspectTenderQueriesCommand {
+                tender_id: harness.tender_id.clone(),
+                cursor: None,
+                limit: 8,
+            })
+            .expect("inspect bounded Query context inventory")
+            .total_current_count,
+        u32::try_from(accepted).expect("bounded accepted Query count")
+    );
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close context-capacity Tender");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold-verify context-capacity boundary")
+            .state,
+        TenderIntegrityState::Ready
+    );
+}
+
+#[tokio::test]
+async fn named_material_query_blocks_its_dependency_closure_without_touching_an_unrelated_branch() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+
+    let (target, affected_task_keys) = production
+        .tasks
+        .iter()
+        .find_map(|candidate| {
+            let mut closure = std::collections::HashSet::from([candidate.task.task_key.clone()]);
+            loop {
+                let before = closure.len();
+                for task in &production.tasks {
+                    if task
+                        .task
+                        .dependencies
+                        .iter()
+                        .any(|dependency| closure.contains(dependency))
+                    {
+                        closure.insert(task.task.task_key.clone());
+                    }
+                }
+                if closure.len() == before {
+                    break;
+                }
+            }
+            (closure.len() > 1 && closure.len() < production.tasks.len())
+                .then_some((candidate.clone(), closure))
+        })
+        .expect("named prerequisite with downstream work and an unrelated branch");
+    let original_states = production
+        .tasks
+        .iter()
+        .map(|task| (task.task.task_key.clone(), task.state))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let query = harness
+        .host
+        .create_tender_query(CreateTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_type: TenderQueryType::ResponsibilitySensitive,
+            question: "Who owns the named prerequisite and its dependent production work?".into(),
+            ambiguity_or_gap:
+                "The exact responsibility basis is unresolved for this dependency branch.".into(),
+            owner_profile_id: target.task.profile_id.clone(),
+            owner_profile_version: target.task.profile_version,
+            evidence: vec![target
+                .task
+                .exact_inputs
+                .first()
+                .expect("named task exact input")
+                .clone()],
+            affected_records: Vec::new(),
+            affected_task_keys: vec![target.task.task_key.clone()],
+            due_at: "2099-01-01T00:00:00.000Z".into(),
+            material: true,
+            release_blocking: true,
+            proposed_treatments: vec![TenderQueryTreatmentProposalInput {
+                treatment: TenderQueryTreatment::Qualification,
+                rationale: "Qualify the exact dependency branch before production continues."
+                    .into(),
+            }],
+        })
+        .expect("register named material Query");
+
+    let inspected = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect targeted dependency invalidation")
+        .expect("active production");
+    for task in &inspected.tasks {
+        if affected_task_keys.contains(&task.task.task_key) {
+            assert_eq!(
+                task.state,
+                ProductionTaskState::QueryBlocked,
+                "{} must be blocked by the named dependency Query",
+                task.task.task_key
+            );
+        } else {
+            assert_eq!(
+                Some(&task.state),
+                original_states.get(&task.task.task_key),
+                "{} is outside the dependency closure",
+                task.task.task_key
+            );
+        }
+    }
+    let invalidated_task_ids = query
+        .invalidations
+        .iter()
+        .filter(|invalidation| invalidation.target_kind == "production_task")
+        .map(|invalidation| invalidation.target_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let expected_task_ids = inspected
+        .tasks
+        .iter()
+        .filter(|task| affected_task_keys.contains(&task.task.task_key))
+        .map(|task| task.production_task_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(invalidated_task_ids, expected_task_ids);
+    assert!(inspected.tasks.iter().any(|task| {
+        !affected_task_keys.contains(&task.task.task_key)
+            && task.state != ProductionTaskState::QueryBlocked
+    }));
+
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close dependency-controlled Tender");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold-verify targeted dependency invalidation")
+            .state,
+        TenderIntegrityState::Ready
+    );
+}
+
+#[tokio::test]
+async fn nonblocking_query_remediation_and_recursive_review_survive_cold_open() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let target = production
+        .tasks
+        .iter()
+        .find(|candidate| {
+            candidate.state == ProductionTaskState::Ready
+                && production
+                    .tasks
+                    .iter()
+                    .any(|task| task.task.dependencies.contains(&candidate.task.task_key))
+        })
+        .expect("ready prerequisite with downstream work")
+        .clone();
+
+    harness.set_agent_scenario("production-task");
+    let authored = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: target.production_task_id.clone(),
+        })
+        .await
+        .expect("author prerequisite Artifact before nonblocking Query");
+    assert_eq!(authored.task.state, ProductionTaskState::ReviewReady);
+
+    let query = harness
+        .host
+        .create_tender_query(CreateTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_type: TenderQueryType::Ambiguity,
+            question: "Which additional evidence qualifies this prerequisite output?".into(),
+            ambiguity_or_gap:
+                "The new observation is nonblocking but makes the current Artifact stale.".into(),
+            owner_profile_id: target.task.profile_id.clone(),
+            owner_profile_version: target.task.profile_version,
+            evidence: vec![target
+                .task
+                .exact_inputs
+                .first()
+                .expect("prerequisite exact input")
+                .clone()],
+            affected_records: Vec::new(),
+            affected_task_keys: vec![target.task.task_key.clone()],
+            due_at: "2099-01-01T00:00:00.000Z".into(),
+            material: false,
+            release_blocking: false,
+            proposed_treatments: vec![TenderQueryTreatmentProposalInput {
+                treatment: TenderQueryTreatment::Qualification,
+                rationale: "Carry the explicit nonblocking qualification into the successor."
+                    .into(),
+            }],
+        })
+        .expect("register nonblocking Query against authored work");
+    assert!(query.approved_treatment.is_none());
+    let stale = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect nonblocking Query staleness")
+        .expect("active production")
+        .tasks
+        .into_iter()
+        .find(|task| task.production_task_id == target.production_task_id)
+        .expect("stale prerequisite task");
+    assert_eq!(stale.state, ProductionTaskState::RemediationReady);
+
+    let remediated_result = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: target.production_task_id.clone(),
+        })
+        .await;
+    let mut remediated = remediated_result.unwrap_or_else(|error| {
+        panic!(
+            "remediate nonblocking Query without a Manager treatment: {error:?}; production={:#?}; fixture={}",
+            harness
+                .host
+                .inspect_tender_production(&harness.tender_id),
+            fs::read_to_string(harness.codex.with_extension("fixture-error"))
+                .unwrap_or_else(|_| "none".into())
+        )
+    });
+    assert!(remediated.run.task.exact_inputs.iter().any(|input| {
+        input.kind == "tender_query_version"
+            && input.reference == query.query_id
+            && input.version == query.version
+    }));
+    assert_eq!(
+        remediated.run.state,
+        AgentRunState::Completed,
+        "{:#?}",
+        remediated.run
+    );
+    assert_eq!(
+        remediated.task.state,
+        ProductionTaskState::ReviewReady,
+        "{:#?}",
+        remediated.run
+    );
+    if remediated.task.state == ProductionTaskState::ReviewReady {
+        remediated = harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: target.production_task_id.clone(),
+            })
+            .await
+            .expect("review nonblocking Query remediation");
+    }
+    assert_eq!(
+        remediated.task.state,
+        ProductionTaskState::ReadyForIntegration,
+        "{:#?}",
+        remediated.run
+    );
+
+    let production = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect released downstream frontier")
+        .expect("active production");
+    let downstream = production
+        .tasks
+        .iter()
+        .find(|task| {
+            task.state == ProductionTaskState::Ready
+                && task.task.dependencies.contains(&target.task.task_key)
+        })
+        .expect("ready downstream task reached by Query invalidation")
+        .clone();
+    let mut completed = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: downstream.production_task_id.clone(),
+        })
+        .await
+        .expect("author downstream Artifact with recursive Query context");
+    assert!(completed.run.task.exact_inputs.iter().any(|input| {
+        input.kind == "tender_query_version"
+            && input.reference == query.query_id
+            && input.version == query.version
+    }));
+    if completed.task.state == ProductionTaskState::ReviewReady {
+        completed = harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: downstream.production_task_id.clone(),
+            })
+            .await
+            .expect("independently review recursive Query-bearing Artifact");
+    }
+    assert_eq!(
+        completed.task.state,
+        ProductionTaskState::ReadyForIntegration
+    );
+
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close recursive Query review Tender");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify nonblocking Query remediation and downstream review");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+}
+
+#[tokio::test]
+async fn stale_query_control_completion_terminalizes_without_stranding_the_task() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let target = production
+        .tasks
+        .iter()
+        .find(|task| task.state == ProductionTaskState::Ready)
+        .expect("ready Query owner task")
+        .clone();
+    let moved_task_key = production
+        .tasks
+        .iter()
+        .find(|candidate| {
+            candidate.task.task_key != target.task.task_key
+                && !production.tasks.iter().any(|dependent| {
+                    dependent
+                        .task
+                        .dependencies
+                        .contains(&candidate.task.task_key)
+                })
+        })
+        .expect("separate Query successor scope")
+        .task
+        .task_key
+        .clone();
+    let query = harness
+        .host
+        .create_tender_query(CreateTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_type: TenderQueryType::MissingInformation,
+            question: "Which exact missing fact controls this work?".into(),
+            ambiguity_or_gap:
+                "The task cannot proceed without an attributable specialist response.".into(),
+            owner_profile_id: target.task.profile_id.clone(),
+            owner_profile_version: target.task.profile_version,
+            evidence: vec![target
+                .task
+                .exact_inputs
+                .first()
+                .expect("owner task exact input")
+                .clone()],
+            affected_records: Vec::new(),
+            affected_task_keys: vec![target.task.task_key.clone()],
+            due_at: "2099-01-01T00:00:00.000Z".into(),
+            material: true,
+            release_blocking: true,
+            proposed_treatments: vec![TenderQueryTreatmentProposalInput {
+                treatment: TenderQueryTreatment::Qualification,
+                rationale: "Request a bounded specialist qualification.".into(),
+            }],
+        })
+        .expect("register exact Query-control basis");
+
+    harness.set_agent_scenario("production-task-delayed-a");
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let production_task_id = target.production_task_id.clone();
+    let control = tokio::spawn(async move {
+        host.run_production_task(RunProductionTaskCommand {
+            tender_id,
+            production_task_id,
+        })
+        .await
+    });
+    wait_for_fixture_path(&harness.codex.with_extension("production-a-waiting")).await;
+    let successor = harness
+        .host
+        .revise_tender_query(ReviseTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: query.query_id.clone(),
+            base_version: query.version,
+            query_type: query.query_type,
+            question: query.question.clone(),
+            ambiguity_or_gap:
+                "The Engineer registered a successor while the specialist turn was in flight."
+                    .into(),
+            owner_profile_id: query.owner_profile_id.clone(),
+            owner_profile_version: query.owner_profile_version,
+            evidence: query.evidence.clone(),
+            affected_records: query.affected_records.clone(),
+            affected_task_keys: vec![moved_task_key],
+            due_at: query.due_at.clone(),
+            material: query.material,
+            release_blocking: query.release_blocking,
+            proposed_treatments: query
+                .proposed_treatments
+                .iter()
+                .map(|proposal| TenderQueryTreatmentProposalInput {
+                    treatment: proposal.treatment,
+                    rationale: proposal.rationale.clone(),
+                })
+                .collect(),
+            response: None,
+            response_evidence: Vec::new(),
+        })
+        .expect("publish concurrent exact Query successor");
+    assert_eq!(successor.version, query.version + 1);
+    fs::write(
+        harness.codex.with_extension("production-a-release"),
+        b"release",
+    )
+    .expect("release stale Query-control output");
+    let completed = control
+        .await
+        .expect("join stale Query-control turn")
+        .expect("terminalize stale Query-control turn");
+    assert_eq!(completed.run.state, AgentRunState::Failed);
+    assert_eq!(
+        completed.run.failure.map(|failure| failure.category),
+        Some(ProviderFailureCategory::OutputInvalid)
+    );
+    assert_eq!(completed.task.state, ProductionTaskState::Ready);
+    assert!(harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect stale Query-control terminality")
+        .expect("active production")
+        .tasks
+        .iter()
+        .all(|task| task.state != ProductionTaskState::Running));
+
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close stale Query-control Tender");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold-verify stale Query-control terminality")
+            .state,
+        TenderIntegrityState::Ready
+    );
+}
+
+#[tokio::test]
+async fn artifact_backed_stale_query_control_resumes_exact_remediation_after_scope_removal() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let target = production
+        .tasks
+        .iter()
+        .find(|task| task.state == ProductionTaskState::Ready)
+        .expect("ready artifact-backed Query owner task")
+        .clone();
+    let moved_task_key = production
+        .tasks
+        .iter()
+        .find(|candidate| {
+            candidate.task.task_key != target.task.task_key
+                && !production.tasks.iter().any(|dependent| {
+                    dependent
+                        .task
+                        .dependencies
+                        .contains(&candidate.task.task_key)
+                })
+        })
+        .expect("separate artifact-backed Query successor scope")
+        .task
+        .task_key
+        .clone();
+    harness.set_agent_scenario("production-task");
+    let authored = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: target.production_task_id.clone(),
+        })
+        .await
+        .expect("author Artifact before Query-control race");
+    assert_eq!(authored.task.state, ProductionTaskState::ReviewReady);
+
+    let query = harness
+        .host
+        .create_tender_query(CreateTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_type: TenderQueryType::Ambiguity,
+            question: "Which exact new observation applies to the authored Artifact?".into(),
+            ambiguity_or_gap: "The current Artifact predates an attributable Query observation."
+                .into(),
+            owner_profile_id: target.task.profile_id.clone(),
+            owner_profile_version: target.task.profile_version,
+            evidence: vec![target
+                .task
+                .exact_inputs
+                .first()
+                .expect("artifact-backed Query evidence")
+                .clone()],
+            affected_records: Vec::new(),
+            affected_task_keys: vec![target.task.task_key.clone()],
+            due_at: "2099-01-01T00:00:00.000Z".into(),
+            material: true,
+            release_blocking: true,
+            proposed_treatments: vec![TenderQueryTreatmentProposalInput {
+                treatment: TenderQueryTreatment::Qualification,
+                rationale: "Request exact specialist input before remediating the Artifact.".into(),
+            }],
+        })
+        .expect("register artifact-backed Query-control basis");
+    harness.set_agent_scenario("production-task-delayed-a");
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let production_task_id = target.production_task_id.clone();
+    let control = tokio::spawn(async move {
+        host.run_production_task(RunProductionTaskCommand {
+            tender_id,
+            production_task_id,
+        })
+        .await
+    });
+    wait_for_fixture_path(&harness.codex.with_extension("production-a-waiting")).await;
+    harness
+        .host
+        .revise_tender_query(ReviseTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: query.query_id.clone(),
+            base_version: query.version,
+            query_type: query.query_type,
+            question: query.question.clone(),
+            ambiguity_or_gap: "The exact successor now targets a separate leaf workstream.".into(),
+            owner_profile_id: query.owner_profile_id.clone(),
+            owner_profile_version: query.owner_profile_version,
+            evidence: query.evidence.clone(),
+            affected_records: Vec::new(),
+            affected_task_keys: vec![moved_task_key],
+            due_at: query.due_at.clone(),
+            material: query.material,
+            release_blocking: query.release_blocking,
+            proposed_treatments: query
+                .proposed_treatments
+                .iter()
+                .map(|proposal| TenderQueryTreatmentProposalInput {
+                    treatment: proposal.treatment,
+                    rationale: proposal.rationale.clone(),
+                })
+                .collect(),
+            response: None,
+            response_evidence: Vec::new(),
+        })
+        .expect("move artifact-backed Query scope during specialist turn");
+    fs::write(
+        harness.codex.with_extension("production-a-release"),
+        b"release",
+    )
+    .expect("release stale artifact-backed Query-control output");
+    let stale = control
+        .await
+        .expect("join artifact-backed Query-control turn")
+        .expect("terminalize artifact-backed stale Query-control turn");
+    assert_eq!(stale.run.state, AgentRunState::Failed);
+    assert_eq!(stale.task.state, ProductionTaskState::RemediationReady);
+
+    harness.set_agent_scenario("production-task");
+    let mut remediated = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: target.production_task_id.clone(),
+        })
+        .await
+        .expect("resume exact Query-driven Artifact remediation");
+    assert!(remediated.run.task.exact_inputs.iter().any(|input| {
+        input.kind == "tender_query_version"
+            && input.reference == query.query_id
+            && input.version == query.version
+    }));
+    if remediated.task.state == ProductionTaskState::ReviewReady {
+        remediated = harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: target.production_task_id.clone(),
+            })
+            .await
+            .expect("review resumed exact Query remediation");
+    }
+    assert_eq!(
+        remediated.task.state,
+        ProductionTaskState::ReadyForIntegration
+    );
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close artifact-backed Query race Tender");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify artifact-backed Query-control recovery");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+}
+
+#[tokio::test]
+async fn removed_query_scope_preserves_the_exact_historical_treatment_for_remediation() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let target = production
+        .tasks
+        .iter()
+        .find(|task| task.state == ProductionTaskState::Ready)
+        .expect("ready task for historical treatment")
+        .clone();
+    let unrelated_task_key = production
+        .tasks
+        .iter()
+        .find(|candidate| {
+            candidate.task.task_key != target.task.task_key
+                && !production.tasks.iter().any(|dependent| {
+                    dependent
+                        .task
+                        .dependencies
+                        .contains(&candidate.task.task_key)
+                })
+        })
+        .expect("unrelated leaf task")
+        .task
+        .task_key
+        .clone();
+
+    harness.set_agent_scenario("production-task");
+    let mut initial = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: target.production_task_id.clone(),
+        })
+        .await
+        .expect("author pre-Query Artifact");
+    if initial.task.state == ProductionTaskState::ReviewReady {
+        initial = harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: target.production_task_id.clone(),
+            })
+            .await
+            .expect("review pre-Query Artifact");
+    }
+    assert_eq!(initial.task.state, ProductionTaskState::ReadyForIntegration);
+
+    let query = harness
+        .host
+        .create_tender_query(CreateTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_type: TenderQueryType::ResponsibilitySensitive,
+            question: "Which exact responsibility assumption qualifies the current Artifact?"
+                .into(),
+            ambiguity_or_gap: "The current Artifact predates the required responsibility basis."
+                .into(),
+            owner_profile_id: target.task.profile_id.clone(),
+            owner_profile_version: target.task.profile_version,
+            evidence: vec![target
+                .task
+                .exact_inputs
+                .first()
+                .expect("historical treatment exact input")
+                .clone()],
+            affected_records: Vec::new(),
+            affected_task_keys: vec![target.task.task_key.clone()],
+            due_at: "2099-01-01T00:00:00.000Z".into(),
+            material: true,
+            release_blocking: true,
+            proposed_treatments: vec![TenderQueryTreatmentProposalInput {
+                treatment: TenderQueryTreatment::ApprovedAssumption,
+                rationale: "Apply the bounded responsibility assumption to the successor.".into(),
+            }],
+        })
+        .expect("invalidate existing Artifact with exact material Query");
+    let decided = harness
+        .host
+        .decide_tender_query_treatment(DecideTenderQueryTreatmentCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: query.query_id.clone(),
+            query_version: query.version,
+            treatment: TenderQueryTreatment::ApprovedAssumption,
+            rationale: "The Manager approves the exact bounded historical assumption.".into(),
+            treatment_details: "Carry the assumption into the successor Artifact and review."
+                .into(),
+            closes_query: false,
+        })
+        .expect("approve exact historical treatment");
+    let decision = decided
+        .approved_treatment
+        .as_ref()
+        .expect("historical approved treatment")
+        .clone();
+    let successor = harness
+        .host
+        .revise_tender_query(ReviseTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: decided.query_id.clone(),
+            base_version: decided.version,
+            query_type: decided.query_type,
+            question: decided.question.clone(),
+            ambiguity_or_gap:
+                "The current Query scope moved to a separate unrelated leaf workstream.".into(),
+            owner_profile_id: decided.owner_profile_id.clone(),
+            owner_profile_version: decided.owner_profile_version,
+            evidence: decided.evidence.clone(),
+            affected_records: Vec::new(),
+            affected_task_keys: vec![unrelated_task_key],
+            due_at: decided.due_at.clone(),
+            material: true,
+            release_blocking: true,
+            proposed_treatments: decided
+                .proposed_treatments
+                .iter()
+                .map(|proposal| TenderQueryTreatmentProposalInput {
+                    treatment: proposal.treatment,
+                    rationale: proposal.rationale.clone(),
+                })
+                .collect(),
+            response: None,
+            response_evidence: Vec::new(),
+        })
+        .expect("remove original task from current Query scope");
+    assert_eq!(successor.version, decided.version + 1);
+    let stale = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect historically invalidated task")
+        .expect("active production")
+        .tasks
+        .into_iter()
+        .find(|task| task.production_task_id == target.production_task_id)
+        .expect("historically invalidated task");
+    assert_eq!(stale.state, ProductionTaskState::RemediationReady);
+
+    let mut remediated = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: target.production_task_id.clone(),
+        })
+        .await
+        .expect("apply historical treatment after scope removal");
+    assert!(remediated.run.task.exact_inputs.iter().any(|input| {
+        input.kind == "approved_query_treatment"
+            && input.reference == decision.decision_id
+            && input.version == decision.query_version
+    }));
+    if remediated.task.state == ProductionTaskState::ReviewReady {
+        remediated = harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: target.production_task_id.clone(),
+            })
+            .await
+            .expect("review historical treatment-bearing successor");
+    }
+    assert_eq!(
+        remediated.task.state,
+        ProductionTaskState::ReadyForIntegration
+    );
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close historical treatment Tender");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify historical treatment-bearing successor");
     assert_eq!(
         integrity.state,
         TenderIntegrityState::Ready,
@@ -4908,6 +5889,364 @@ async fn review_output_cannot_attach_after_its_exact_package_version_is_supersed
         .inspect_current_bid_decision_package(&harness.tender_id)
         .expect("inspect current package")
         .is_some_and(|current| current.version == 2 && current.review.is_none()));
+}
+
+#[tokio::test]
+async fn agent_query_blocks_exact_work_until_manager_treatment_is_applied_and_reviewed() {
+    let harness = Harness::new("record-extraction");
+    let (_, production) = active_production(&harness).await;
+    let target = production
+        .tasks
+        .iter()
+        .find(|task| task.state == ProductionTaskState::Ready)
+        .expect("ready production task")
+        .clone();
+
+    harness.set_agent_scenario("production-task-query-proposal");
+    let proposed = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: target.production_task_id.clone(),
+        })
+        .await
+        .expect("specialist proposes material Tender Query");
+    assert_eq!(
+        proposed.run.state,
+        AgentRunState::Completed,
+        "{:#?}; fixture={}",
+        proposed.run,
+        fs::read_to_string(harness.codex.with_extension("fixture-error"))
+            .unwrap_or_else(|_| "none".into())
+    );
+    assert_eq!(proposed.task.state, ProductionTaskState::QueryBlocked);
+    assert!(!proposed.task.ready_for_integration);
+
+    let page = harness
+        .host
+        .inspect_tender_queries(InspectTenderQueriesCommand {
+            tender_id: harness.tender_id.clone(),
+            cursor: None,
+            limit: 8,
+        })
+        .expect("inspect bounded Query Register");
+    assert!(page.query_register_open);
+    assert_eq!(page.total_current_count, 1);
+    assert_eq!(page.release_blocking_count, 1);
+    let query = page.items.first().expect("agent Tender Query").clone();
+    assert_eq!(
+        query.source_run_id.as_deref(),
+        Some(proposed.run.run_id.as_str())
+    );
+    assert_eq!(query.owner_profile_id, proposed.run.profile.profile_id);
+    assert_eq!(query.affected_task_keys, vec![target.task.task_key.clone()]);
+    assert!(query.approved_treatment.is_none());
+    assert!(query.invalidations.iter().any(|invalidation| {
+        invalidation.target_kind == "production_task"
+            && invalidation.target_id == target.production_task_id
+    }));
+
+    harness.set_agent_scenario("production-task");
+    let owner_update = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: target.production_task_id.clone(),
+        })
+        .await
+        .expect("run bounded specialist Query-control turn");
+    assert_eq!(owner_update.run.state, AgentRunState::Completed);
+    assert_eq!(owner_update.task.state, ProductionTaskState::QueryBlocked);
+    let query = harness
+        .host
+        .inspect_tender_queries(InspectTenderQueriesCommand {
+            tender_id: harness.tender_id.clone(),
+            cursor: None,
+            limit: 8,
+        })
+        .expect("inspect specialist Query successor")
+        .items
+        .into_iter()
+        .next()
+        .expect("specialist Query successor");
+    assert_eq!(query.version, 2);
+    assert_eq!(
+        query.source_run_id.as_deref(),
+        Some(owner_update.run.run_id.as_str())
+    );
+    assert!(query.evidence.len() > page.items[0].evidence.len());
+    assert!(query.proposed_treatments.iter().any(|proposal| {
+        proposal.proposed_by_run_id.as_deref() == Some(owner_update.run.run_id.as_str())
+    }));
+
+    let affected_record = inspect_all_records(&harness.host, &harness.tender_id)
+        .into_iter()
+        .next()
+        .expect("current Tender Record for targeted Query invalidation");
+    let query = harness
+        .host
+        .revise_tender_query(ReviseTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: query.query_id.clone(),
+            base_version: query.version,
+            query_type: query.query_type,
+            question: query.question.clone(),
+            ambiguity_or_gap: query.ambiguity_or_gap.clone(),
+            owner_profile_id: query.owner_profile_id.clone(),
+            owner_profile_version: query.owner_profile_version,
+            evidence: query.evidence.clone(),
+            affected_records: vec![TenderRecordVersionReference {
+                record_id: affected_record.record_id.clone(),
+                version: affected_record.version,
+            }],
+            affected_task_keys: query.affected_task_keys.clone(),
+            due_at: query.due_at.clone(),
+            material: query.material,
+            release_blocking: query.release_blocking,
+            proposed_treatments: vec![TenderQueryTreatmentProposalInput {
+                treatment: TenderQueryTreatment::ApprovedAssumption,
+                rationale: "Treat the exact record and production task together.".into(),
+            }],
+            response: None,
+            response_evidence: Vec::new(),
+        })
+        .expect("bind exact affected Tender Record to Query successor");
+    assert_eq!(
+        query.affected_records,
+        vec![TenderRecordVersionReference {
+            record_id: affected_record.record_id.clone(),
+            version: affected_record.version,
+        }]
+    );
+
+    let decided = harness
+        .host
+        .decide_tender_query_treatment(DecideTenderQueryTreatmentCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: query.query_id.clone(),
+            query_version: query.version,
+            treatment: TenderQueryTreatment::ApprovedAssumption,
+            rationale: "The Tendering Manager accepts the bounded assumption for this exact Query version.".into(),
+            treatment_details: "Apply the stated responsibility assumption and preserve it in the next Artifact Version.".into(),
+            closes_query: false,
+        })
+        .expect("approve exact Query Treatment");
+    let decision = decided
+        .approved_treatment
+        .as_ref()
+        .expect("approved treatment");
+    assert_eq!(decision.treatment, TenderQueryTreatment::ApprovedAssumption);
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_production(&harness.tender_id)
+            .expect("inspect released production")
+            .expect("production")
+            .tasks
+            .iter()
+            .find(|task| task.production_task_id == target.production_task_id)
+            .expect("released task")
+            .state,
+        ProductionTaskState::RemediationReady
+    );
+
+    harness.set_agent_scenario("production-task");
+    let mut remediated = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: target.production_task_id.clone(),
+        })
+        .await
+        .expect("apply exact Query Treatment in a successor Artifact Version");
+    assert!(remediated.run.task.exact_inputs.iter().any(|input| {
+        input.kind == "approved_query_treatment"
+            && input.reference == decision.decision_id
+            && input.version == decision.query_version
+    }));
+    if remediated.task.state == ProductionTaskState::ReviewReady {
+        remediated = harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: target.production_task_id.clone(),
+            })
+            .await
+            .expect("independently review treatment-bearing Artifact Version");
+    }
+    assert_eq!(
+        remediated.task.state,
+        ProductionTaskState::ReadyForIntegration,
+        "{:#?}; fixture={}",
+        remediated.run,
+        fs::read_to_string(harness.codex.with_extension("fixture-error"))
+            .unwrap_or_else(|_| "none".into())
+    );
+    let review_detail = harness
+        .host
+        .inspect_production_task_review(InspectProductionTaskReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: target.production_task_id.clone(),
+        })
+        .expect("inspect exact treatment-bearing Artifact Versions");
+    let artifact = review_detail
+        .artifact_versions
+        .last()
+        .expect("successor artifact");
+    assert_eq!(artifact.summary.version, 2);
+    assert_eq!(
+        artifact.payload.query_treatment_applications[0].decision_id,
+        decision.decision_id
+    );
+
+    let revised = harness
+        .host
+        .revise_tender_query(ReviseTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: decided.query_id.clone(),
+            base_version: decided.version,
+            query_type: decided.query_type,
+            question: decided.question.clone(),
+            ambiguity_or_gap: "A later exact evidence observation changes the treatment target."
+                .into(),
+            owner_profile_id: decided.owner_profile_id.clone(),
+            owner_profile_version: decided.owner_profile_version,
+            evidence: decided.evidence.clone(),
+            affected_records: decided.affected_records.clone(),
+            affected_task_keys: decided.affected_task_keys.clone(),
+            due_at: "2000-01-01T00:00:00.000Z".into(),
+            material: decided.material,
+            release_blocking: decided.release_blocking,
+            proposed_treatments: vec![TenderQueryTreatmentProposalInput {
+                treatment: TenderQueryTreatment::Qualification,
+                rationale: "The new exact observation requires a revised Manager treatment.".into(),
+            }],
+            response: None,
+            response_evidence: Vec::new(),
+        })
+        .expect("publish immutable Query successor");
+    assert_eq!(revised.version, decided.version + 1);
+    assert_eq!(
+        revised.status,
+        quantix_lib::TenderQueryStatus::TreatmentProposed
+    );
+    assert_eq!(
+        harness
+            .host
+            .decide_tender_query_treatment(DecideTenderQueryTreatmentCommand {
+                tender_id: harness.tender_id.clone(),
+                query_id: decided.query_id.clone(),
+                query_version: decided.version,
+                treatment: TenderQueryTreatment::ApprovedAssumption,
+                rationale: "Attempt to reuse a stale exact decision basis.".into(),
+                treatment_details: "This must be denied and audited.".into(),
+                closes_query: false,
+            })
+            .expect_err("stale exact Query version cannot be decided")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let blocked = harness
+        .host
+        .decide_tender_query_treatment(DecideTenderQueryTreatmentCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: revised.query_id.clone(),
+            query_version: revised.version,
+            treatment: TenderQueryTreatment::ExternalRfiDrafting,
+            rationale: "The changed evidence now requires a controlled external answer.".into(),
+            treatment_details: "Keep dependent work blocked while the External RFI is drafted under the next workflow slice.".into(),
+            closes_query: false,
+        })
+        .expect("record exact blocking External RFI treatment");
+    assert_eq!(blocked.status, quantix_lib::TenderQueryStatus::Blocked);
+    let page = harness
+        .host
+        .inspect_tender_queries(InspectTenderQueriesCommand {
+            tender_id: harness.tender_id.clone(),
+            cursor: None,
+            limit: 8,
+        })
+        .expect("inspect overdue blocking Query");
+    assert_eq!(page.overdue_count, 1);
+    assert_eq!(page.release_blocking_count, 1);
+    assert!(page.items[0].overdue);
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_production(&harness.tender_id)
+            .expect("inspect External RFI block")
+            .expect("active production")
+            .tasks
+            .iter()
+            .find(|task| task.production_task_id == target.production_task_id)
+            .expect("affected task")
+            .state,
+        ProductionTaskState::QueryBlocked
+    );
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close Query-controlled Tender");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify Query Register and treatment lineage");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open Query-controlled Tender");
+    connection
+        .execute_batch("DROP TRIGGER tender_query_versions_no_update")
+        .expect("enable Query manifest tamper fixture");
+    let manifest_json: String = connection
+        .query_row(
+            "SELECT manifest_json FROM tender_query_versions
+             WHERE query_id = ?1 AND version = ?2",
+            rusqlite::params![revised.query_id, revised.version],
+            |row| row.get(0),
+        )
+        .expect("load exact Query manifest");
+    let mut manifest: Value =
+        serde_json::from_str(&manifest_json).expect("parse exact Query manifest");
+    manifest["ambiguity_or_gap"] =
+        Value::String("Selectively altered Query decision basis.".into());
+    let manifest_json = serde_json::to_string(&manifest).expect("canonical forged Query manifest");
+    let manifest_sha256 = Sha256::digest(manifest_json.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    connection
+        .execute(
+            "UPDATE tender_query_versions
+             SET ambiguity_or_gap = 'Selectively altered Query decision basis.',
+                 manifest_json = ?3, manifest_sha256 = ?4
+             WHERE query_id = ?1 AND version = ?2",
+            rusqlite::params![
+                revised.query_id,
+                revised.version,
+                manifest_json,
+                manifest_sha256
+            ],
+        )
+        .expect("tamper exact Query manifest basis");
+    drop(connection);
+    let cold_host =
+        QuantixHost::with_setup_platform(&harness.application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&cold_host).state, SetupState::Ready);
+    assert_eq!(
+        cold_host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("inspect tampered Query manifest")
+            .state,
+        TenderIntegrityState::RecoveryRequired
+    );
 }
 
 fn install_codex_fixture(resources: &Path, scenario: &str) -> std::path::PathBuf {

@@ -910,6 +910,7 @@ fn run_agent_turn(
             | "production-task-delayed-review"
             | "production-task-evidence-invalid"
             | "production-task-output-over-budget"
+            | "production-task-query-proposal"
             | "production-task-review-rework"
             | "production-task-review-critical"
             | "production-task-review-critical-repeat"
@@ -1451,6 +1452,46 @@ fn run_agent_turn(
         })
     } else if scenario.starts_with("production-task")
         && provider_data_view
+            .get("query_control")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    {
+        let query = provider_data_view
+            .get("tender_queries")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|queries| queries.first())
+            .ok_or("query control context")?;
+        let query_evidence = query
+            .get("evidence")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let added_evidence = provider_data_view
+            .pointer("/production_task/exact_inputs")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|inputs| {
+                inputs
+                    .iter()
+                    .find(|input| !query_evidence.contains(input))
+                    .cloned()
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "query_updates": [{
+                "query_id": query.get("query_id").cloned().unwrap_or_default(),
+                "base_version": query.get("query_version").cloned().unwrap_or_default(),
+                "added_evidence": added_evidence,
+                "proposed_treatments": [{
+                    "treatment": "qualification",
+                    "rationale": "The owning specialist proposes an attributable controlled qualification for Manager decision."
+                }],
+                "response": null,
+                "response_evidence": []
+            }]
+        })
+    } else if scenario.starts_with("production-task")
+        && provider_data_view
             .get("review_candidate")
             .is_some_and(|candidate| !candidate.is_null())
     {
@@ -1585,6 +1626,76 @@ fn run_agent_turn(
             "gaps": [],
             "summary": format!("Completed the exact bounded production task for {tender_name}.")
         });
+        let approved_query_treatments = provider_data_view
+            .get("approved_query_treatments")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if !approved_query_treatments.is_empty() {
+            output.as_object_mut().ok_or("production output object")?.insert(
+                "query_treatment_applications".into(),
+                serde_json::Value::Array(
+                    approved_query_treatments
+                        .into_iter()
+                        .map(|decision| {
+                            let decision_id = decision.get("decision_id").cloned().unwrap_or_default();
+                            let query_version = decision.get("query_version").cloned().unwrap_or_default();
+                            serde_json::json!({
+                                "application": "Applied the exact Manager-approved Query Treatment to this new Artifact Version.",
+                                "decision_id": decision_id,
+                                "evidence_references": [
+                                    format!(
+                                        "approved_query_treatment:{}:{}",
+                                        decision.get("decision_id").and_then(serde_json::Value::as_str).unwrap_or_default(),
+                                        decision.get("query_version").and_then(serde_json::Value::as_u64).unwrap_or_default(),
+                                    ),
+                                    format!(
+                                        "tender_query_version:{}:{}",
+                                        decision.get("query_id").and_then(serde_json::Value::as_str).unwrap_or_default(),
+                                        decision.get("query_version").and_then(serde_json::Value::as_u64).unwrap_or_default(),
+                                    )
+                                ],
+                                "query_id": decision.get("query_id").cloned().unwrap_or_default(),
+                                "query_version": query_version,
+                                "treatment": decision.get("treatment").cloned().unwrap_or_default(),
+                            })
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        if scenario == "production-task-query-proposal"
+            && provider_data_view
+                .get("remediation_target")
+                .is_none_or(serde_json::Value::is_null)
+        {
+            let evidence = provider_data_view
+                .pointer("/production_task/exact_inputs/0")
+                .cloned()
+                .ok_or("query proposal evidence")?;
+            let task_key = provider_data_view
+                .pointer("/production_task/task_key")
+                .cloned()
+                .ok_or("query proposal task")?;
+            output.as_object_mut().ok_or("production output object")?.insert(
+                "query_proposals".into(),
+                serde_json::json!([{
+                    "affected_records": [],
+                    "affected_task_keys": [task_key],
+                    "ambiguity_or_gap": "The exact input leaves a responsibility-sensitive production gap.",
+                    "due_at": "2099-01-01T00:00:00.000Z",
+                    "evidence": [evidence],
+                    "material": true,
+                    "proposed_treatments": [{
+                        "rationale": "The Manager should approve an exact treatment before dependent work closes.",
+                        "treatment": "approved_assumption"
+                    }],
+                    "query_type": "responsibility_sensitive",
+                    "question": "Which party owns the unresolved production responsibility?",
+                    "release_blocking": true
+                }]),
+            );
+        }
         if !remediation_findings.is_empty() {
             let remediation_evidence = output
                 .get("evidence_references")

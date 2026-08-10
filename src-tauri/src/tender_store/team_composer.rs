@@ -792,7 +792,7 @@ impl TenderStore {
                        SELECT activation_id FROM production_activations
                        WHERE plan_id = ?1 AND plan_version = ?2 AND status = 'suspended'
                       ) AND status IN (
-                        'blocked', 'ready', 'review_ready', 'remediation_ready',
+                        'blocked', 'ready', 'review_ready', 'remediation_ready', 'query_blocked',
                         'attempt_limit_reached', 'failed', 'cancelled', 'indeterminate'
                       )",
                     params![command.plan_id, command.base_version, created_at],
@@ -3422,6 +3422,21 @@ fn production_output_contract() -> String {
             "gaps": {
                 "items": { "maxLength": 4000, "minLength": 1, "type": "string" },
                 "maxItems": 64,
+                "type": "array"
+            },
+            "query_proposals": {
+                "items": { "type": "object" },
+                "maxItems": 16,
+                "type": "array"
+            },
+            "query_treatment_applications": {
+                "items": { "type": "object" },
+                "maxItems": 64,
+                "type": "array"
+            },
+            "query_updates": {
+                "items": { "type": "object" },
+                "maxItems": 16,
                 "type": "array"
             },
             "summary": { "maxLength": 4000, "minLength": 1, "type": "string" }

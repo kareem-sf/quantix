@@ -16,6 +16,13 @@ use crate::{
 };
 
 use super::bid_decisions::package_dependencies_are_current;
+use super::tender_queries::{
+    agent_query_publication_is_valid, approved_query_treatments_for_inputs,
+    approved_query_treatments_for_task, production_query_contexts_for_task,
+    production_task_state_after_query_release, publish_agent_query_proposals,
+    task_has_blocking_query, task_has_current_query_artifact_invalidation, AgentQueryPublication,
+    AgentTenderQueryProposal, AgentTenderQueryUpdate, TenderQueryTreatment,
+};
 use super::{
     agent_records::{
         ensure_agent_run_capacity, insert_event, insert_task, load_profile, load_task,
@@ -116,6 +123,7 @@ pub enum ProductionTaskState {
     ReviewReady,
     Reviewing,
     RemediationReady,
+    QueryBlocked,
     ReadyForIntegration,
     AttemptLimitReached,
     Failed,
@@ -133,6 +141,7 @@ impl ProductionTaskState {
             Self::ReviewReady => "review_ready",
             Self::Reviewing => "reviewing",
             Self::RemediationReady => "remediation_ready",
+            Self::QueryBlocked => "query_blocked",
             Self::ReadyForIntegration => "ready_for_integration",
             Self::AttemptLimitReached => "attempt_limit_reached",
             Self::Failed => "failed",
@@ -150,6 +159,7 @@ impl ProductionTaskState {
             "review_ready" => Ok(Self::ReviewReady),
             "reviewing" => Ok(Self::Reviewing),
             "remediation_ready" => Ok(Self::RemediationReady),
+            "query_blocked" => Ok(Self::QueryBlocked),
             "ready_for_integration" => Ok(Self::ReadyForIntegration),
             "attempt_limit_reached" => Ok(Self::AttemptLimitReached),
             "failed" => Ok(Self::Failed),
@@ -354,6 +364,7 @@ pub struct ProductionTaskInspection {
     pub open_blocking_finding_count: u32,
     pub latest_artifact: Option<ProductionArtifactVersionSummary>,
     pub latest_review_result: Option<ProductionReviewResult>,
+    pub query_control_available: bool,
     pub ready_for_integration: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -389,6 +400,12 @@ pub struct ProductionArtifactPayload {
     pub gaps: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub remediations: Vec<ProductionRemediation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub query_treatment_applications: Vec<ProductionQueryTreatmentApplication>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub query_proposals: Vec<AgentTenderQueryProposal>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub query_updates: Vec<AgentTenderQueryUpdate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -398,6 +415,24 @@ pub struct ProductionRemediation {
     pub finding_id: String,
     pub treatment: String,
     pub evidence_references: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ProductionQueryTreatmentApplication {
+    pub decision_id: String,
+    pub query_id: String,
+    pub query_version: u32,
+    pub treatment: TenderQueryTreatment,
+    pub application: String,
+    pub evidence_references: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProductionQueryControlCandidate {
+    query_updates: Vec<AgentTenderQueryUpdate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -527,7 +562,7 @@ impl TenderStore {
             || review_count > task_count.saturating_mul(MAX_PRODUCTION_TASK_ATTEMPTS)
             || finding_count > review_count.saturating_mul(MAX_PRODUCTION_FINDINGS as u32)
             || disposition_count > finding_count
-            || readiness_count > task_count
+            || readiness_count > task_count.saturating_mul(MAX_PRODUCTION_TASK_ATTEMPTS)
         {
             return Ok(false);
         }
@@ -760,6 +795,24 @@ impl TenderStore {
                 {
                     return Ok(false);
                 }
+                let query_blocked =
+                    task_has_blocking_query(&self.connection, &definition.task_key)?;
+                if activation.4 == "active"
+                    && ((state == ProductionTaskState::QueryBlocked && !query_blocked)
+                        || (query_blocked
+                            && !matches!(
+                                state,
+                                ProductionTaskState::QueryBlocked
+                                    | ProductionTaskState::Running
+                                    | ProductionTaskState::Reviewing
+                                    | ProductionTaskState::AttemptLimitReached
+                                    | ProductionTaskState::Failed
+                                    | ProductionTaskState::Cancelled
+                                    | ProductionTaskState::Indeterminate
+                            )))
+                {
+                    return Ok(false);
+                }
                 let mut attempt_statement = self
                     .connection
                     .prepare(
@@ -789,13 +842,15 @@ impl TenderStore {
                             state,
                             ProductionTaskState::Blocked
                                 | ProductionTaskState::Ready
+                                | ProductionTaskState::QueryBlocked
                                 | ProductionTaskState::Suspended
                         ))
                     || (!attempts.is_empty()
                         && matches!(
                             state,
                             ProductionTaskState::Blocked | ProductionTaskState::Ready
-                        ))
+                        )
+                        && !attempts.iter().all(|attempt| attempt.1 == "query_control"))
                 {
                     return Ok(false);
                 }
@@ -806,7 +861,26 @@ impl TenderStore {
                 {
                     check()?;
                     let task = load_task(&self.connection, attempt_task_id)?;
-                    let attempt_profile = if attempt_kind == "review" {
+                    let attempt_profile = if attempt_kind == "query_control" {
+                        let query_input = task
+                            .exact_inputs
+                            .iter()
+                            .find(|input| input.kind == "tender_query_version")
+                            .ok_or_else(|| {
+                                TenderCommandError::new(TenderErrorCode::IntegrityFailed)
+                            })?;
+                        let owner: (String, u32) = self
+                            .connection
+                            .query_row(
+                                "SELECT owner_profile_id, owner_profile_version
+                                 FROM tender_query_versions
+                                 WHERE query_id = ?1 AND version = ?2",
+                                params![query_input.reference, query_input.version],
+                                |row| Ok((row.get(0)?, row.get(1)?)),
+                            )
+                            .map_err(sql_error)?;
+                        load_profile(&self.connection, owner)?
+                    } else if attempt_kind == "review" {
                         load_profile(
                             &self.connection,
                             (
@@ -827,19 +901,45 @@ impl TenderStore {
                         .map(|input| (&input.kind, &input.reference, input.version))
                         .collect::<std::collections::HashSet<_>>();
                     let inputs_valid = input_set.len() == task.exact_inputs.len()
-                        && if attempt_kind == "review" {
-                            task.exact_inputs.len() == 1
-                                && task.exact_inputs[0].kind == "production_artifact_version"
+                        && if attempt_kind == "query_control" {
+                            task.exact_inputs
+                                .iter()
+                                .filter(|input| input.kind == "tender_query_version")
+                                .count()
+                                == 1
+                        } else if attempt_kind == "review" {
+                            task.exact_inputs
+                                .iter()
+                                .filter(|input| input.kind == "production_artifact_version")
+                                .count()
+                                == 1
+                                && task.exact_inputs.iter().all(|input| {
+                                    matches!(
+                                        input.kind.as_str(),
+                                        "production_artifact_version"
+                                            | "tender_query_version"
+                                            | "approved_query_treatment"
+                                    )
+                                })
                         } else {
                             definition.exact_inputs.iter().all(|input| {
                                 input_set.contains(&(&input.kind, &input.reference, input.version))
                             }) && (attempt_kind != "remediation"
-                                || task
-                                    .exact_inputs
-                                    .iter()
-                                    .any(|input| input.kind == "production_review_finding"))
+                                || task.exact_inputs.iter().any(|input| {
+                                    matches!(
+                                        input.kind.as_str(),
+                                        "production_review_finding"
+                                            | "approved_query_treatment"
+                                            | "tender_query_version"
+                                    )
+                                }))
                         };
-                    let expected_objective = if attempt_kind == "review" {
+                    let expected_objective = if attempt_kind == "query_control" {
+                        format!(
+                            "Add attributable Evidence or propose a treatment for the exact blocked Tender Query affecting {}; do not decide or close it.",
+                            definition.task_key
+                        )
+                    } else if attempt_kind == "review" {
                         format!(
                             "Independently review the exact candidate for {} without editing or approving it.",
                             definition.task_key
@@ -847,14 +947,18 @@ impl TenderStore {
                     } else {
                         definition.objective.clone()
                     };
-                    let expected_contract = if attempt_kind == "review" {
+                    let expected_contract = if attempt_kind == "query_control" {
+                        production_query_control_output_contract()?
+                    } else if attempt_kind == "review" {
                         production_review_output_contract()?
                     } else if attempt_kind == "remediation" {
                         production_remediation_output_contract()?
                     } else {
                         definition.output_contract_json.clone()
                     };
-                    let expected_review_policy = if attempt_kind == "review" {
+                    let expected_review_policy = if attempt_kind == "query_control" {
+                        "The specialist may add exact Evidence and propose treatments, but cannot approve a treatment or close the Query."
+                    } else if attempt_kind == "review" {
                         "This separate review must report whether the exact candidate satisfies the approved review policy; it cannot edit or approve the work."
                     } else {
                         profile.review_policy.as_str()
@@ -892,6 +996,28 @@ impl TenderStore {
                     let [(run_id, run_status, retry_of_run_id)] = runs.as_slice() else {
                         return Ok(false);
                     };
+                    if attempt_kind == "query_control" && run_status == "completed" {
+                        let Some(query_input) = task
+                            .exact_inputs
+                            .iter()
+                            .find(|input| input.kind == "tender_query_version")
+                        else {
+                            return Ok(false);
+                        };
+                        let successor_version = query_input.version.saturating_add(1);
+                        let publication_count: u32 = self
+                            .connection
+                            .query_row(
+                                "SELECT COUNT(*) FROM tender_query_versions
+                                 WHERE source_run_id = ?1 AND query_id = ?2 AND version = ?3",
+                                params![run_id, query_input.reference, successor_version],
+                                |row| row.get(0),
+                            )
+                            .map_err(sql_error)?;
+                        if publication_count != 1 {
+                            return Ok(false);
+                        }
+                    }
                     let latest = attempt_index + 1 == attempts.len();
                     let expected_retry = (prior_attempt_kind.as_deref()
                         == Some(attempt_kind.as_str()))
@@ -900,6 +1026,21 @@ impl TenderStore {
                     let next_kind = attempts
                         .get(attempt_index + 1)
                         .map(|attempt| attempt.1.as_str());
+                    let query_remediation_next = if matches!(
+                        (attempt_kind.as_str(), next_kind),
+                        ("author", Some("remediation"))
+                    ) {
+                        let next_task =
+                            load_task(&self.connection, &attempts[attempt_index + 1].2)?;
+                        next_task.exact_inputs.iter().any(|input| {
+                            matches!(
+                                input.kind.as_str(),
+                                "approved_query_treatment" | "tender_query_version"
+                            )
+                        })
+                    } else {
+                        false
+                    };
                     let retry_terminal = matches!(
                         run_status.as_str(),
                         "failed" | "interrupted" | "indeterminate"
@@ -922,12 +1063,18 @@ impl TenderStore {
                                 ("author" | "remediation", Some("review"))
                                     | ("review", Some("remediation"))
                             ))
+                            || (run_status == "completed"
+                                && (attempt_kind == "query_control"
+                                    || next_kind == Some("query_control")))
+                            || (run_status == "completed" && query_remediation_next)
                             || retry_terminal);
                     let latest_matches = latest
                         && match state {
                             ProductionTaskState::Running => {
-                                matches!(attempt_kind.as_str(), "author" | "remediation")
-                                    && run_status == "running"
+                                matches!(
+                                    attempt_kind.as_str(),
+                                    "author" | "remediation" | "query_control"
+                                ) && run_status == "running"
                             }
                             ProductionTaskState::ReviewReady => {
                                 matches!(attempt_kind.as_str(), "author" | "remediation")
@@ -937,20 +1084,82 @@ impl TenderStore {
                                 attempt_kind == "review" && run_status == "running"
                             }
                             ProductionTaskState::RemediationReady => {
-                                attempt_kind == "review"
-                                    && run_status == "completed"
-                                    && self
+                                if attempt_kind == "query_control" && run_status == "failed" {
+                                    production_task_state_after_query_release(
+                                        &self.connection,
+                                        &production_task_id,
+                                    )? == "remediation_ready"
+                                } else if run_status == "completed" && attempt_kind == "review" {
+                                    let result: Option<String> = self
                                         .connection
                                         .query_row(
-                                            "SELECT EXISTS(
-                                           SELECT 1 FROM production_reviews
-                                           WHERE reviewer_run_id = ?1
-                                             AND result = 'requires_remediation'
-                                         )",
+                                            "SELECT result FROM production_reviews
+                                                 WHERE reviewer_run_id = ?1",
                                             [run_id],
-                                            |row| row.get::<_, bool>(0),
+                                            |row| row.get(0),
                                         )
-                                        .map_err(sql_error)?
+                                        .optional()
+                                        .map_err(sql_error)?;
+                                    if result.as_deref() == Some("requires_remediation") {
+                                        true
+                                    } else if result.as_deref() == Some("satisfied") {
+                                        let latest_artifact: Option<(String, u32)> = self
+                                            .connection
+                                            .query_row(
+                                                "SELECT artifact_id, version
+                                                     FROM production_artifact_versions
+                                                     WHERE production_task_id = ?1
+                                                     ORDER BY version DESC LIMIT 1",
+                                                [&production_task_id],
+                                                |row| Ok((row.get(0)?, row.get(1)?)),
+                                            )
+                                            .optional()
+                                            .map_err(sql_error)?;
+                                        latest_artifact.is_some_and(|(artifact_id, version)| {
+                                            production_artifact_applies_current_query_treatments(
+                                                &self.connection,
+                                                &definition.task_key,
+                                                &artifact_id,
+                                                version,
+                                            )
+                                            .is_ok_and(|current| !current)
+                                        })
+                                    } else {
+                                        false
+                                    }
+                                } else if run_status == "completed"
+                                    && matches!(attempt_kind.as_str(), "author" | "remediation")
+                                {
+                                    let latest_artifact: Option<(String, u32)> = self
+                                        .connection
+                                        .query_row(
+                                            "SELECT artifact_id, version
+                                                 FROM production_artifact_versions
+                                                 WHERE production_task_id = ?1
+                                                 ORDER BY version DESC LIMIT 1",
+                                            [&production_task_id],
+                                            |row| Ok((row.get(0)?, row.get(1)?)),
+                                        )
+                                        .optional()
+                                        .map_err(sql_error)?;
+                                    latest_artifact.is_some_and(|(artifact_id, version)| {
+                                        production_artifact_applies_current_query_treatments(
+                                            &self.connection,
+                                            &definition.task_key,
+                                            &artifact_id,
+                                            version,
+                                        )
+                                        .is_ok_and(|current| !current)
+                                    })
+                                } else {
+                                    false
+                                }
+                            }
+                            ProductionTaskState::QueryBlocked => {
+                                matches!(
+                                    run_status.as_str(),
+                                    "completed" | "failed" | "interrupted"
+                                )
                             }
                             ProductionTaskState::ReadyForIntegration => run_status == "completed",
                             ProductionTaskState::AttemptLimitReached => {
@@ -973,7 +1182,10 @@ impl TenderStore {
                                 run_status.as_str(),
                                 "completed" | "failed" | "interrupted" | "indeterminate"
                             ),
-                            ProductionTaskState::Blocked | ProductionTaskState::Ready => false,
+                            ProductionTaskState::Blocked | ProductionTaskState::Ready => {
+                                attempt_kind == "query_control"
+                                    && matches!(run_status.as_str(), "completed" | "failed")
+                            }
                         };
                     if retry_of_run_id.as_deref() != expected_retry
                         || (!terminal_prior && !latest_matches)
@@ -1211,9 +1423,68 @@ impl TenderStore {
                 )
                 .optional()
                 .map_err(sql_error)?;
+            let definition: WorkPlanTask = parse_canonical_json(&task_json)?;
+            let dependencies_ready: bool = transaction
+                .query_row(
+                    "SELECT NOT EXISTS(
+                       SELECT 1 FROM json_each(?1, '$.dependencies') AS dependency
+                       LEFT JOIN production_tasks AS prerequisite
+                         ON prerequisite.activation_id = ?2
+                        AND prerequisite.task_key = dependency.value
+                       WHERE prerequisite.production_task_id IS NULL
+                          OR prerequisite.status != 'ready_for_integration'
+                     )",
+                    params![task_json, activation_id],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            if task_status == "ready" && !dependencies_ready {
+                append_production_denial(
+                    &transaction,
+                    tender_id,
+                    "run_production_task",
+                    Some(production_task_id),
+                    "dependencies_not_ready",
+                )?;
+                transaction
+                    .execute(
+                        "UPDATE production_tasks SET status = 'blocked', updated_at = ?2
+                         WHERE production_task_id = ?1 AND status = 'ready'",
+                        params![production_task_id, sqlite_timestamp(&transaction)?],
+                    )
+                    .map_err(sql_error)?;
+                transaction.commit().map_err(sql_error)?;
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            let all_production_query_contexts =
+                production_query_contexts_for_task(&transaction, &definition.task_key)?;
+            let query_control_context = (task_status == "query_blocked"
+                || latest_attempt
+                    .as_ref()
+                    .is_some_and(|attempt| attempt.5 == "query_control"))
+            .then(|| {
+                all_production_query_contexts
+                    .iter()
+                    .find(|context| {
+                        context.blocks_dependent_work()
+                            && context
+                                .affected_task_keys
+                                .iter()
+                                .any(|key| key == &definition.task_key || key == "*")
+                    })
+                    .cloned()
+            })
+            .flatten();
+            let query_remediation_ready =
+                !approved_query_treatments_for_task(&transaction, &definition.task_key)?.is_empty()
+                    || task_has_current_query_artifact_invalidation(
+                        &transaction,
+                        production_task_id,
+                    )?;
             let attempt_kind = match task_status.as_str() {
                 "review_ready" => "review",
                 "remediation_ready" => "remediation",
+                "query_blocked" => "query_control",
                 "failed" | "cancelled" | "indeterminate" => latest_attempt
                     .as_ref()
                     .map(|attempt| attempt.5.as_str())
@@ -1228,6 +1499,19 @@ impl TenderStore {
             .flatten();
             let retry_eligible = match (task_status.as_str(), latest_attempt.as_ref()) {
                 ("ready", None) => expected_retry_of_run_id.is_none() && current_task_id.is_none(),
+                ("ready", Some((_, _, prior_status, _, _, prior_kind))) => {
+                    expected_retry_of_run_id.is_none()
+                        && matches!(prior_status.as_str(), "completed" | "failed")
+                        && prior_kind == "query_control"
+                }
+                ("query_blocked", None) => {
+                    expected_retry_of_run_id.is_none() && query_control_context.is_some()
+                }
+                ("query_blocked", Some((_, _, prior_status, _, _, _))) => {
+                    expected_retry_of_run_id.is_none()
+                        && prior_status == "completed"
+                        && query_control_context.is_some()
+                }
                 ("review_ready", Some((_, _, prior_status, _, _, prior_kind))) => {
                     expected_retry_of_run_id.is_none()
                         && prior_status == "completed"
@@ -1235,8 +1519,11 @@ impl TenderStore {
                 }
                 ("remediation_ready", Some((_, _, prior_status, _, _, prior_kind))) => {
                     expected_retry_of_run_id.is_none()
-                        && prior_status == "completed"
-                        && prior_kind == "review"
+                        && ((prior_status == "completed"
+                            && (prior_kind == "review" || query_remediation_ready))
+                            || (prior_status == "failed"
+                                && prior_kind == "query_control"
+                                && query_remediation_ready))
                 }
                 ("failed", Some((_, prior_run_id, prior_status, failure_json, _, _)))
                     if prior_status == "failed" => {
@@ -1333,8 +1620,28 @@ impl TenderStore {
                 transaction.commit().map_err(sql_error)?;
                 return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
             }
-            let definition: WorkPlanTask = parse_canonical_json(&task_json)?;
-            let (profile_id, profile_version) = if attempt_kind == "review" {
+            if attempt_kind != "query_control"
+                && task_has_blocking_query(&transaction, &definition.task_key)?
+            {
+                append_production_denial(
+                    &transaction,
+                    tender_id,
+                    "run_production_task",
+                    Some(production_task_id),
+                    "material_query_unresolved",
+                )?;
+                transaction.commit().map_err(sql_error)?;
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            let (profile_id, profile_version) = if attempt_kind == "query_control" {
+                let context = query_control_context
+                    .as_ref()
+                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+                (
+                    context.owner_profile_id.clone(),
+                    context.owner_profile_version,
+                )
+            } else if attempt_kind == "review" {
                 (
                     definition
                         .review_profile_id
@@ -1402,6 +1709,37 @@ impl TenderStore {
             } else {
                 definition.exact_inputs.clone()
             };
+            let production_query_contexts = if attempt_kind == "query_control" {
+                vec![query_control_context
+                    .clone()
+                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?]
+            } else {
+                all_production_query_contexts
+            };
+            let approved_query_treatments = production_query_contexts
+                .iter()
+                .filter_map(|context| context.approved_treatment.clone())
+                .filter(|decision| {
+                    attempt_kind == "query_control" || decision.treatment.permits_dependent_work()
+                })
+                .collect::<Vec<_>>();
+            for context in &production_query_contexts {
+                exact_inputs.push(AgentTaskInputReference {
+                    kind: "tender_query_version".into(),
+                    reference: context.query_id.clone(),
+                    version: context.query_version,
+                });
+                if attempt_kind == "query_control" {
+                    exact_inputs.extend(context.evidence.iter().cloned());
+                }
+            }
+            for decision in &approved_query_treatments {
+                exact_inputs.push(AgentTaskInputReference {
+                    kind: "approved_query_treatment".into(),
+                    reference: decision.decision_id.clone(),
+                    version: decision.query_version,
+                });
+            }
             let mut dependency_outputs = Vec::new();
             if matches!(attempt_kind, "author" | "remediation") {
                 for dependency in &definition.dependencies {
@@ -1417,7 +1755,28 @@ impl TenderStore {
                            ON artifacts.artifact_id = readiness.artifact_id
                           AND artifacts.version = readiness.artifact_version
                          WHERE tasks.activation_id = ?1 AND tasks.task_key = ?2
-                           AND tasks.status = 'ready_for_integration'",
+                           AND tasks.status = 'ready_for_integration'
+                           AND NOT EXISTS(
+                             SELECT 1 FROM tender_query_target_invalidations AS invalidations
+                             JOIN tender_query_heads AS query_heads
+                               ON query_heads.query_id = invalidations.query_id
+                              AND query_heads.current_version = invalidations.query_version
+                             WHERE invalidations.target_kind = 'approval'
+                               AND invalidations.target_id = readiness.readiness_id
+                           )
+                           AND readiness.rowid = (
+                             SELECT MAX(candidate.rowid)
+                             FROM production_integration_readiness AS candidate
+                             WHERE candidate.production_task_id = tasks.production_task_id
+                               AND NOT EXISTS(
+                                 SELECT 1 FROM tender_query_target_invalidations AS invalidations
+                                 JOIN tender_query_heads AS query_heads
+                                   ON query_heads.query_id = invalidations.query_id
+                                  AND query_heads.current_version = invalidations.query_version
+                                 WHERE invalidations.target_kind = 'approval'
+                                   AND invalidations.target_id = candidate.readiness_id
+                               )
+                           )",
                         params![activation_id, dependency],
                         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
                     )
@@ -1512,7 +1871,11 @@ impl TenderStore {
                     .map_err(sql_error)?
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(sql_error)?;
-                if findings.is_empty() || findings.len() > MAX_PRODUCTION_FINDINGS {
+                if (findings.is_empty()
+                    && approved_query_treatments.is_empty()
+                    && production_query_contexts.is_empty())
+                    || findings.len() > MAX_PRODUCTION_FINDINGS
+                {
                     return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
                 }
                 for finding in &findings {
@@ -1613,7 +1976,12 @@ impl TenderStore {
                 task_id: random_identifier(&transaction)?,
                 profile_id: profile.profile_id.clone(),
                 profile_version: profile.version,
-                objective: if attempt_kind == "review" {
+                objective: if attempt_kind == "query_control" {
+                    format!(
+                        "Add attributable Evidence or propose a treatment for the exact blocked Tender Query affecting {}; do not decide or close it.",
+                        definition.task_key
+                    )
+                } else if attempt_kind == "review" {
                     format!(
                         "Independently review the exact candidate for {} without editing or approving it.",
                         definition.task_key
@@ -1622,14 +1990,18 @@ impl TenderStore {
                     definition.objective.clone()
                 },
                 exact_inputs,
-                output_contract_json: if attempt_kind == "review" {
+                output_contract_json: if attempt_kind == "query_control" {
+                    production_query_control_output_contract()?
+                } else if attempt_kind == "review" {
                     production_review_output_contract()?
                 } else if attempt_kind == "remediation" {
                     production_remediation_output_contract()?
                 } else {
                     definition.output_contract_json.clone()
                 },
-                review_policy: if attempt_kind == "review" {
+                review_policy: if attempt_kind == "query_control" {
+                    "The specialist may add exact Evidence and propose treatments, but cannot approve a treatment or close the Query.".into()
+                } else if attempt_kind == "review" {
                     "This separate review must report whether the exact candidate satisfies the approved review policy; it cannot edit or approve the work.".into()
                 } else {
                     profile.review_policy.clone()
@@ -1667,6 +2039,8 @@ impl TenderStore {
                     .max()
                     .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?,
                 "data_scope": task.permissions.data_scopes.join("+"),
+                "approved_query_treatments": approved_query_treatments,
+                "tender_queries": production_query_contexts,
                 "dependency_outputs": dependency_outputs,
                 "remediation_findings": remediation_findings,
                 "remediation_target": remediation_target,
@@ -1677,6 +2051,7 @@ impl TenderStore {
                     "version": plan_version,
                 },
                 "production_task": definition,
+                "query_control": attempt_kind == "query_control",
                 "schema_version": 1,
                 "tender": { "name": tender_name },
             });
@@ -2011,6 +2386,13 @@ impl TenderStore {
             budget.check()?;
             let task_definition_json = canonical_json(task)?;
             let task_definition_sha256 = sha256_hex(task_definition_json.as_bytes());
+            let initial_state = if task_has_blocking_query(&transaction, &task.task_key)? {
+                ProductionTaskState::QueryBlocked
+            } else if task.dependencies.is_empty() {
+                ProductionTaskState::Ready
+            } else {
+                ProductionTaskState::Blocked
+            };
             transaction
                 .execute(
                     "INSERT INTO production_tasks (
@@ -2023,15 +2405,24 @@ impl TenderStore {
                         task.task_key,
                         task_definition_json,
                         task_definition_sha256,
-                        if task.dependencies.is_empty() {
-                            ProductionTaskState::Ready.as_str()
-                        } else {
-                            ProductionTaskState::Blocked.as_str()
-                        },
+                        initial_state.as_str(),
                         created_at,
                     ],
                 )
                 .map_err(sql_error)?;
+        }
+        for task in &plan.tasks {
+            budget.check()?;
+            if task_has_blocking_query(&transaction, &task.task_key)? {
+                transaction
+                    .execute(
+                        "UPDATE production_tasks SET status = 'query_blocked', updated_at = ?3
+                         WHERE activation_id = ?1 AND task_key = ?2
+                           AND status IN ('blocked', 'ready')",
+                        params![activation_id, task.task_key, created_at],
+                    )
+                    .map_err(sql_error)?;
+            }
         }
         if transaction
             .execute(
@@ -2168,10 +2559,21 @@ impl TenderStore {
                 .map(|value| ProductionReviewResult::parse(&value))
                 .transpose()?;
             let state = ProductionTaskState::parse(&row.get::<_, String>(2).map_err(sql_error)?)?;
+            let task: WorkPlanTask = parse_canonical_json(&task_json)?;
+            let query_control_available = state == ProductionTaskState::QueryBlocked
+                && production_query_contexts_for_task(&self.connection, &task.task_key)?
+                    .iter()
+                    .any(|context| {
+                        context.blocks_dependent_work()
+                            && context
+                                .affected_task_keys
+                                .iter()
+                                .any(|key| key == &task.task_key || key == "*")
+                    });
             tasks.push(ProductionTaskInspection {
                 production_task_id,
                 plan_manifest_sha256: activation.3.clone(),
-                task: parse_canonical_json(&task_json)?,
+                task,
                 state,
                 run_ids,
                 artifact_version_count,
@@ -2180,6 +2582,7 @@ impl TenderStore {
                 open_blocking_finding_count,
                 latest_artifact,
                 latest_review_result,
+                query_control_available,
                 ready_for_integration: state == ProductionTaskState::ReadyForIntegration,
                 created_at: row.get(3).map_err(sql_error)?,
                 updated_at: row.get(4).map_err(sql_error)?,
@@ -2670,7 +3073,17 @@ fn load_production_readiness(
             "SELECT readiness_id, artifact_id, artifact_version, payload_sha256, review_id,
                     output_validation_passed, evidence_verified, dependencies_satisfied,
                     approval_gates_json, finding_dispositions_sha256, created_at
-             FROM production_integration_readiness WHERE production_task_id = ?1",
+             FROM production_integration_readiness AS readiness
+             WHERE production_task_id = ?1
+               AND NOT EXISTS(
+                 SELECT 1 FROM tender_query_target_invalidations AS invalidations
+                 JOIN tender_query_heads AS query_heads
+                   ON query_heads.query_id = invalidations.query_id
+                  AND query_heads.current_version = invalidations.query_version
+                 WHERE invalidations.target_kind = 'approval'
+                   AND invalidations.target_id = readiness.readiness_id
+               )
+             ORDER BY readiness.rowid DESC LIMIT 1",
             [production_task_id],
             |row| {
                 Ok((
@@ -2708,6 +3121,58 @@ fn load_production_readiness(
         .transpose()
 }
 
+fn load_all_production_readiness(
+    connection: &rusqlite::Connection,
+    production_task_id: &str,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<Vec<ProductionIntegrationReadiness>, TenderCommandError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT readiness_id, artifact_id, artifact_version, payload_sha256, review_id,
+                    output_validation_passed, evidence_verified, dependencies_satisfied,
+                    approval_gates_json, finding_dispositions_sha256, created_at
+             FROM production_integration_readiness
+             WHERE production_task_id = ?1 ORDER BY rowid",
+        )
+        .map_err(sql_error)?;
+    let rows = statement
+        .query_map([production_task_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u32>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, bool>(5)?,
+                row.get::<_, bool>(6)?,
+                row.get::<_, bool>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, String>(10)?,
+            ))
+        })
+        .map_err(sql_error)?;
+    let mut readiness = Vec::new();
+    for row in rows {
+        check()?;
+        let row = row.map_err(sql_error)?;
+        readiness.push(ProductionIntegrationReadiness {
+            readiness_id: row.0,
+            artifact_id: row.1,
+            artifact_version: row.2,
+            payload_sha256: row.3,
+            review_id: row.4,
+            output_validation_passed: row.5,
+            evidence_verified: row.6,
+            dependencies_satisfied: row.7,
+            approval_gates: parse_canonical_json(&row.8)?,
+            finding_dispositions_sha256: row.9,
+            created_at: row.10,
+        });
+    }
+    Ok(readiness)
+}
+
 fn production_task_records_are_valid(
     connection: &rusqlite::Connection,
     production_task_id: &str,
@@ -2718,6 +3183,7 @@ fn production_task_records_are_valid(
     let artifacts = load_production_artifact_versions(connection, production_task_id, check)?;
     let reviews = load_production_reviews(connection, production_task_id, check)?;
     let readiness = load_production_readiness(connection, production_task_id)?;
+    let all_readiness = load_all_production_readiness(connection, production_task_id, check)?;
     if artifacts.iter().enumerate().any(|(index, artifact)| {
         artifact.summary.artifact_id != production_task_id
             || artifact.summary.version as usize != index + 1
@@ -2766,16 +3232,38 @@ fn production_task_records_are_valid(
                 return Ok(false);
             }
         } else {
-            let Some(remediation_review_id) = artifact.summary.remediation_review_id.as_deref()
-            else {
-                return Ok(false);
-            };
-            if !reviews.iter().any(|review| {
-                review.review_id == remediation_review_id
-                    && review.target_artifact_id == artifact.summary.artifact_id
-                    && review.target_version == artifact.summary.version - 1
-                    && review.result == ProductionReviewResult::RequiresRemediation
-            }) {
+            let review_based = artifact
+                .summary
+                .remediation_review_id
+                .as_deref()
+                .is_some_and(|remediation_review_id| {
+                    reviews.iter().any(|review| {
+                        review.review_id == remediation_review_id
+                            && review.target_artifact_id == artifact.summary.artifact_id
+                            && review.target_version == artifact.summary.version - 1
+                            && review.result == ProductionReviewResult::RequiresRemediation
+                    })
+                });
+            let query_based: bool = connection
+                .query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM agent_runs AS runs
+                       JOIN tender_tasks AS tasks ON tasks.task_id = runs.task_id
+                       JOIN json_each(tasks.exact_inputs_json) AS input
+                       WHERE runs.run_id = ?1
+                         AND json_extract(input.value, '$.kind') IN (
+                           'approved_query_treatment', 'tender_query_version'
+                         )
+                     )",
+                    [&artifact.summary.author_run_id],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            if artifact.summary.remediation_review_id.is_some() {
+                if !review_based {
+                    return Ok(false);
+                }
+            } else if !query_based {
                 return Ok(false);
             }
         }
@@ -2844,12 +3332,12 @@ fn production_task_records_are_valid(
             || review.scope != expected_scope
             || review.criteria != expected_criteria
             || review.inputs != run_task.exact_inputs
-            || run_task.exact_inputs
-                != vec![AgentTaskInputReference {
-                    kind: "production_artifact_version".into(),
-                    reference: review.target_artifact_id.clone(),
-                    version: review.target_version,
-                }]
+            || !production_review_inputs_are_valid(
+                connection,
+                definition,
+                review,
+                &run_task.exact_inputs,
+            )?
             || review.result != result_candidate.result
             || review.resolved_finding_ids != result_candidate.resolved_finding_ids
             || resolved.len() != review.resolved_finding_ids.len()
@@ -2933,6 +3421,57 @@ fn production_task_records_are_valid(
         .iter()
         .flat_map(|review| &review.findings)
         .any(|finding| finding.severity.blocks_integration() && finding.disposition.is_none());
+    let expected_approval_gates = vec![
+        "bid_decision_accepted".to_owned(),
+        "work_plan_approved".to_owned(),
+        "production_activation_active".to_owned(),
+        "dependencies_ready_for_integration".to_owned(),
+        "approved_query_treatments_applied".to_owned(),
+    ];
+    for stored in &all_readiness {
+        check()?;
+        let Some(artifact) = artifacts.iter().find(|artifact| {
+            artifact.summary.artifact_id == stored.artifact_id
+                && artifact.summary.version == stored.artifact_version
+        }) else {
+            return Ok(false);
+        };
+        let review_gate_satisfied = if definition.review_profile_id.is_none() {
+            stored.review_id.is_none()
+        } else {
+            stored.review_id.as_ref().is_some_and(|readiness_review_id| {
+                reviews.iter().any(|review| {
+                    &review.review_id == readiness_review_id
+                        && review.target_artifact_id == stored.artifact_id
+                        && review.target_version == stored.artifact_version
+                        && (review.result == ProductionReviewResult::Satisfied
+                            || (review.result == ProductionReviewResult::RequiresRemediation
+                                && review.findings.iter().all(|finding| {
+                                    !finding.severity.blocks_integration()
+                                        || finding.disposition.as_ref().is_some_and(|disposition| {
+                                            disposition.kind
+                                                == ProductionFindingDispositionKind::ExceptionApproved
+                                        })
+                                })))
+                })
+            })
+        };
+        if stored.payload_sha256 != artifact.summary.payload_sha256
+            || !stored.output_validation_passed
+            || !stored.evidence_verified
+            || !stored.dependencies_satisfied
+            || stored.approval_gates != expected_approval_gates
+            || stored.finding_dispositions_sha256
+                != production_finding_dispositions_sha256_at(
+                    connection,
+                    production_task_id,
+                    stored.artifact_version,
+                )?
+            || !review_gate_satisfied
+        {
+            return Ok(false);
+        }
+    }
     let latest_artifact = artifacts.last();
     let latest_review = reviews.last();
     let readiness_expected = state == ProductionTaskState::ReadyForIntegration;
@@ -2967,15 +3506,13 @@ fn production_task_records_are_valid(
             || !readiness.output_validation_passed
             || !readiness.evidence_verified
             || !readiness.dependencies_satisfied
-            || readiness.approval_gates
-                != vec![
-                    "bid_decision_accepted".to_owned(),
-                    "work_plan_approved".to_owned(),
-                    "production_activation_active".to_owned(),
-                    "dependencies_ready_for_integration".to_owned(),
-                ]
+            || readiness.approval_gates != expected_approval_gates
             || readiness.finding_dispositions_sha256
-                != production_finding_dispositions_sha256(connection, production_task_id)?
+                != production_finding_dispositions_sha256_at(
+                    connection,
+                    production_task_id,
+                    readiness.artifact_version,
+                )?
             || !review_gate_satisfied
         {
             return Ok(false);
@@ -2989,17 +3526,29 @@ fn production_task_records_are_valid(
                         && review.target_version == artifact.summary.version
                 })
             })),
-        ProductionTaskState::RemediationReady => Ok(latest_review.is_some_and(|review| {
-            review.result == ProductionReviewResult::RequiresRemediation && blockers_open
-        })),
+        ProductionTaskState::RemediationReady => {
+            let review_remediation = latest_review.is_some_and(|review| {
+                review.result == ProductionReviewResult::RequiresRemediation && blockers_open
+            });
+            let query_remediation = latest_artifact.is_some()
+                && (task_has_current_query_artifact_invalidation(connection, production_task_id)?
+                    || !production_artifact_applies_current_query_treatments(
+                        connection,
+                        &definition.task_key,
+                        &latest_artifact.expect("checked").summary.artifact_id,
+                        latest_artifact.expect("checked").summary.version,
+                    )?);
+            Ok(review_remediation || query_remediation)
+        }
         ProductionTaskState::ReadyForIntegration => Ok(true),
         _ => Ok(readiness.is_none()),
     }
 }
 
-fn production_finding_dispositions_sha256(
+fn production_finding_dispositions_sha256_at(
     connection: &rusqlite::Connection,
     production_task_id: &str,
+    through_artifact_version: u32,
 ) -> Result<String, TenderCommandError> {
     let mut statement = connection
         .prepare(
@@ -3015,28 +3564,32 @@ fn production_finding_dispositions_sha256(
              LEFT JOIN production_finding_dispositions AS dispositions
                ON dispositions.finding_id = findings.finding_id
              WHERE reviews.production_task_id = ?1
+               AND reviews.target_version <= ?2
              ORDER BY reviews.rowid, findings.finding_sequence",
         )
         .map_err(sql_error)?;
     let observations = statement
-        .query_map([production_task_id], |row| {
-            Ok(json!({
-                "finding_id": row.get::<_, String>(0)?,
-                "review_id": row.get::<_, String>(1)?,
-                "severity": row.get::<_, String>(2)?,
-                "disposition_id": row.get::<_, Option<String>>(3)?,
-                "audit_sequence": row.get::<_, Option<i64>>(4)?,
-                "disposition": row.get::<_, Option<String>>(5)?,
-                "target_artifact_id": row.get::<_, Option<String>>(6)?,
-                "target_version": row.get::<_, Option<u32>>(7)?,
-                "verifying_review_id": row.get::<_, Option<String>>(8)?,
-                "decided_by": row.get::<_, Option<String>>(9)?,
-                "acting_role": row.get::<_, Option<String>>(10)?,
-                "rationale": row.get::<_, Option<String>>(11)?,
-                "consequence": row.get::<_, Option<String>>(12)?,
-                "created_at": row.get::<_, Option<String>>(13)?,
-            }))
-        })
+        .query_map(
+            params![production_task_id, through_artifact_version],
+            |row| {
+                Ok(json!({
+                    "finding_id": row.get::<_, String>(0)?,
+                    "review_id": row.get::<_, String>(1)?,
+                    "severity": row.get::<_, String>(2)?,
+                    "disposition_id": row.get::<_, Option<String>>(3)?,
+                    "audit_sequence": row.get::<_, Option<i64>>(4)?,
+                    "disposition": row.get::<_, Option<String>>(5)?,
+                    "target_artifact_id": row.get::<_, Option<String>>(6)?,
+                    "target_version": row.get::<_, Option<u32>>(7)?,
+                    "verifying_review_id": row.get::<_, Option<String>>(8)?,
+                    "decided_by": row.get::<_, Option<String>>(9)?,
+                    "acting_role": row.get::<_, Option<String>>(10)?,
+                    "rationale": row.get::<_, Option<String>>(11)?,
+                    "consequence": row.get::<_, Option<String>>(12)?,
+                    "created_at": row.get::<_, Option<String>>(13)?,
+                }))
+            },
+        )
         .map_err(sql_error)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(sql_error)?;
@@ -3184,6 +3737,12 @@ pub(super) fn production_completion_payload_is_valid(
             .is_some_and(|candidate| {
                 validate_artifact_candidate(connection, task_id, &candidate, &attempt_kind).is_ok()
             })
+    } else if attempt_kind == "query_control" {
+        parse_canonical_json::<ProductionQueryControlCandidate>(payload_json)
+            .ok()
+            .is_some_and(|candidate| {
+                validate_query_control_candidate(connection, task_id, &candidate).is_ok()
+            })
     } else if attempt_kind == "review" {
         let artifact =
             load_exact_production_review_target(connection, &production_task_id, task_id)?;
@@ -3318,6 +3877,29 @@ pub(super) fn finish_production_task(
         && definition.review_profile_version.is_none();
     let mut review_id = None;
     let next_state = match run_state {
+        AgentRunState::Completed if attempt_kind == "query_control" => {
+            let payload_json = payload_json
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            let candidate: ProductionQueryControlCandidate = parse_canonical_json(payload_json)?;
+            validate_query_control_candidate(transaction, task_id, &candidate)?;
+            publish_agent_query_proposals(
+                transaction,
+                AgentQueryPublication {
+                    tender_id,
+                    run_id,
+                    task_id,
+                    current_task_key: &task_key,
+                    proposals: &[],
+                    updates: &candidate.query_updates,
+                    query_control: true,
+                    created_at: completed_at,
+                },
+            )?;
+            if !task_has_blocking_query(transaction, &task_key)? {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            ProductionTaskState::QueryBlocked
+        }
         AgentRunState::Completed if matches!(attempt_kind.as_str(), "author" | "remediation") => {
             let payload_json = payload_json
                 .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
@@ -3345,18 +3927,17 @@ pub(super) fn finish_production_task(
                 .map(|prior| prior.0.clone())
                 .unwrap_or_else(|| production_task_id.clone());
             let remediation_review_id = if attempt_kind == "remediation" {
-                Some(
-                    transaction
-                        .query_row(
-                            "SELECT review_id FROM production_reviews
-                             WHERE production_task_id = ?1
-                               AND result = 'requires_remediation'
-                             ORDER BY rowid DESC LIMIT 1",
-                            [&production_task_id],
-                            |row| row.get::<_, String>(0),
-                        )
-                        .map_err(sql_error)?,
-                )
+                transaction
+                    .query_row(
+                        "SELECT review_id FROM production_reviews
+                         WHERE production_task_id = ?1
+                           AND result = 'requires_remediation'
+                         ORDER BY rowid DESC LIMIT 1",
+                        [&production_task_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                    .map_err(sql_error)?
             } else {
                 None
             };
@@ -3383,7 +3964,29 @@ pub(super) fn finish_production_task(
                     ],
                 )
                 .map_err(sql_error)?;
-            if self_validating_review {
+            publish_agent_query_proposals(
+                transaction,
+                AgentQueryPublication {
+                    tender_id,
+                    run_id,
+                    task_id,
+                    current_task_key: &task_key,
+                    proposals: &candidate.query_proposals,
+                    updates: &candidate.query_updates,
+                    query_control: false,
+                    created_at: completed_at,
+                },
+            )?;
+            if task_has_blocking_query(transaction, &task_key)? {
+                ProductionTaskState::QueryBlocked
+            } else if !production_artifact_applies_current_query_treatments(
+                transaction,
+                &task_key,
+                &artifact_id,
+                version,
+            )? {
+                ProductionTaskState::RemediationReady
+            } else if self_validating_review {
                 insert_production_integration_readiness(
                     transaction,
                     &production_task_id,
@@ -3497,16 +4100,27 @@ pub(super) fn finish_production_task(
                 )?;
             }
             if candidate.result == ProductionReviewResult::Satisfied {
-                insert_production_integration_readiness(
+                if task_has_blocking_query(transaction, &task_key)? {
+                    ProductionTaskState::QueryBlocked
+                } else if !production_artifact_applies_current_query_treatments(
                     transaction,
-                    &production_task_id,
+                    &task_key,
                     &artifact.0,
                     artifact.1,
-                    &artifact.2,
-                    Some(&id),
-                    completed_at,
-                )?;
-                ProductionTaskState::ReadyForIntegration
+                )? {
+                    ProductionTaskState::RemediationReady
+                } else {
+                    insert_production_integration_readiness(
+                        transaction,
+                        &production_task_id,
+                        &artifact.0,
+                        artifact.1,
+                        &artifact.2,
+                        Some(&id),
+                        completed_at,
+                    )?;
+                    ProductionTaskState::ReadyForIntegration
+                }
             } else {
                 ProductionTaskState::RemediationReady
             }
@@ -3516,6 +4130,16 @@ pub(super) fn finish_production_task(
         }
         AgentRunState::Interrupted => ProductionTaskState::Cancelled,
         AgentRunState::Indeterminate => ProductionTaskState::Indeterminate,
+        AgentRunState::Failed if attempt_kind == "query_control" => {
+            if task_has_blocking_query(transaction, &task_key)? {
+                ProductionTaskState::QueryBlocked
+            } else {
+                ProductionTaskState::parse(production_task_state_after_query_release(
+                    transaction,
+                    &production_task_id,
+                )?)?
+            }
+        }
         AgentRunState::Failed => ProductionTaskState::Failed,
         AgentRunState::Running => {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
@@ -3579,7 +4203,7 @@ fn validate_artifact_candidate(
         || candidate.summary.len() > 4_000
         || candidate.evidence_references.is_empty()
         || candidate.evidence_references.len() > MAX_PRODUCTION_EVIDENCE_REFERENCES
-        || candidate.gaps.len() > 64
+        || !candidate.gaps.is_empty()
     {
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
@@ -3597,10 +4221,84 @@ fn validate_artifact_candidate(
         || evidence
             .iter()
             .any(|reference| !allowed.contains(*reference))
+        || !agent_query_publication_is_valid(
+            transaction,
+            task_id,
+            &candidate.query_proposals,
+            &candidate.query_updates,
+            false,
+        )?
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let expected_treatments =
+        approved_query_treatments_for_inputs(transaction, &task.exact_inputs)?;
+    let applications = candidate
+        .query_treatment_applications
+        .iter()
+        .map(|application| application.decision_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected_decision_ids = expected_treatments
+        .iter()
+        .map(|decision| decision.decision_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if applications.len() != candidate.query_treatment_applications.len()
+        || applications != expected_decision_ids
         || candidate
-            .gaps
+            .query_treatment_applications
             .iter()
-            .any(|gap| gap.trim().is_empty() || gap.len() > 4_000)
+            .any(|application| {
+                let expected = expected_treatments
+                    .iter()
+                    .find(|decision| decision.decision_id == application.decision_id);
+                let exact_reference = format!(
+                    "approved_query_treatment:{}:{}",
+                    application.decision_id, application.query_version
+                );
+                let exact_query_reference = format!(
+                    "tender_query_version:{}:{}",
+                    application.query_id, application.query_version
+                );
+                expected.is_none_or(|decision| {
+                    decision.query_id != application.query_id
+                        || decision.query_version != application.query_version
+                        || decision.treatment != application.treatment
+                        || application.application.trim().is_empty()
+                        || application.application.len() > 4_000
+                        || application.evidence_references.is_empty()
+                        || application.evidence_references.len()
+                            > MAX_PRODUCTION_EVIDENCE_REFERENCES
+                        || !application.evidence_references.contains(&exact_reference)
+                        || !application
+                            .evidence_references
+                            .contains(&exact_query_reference)
+                        || application
+                            .evidence_references
+                            .iter()
+                            .any(|reference| !allowed.contains(reference))
+                })
+            })
+        || candidate.query_proposals.len() > 16
+        || candidate.query_updates.len() > 16
+        || candidate.query_proposals.iter().any(|proposal| {
+            proposal.evidence.is_empty()
+                || proposal
+                    .evidence
+                    .iter()
+                    .any(|reference| !task.exact_inputs.contains(reference))
+        })
+        || candidate.query_updates.iter().any(|update| {
+            update.query_id.len() != 32
+                || update.base_version == 0
+                || update
+                    .added_evidence
+                    .iter()
+                    .any(|reference| !task.exact_inputs.contains(reference))
+                || update
+                    .response_evidence
+                    .iter()
+                    .any(|reference| !task.exact_inputs.contains(reference))
+        })
     {
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
@@ -3634,7 +4332,15 @@ fn validate_artifact_candidate(
         .iter()
         .map(|remediation| remediation.finding_id.clone())
         .collect::<std::collections::BTreeSet<_>>();
-    if (attempt_kind == "remediation" && (open_findings.is_empty() || remediated != open_findings))
+    let has_query_remediation_input = task
+        .exact_inputs
+        .iter()
+        .any(|input| input.kind == "tender_query_version");
+    if (attempt_kind == "remediation"
+        && ((open_findings.is_empty()
+            && expected_treatments.is_empty()
+            && !has_query_remediation_input)
+            || remediated != open_findings))
         || (attempt_kind != "remediation" && !candidate.remediations.is_empty())
         || candidate.remediations.len() != remediated.len()
         || candidate.remediations.iter().any(|remediation| {
@@ -3646,6 +4352,45 @@ fn validate_artifact_candidate(
                     .evidence_references
                     .iter()
                     .any(|reference| !allowed.contains(reference))
+        })
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(())
+}
+
+fn validate_query_control_candidate(
+    connection: &rusqlite::Connection,
+    task_id: &str,
+    candidate: &ProductionQueryControlCandidate,
+) -> Result<(), TenderCommandError> {
+    let task = load_task(connection, task_id)?;
+    let query_inputs = task
+        .exact_inputs
+        .iter()
+        .filter(|input| input.kind == "tender_query_version")
+        .collect::<Vec<_>>();
+    if query_inputs.len() != 1
+        || !agent_query_publication_is_valid(
+            connection,
+            task_id,
+            &[],
+            &candidate.query_updates,
+            true,
+        )?
+        || candidate.query_updates.is_empty()
+        || candidate.query_updates.len() > 16
+        || candidate.query_updates.iter().any(|update| {
+            update.query_id != query_inputs[0].reference
+                || update.base_version != query_inputs[0].version
+                || (update.added_evidence.is_empty()
+                    && update.proposed_treatments.is_empty()
+                    && update.response.is_none())
+                || update
+                    .added_evidence
+                    .iter()
+                    .chain(update.response_evidence.iter())
+                    .any(|reference| !task.exact_inputs.contains(reference))
         })
     {
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
@@ -3699,12 +4444,29 @@ fn validate_review_candidate(
         .map_err(sql_error)?;
     let unresolved_prior_count = open.difference(&resolved).count();
     let unresolved_prior = unresolved_prior_count > 0;
+    let query_remediation: bool = transaction
+        .query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM production_artifact_versions AS artifacts
+               JOIN agent_runs AS runs ON runs.run_id = artifacts.author_run_id
+               JOIN tender_tasks AS tasks ON tasks.task_id = runs.task_id
+               JOIN json_each(tasks.exact_inputs_json) AS input
+               WHERE artifacts.production_task_id = ?1 AND artifacts.version = ?2
+                 AND json_extract(input.value, '$.kind') = 'tender_query_version'
+             )",
+            params![production_task_id, target_version],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
     if candidate.resolved_finding_ids.len() > MAX_PRODUCTION_FINDINGS
         || candidate.resolved_finding_ids.len() != resolved.len()
         || !resolved.is_subset(&open)
         || unresolved_prior_count.saturating_add(new_blocking_count) > MAX_PRODUCTION_FINDINGS
         || (target_version == 1 && !resolved.is_empty())
-        || (target_version > 1 && open.is_empty())
+        || (target_version > 1
+            && open.is_empty()
+            && artifact.query_treatment_applications.is_empty()
+            && !query_remediation)
         || (candidate.result == ProductionReviewResult::Satisfied
             && (has_blocking || unresolved_prior))
         || (candidate.result == ProductionReviewResult::RequiresRemediation
@@ -3732,10 +4494,14 @@ fn load_exact_production_review_target(
     task_id: &str,
 ) -> Result<Option<StoredProductionReviewTarget>, TenderCommandError> {
     let task = load_task(connection, task_id)?;
-    let [input] = task.exact_inputs.as_slice() else {
+    let mut artifact_inputs = task
+        .exact_inputs
+        .iter()
+        .filter(|input| input.kind == "production_artifact_version");
+    let Some(input) = artifact_inputs.next() else {
         return Ok(None);
     };
-    if input.kind != "production_artifact_version" {
+    if artifact_inputs.next().is_some() {
         return Ok(None);
     }
     connection
@@ -3764,6 +4530,100 @@ fn load_exact_production_review_target(
 
 fn production_evidence_reference(input: &AgentTaskInputReference) -> String {
     format!("{}:{}:{}", input.kind, input.reference, input.version)
+}
+
+fn production_review_inputs_are_valid(
+    connection: &rusqlite::Connection,
+    definition: &WorkPlanTask,
+    review: &ProductionReview,
+    inputs: &[AgentTaskInputReference],
+) -> Result<bool, TenderCommandError> {
+    let unique = inputs
+        .iter()
+        .map(|input| (&input.kind, &input.reference, input.version))
+        .collect::<std::collections::HashSet<_>>();
+    if unique.len() != inputs.len()
+        || inputs
+            .iter()
+            .filter(|input| input.kind == "production_artifact_version")
+            .count()
+            != 1
+        || !inputs.iter().any(|input| {
+            input.kind == "production_artifact_version"
+                && input.reference == review.target_artifact_id
+                && input.version == review.target_version
+        })
+        || inputs.iter().any(|input| {
+            !matches!(
+                input.kind.as_str(),
+                "production_artifact_version" | "tender_query_version" | "approved_query_treatment"
+            )
+        })
+    {
+        return Ok(false);
+    }
+    for query_input in inputs
+        .iter()
+        .filter(|input| input.kind == "tender_query_version")
+    {
+        let attributable: bool = connection
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM tender_query_versions AS versions
+                   JOIN json_each(versions.affected_task_keys_json) AS affected
+                   WHERE versions.query_id = ?1 AND versions.version = ?2
+                     AND (affected.value = ?3 OR affected.value = '*')
+                   UNION ALL
+                   SELECT 1 FROM tender_query_target_invalidations AS invalidations
+                   WHERE invalidations.query_id = ?1 AND invalidations.query_version = ?2
+                     AND invalidations.target_kind = 'artifact'
+                     AND invalidations.target_id = ?4 AND invalidations.target_version = ?5
+                   UNION ALL
+                   SELECT 1 FROM tender_query_target_invalidations AS invalidations
+                   JOIN production_artifact_versions AS artifacts
+                     ON artifacts.production_task_id = invalidations.target_id
+                   WHERE invalidations.query_id = ?1 AND invalidations.query_version = ?2
+                     AND invalidations.target_kind = 'production_task'
+                     AND artifacts.artifact_id = ?4 AND artifacts.version = ?5
+                  )",
+                params![
+                    query_input.reference,
+                    query_input.version,
+                    definition.task_key,
+                    review.target_artifact_id,
+                    review.target_version,
+                ],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if !attributable {
+            return Ok(false);
+        }
+    }
+    for decision_input in inputs
+        .iter()
+        .filter(|input| input.kind == "approved_query_treatment")
+    {
+        let query: Option<String> = connection
+            .query_row(
+                "SELECT query_id FROM tender_query_treatment_decisions
+                 WHERE decision_id = ?1 AND query_version = ?2",
+                params![decision_input.reference, decision_input.version],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        if query.is_none_or(|query_id| {
+            !inputs.iter().any(|input| {
+                input.kind == "tender_query_version"
+                    && input.reference == query_id
+                    && input.version == decision_input.version
+            })
+        }) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn production_review_scope(definition: &WorkPlanTask) -> Result<Vec<String>, TenderCommandError> {
@@ -3916,6 +4776,23 @@ fn insert_production_integration_readiness(
     review_id: Option<&str>,
     created_at: &str,
 ) -> Result<(), TenderCommandError> {
+    let task_key: String = transaction
+        .query_row(
+            "SELECT task_key FROM production_tasks WHERE production_task_id = ?1",
+            [production_task_id],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if task_has_blocking_query(transaction, &task_key)?
+        || !production_artifact_applies_current_query_treatments(
+            transaction,
+            &task_key,
+            artifact_id,
+            artifact_version,
+        )?
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
     let gates_hold: bool = transaction
         .query_row(
             "SELECT EXISTS(
@@ -3983,13 +4860,17 @@ fn insert_production_integration_readiness(
     if !gates_hold || !dependencies_satisfied || blocking_open {
         return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
     }
-    let disposition_sha256 =
-        production_finding_dispositions_sha256(transaction, production_task_id)?;
+    let disposition_sha256 = production_finding_dispositions_sha256_at(
+        transaction,
+        production_task_id,
+        artifact_version,
+    )?;
     let approval_gates = vec![
         "bid_decision_accepted".to_owned(),
         "work_plan_approved".to_owned(),
         "production_activation_active".to_owned(),
         "dependencies_ready_for_integration".to_owned(),
+        "approved_query_treatments_applied".to_owned(),
     ];
     transaction
         .execute(
@@ -4013,6 +4894,55 @@ fn insert_production_integration_readiness(
         )
         .map_err(sql_error)?;
     Ok(())
+}
+
+fn production_artifact_applies_current_query_treatments(
+    connection: &rusqlite::Connection,
+    task_key: &str,
+    artifact_id: &str,
+    artifact_version: u32,
+) -> Result<bool, TenderCommandError> {
+    let (payload_json, author_run_id, author_task_id): (String, String, String) = connection
+        .query_row(
+            "SELECT artifacts.payload_json, artifacts.author_run_id, runs.task_id
+             FROM production_artifact_versions AS artifacts
+             JOIN agent_runs AS runs ON runs.run_id = artifacts.author_run_id
+             WHERE artifacts.artifact_id = ?1 AND artifacts.version = ?2",
+            params![artifact_id, artifact_version],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(sql_error)?;
+    let payload: ProductionArtifactPayload = parse_canonical_json(&payload_json)?;
+    let author_inputs = load_task(connection, &author_task_id)?.exact_inputs;
+    let query_contexts = production_query_contexts_for_task(connection, task_key)?;
+    if query_contexts.iter().any(|context| {
+        context.source_run_id.as_deref() != Some(author_run_id.as_str())
+            && !author_inputs.iter().any(|input| {
+                input.kind == "tender_query_version"
+                    && input.reference == context.query_id
+                    && input.version == context.query_version
+            })
+    }) {
+        return Ok(false);
+    }
+    let expected = approved_query_treatments_for_inputs(connection, &author_inputs)?
+        .into_iter()
+        .filter(|decision| decision.treatment.permits_dependent_work())
+        .collect::<Vec<_>>();
+    if payload.query_treatment_applications.len() != expected.len() {
+        return Ok(false);
+    }
+    Ok(expected.iter().all(|decision| {
+        payload
+            .query_treatment_applications
+            .iter()
+            .any(|application| {
+                application.decision_id == decision.decision_id
+                    && application.query_id == decision.query_id
+                    && application.query_version == decision.query_version
+                    && application.treatment == decision.treatment
+            })
+    }))
 }
 
 fn refresh_ready_frontier(
@@ -4053,6 +4983,16 @@ fn refresh_ready_frontier(
             }
         }
         if ready {
+            if task_has_blocking_query(transaction, &task.task_key)? {
+                transaction
+                    .execute(
+                        "UPDATE production_tasks SET status = 'query_blocked', updated_at = ?2
+                         WHERE production_task_id = ?1 AND status = 'blocked'",
+                        params![production_task_id, updated_at],
+                    )
+                    .map_err(sql_error)?;
+                continue;
+            }
             transaction
                 .execute(
                     "UPDATE production_tasks SET status = 'ready', updated_at = ?2
@@ -4191,6 +5131,22 @@ fn production_review_output_contract() -> Result<String, TenderCommandError> {
     }))
 }
 
+fn production_query_control_output_contract() -> Result<String, TenderCommandError> {
+    canonical_json(&json!({
+        "additionalProperties": false,
+        "properties": {
+            "query_updates": {
+                "items": { "type": "object" },
+                "maxItems": 16,
+                "minItems": 1,
+                "type": "array"
+            }
+        },
+        "required": ["query_updates"],
+        "type": "object"
+    }))
+}
+
 fn production_remediation_output_contract() -> Result<String, TenderCommandError> {
     canonical_json(&json!({
         "additionalProperties": false,
@@ -4203,7 +5159,22 @@ fn production_remediation_output_contract() -> Result<String, TenderCommandError
             },
             "gaps": {
                 "items": { "maxLength": 4000, "minLength": 1, "type": "string" },
+                "maxItems": 0,
+                "type": "array"
+            },
+            "query_proposals": {
+                "items": { "type": "object" },
+                "maxItems": 16,
+                "type": "array"
+            },
+            "query_treatment_applications": {
+                "items": { "type": "object" },
                 "maxItems": 64,
+                "type": "array"
+            },
+            "query_updates": {
+                "items": { "type": "object" },
+                "maxItems": 16,
                 "type": "array"
             },
             "remediations": {
@@ -4223,12 +5194,11 @@ fn production_remediation_output_contract() -> Result<String, TenderCommandError
                     "type": "object"
                 },
                 "maxItems": MAX_PRODUCTION_FINDINGS,
-                "minItems": 1,
                 "type": "array"
             },
             "summary": { "maxLength": 4000, "minLength": 1, "type": "string" }
         },
-        "required": ["summary", "evidence_references", "gaps", "remediations"],
+        "required": ["summary", "evidence_references", "gaps"],
         "type": "object"
     }))
 }

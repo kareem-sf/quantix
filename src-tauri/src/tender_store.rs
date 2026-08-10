@@ -36,6 +36,7 @@ pub(crate) mod backups;
 mod bid_decisions;
 mod production_scheduler;
 mod team_composer;
+mod tender_queries;
 mod tender_records;
 
 pub use backups::{
@@ -65,15 +66,23 @@ pub use production_scheduler::{
     InspectProductionTaskReviewCommand, ProductionArtifactPayload, ProductionArtifactVersion,
     ProductionArtifactVersionSummary, ProductionFindingDisposition,
     ProductionFindingDispositionKind, ProductionFindingSeverity, ProductionIntegrationReadiness,
-    ProductionRemediation, ProductionReview, ProductionReviewFinding, ProductionReviewResult,
-    ProductionTaskInspection, ProductionTaskReviewInspection, ProductionTaskRunResult,
-    ProductionTaskState, RunProductionTaskCommand, TenderProductionInspection,
+    ProductionQueryTreatmentApplication, ProductionRemediation, ProductionReview,
+    ProductionReviewFinding, ProductionReviewResult, ProductionTaskInspection,
+    ProductionTaskReviewInspection, ProductionTaskRunResult, ProductionTaskState,
+    RunProductionTaskCommand, TenderProductionInspection,
 };
 pub use team_composer::{
     ComposeTenderOfficeCommand, DecideWorkPlanProposalCommand, MajorFindingPolicy,
     ReviseWorkPlanProposalCommand, WorkPlanApprovalRecord, WorkPlanCapabilityGap, WorkPlanDecision,
     WorkPlanProfileBinding, WorkPlanProposalInspection, WorkPlanRevisionAction, WorkPlanTask,
     WorkPlanWorkstream,
+};
+pub use tender_queries::{
+    AgentTenderQueryProposal, AgentTenderQueryUpdate, ApprovedQueryTreatment,
+    CreateTenderQueryCommand, DecideTenderQueryTreatmentCommand, InspectTenderQueriesCommand,
+    ReviseTenderQueryCommand, TenderQuery, TenderQueryInvalidation, TenderQueryPage,
+    TenderQueryResponse, TenderQueryStatus, TenderQueryTreatment, TenderQueryTreatmentProposal,
+    TenderQueryTreatmentProposalInput, TenderQueryType,
 };
 pub use tender_records::{
     CreateTenderEngineerEntryCommand, DecideTenderRecordCommand, InspectTenderRecordsCommand,
@@ -92,7 +101,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 15;
+const TENDER_SCHEMA_VERSION: i64 = 16;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -149,6 +158,90 @@ CREATE TABLE query_register (
   opened_by_intake_id TEXT NOT NULL,
   opened_at TEXT NOT NULL,
   FOREIGN KEY (opened_by_intake_id) REFERENCES intake_runs(intake_id)
+);
+CREATE TABLE tender_queries (
+  query_id TEXT PRIMARY KEY CHECK (length(query_id) = 32),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE tender_query_versions (
+  query_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 32),
+  query_type TEXT NOT NULL CHECK (query_type IN (
+    'missing_information', 'ambiguity', 'contradiction', 'responsibility_sensitive'
+  )),
+  question TEXT NOT NULL CHECK (length(CAST(question AS BLOB)) BETWEEN 1 AND 4000),
+  ambiguity_or_gap TEXT NOT NULL CHECK (
+    length(CAST(ambiguity_or_gap AS BLOB)) BETWEEN 1 AND 4000
+  ),
+  owner_profile_id TEXT NOT NULL CHECK (length(owner_profile_id) = 32),
+  owner_profile_version INTEGER NOT NULL CHECK (owner_profile_version > 0),
+  evidence_json TEXT NOT NULL CHECK (json_valid(evidence_json)),
+  affected_records_json TEXT NOT NULL CHECK (json_valid(affected_records_json)),
+  affected_task_keys_json TEXT NOT NULL CHECK (json_valid(affected_task_keys_json)),
+  invalidation_targets_json TEXT NOT NULL CHECK (json_valid(invalidation_targets_json)),
+  due_at TEXT NOT NULL,
+  material INTEGER NOT NULL CHECK (material IN (0, 1)),
+  release_blocking INTEGER NOT NULL CHECK (release_blocking IN (0, 1)),
+  proposed_treatments_json TEXT NOT NULL CHECK (json_valid(proposed_treatments_json)),
+  responses_json TEXT NOT NULL CHECK (json_valid(responses_json)),
+  source_run_id TEXT,
+  created_by TEXT NOT NULL CHECK (created_by IN ('engineer_user', 'agent_run')),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (query_id, version),
+  FOREIGN KEY (query_id) REFERENCES tender_queries(query_id),
+  FOREIGN KEY (owner_profile_id, owner_profile_version)
+    REFERENCES agent_profile_versions(profile_id, version),
+  FOREIGN KEY (source_run_id) REFERENCES agent_runs(run_id)
+);
+CREATE TABLE tender_query_heads (
+  query_id TEXT PRIMARY KEY,
+  current_version INTEGER NOT NULL CHECK (current_version BETWEEN 1 AND 32),
+  FOREIGN KEY (query_id, current_version)
+    REFERENCES tender_query_versions(query_id, version)
+);
+CREATE TABLE tender_query_treatment_decisions (
+  decision_id TEXT PRIMARY KEY CHECK (length(decision_id) = 32),
+  query_id TEXT NOT NULL,
+  query_version INTEGER NOT NULL CHECK (query_version BETWEEN 1 AND 32),
+  treatment TEXT NOT NULL CHECK (treatment IN (
+    'internal_resolution', 'external_rfi_drafting', 'approved_assumption',
+    'qualification', 'exclusion', 'allowance', 'blocked'
+  )),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  treatment_details TEXT NOT NULL CHECK (
+    length(CAST(treatment_details AS BLOB)) BETWEEN 1 AND 4000
+  ),
+  closes_query INTEGER NOT NULL CHECK (closes_query IN (0, 1)),
+  decided_by TEXT NOT NULL CHECK (decided_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  invalidation_targets_json TEXT NOT NULL CHECK (json_valid(invalidation_targets_json)),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (query_id, query_version),
+  FOREIGN KEY (query_id, query_version)
+    REFERENCES tender_query_versions(query_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE tender_query_target_invalidations (
+  invalidation_id TEXT PRIMARY KEY CHECK (length(invalidation_id) = 32),
+  query_id TEXT NOT NULL,
+  query_version INTEGER NOT NULL CHECK (query_version BETWEEN 1 AND 32),
+  target_kind TEXT NOT NULL CHECK (target_kind IN (
+    'production_task', 'artifact', 'calculation', 'review', 'approval'
+  )),
+  target_id TEXT NOT NULL CHECK (length(CAST(target_id AS BLOB)) BETWEEN 1 AND 200),
+  target_version INTEGER NOT NULL CHECK (target_version >= 0),
+  reason TEXT NOT NULL CHECK (reason IN (
+    'query_opened', 'evidence_changed', 'response_added', 'treatment_changed'
+  )),
+  created_at TEXT NOT NULL,
+  UNIQUE (query_id, query_version, target_kind, target_id, target_version),
+  FOREIGN KEY (query_id, query_version)
+    REFERENCES tender_query_versions(query_id, version)
 );
 CREATE TABLE source_artifacts (
   artifact_id TEXT PRIMARY KEY CHECK (length(artifact_id) = 32),
@@ -744,8 +837,8 @@ CREATE TABLE production_tasks (
   task_id TEXT UNIQUE,
   status TEXT NOT NULL CHECK (status IN (
     'blocked', 'ready', 'running', 'review_ready', 'reviewing', 'remediation_ready',
-    'ready_for_integration', 'attempt_limit_reached', 'failed', 'cancelled',
-    'indeterminate', 'suspended'
+    'query_blocked', 'ready_for_integration', 'attempt_limit_reached', 'failed',
+    'cancelled', 'indeterminate', 'suspended'
   )),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -756,7 +849,9 @@ CREATE TABLE production_tasks (
 CREATE TABLE production_task_attempts (
   production_task_id TEXT NOT NULL,
   attempt_number INTEGER NOT NULL CHECK (attempt_number BETWEEN 1 AND 8),
-  attempt_kind TEXT NOT NULL CHECK (attempt_kind IN ('author', 'review', 'remediation')),
+  attempt_kind TEXT NOT NULL CHECK (
+    attempt_kind IN ('author', 'review', 'remediation', 'query_control')
+  ),
   task_id TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL,
   PRIMARY KEY (production_task_id, attempt_number),
@@ -841,7 +936,7 @@ CREATE TABLE production_finding_dispositions (
 );
 CREATE TABLE production_integration_readiness (
   readiness_id TEXT PRIMARY KEY CHECK (length(readiness_id) = 32),
-  production_task_id TEXT NOT NULL UNIQUE,
+  production_task_id TEXT NOT NULL,
   artifact_id TEXT NOT NULL CHECK (length(artifact_id) = 32),
   artifact_version INTEGER NOT NULL CHECK (artifact_version BETWEEN 1 AND 8),
   payload_sha256 TEXT NOT NULL CHECK (length(payload_sha256) = 64),
@@ -852,6 +947,7 @@ CREATE TABLE production_integration_readiness (
   approval_gates_json TEXT NOT NULL CHECK (json_valid(approval_gates_json)),
   finding_dispositions_sha256 TEXT NOT NULL CHECK (length(finding_dispositions_sha256) = 64),
   created_at TEXT NOT NULL,
+  UNIQUE (production_task_id, artifact_id, artifact_version),
   FOREIGN KEY (production_task_id) REFERENCES production_tasks(production_task_id),
   FOREIGN KEY (artifact_id, artifact_version)
     REFERENCES production_artifact_versions(artifact_id, version),
@@ -925,6 +1021,46 @@ CREATE TRIGGER query_register_no_delete
 BEFORE DELETE ON query_register
 BEGIN
   SELECT RAISE(ABORT, 'Query Register identity is immutable');
+END;
+CREATE TRIGGER tender_queries_no_update
+BEFORE UPDATE ON tender_queries
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Query identities are immutable');
+END;
+CREATE TRIGGER tender_queries_no_delete
+BEFORE DELETE ON tender_queries
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Query identities are immutable');
+END;
+CREATE TRIGGER tender_query_versions_no_update
+BEFORE UPDATE ON tender_query_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Query Versions are immutable');
+END;
+CREATE TRIGGER tender_query_versions_no_delete
+BEFORE DELETE ON tender_query_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Query Versions are immutable');
+END;
+CREATE TRIGGER tender_query_treatment_decisions_no_update
+BEFORE UPDATE ON tender_query_treatment_decisions
+BEGIN
+  SELECT RAISE(ABORT, 'Approved Query Treatments are immutable');
+END;
+CREATE TRIGGER tender_query_treatment_decisions_no_delete
+BEFORE DELETE ON tender_query_treatment_decisions
+BEGIN
+  SELECT RAISE(ABORT, 'Approved Query Treatments are immutable');
+END;
+CREATE TRIGGER tender_query_target_invalidations_no_update
+BEFORE UPDATE ON tender_query_target_invalidations
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Query invalidations are immutable');
+END;
+CREATE TRIGGER tender_query_target_invalidations_no_delete
+BEFORE DELETE ON tender_query_target_invalidations
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Query invalidations are immutable');
 END;
 CREATE TRIGGER source_artifacts_no_update
 BEFORE UPDATE ON source_artifacts
@@ -2215,6 +2351,9 @@ impl TenderStore {
             return Ok(false);
         }
         if !self.tender_record_manifests_are_valid_with_check(check)? {
+            return Ok(false);
+        }
+        if !self.tender_query_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
         if !self.bid_decision_manifests_are_valid_with_check(check)? {

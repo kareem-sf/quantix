@@ -2097,7 +2097,7 @@ impl TenderStore {
             .execute(
                 "UPDATE production_tasks SET status = 'suspended', updated_at = ?1
                  WHERE status IN (
-                   'blocked', 'ready', 'review_ready', 'remediation_ready',
+                   'blocked', 'ready', 'review_ready', 'remediation_ready', 'query_blocked',
                    'attempt_limit_reached', 'failed', 'cancelled'
                  )
                    AND activation_id IN (
