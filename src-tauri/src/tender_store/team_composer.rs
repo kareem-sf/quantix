@@ -1,4 +1,5 @@
 use garde::Validate;
+use jiff::Timestamp;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1835,14 +1836,23 @@ fn work_plan_deadlines(
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
         for field in record.fields {
-            let value = field.normalized_value.or(field.value);
-            if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
-                validate_text(&value, 200)?;
-                if deadlines.len() >= MAX_PLAN_QUERIES {
-                    return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
-                }
-                deadlines.push(value);
+            let Some(value) = field
+                .normalized_value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let value = value
+                .parse::<Timestamp>()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?
+                .to_string();
+            validate_text(&value, 200)?;
+            if deadlines.len() >= MAX_PLAN_QUERIES {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
             }
+            deadlines.push(value);
         }
     }
     deadlines.sort();
@@ -1865,9 +1875,9 @@ fn deadlines_from_plan(
     deadlines.dedup();
     if deadlines.is_empty()
         || deadlines.len() > MAX_PLAN_QUERIES
-        || deadlines
-            .iter()
-            .any(|deadline| validate_text(deadline, 200).is_err())
+        || deadlines.iter().any(|deadline| {
+            validate_text(deadline, 200).is_err() || deadline.parse::<Timestamp>().is_err()
+        })
         || plan
             .tasks
             .iter()
@@ -3413,6 +3423,51 @@ fn production_output_contract() -> String {
     canonical_json(&json!({
         "additionalProperties": false,
         "properties": {
+            "coordination_observations": {
+                "description": "Emit every subject in coordination_contract.required_subjects. For each entry in coordination_contract.assignment_contracts, emit every required key exactly once as key=value across one or more observations; copy Host source observations exactly unless the artifact must surface a contradiction.",
+                "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                        "subject": {
+                            "enum": ["submission_deadline", "responsible_party", "scope_qualification", "scope_exclusion", "expected_delivery_cost", "approved_tender_price", "commercial_appetite", "technical_commitment", "programme_commitment", "procurement_commitment", "contractual_commitment", "risk_commitment", "submission_commitment", "query_treatment"],
+                            "type": "string"
+                        },
+                        "evidence_references": {
+                            "items": { "maxLength": 400, "minLength": 1, "type": "string" },
+                            "maxItems": 256,
+                            "minItems": 1,
+                            "type": "array"
+                        },
+                        "value": {
+                            "additionalProperties": false,
+                            "properties": {
+                                "currency": { "maxLength": 3, "minLength": 3, "type": "string" },
+                                "kind": { "enum": ["text", "amount", "text_set"], "type": "string" },
+                                "text": { "maxLength": 4000, "minLength": 1, "type": "string" },
+                                "value": { "maxLength": 100, "minLength": 1, "type": "string" },
+                                "values": {
+                                    "items": {
+                                        "description": "A Host-authorized lowercase coordination key followed by '=' and the exact current value.",
+                                        "maxLength": 4608,
+                                        "minLength": 3,
+                                        "pattern": "^[a-z0-9_.:-]{1,512}=.+$",
+                                        "type": "string"
+                                    },
+                                    "maxItems": 32,
+                                    "type": "array"
+                                }
+                            },
+                            "required": ["kind"],
+                            "type": "object"
+                        }
+                    },
+                    "required": ["subject", "value", "evidence_references"],
+                    "type": "object"
+                },
+                "maxItems": 32,
+                "minItems": 1,
+                "type": "array"
+            },
             "evidence_references": {
                 "items": { "maxLength": 400, "minLength": 1, "type": "string" },
                 "maxItems": 256,
@@ -3441,7 +3496,7 @@ fn production_output_contract() -> String {
             },
             "summary": { "maxLength": 4000, "minLength": 1, "type": "string" }
         },
-        "required": ["summary", "evidence_references", "gaps"],
+        "required": ["summary", "evidence_references", "gaps", "coordination_observations"],
         "type": "object"
     }))
     .expect("static production output contract")
@@ -3963,7 +4018,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{next_work_plan_version, MAX_PLAN_VERSIONS};
+    use super::{next_work_plan_version, production_output_contract, MAX_PLAN_VERSIONS};
     use crate::TenderErrorCode;
 
     #[test]
@@ -3978,5 +4033,12 @@ mod tests {
                 .code,
             TenderErrorCode::InvalidCommand
         );
+    }
+
+    #[test]
+    fn production_contract_instructions_name_the_serialized_coordination_fields() {
+        let contract = production_output_contract();
+        assert!(contract.contains("coordination_contract.required_subjects"));
+        assert!(contract.contains("coordination_contract.assignment_contracts"));
     }
 }

@@ -10,20 +10,22 @@ use quantix_lib::{
     ApproveControlledBoqCalculationRunCommand, ApproveExternalRfiForIssueCommand,
     ApprovePricedCostBaselineCommand, ApprovePricingAdjustmentCommand,
     ApproveProductionFindingExceptionCommand, ApproveTenderPriceCommand,
-    BasisOfEstimateReviewOutcome, BasisOfEstimateVersion, BidDecisionApprovalDecision,
-    BidDecisionPackageInspection, BidDecisionPackageReviewOutcome, BidRecommendationOutcome,
-    BoqRowDisposition, CalculationDecimalInput, CalculationInputState, CalculationRoundingMode,
-    CalculationRuleReviewOutcome, ComplianceDisposition, ComplianceDispositionUpdate,
-    ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand, ControlledBoqCalculationStatus,
-    CreateBidDecisionPackageCommand, CreateCalculationScenarioCommand,
-    CreateCommercialStrategyCommand, CreateExternalRfiDraftCommand,
-    CreatePricedCostBaselineCommand, CreatePricingAdjustmentCommand, CreatePricingScenarioCommand,
-    CreateTenderCommand, CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
-    DecideBidDecisionPackageCommand, DecideTenderQueryTreatmentCommand, DecideTenderRecordCommand,
-    DecideWorkPlanProposalCommand, DesignateBoqTableCommand, DeviceProtection, ExchangeRateType,
-    ExportApprovedExternalRfiCommand, ExternalRfiQueryReference, ExternalRfiRecipient,
-    ImportTenderPackageCommand, InspectBidDecisionApprovalHistoryCommand,
-    InspectCalculationWorkspaceCommand, InspectEstimateWorkspaceCommand,
+    AssembleCoordinatedBidBaselineCommand, BasisOfEstimateReviewOutcome, BasisOfEstimateVersion,
+    BidDecisionApprovalDecision, BidDecisionPackageInspection, BidDecisionPackageReviewOutcome,
+    BidRecommendationOutcome, BoqRowDisposition, CalculationDecimalInput, CalculationInputState,
+    CalculationRoundingMode, CalculationRuleReviewOutcome, ComplianceDisposition,
+    ComplianceDispositionUpdate, ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand,
+    ControlledBoqCalculationStatus, CoordinatedBidBaselineBlockerCode,
+    CoordinatedBidBaselineDecision, CreateBidDecisionPackageCommand,
+    CreateCalculationScenarioCommand, CreateCommercialStrategyCommand,
+    CreateExternalRfiDraftCommand, CreatePricedCostBaselineCommand, CreatePricingAdjustmentCommand,
+    CreatePricingScenarioCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
+    CreateTenderQueryCommand, DecideBidDecisionPackageCommand, DecideCoordinatedBidBaselineCommand,
+    DecideTenderQueryTreatmentCommand, DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
+    DesignateBoqTableCommand, DeviceProtection, ExchangeRateType, ExportApprovedExternalRfiCommand,
+    ExternalRfiQueryReference, ExternalRfiRecipient, ImportTenderPackageCommand,
+    InspectBidDecisionApprovalHistoryCommand, InspectCalculationWorkspaceCommand,
+    InspectCoordinatedBidBaselinesCommand, InspectEstimateWorkspaceCommand,
     InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
     InspectProductionTaskReviewCommand, InspectTenderQueriesCommand,
     InterpretExternalRfiResponseCommand, InvalidateBidDecisionApprovalCommand, MajorFindingPolicy,
@@ -186,6 +188,834 @@ impl Harness {
 }
 
 #[tokio::test]
+async fn coordinated_baseline_exposes_incomplete_integration_and_denies_approval() {
+    let harness = Harness::new("record-extraction-coordinated");
+    active_production(&harness).await;
+
+    let proposed = harness
+        .host
+        .assemble_coordinated_bid_baseline(AssembleCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+        })
+        .expect("assemble a bounded blocked integration proposal");
+    assert!(proposed.blockers.iter().any(|blocker| {
+        blocker.code == CoordinatedBidBaselineBlockerCode::ProductionTaskNotReady
+    }));
+    assert!(proposed.blockers.iter().any(|blocker| {
+        blocker.code == CoordinatedBidBaselineBlockerCode::ApprovedTenderPriceMissing
+    }));
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect retained production lifecycle")
+            .lifecycle_phase,
+        TenderLifecyclePhase::ActiveProduction
+    );
+    assert_eq!(
+        harness
+            .host
+            .decide_coordinated_bid_baseline(DecideCoordinatedBidBaselineCommand {
+                tender_id: harness.tender_id.clone(),
+                baseline_id: proposed.baseline_id,
+                version: proposed.version,
+                manifest_sha256: proposed.manifest_sha256,
+                decision: CoordinatedBidBaselineDecision::Approve,
+                rationale: "A blocked integration proposal cannot be approved.".into(),
+                conditions: Vec::new(),
+                exceptions: Vec::new(),
+            })
+            .expect_err("blockers deny Baseline Approval")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+}
+
+#[tokio::test]
+async fn production_output_without_the_required_typed_coordination_fact_fails_closed() {
+    let harness = Harness::new("record-extraction-coordinated");
+    let (_, production) = active_production(&harness).await;
+    let ready = production
+        .tasks
+        .iter()
+        .find(|task| task.state == ProductionTaskState::Ready)
+        .expect("ready production task");
+    harness.set_agent_scenario("production-task-coordination-missing");
+    let denied = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: ready.production_task_id.clone(),
+        })
+        .await
+        .expect("terminalize invalid typed coordination output");
+    assert_eq!(denied.run.state, AgentRunState::Failed);
+    assert_eq!(
+        denied.run.failure.as_ref().map(|failure| failure.category),
+        Some(ProviderFailureCategory::OutputInvalid)
+    );
+    assert_eq!(denied.task.artifact_version_count, 0);
+
+    let harness = Harness::new("record-extraction-coordinated");
+    let (_, production) = active_production(&harness).await;
+    let ready = production
+        .tasks
+        .iter()
+        .find(|task| task.state == ProductionTaskState::Ready)
+        .expect("second ready production task");
+    harness.set_agent_scenario("production-task-coordination-wrong-key");
+    let denied = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: ready.production_task_id.clone(),
+        })
+        .await
+        .expect("terminalize the agent-invented coordination key");
+    assert_eq!(denied.run.state, AgentRunState::Failed);
+    assert_eq!(
+        denied.run.failure.as_ref().map(|failure| failure.category),
+        Some(ProviderFailureCategory::OutputInvalid)
+    );
+    assert_eq!(denied.task.artifact_version_count, 0);
+}
+
+#[tokio::test]
+async fn production_coordination_contract_pages_more_than_thirty_two_host_owned_keys() {
+    let harness = Harness::new("record-extraction-coordination-many");
+    let (_, production) = active_production(&harness).await;
+    let ready = production
+        .tasks
+        .iter()
+        .find(|task| task.task.task_key == "tender_coordination_production")
+        .expect("technical production task");
+    harness.set_agent_scenario("production-task");
+    let completed = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: ready.production_task_id.clone(),
+        })
+        .await
+        .expect("publish the bounded multi-observation coordination account");
+    assert_eq!(completed.run.state, AgentRunState::Completed);
+    let payload: Value = serde_json::from_str(
+        &completed
+            .run
+            .proposed_result
+            .as_ref()
+            .expect("production result")
+            .payload_json,
+    )
+    .expect("typed production payload");
+    let observations = payload["coordination_observations"]
+        .as_array()
+        .expect("coordination observations");
+    assert!(observations.len() > 1);
+    assert!(
+        observations
+            .iter()
+            .filter_map(|observation| observation.pointer("/value/values")?.as_array())
+            .map(Vec::len)
+            .sum::<usize>()
+            > 32
+    );
+    assert_eq!(completed.task.artifact_version_count, 1);
+}
+
+#[tokio::test]
+async fn production_activation_audits_an_unrepresentable_coordination_contract() {
+    let harness = Harness::new("record-extraction-coordination-overflow");
+    let package = ready_package(&harness).await;
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept the exact large package");
+    let plan = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose the bounded Work Plan");
+    let approved = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: plan.plan_id,
+            version: plan.version,
+            decision: WorkPlanDecision::Approve,
+            rationale: "Approve the exact plan before coordination preflight.".into(),
+        })
+        .expect("approve the exact large Work Plan");
+    assert_eq!(
+        harness
+            .host
+            .activate_tender_production(ActivateTenderProductionCommand {
+                tender_id: harness.tender_id.clone(),
+                plan_id: approved.plan_id,
+                plan_version: approved.version,
+                plan_manifest_sha256: approved.manifest_sha256,
+            })
+            .expect_err("oversized coordination contract must fail before provider dispatch")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open large Tender Store");
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM audit_events
+                 WHERE event_type = 'production_activation_denied'
+                   AND json_extract(payload_json, '$.change.reason') = 'coordination_contract_boundary'",
+                [],
+                |row| row.get::<_, u32>(0),
+            )
+            .expect("count audited coordination boundary"),
+        1
+    );
+    drop(connection);
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close the non-activated large Tender");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold-verify no partial production activation")
+            .state,
+        TenderIntegrityState::Ready
+    );
+}
+
+#[tokio::test]
+async fn coordinated_baseline_binds_every_current_control_and_approves_only_the_exact_head() {
+    let harness = Harness::new("record-extraction-coordinated");
+    active_production(&harness).await;
+    approve_exact_final_price_for_integration(&harness).await;
+    complete_all_production_for_integration(&harness).await;
+
+    let first = harness
+        .host
+        .assemble_coordinated_bid_baseline(AssembleCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+        })
+        .expect("assemble the exact coordinated baseline");
+    assert!(first.blockers.is_empty(), "{:#?}", first.blockers);
+    assert!(
+        first.contradictions.is_empty(),
+        "{:#?}",
+        first.contradictions
+    );
+    assert_eq!(
+        first
+            .bindings
+            .iter()
+            .filter(|binding| {
+                matches!(
+                    binding.source.as_str(),
+                    "submission_deadline" | "clarification_cutoff"
+                )
+            })
+            .count(),
+        2,
+        "two distinct exact milestones must coexist without a false date contradiction"
+    );
+    let categories = first
+        .bindings
+        .iter()
+        .map(|binding| binding.category)
+        .collect::<std::collections::HashSet<_>>();
+    for required in [
+        quantix_lib::CoordinatedBidBaselineCategory::Technical,
+        quantix_lib::CoordinatedBidBaselineCategory::Programme,
+        quantix_lib::CoordinatedBidBaselineCategory::Procurement,
+        quantix_lib::CoordinatedBidBaselineCategory::Contractual,
+        quantix_lib::CoordinatedBidBaselineCategory::Risk,
+        quantix_lib::CoordinatedBidBaselineCategory::Query,
+        quantix_lib::CoordinatedBidBaselineCategory::Qualification,
+        quantix_lib::CoordinatedBidBaselineCategory::Exclusion,
+        quantix_lib::CoordinatedBidBaselineCategory::Submission,
+        quantix_lib::CoordinatedBidBaselineCategory::Commercial,
+    ] {
+        assert!(categories.contains(&required), "missing {required:?}");
+    }
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect Integrated Review transition")
+            .lifecycle_phase,
+        TenderLifecyclePhase::IntegratedReview
+    );
+
+    let successor = harness
+        .host
+        .assemble_coordinated_bid_baseline(AssembleCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: Some(first.version),
+        })
+        .expect("publish immutable exact successor before approval");
+    assert_eq!(successor.version, first.version + 1);
+    assert_eq!(
+        harness
+            .host
+            .decide_coordinated_bid_baseline(DecideCoordinatedBidBaselineCommand {
+                tender_id: harness.tender_id.clone(),
+                baseline_id: first.baseline_id,
+                version: first.version,
+                manifest_sha256: first.manifest_sha256,
+                decision: CoordinatedBidBaselineDecision::Approve,
+                rationale: "A superseded version must lose the approval race.".into(),
+                conditions: Vec::new(),
+                exceptions: Vec::new(),
+            })
+            .expect_err("stale Baseline version cannot be approved")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    for invalid in [
+        DecideCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: successor.baseline_id.clone(),
+            version: successor.version,
+            manifest_sha256: successor.manifest_sha256.clone(),
+            decision: CoordinatedBidBaselineDecision::Approve,
+            rationale: "   ".into(),
+            conditions: Vec::new(),
+            exceptions: Vec::new(),
+        },
+        DecideCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: successor.baseline_id.clone(),
+            version: successor.version,
+            manifest_sha256: successor.manifest_sha256.clone(),
+            decision: CoordinatedBidBaselineDecision::Approve,
+            rationale: "Exact decision shape must remain canonical.".into(),
+            conditions: vec!["Same condition".into(), " Same condition ".into()],
+            exceptions: Vec::new(),
+        },
+    ] {
+        assert_eq!(
+            harness
+                .host
+                .decide_coordinated_bid_baseline(invalid)
+                .expect_err("semantic approval shape must fail closed and be audited")
+                .code,
+            TenderErrorCode::InvalidCommand
+        );
+    }
+    let command = DecideCoordinatedBidBaselineCommand {
+        tender_id: harness.tender_id.clone(),
+        baseline_id: successor.baseline_id.clone(),
+        version: successor.version,
+        manifest_sha256: successor.manifest_sha256.clone(),
+        decision: CoordinatedBidBaselineDecision::Approve,
+        rationale: "Approve one exact reconciled Coordinated Bid Baseline.".into(),
+        conditions: vec!["Package Production preserves every bound commitment.".into()],
+        exceptions: vec!["Disclosed Minor findings remain visible in package review.".into()],
+    };
+    let decisions = std::thread::scope(|scope| {
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let left_barrier = Arc::clone(&barrier);
+        let right_barrier = Arc::clone(&barrier);
+        let left_command = command.clone();
+        let right_command = command.clone();
+        let left_host = &harness.host;
+        let right_host = &harness.host;
+        let left = scope.spawn(move || {
+            left_barrier.wait();
+            left_host.decide_coordinated_bid_baseline(left_command)
+        });
+        let right = scope.spawn(move || {
+            right_barrier.wait();
+            right_host.decide_coordinated_bid_baseline(right_command)
+        });
+        barrier.wait();
+        vec![
+            left.join().expect("left approval caller"),
+            right.join().expect("right approval caller"),
+        ]
+    });
+    assert_eq!(
+        decisions.iter().filter(|decision| decision.is_ok()).count(),
+        1
+    );
+    assert_eq!(
+        decisions
+            .iter()
+            .filter_map(|decision| decision.as_ref().err())
+            .filter(|error| error.code == TenderErrorCode::InvalidCommand)
+            .count(),
+        1
+    );
+    let approved = decisions
+        .into_iter()
+        .find_map(Result::ok)
+        .expect("exactly one caller approves the current Coordinated Bid Baseline");
+    let approval = approved
+        .approval
+        .as_ref()
+        .expect("immutable Baseline Approval");
+    assert_eq!(approval.decision, CoordinatedBidBaselineDecision::Approve);
+    assert_eq!(approval.decided_by, "engineer_user");
+    assert_eq!(approval.acting_role, "tendering_manager");
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect Package Production transition")
+            .lifecycle_phase,
+        TenderLifecyclePhase::PackageProduction
+    );
+    assert_eq!(
+        harness
+            .host
+            .revise_tender(ReviseTenderCommand {
+                tender_id: harness.tender_id.clone(),
+                name: "Late unassessed material change".into(),
+            })
+            .expect_err("Package Production must close ordinary material-change mutation")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close approved coordinated baseline Tender");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify exact baseline history");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "integrity issues: {:#?}",
+        integrity.issues
+    );
+
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open coordinated baseline store");
+    let audited_shape_denials: u32 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM audit_events
+             WHERE event_type = 'coordinated_bid_baseline_denied'
+               AND json_extract(payload_json, '$.change.reason') = 'command_shape'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count audited semantic approval denials");
+    assert_eq!(audited_shape_denials, 2);
+    let exact_decision_events: u32 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM audit_events
+             WHERE event_type = 'coordinated_bid_baseline_decided'
+               AND json_extract(payload_json, '$.change.baseline_id') = ?1
+               AND json_extract(payload_json, '$.change.baseline_version') = ?2",
+            rusqlite::params![successor.baseline_id, successor.version.to_string()],
+            |row| row.get(0),
+        )
+        .expect("count the single immutable baseline decision");
+    assert_eq!(exact_decision_events, 1);
+    connection
+        .execute(
+            "UPDATE tender SET lifecycle_phase = 'active_production' WHERE singleton = 1",
+            [],
+        )
+        .expect("corrupt the derived lifecycle only");
+    let lifecycle_corrupted_host =
+        QuantixHost::with_setup_platform(&harness.application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(
+        ensure_quantix_setup(&lifecycle_corrupted_host).state,
+        SetupState::Ready
+    );
+    assert_eq!(
+        lifecycle_corrupted_host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold-detect lifecycle divergence from exact Baseline Approval")
+            .state,
+        TenderIntegrityState::RecoveryRequired
+    );
+    connection
+        .execute(
+            "UPDATE tender SET lifecycle_phase = 'package_production' WHERE singleton = 1",
+            [],
+        )
+        .expect("restore the exact approved lifecycle before the next corruption seam");
+    connection
+        .execute_batch("DROP TRIGGER coordinated_bid_baseline_approvals_no_update")
+        .expect("open exact approval corruption seam");
+    let manifest_json: String = connection
+        .query_row(
+            "SELECT manifest_json FROM coordinated_bid_baseline_approvals WHERE approval_id = ?1",
+            [&approval.approval_id],
+            |row| row.get(0),
+        )
+        .expect("load exact Baseline Approval manifest");
+    let mut manifest: Value =
+        serde_json::from_str(&manifest_json).expect("parse approval manifest");
+    manifest["rationale"] = Value::String("Forged rationale outside the Audit chain.".into());
+    let forged_manifest_json = serde_json::to_string(&manifest).expect("canonical forged approval");
+    let forged_manifest_sha256 = Sha256::digest(forged_manifest_json.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    connection
+        .execute(
+            "UPDATE coordinated_bid_baseline_approvals
+             SET rationale = ?1, manifest_json = ?2, approval_sha256 = ?3
+             WHERE approval_id = ?4",
+            rusqlite::params![
+                "Forged rationale outside the Audit chain.",
+                forged_manifest_json,
+                forged_manifest_sha256,
+                approval.approval_id,
+            ],
+        )
+        .expect("tamper with a self-consistent approval record");
+    drop(connection);
+    let corrupted_host =
+        QuantixHost::with_setup_platform(&harness.application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(
+        ensure_quantix_setup(&corrupted_host).state,
+        SetupState::Ready
+    );
+    assert_eq!(
+        corrupted_host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold-detect approval facts diverging from Audit")
+            .state,
+        TenderIntegrityState::RecoveryRequired
+    );
+}
+
+#[tokio::test]
+async fn coordinated_baseline_surfaces_recorded_cross_workstream_contradictions() {
+    let harness = Harness::new("record-extraction-coordinated");
+    active_production(&harness).await;
+    approve_exact_final_price_for_integration(&harness).await;
+    harness.set_agent_scenario("production-task");
+    let cost_task_id = loop {
+        let production = harness
+            .host
+            .inspect_tender_production(&harness.tender_id)
+            .expect("inspect the coordination frontier")
+            .expect("active production");
+        if let Some(task) = production.tasks.iter().find(|task| {
+            task.task.task_key == "cost_estimation_production"
+                && task.state == ProductionTaskState::Ready
+        }) {
+            break task.production_task_id.clone();
+        }
+        let task = production
+            .tasks
+            .iter()
+            .find(|task| {
+                matches!(
+                    task.state,
+                    ProductionTaskState::Ready
+                        | ProductionTaskState::ReviewReady
+                        | ProductionTaskState::RemediationReady
+                )
+            })
+            .unwrap_or_else(|| panic!("cost workstream never became ready: {production:#?}"));
+        harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: task.production_task_id.clone(),
+            })
+            .await
+            .expect("advance exact prerequisites for cost coordination");
+    };
+    harness.set_agent_scenario("production-task-coordination-cost-conflict");
+    harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: cost_task_id,
+        })
+        .await
+        .expect("publish a typed production cost observation that conflicts with pricing");
+    complete_all_production_for_integration(&harness).await;
+    let proposed = harness
+        .host
+        .assemble_coordinated_bid_baseline(AssembleCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+        })
+        .expect("assemble contradiction-bearing proposal");
+    let cost_conflict = proposed
+        .contradictions
+        .iter()
+        .find(|contradiction| contradiction.key == "expected_delivery_cost")
+        .expect("production and approved pricing disagree on one exact cost subject");
+    assert!(cost_conflict.references.len() >= 2);
+    assert!(proposed
+        .blockers
+        .iter()
+        .any(|blocker| { blocker.code == CoordinatedBidBaselineBlockerCode::ContradictionOpen }));
+}
+
+#[tokio::test]
+async fn coordinated_baseline_compares_non_numeric_commitments_across_workstreams() {
+    let harness = Harness::new("record-extraction-coordinated");
+    let (_, production) = active_production(&harness).await;
+    approve_exact_final_price_for_integration(&harness).await;
+    let coordination = production
+        .tasks
+        .iter()
+        .find(|task| task.task.task_key == "tender_coordination_production")
+        .expect("ready coordination workstream");
+    harness.set_agent_scenario("production-task-coordination-commitment-conflict");
+    harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: coordination.production_task_id.clone(),
+        })
+        .await
+        .expect("publish a production commitment against one Host-owned source key");
+    complete_all_production_for_integration(&harness).await;
+
+    let proposed = harness
+        .host
+        .assemble_coordinated_bid_baseline(AssembleCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+        })
+        .expect("assemble the commitment contradiction");
+    let contradiction = proposed
+        .contradictions
+        .iter()
+        .find(|contradiction| {
+            contradiction.key == "commitment:v:project_delivery_context.v:required_capability"
+        })
+        .expect("production must be reconciled against the exact Tender Record proposition");
+    assert_eq!(
+        contradiction.category,
+        quantix_lib::CoordinatedBidBaselineContradictionCategory::Commitment
+    );
+    assert!(contradiction.references.len() >= 2);
+}
+
+#[tokio::test]
+async fn coordinated_baseline_reconciles_work_plan_deadlines_and_responsibility() {
+    let harness = Harness::new("record-extraction-coordinated");
+    let (_, production) = active_production(&harness).await;
+    approve_exact_final_price_for_integration(&harness).await;
+    let coordination = production
+        .tasks
+        .iter()
+        .find(|task| task.task.task_key == "tender_coordination_production")
+        .expect("ready coordination workstream");
+    let document_control = production
+        .tasks
+        .iter()
+        .find(|task| task.task.task_key == "document_control_production")
+        .expect("ready document-control workstream");
+    harness.set_agent_scenario("production-task-coordination-date-source-responsibility-conflict");
+    let deadline_and_source_result = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: coordination.production_task_id.clone(),
+        })
+        .await
+        .expect("publish a conflicting typed deadline");
+    assert_eq!(
+        deadline_and_source_result.run.state,
+        AgentRunState::Completed,
+        "deadline/source contradiction fixture must publish a complete attributable artifact: {:#?}",
+        deadline_and_source_result.run
+    );
+    harness.set_agent_scenario("production-task-coordination-responsibility-conflict");
+    let responsibility_result = harness
+        .host
+        .run_production_task(RunProductionTaskCommand {
+            tender_id: harness.tender_id.clone(),
+            production_task_id: document_control.production_task_id.clone(),
+        })
+        .await
+        .expect("publish a conflicting typed accountable party");
+    assert_eq!(
+        responsibility_result.run.state,
+        AgentRunState::Completed,
+        "responsibility contradiction fixture must publish a complete attributable artifact: {:#?}",
+        responsibility_result.run.failure
+    );
+    complete_all_production_for_integration(&harness).await;
+
+    let proposed = harness
+        .host
+        .assemble_coordinated_bid_baseline(AssembleCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+        })
+        .expect("assemble Work Plan coordination conflicts");
+    assert!(proposed.contradictions.iter().any(|contradiction| {
+        contradiction.category == quantix_lib::CoordinatedBidBaselineContradictionCategory::Date
+            && contradiction.key.contains("tender_coordination_production")
+    }));
+    assert!(proposed.contradictions.iter().any(|contradiction| {
+        contradiction.category
+            == quantix_lib::CoordinatedBidBaselineContradictionCategory::Responsibility
+            && contradiction.key.contains("document_control_production")
+    }));
+    assert!(proposed.contradictions.iter().any(|contradiction| {
+        contradiction.category
+            == quantix_lib::CoordinatedBidBaselineContradictionCategory::Responsibility
+            && contradiction.key.contains("project_delivery_context")
+            && contradiction.key.contains("responsible_party")
+    }));
+    assert!(proposed
+        .blockers
+        .iter()
+        .any(|blocker| blocker.code == CoordinatedBidBaselineBlockerCode::ContradictionOpen));
+}
+
+#[tokio::test]
+async fn coordinated_baseline_marks_exact_dependencies_stale_and_denies_approval() {
+    let harness = Harness::new("record-extraction-coordinated");
+    active_production(&harness).await;
+    approve_exact_final_price_for_integration(&harness).await;
+
+    let first = harness
+        .host
+        .assemble_coordinated_bid_baseline(AssembleCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+        })
+        .expect("capture the incomplete exact dependency snapshot");
+    let query_page = harness
+        .host
+        .inspect_tender_queries(InspectTenderQueriesCommand {
+            tender_id: harness.tender_id.clone(),
+            cursor: None,
+            limit: 8,
+        })
+        .expect("inspect the current Query Register");
+    let owner = query_page
+        .owner_profiles
+        .first()
+        .expect("approved Query owner");
+    let evidence = query_page
+        .items
+        .first()
+        .and_then(|query| query.evidence.first())
+        .cloned()
+        .expect("an exact registered source reference");
+    let late_query = harness
+        .host
+        .create_tender_query(CreateTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_type: TenderQueryType::Ambiguity,
+            question: "Which late qualification applies to the priced cost basis?".into(),
+            ambiguity_or_gap:
+                "A new exact estimating dependency was registered after the coordinated snapshot."
+                    .into(),
+            owner_profile_id: owner.profile_id.clone(),
+            owner_profile_version: owner.version,
+            evidence: vec![evidence],
+            affected_records: Vec::new(),
+            affected_task_keys: vec!["*".into()],
+            due_at: "2099-01-01T00:00:00.000Z".into(),
+            material: false,
+            release_blocking: false,
+            proposed_treatments: vec![TenderQueryTreatmentProposalInput {
+                treatment: TenderQueryTreatment::Qualification,
+                rationale: "Carry the exact clarification only after a new reviewed Basis.".into(),
+            }],
+        })
+        .expect("register an allowed late exact pricing dependency");
+    harness
+        .host
+        .decide_tender_query_treatment(DecideTenderQueryTreatmentCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: late_query.query_id.clone(),
+            query_version: late_query.version,
+            treatment: TenderQueryTreatment::Qualification,
+            rationale:
+                "Approve the separate late qualification without changing the earlier assumption."
+                    .into(),
+            treatment_details:
+                "Carry this exact late qualification as a distinct Query proposition.".into(),
+            closes_query: true,
+        })
+        .expect("approve a second distinct Query treatment");
+    let page = harness
+        .host
+        .inspect_coordinated_bid_baselines(InspectCoordinatedBidBaselinesCommand {
+            tender_id: harness.tender_id.clone(),
+            before_version: None,
+            limit: 4,
+        })
+        .expect("inspect dynamic baseline currentness");
+    assert!(!page.items[0].current);
+    assert_eq!(
+        harness
+            .host
+            .decide_coordinated_bid_baseline(DecideCoordinatedBidBaselineCommand {
+                tender_id: harness.tender_id.clone(),
+                baseline_id: first.baseline_id.clone(),
+                version: first.version,
+                manifest_sha256: first.manifest_sha256,
+                decision: CoordinatedBidBaselineDecision::Approve,
+                rationale: "A stale exact dependency cannot pass Integrated Review.".into(),
+                conditions: Vec::new(),
+                exceptions: Vec::new(),
+            })
+            .expect_err("stale dependency must deny exact approval")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let successor = harness
+        .host
+        .assemble_coordinated_bid_baseline(AssembleCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: Some(first.version),
+        })
+        .expect("assemble a successor that visibly carries stale dependencies");
+    assert!(successor
+        .blockers
+        .iter()
+        .any(|blocker| blocker.code == CoordinatedBidBaselineBlockerCode::StaleInput));
+    assert!(successor
+        .contradictions
+        .iter()
+        .all(|contradiction| !contradiction.key.starts_with("query_treatment")));
+
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close stale baseline Tender");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold-verify attributable stale history")
+            .state,
+        TenderIntegrityState::Ready
+    );
+}
+
+#[tokio::test]
 async fn record_inventory_overflow_fails_terminally_without_publication_and_is_audited() {
     let harness = Harness::new("record-extraction-inventory-fill");
     let evidence = harness.import_evidence().await;
@@ -327,12 +1157,12 @@ async fn exact_proceed_composes_the_mandatory_tender_office_as_a_proposal() {
     assert!(proposal.workstreams.iter().all(|workstream| {
         workstream
             .deadlines
-            .contains(&"2026-05-15T14:00:00+03:00".into())
+            .contains(&"2026-05-15T11:00:00Z".into())
     }));
     assert!(proposal
         .tasks
         .iter()
-        .all(|task| task.deadline == "2026-05-15T14:00:00+03:00"));
+        .all(|task| task.deadline == "2026-05-15T11:00:00Z"));
     assert_eq!(
         proposal.query_bindings.len() as u32,
         package.unresolved_query_count
@@ -4370,6 +5200,45 @@ async fn active_production(
     (approved, production)
 }
 
+async fn complete_all_production_for_integration(harness: &Harness) {
+    harness.set_agent_scenario("production-task");
+    for _ in 0..64 {
+        let production = harness
+            .host
+            .inspect_tender_production(&harness.tender_id)
+            .expect("inspect integration production frontier")
+            .expect("active production");
+        if production
+            .tasks
+            .iter()
+            .all(|task| task.state == ProductionTaskState::ReadyForIntegration)
+        {
+            return;
+        }
+        let task = production
+            .tasks
+            .iter()
+            .find(|task| {
+                matches!(
+                    task.state,
+                    ProductionTaskState::Ready
+                        | ProductionTaskState::ReviewReady
+                        | ProductionTaskState::RemediationReady
+                )
+            })
+            .unwrap_or_else(|| panic!("production frontier is stranded: {production:#?}"));
+        harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: task.production_task_id.clone(),
+            })
+            .await
+            .expect("advance exact integration production task");
+    }
+    panic!("production did not complete within its bounded attempt frontier");
+}
+
 async fn run_cost_estimator_fixture(
     harness: &Harness,
     fixture_scenario: &str,
@@ -4777,6 +5646,159 @@ async fn prepare_and_approve_exact_basis_for_pricing(
 
 async fn approve_exact_basis_for_pricing(harness: &Harness) -> BasisOfEstimateVersion {
     prepare_and_approve_exact_basis_for_pricing(harness).await.0
+}
+
+async fn approve_exact_final_price_for_integration(
+    harness: &Harness,
+) -> quantix_lib::PricingScenarioVersion {
+    let (basis, prepared) = prepare_and_approve_exact_basis_for_pricing(harness).await;
+    let baseline = harness
+        .host
+        .create_priced_cost_baseline(CreatePricedCostBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            basis_id: basis.basis_id,
+            basis_version: basis.version,
+            basis_manifest_sha256: basis.manifest_sha256,
+            rationale: "Establish the exact delivery-cost basis for Integrated Review.".into(),
+        })
+        .expect("create integrated-review Priced Cost Baseline");
+    harness.set_agent_scenario("priced-cost-baseline-review");
+    let baseline = harness
+        .host
+        .run_priced_cost_baseline_review(RunPricedCostBaselineReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id,
+            version: baseline.version,
+        })
+        .await
+        .expect("review integrated-review Priced Cost Baseline")
+        .baseline;
+    let baseline = harness
+        .host
+        .approve_priced_cost_baseline(ApprovePricedCostBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id,
+            version: baseline.version,
+            manifest_sha256: baseline.manifest_sha256,
+            rationale: "Approve the exact reviewed cost baseline.".into(),
+        })
+        .expect("approve integrated-review Priced Cost Baseline");
+
+    let adjustment_run = run_cost_estimator_fixture(
+        harness,
+        "cost-estimator-calculation",
+        prepared.scenario_id,
+        prepared.scenario_version,
+        "Integrated Review commercial strategy input",
+        &prepared.calculation_evidence,
+    )
+    .await;
+    let adjustment_run = harness
+        .host
+        .approve_controlled_boq_calculation_run(ApproveControlledBoqCalculationRunCommand {
+            tender_id: harness.tender_id.clone(),
+            calculation_run_id: adjustment_run.calculation_run_id,
+            manifest_sha256: adjustment_run.manifest_sha256,
+            rationale: "Approve the distinct commercial strategy input.".into(),
+        })
+        .expect("approve integrated-review adjustment calculation");
+    let adjustment = harness
+        .host
+        .create_pricing_adjustment(CreatePricingAdjustmentCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id.clone(),
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256.clone(),
+            calculation_run_id: adjustment_run.calculation_run_id,
+            calculation_manifest_sha256: adjustment_run.manifest_sha256,
+            kind: PricingAdjustmentKind::CommercialStrategy,
+            direction: PricingAdjustmentDirection::Add,
+            scope: "Integrated Review commercial commitments.".into(),
+            rationale: "Keep the commercial strategy separate and reviewed.".into(),
+            commercial_appetite: Some("Protect delivery certainty and margin discipline.".into()),
+            exclusions: Vec::new(),
+            qualifications: Vec::new(),
+            remediates: Vec::new(),
+        })
+        .expect("create integrated-review strategy input");
+    harness.set_agent_scenario("pricing-adjustment-review");
+    let adjustment = harness
+        .host
+        .run_pricing_adjustment_review(RunPricingAdjustmentReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            adjustment_id: adjustment.adjustment_id,
+            version: adjustment.version,
+        })
+        .await
+        .expect("review integrated-review strategy input")
+        .adjustment;
+    let adjustment = harness
+        .host
+        .approve_pricing_adjustment(ApprovePricingAdjustmentCommand {
+            tender_id: harness.tender_id.clone(),
+            adjustment_id: adjustment.adjustment_id,
+            version: adjustment.version,
+            manifest_sha256: adjustment.manifest_sha256,
+            rationale: "Approve the exact reviewed commercial strategy input.".into(),
+        })
+        .expect("approve integrated-review strategy input");
+    let strategy = harness
+        .host
+        .create_commercial_strategy(CreateCommercialStrategyCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id.clone(),
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256.clone(),
+            reviewed_inputs: vec![PricingAdjustmentReference {
+                adjustment_id: adjustment.adjustment_id,
+                version: adjustment.version,
+                manifest_sha256: adjustment.manifest_sha256,
+            }],
+        })
+        .expect("create exact reviewed commercial strategy");
+    let strategy = harness
+        .host
+        .approve_commercial_strategy(ApproveCommercialStrategyCommand {
+            tender_id: harness.tender_id.clone(),
+            strategy_id: strategy.strategy_id,
+            manifest_sha256: strategy.manifest_sha256,
+            rationale: "Approve the exact reviewed commercial commitments.".into(),
+        })
+        .expect("approve exact commercial strategy");
+    let scenario = harness
+        .host
+        .create_pricing_scenario(CreatePricingScenarioCommand {
+            tender_id: harness.tender_id.clone(),
+            name: "Integrated Review Tender Price".into(),
+            baseline_id: baseline.baseline_id,
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256,
+            strategy_id: strategy.strategy_id,
+            strategy_manifest_sha256: strategy.manifest_sha256,
+            adjustments: Vec::new(),
+        })
+        .expect("create exact Integrated Review price scenario");
+    let scenario = harness
+        .host
+        .select_pricing_scenario(SelectPricingScenarioCommand {
+            tender_id: harness.tender_id.clone(),
+            pricing_scenario_id: scenario.pricing_scenario_id,
+            version: scenario.version,
+            manifest_sha256: scenario.manifest_sha256,
+            rationale: "Select the exact Integrated Review scenario.".into(),
+        })
+        .expect("select exact Integrated Review scenario");
+    harness
+        .host
+        .approve_tender_price(ApproveTenderPriceCommand {
+            tender_id: harness.tender_id.clone(),
+            pricing_scenario_id: scenario.pricing_scenario_id,
+            version: scenario.version,
+            manifest_sha256: scenario.manifest_sha256,
+            calculation_manifest_sha256: scenario.calculation.manifest_sha256,
+            rationale: "Approve the exact Final Price for the coordinated baseline.".into(),
+        })
+        .expect("approve exact Integrated Review Final Price")
 }
 
 #[tokio::test]

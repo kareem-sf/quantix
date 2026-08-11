@@ -1,6 +1,7 @@
 use std::{collections::HashSet, fs, path::Path};
 
 use garde::Validate;
+use jiff::Timestamp;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1341,7 +1342,11 @@ impl TenderStore {
                 if record.kind == TenderRecordKind::Deadline
                     && (field.original_expression.is_none()
                         || field.timezone.is_none()
-                        || (field.normalized_value.is_none() && field.uncertainty.is_none()))
+                        || (field.normalized_value.is_none() && field.uncertainty.is_none())
+                        || field
+                            .normalized_value
+                            .as_deref()
+                            .is_some_and(|value| value.parse::<Timestamp>().is_err()))
                 {
                     return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
                 }

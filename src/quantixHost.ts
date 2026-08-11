@@ -145,6 +145,12 @@ import type { TenderQueryPage } from "./bindings/TenderQueryPage";
 import type { WorkPlanDecision } from "./bindings/WorkPlanDecision";
 import type { WorkPlanProposalInspection } from "./bindings/WorkPlanProposalInspection";
 import type { WorkPlanRevisionAction } from "./bindings/WorkPlanRevisionAction";
+import type { AssembleCoordinatedBidBaselineCommand } from "./bindings/AssembleCoordinatedBidBaselineCommand";
+import type { CoordinatedBidBaseline } from "./bindings/CoordinatedBidBaseline";
+import type { CoordinatedBidBaselineDecision } from "./bindings/CoordinatedBidBaselineDecision";
+import type { CoordinatedBidBaselinePage } from "./bindings/CoordinatedBidBaselinePage";
+import type { DecideCoordinatedBidBaselineCommand } from "./bindings/DecideCoordinatedBidBaselineCommand";
+import type { InspectCoordinatedBidBaselinesCommand } from "./bindings/InspectCoordinatedBidBaselinesCommand";
 
 export function ensureQuantixSetup(): Promise<SetupOutcome> {
   return invoke<SetupOutcome>("ensure_quantix_setup");
@@ -1126,4 +1132,58 @@ export function interruptAgentRun(
     run_id: runId,
   };
   return invoke<boolean>("interrupt_agent_run", { command });
+}
+
+export function assembleCoordinatedBidBaseline(
+  tenderId: string,
+  baseVersion: number | null,
+): Promise<CoordinatedBidBaseline> {
+  const command: AssembleCoordinatedBidBaselineCommand = {
+    tender_id: tenderId,
+    base_version: baseVersion,
+  };
+  return invoke<CoordinatedBidBaseline>("assemble_coordinated_bid_baseline", {
+    command,
+  });
+}
+
+export function inspectCoordinatedBidBaselines(
+  tenderId: string,
+  beforeVersion: number | null,
+  limit: number,
+): Promise<CoordinatedBidBaselinePage> {
+  const command: InspectCoordinatedBidBaselinesCommand = {
+    tender_id: tenderId,
+    before_version: beforeVersion,
+    limit,
+  };
+  return invoke<CoordinatedBidBaselinePage>(
+    "inspect_coordinated_bid_baselines",
+    { command },
+  );
+}
+
+export function decideCoordinatedBidBaseline(
+  tenderId: string,
+  baselineId: string,
+  version: number,
+  manifestSha256: string,
+  decision: CoordinatedBidBaselineDecision,
+  rationale: string,
+  conditions: string[],
+  exceptions: string[],
+): Promise<CoordinatedBidBaseline> {
+  const command: DecideCoordinatedBidBaselineCommand = {
+    tender_id: tenderId,
+    baseline_id: baselineId,
+    version,
+    manifest_sha256: manifestSha256,
+    decision,
+    rationale,
+    conditions,
+    exceptions,
+  };
+  return invoke<CoordinatedBidBaseline>("decide_coordinated_bid_baseline", {
+    command,
+  });
 }

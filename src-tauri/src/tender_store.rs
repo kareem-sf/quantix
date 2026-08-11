@@ -35,6 +35,7 @@ mod agent_records;
 pub(crate) mod backups;
 mod bid_decisions;
 mod calculations;
+mod coordinated_baselines;
 mod estimates;
 mod external_rfis;
 mod pricing;
@@ -78,6 +79,15 @@ pub use calculations::{
     ProposeBoqCalculationRuleCommand, RunCalculationRuleReviewCommand,
     RunCostEstimatorCalculationCommand,
 };
+pub use coordinated_baselines::{
+    AssembleCoordinatedBidBaselineCommand, CoordinatedBidBaseline, CoordinatedBidBaselineApproval,
+    CoordinatedBidBaselineBinding, CoordinatedBidBaselineBindingKind,
+    CoordinatedBidBaselineBlocker, CoordinatedBidBaselineBlockerCode,
+    CoordinatedBidBaselineCategory, CoordinatedBidBaselineContradiction,
+    CoordinatedBidBaselineContradictionCategory, CoordinatedBidBaselineDecision,
+    CoordinatedBidBaselinePage, DecideCoordinatedBidBaselineCommand,
+    InspectCoordinatedBidBaselinesCommand,
+};
 pub use estimates::{
     ApproveBasisOfEstimateCommand, BasisOfEstimateReview, BasisOfEstimateReviewFinding,
     BasisOfEstimateReviewOutcome, BasisOfEstimateReviewResult, BasisOfEstimateVersion,
@@ -116,10 +126,11 @@ pub use pricing::{
 pub use production_scheduler::{
     ActivateTenderProductionCommand, ApproveProductionFindingExceptionCommand,
     InspectProductionTaskReviewCommand, ProductionArtifactPayload, ProductionArtifactVersion,
-    ProductionArtifactVersionSummary, ProductionFindingDisposition,
-    ProductionFindingDispositionKind, ProductionFindingSeverity, ProductionIntegrationReadiness,
-    ProductionQueryTreatmentApplication, ProductionRemediation, ProductionReview,
-    ProductionReviewFinding, ProductionReviewResult, ProductionTaskInspection,
+    ProductionArtifactVersionSummary, ProductionCoordinationObservation,
+    ProductionCoordinationObservationSubject, ProductionCoordinationObservationValue,
+    ProductionFindingDisposition, ProductionFindingDispositionKind, ProductionFindingSeverity,
+    ProductionIntegrationReadiness, ProductionQueryTreatmentApplication, ProductionRemediation,
+    ProductionReview, ProductionReviewFinding, ProductionReviewResult, ProductionTaskInspection,
     ProductionTaskReviewInspection, ProductionTaskRunResult, ProductionTaskState,
     RunProductionTaskCommand, TenderProductionInspection,
 };
@@ -153,7 +164,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 18;
+const TENDER_SCHEMA_VERSION: i64 = 19;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -164,7 +175,8 @@ CREATE TABLE tender (
   tender_id TEXT NOT NULL UNIQUE,
   current_revision INTEGER NOT NULL CHECK (current_revision > 0),
   lifecycle_phase TEXT NOT NULL CHECK (lifecycle_phase IN (
-    'intake', 'bid_decision', 'tender_planning', 'active_production', 'declined'
+    'intake', 'bid_decision', 'tender_planning', 'active_production',
+    'integrated_review', 'package_production', 'declined'
   )),
   created_at TEXT NOT NULL
 );
@@ -1689,6 +1701,82 @@ CREATE TABLE production_integration_readiness (
     REFERENCES production_artifact_versions(artifact_id, version),
   FOREIGN KEY (review_id) REFERENCES production_reviews(review_id)
 );
+CREATE TABLE coordinated_bid_baselines (
+  baseline_id TEXT PRIMARY KEY CHECK (length(baseline_id) = 32),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE coordinated_bid_baseline_versions (
+  baseline_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 32),
+  tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  activation_id TEXT NOT NULL,
+  plan_id TEXT NOT NULL,
+  plan_version INTEGER NOT NULL CHECK (plan_version > 0),
+  plan_manifest_sha256 TEXT NOT NULL CHECK (length(plan_manifest_sha256) = 64),
+  coordinator_profile_id TEXT NOT NULL CHECK (length(coordinator_profile_id) = 32),
+  coordinator_profile_version INTEGER NOT NULL CHECK (coordinator_profile_version > 0),
+  bindings_json TEXT NOT NULL CHECK (
+    json_valid(bindings_json) AND length(CAST(bindings_json AS BLOB)) <= 4194304
+  ),
+  contradictions_json TEXT NOT NULL CHECK (
+    json_valid(contradictions_json) AND length(CAST(contradictions_json AS BLOB)) <= 1048576
+  ),
+  blockers_json TEXT NOT NULL CHECK (
+    json_valid(blockers_json) AND length(CAST(blockers_json AS BLOB)) <= 1048576
+  ),
+  explanation TEXT NOT NULL CHECK (length(CAST(explanation AS BLOB)) BETWEEN 1 AND 8000),
+  preceding_version_manifest_sha256 TEXT,
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (
+    json_valid(manifest_json) AND length(CAST(manifest_json AS BLOB)) <= 4194304
+  ),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (baseline_id, version),
+  FOREIGN KEY (baseline_id) REFERENCES coordinated_bid_baselines(baseline_id),
+  FOREIGN KEY (activation_id) REFERENCES production_activations(activation_id),
+  FOREIGN KEY (plan_id, plan_version) REFERENCES work_plan_versions(plan_id, version),
+  FOREIGN KEY (coordinator_profile_id, coordinator_profile_version)
+    REFERENCES agent_profile_versions(profile_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence),
+  CHECK (
+    (version = 1 AND preceding_version_manifest_sha256 IS NULL)
+    OR (version > 1 AND length(preceding_version_manifest_sha256) = 64)
+  )
+);
+CREATE TABLE coordinated_bid_baseline_head (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  baseline_id TEXT NOT NULL,
+  current_version INTEGER NOT NULL CHECK (current_version BETWEEN 1 AND 32),
+  FOREIGN KEY (baseline_id, current_version)
+    REFERENCES coordinated_bid_baseline_versions(baseline_id, version)
+);
+CREATE TABLE coordinated_bid_baseline_approvals (
+  approval_id TEXT PRIMARY KEY CHECK (length(approval_id) = 32),
+  baseline_id TEXT NOT NULL,
+  baseline_version INTEGER NOT NULL CHECK (baseline_version BETWEEN 1 AND 32),
+  baseline_manifest_sha256 TEXT NOT NULL CHECK (length(baseline_manifest_sha256) = 64),
+  decision TEXT NOT NULL CHECK (decision IN ('approve', 'return', 'reject')),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  conditions_json TEXT NOT NULL CHECK (json_valid(conditions_json)),
+  exceptions_json TEXT NOT NULL CHECK (json_valid(exceptions_json)),
+  supporting_reviews_sha256 TEXT NOT NULL CHECK (length(supporting_reviews_sha256) = 64),
+  decided_by TEXT NOT NULL CHECK (decided_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+  lifecycle_before TEXT NOT NULL CHECK (lifecycle_before = 'integrated_review'),
+  lifecycle_after TEXT NOT NULL CHECK (lifecycle_after IN (
+    'active_production', 'package_production'
+  )),
+  preceding_approval_hash TEXT NOT NULL CHECK (length(preceding_approval_hash) = 64),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  approval_sha256 TEXT NOT NULL UNIQUE CHECK (length(approval_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (baseline_id, baseline_version),
+  FOREIGN KEY (baseline_id, baseline_version)
+    REFERENCES coordinated_bid_baseline_versions(baseline_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
   event_type TEXT NOT NULL,
@@ -2622,6 +2710,26 @@ BEFORE DELETE ON production_integration_readiness
 BEGIN
   SELECT RAISE(ABORT, 'Production Integration Readiness is immutable');
 END;
+CREATE TRIGGER coordinated_bid_baseline_versions_no_update
+BEFORE UPDATE ON coordinated_bid_baseline_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Coordinated Bid Baseline versions are immutable');
+END;
+CREATE TRIGGER coordinated_bid_baseline_versions_no_delete
+BEFORE DELETE ON coordinated_bid_baseline_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Coordinated Bid Baseline versions are immutable');
+END;
+CREATE TRIGGER coordinated_bid_baseline_approvals_no_update
+BEFORE UPDATE ON coordinated_bid_baseline_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Coordinated Bid Baseline approvals are immutable');
+END;
+CREATE TRIGGER coordinated_bid_baseline_approvals_no_delete
+BEFORE DELETE ON coordinated_bid_baseline_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Coordinated Bid Baseline approvals are immutable');
+END;
 CREATE TRIGGER audit_events_no_update
 BEFORE UPDATE ON audit_events
 BEGIN
@@ -2695,6 +2803,8 @@ pub enum TenderLifecyclePhase {
     BidDecision,
     TenderPlanning,
     ActiveProduction,
+    IntegratedReview,
+    PackageProduction,
     Declined,
 }
 
@@ -2705,6 +2815,8 @@ impl TenderLifecyclePhase {
             Self::BidDecision => "bid_decision",
             Self::TenderPlanning => "tender_planning",
             Self::ActiveProduction => "active_production",
+            Self::IntegratedReview => "integrated_review",
+            Self::PackageProduction => "package_production",
             Self::Declined => "declined",
         }
     }
@@ -2715,6 +2827,8 @@ impl TenderLifecyclePhase {
             "bid_decision" => Ok(Self::BidDecision),
             "tender_planning" => Ok(Self::TenderPlanning),
             "active_production" => Ok(Self::ActiveProduction),
+            "integrated_review" => Ok(Self::IntegratedReview),
+            "package_production" => Ok(Self::PackageProduction),
             "declined" => Ok(Self::Declined),
             _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
         }
@@ -3430,6 +3544,9 @@ impl TenderStore {
         if !self.production_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
+        if !self.coordinated_baseline_manifests_are_valid_with_check(check)? {
+            return Ok(false);
+        }
         let mut statement = self
             .connection
             .prepare(
@@ -3575,8 +3692,13 @@ impl TenderStore {
                 |row| row.get(0),
             )
             .map_err(sql_error)?;
-        if lifecycle_phase != TenderLifecyclePhase::Declined
-            && !successor_pending
+        if matches!(
+            lifecycle_phase,
+            TenderLifecyclePhase::Intake
+                | TenderLifecyclePhase::BidDecision
+                | TenderLifecyclePhase::TenderPlanning
+                | TenderLifecyclePhase::ActiveProduction
+        ) && !successor_pending
             && !recovery_retry_pending
         {
             return Ok(());

@@ -5101,7 +5101,11 @@ impl TenderStore {
                 )
                 .map_err(sql_error)?
         {
-            expected_lifecycle = TenderLifecyclePhase::ActiveProduction;
+            expected_lifecycle = match lifecycle_phase {
+                TenderLifecyclePhase::IntegratedReview
+                | TenderLifecyclePhase::PackageProduction => lifecycle_phase,
+                _ => TenderLifecyclePhase::ActiveProduction,
+            };
         }
         if let Some(terminal) = approvals.last().filter(|approval| {
             approval.invalidation.is_none()

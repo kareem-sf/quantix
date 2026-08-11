@@ -899,6 +899,9 @@ fn run_agent_turn(
             | "usage-stream"
             | "output-invalid"
             | "record-extraction"
+            | "record-extraction-coordinated"
+            | "record-extraction-coordination-many"
+            | "record-extraction-coordination-overflow"
             | "record-extraction-decline-risk"
             | "record-extraction-expanded"
             | "record-extraction-extra-characteristic"
@@ -941,6 +944,13 @@ fn run_agent_turn(
             | "pricing-adjustment-review"
             | "pricing-adjustment-review-failed"
             | "production-task"
+            | "production-task-coordination-cost-conflict"
+            | "production-task-coordination-commitment-conflict"
+            | "production-task-coordination-date-conflict"
+            | "production-task-coordination-date-source-responsibility-conflict"
+            | "production-task-coordination-missing"
+            | "production-task-coordination-responsibility-conflict"
+            | "production-task-coordination-wrong-key"
             | "production-task-delayed-a"
             | "production-task-delayed-b"
             | "production-task-delayed-review"
@@ -1358,6 +1368,56 @@ fn run_agent_turn(
         added["title"] = serde_json::json!("Late verified Project Characteristic");
         candidate["records"] = serde_json::json!([added]);
         candidate
+    } else if scenario == "record-extraction-coordination-many" {
+        let mut candidate = record_extraction_candidate(provider_data_view)?;
+        let template = candidate["records"]
+            .as_array()
+            .and_then(|records| {
+                records.iter().find(|record| {
+                    record.get("stable_key").and_then(serde_json::Value::as_str)
+                        == Some("project_delivery_context")
+                })
+            })
+            .cloned()
+            .ok_or("Project Characteristic coordination template")?;
+        let additions = (0..40).map(|index| {
+            let mut record = template.clone();
+            record["stable_key"] =
+                serde_json::json!(format!("coordination_characteristic_{index:02}"));
+            record["title"] = serde_json::json!(format!("Coordination characteristic {index:02}"));
+            record
+        });
+        candidate["records"]
+            .as_array_mut()
+            .ok_or("Tender Record candidates")?
+            .extend(additions);
+        candidate
+    } else if scenario == "record-extraction-coordination-overflow" {
+        let mut candidate = record_extraction_candidate(provider_data_view)?;
+        let template = candidate["records"]
+            .as_array()
+            .and_then(|records| {
+                records.iter().find(|record| {
+                    record.get("stable_key").and_then(serde_json::Value::as_str)
+                        == Some("project_delivery_context")
+                })
+            })
+            .cloned()
+            .ok_or("Project Characteristic coordination template")?;
+        let additions = (0..56).map(|index| {
+            let mut record = template.clone();
+            record["stable_key"] =
+                serde_json::json!(format!("large_coordination_characteristic_{index:02}"));
+            record["title"] =
+                serde_json::json!(format!("Large coordination characteristic {index:02}"));
+            record["fields"][0]["value"] = serde_json::json!("v".repeat(4_000));
+            record
+        });
+        candidate["records"]
+            .as_array_mut()
+            .ok_or("Tender Record candidates")?
+            .extend(additions);
+        candidate
     } else if scenario == "record-extraction-inventory-fill" {
         let mut candidate = record_extraction_candidate(provider_data_view)?;
         let template = candidate["records"][0].clone();
@@ -1398,6 +1458,62 @@ fn run_agent_turn(
         added["stable_key"] = serde_json::json!("late_submission_obligation");
         added["title"] = serde_json::json!("Late discovered submission obligation");
         candidate["records"] = serde_json::json!([added]);
+        candidate
+    } else if scenario == "record-extraction-coordinated" {
+        let mut candidate = record_extraction_candidate(provider_data_view)?;
+        let records = candidate["records"]
+            .as_array_mut()
+            .ok_or("coordinated record candidates")?;
+        if let Some(deadline) = records.iter_mut().find(|record| {
+            record.get("stable_key").and_then(serde_json::Value::as_str)
+                == Some("submission_deadline")
+        }) {
+            deadline["contradictions"] = serde_json::json!([]);
+            deadline["fields"][0]["uncertainty"] = serde_json::Value::Null;
+        }
+        let exact_evidence = records
+            .first()
+            .and_then(|record| record.pointer("/fields/0/evidence/0"))
+            .cloned()
+            .ok_or("coordinated record evidence")?;
+        records.push(serde_json::json!({
+            "stable_key": "clarification_cutoff",
+            "kind": "deadline",
+            "title": "Clarification cutoff",
+            "fields": [{
+                "name": "deadline",
+                "value": "8 May 2026 at 14:00 Cairo time",
+                "basis_kind": "evidence",
+                "basis_reference": null,
+                "basis_description": null,
+                "original_expression": "8 May 2026 at 14:00 Cairo time",
+                "normalized_value": "2026-05-08T14:00:00+03:00",
+                "timezone": "Africa/Cairo",
+                "uncertainty": null,
+                "evidence": [exact_evidence.clone()]
+            }],
+            "contradictions": []
+        }));
+        if let Some(project) = records.iter_mut().find(|record| {
+            record.get("stable_key").and_then(serde_json::Value::as_str)
+                == Some("project_delivery_context")
+        }) {
+            project["fields"]
+                .as_array_mut()
+                .ok_or("project delivery fields")?
+                .push(serde_json::json!({
+                    "name": "responsible_party",
+                    "value": "tender_coordinator",
+                    "basis_kind": "evidence",
+                    "basis_reference": null,
+                    "basis_description": null,
+                    "original_expression": null,
+                    "normalized_value": null,
+                    "timezone": null,
+                    "uncertainty": null,
+                    "evidence": [exact_evidence]
+                }));
+        }
         candidate
     } else if scenario == "record-extraction" {
         record_extraction_candidate(provider_data_view)?
@@ -2081,11 +2197,171 @@ fn run_agent_turn(
         if scenario == "production-task-evidence-invalid" {
             evidence_references = vec!["tender_revision:unavailable:1".into()];
         }
+        let coordination_evidence = evidence_references
+            .first()
+            .cloned()
+            .ok_or("production coordination evidence")?;
+        let coordination_contract = provider_data_view
+            .get("coordination_contract")
+            .ok_or("production coordination contract")?;
+        let required_subjects = coordination_contract
+            .get("required_subjects")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("required coordination subjects")?;
+        let assignment_contracts = coordination_contract
+            .get("assignment_contracts")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("coordination assignment contracts")?;
+        let source_observations = coordination_contract
+            .get("source_observations")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("coordination source observations")?;
+        let mut coordination_observations = Vec::new();
+        let mut wrong_key_injected = false;
+        for subject in required_subjects {
+            let subject = subject.as_str().ok_or("required coordination subject")?;
+            if let Some(assignment_contract) = assignment_contracts.iter().find(|contract| {
+                contract.get("subject").and_then(serde_json::Value::as_str) == Some(subject)
+            }) {
+                let mut assignments = assignment_contract
+                    .get("required_keys")
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or("required coordination assignment keys")?
+                    .iter()
+                    .map(|key| {
+                        let key = key.as_str().ok_or("coordination assignment key")?;
+                        let source = source_observations
+                            .iter()
+                            .filter(|observation| {
+                                observation
+                                    .get("subject")
+                                    .and_then(serde_json::Value::as_str)
+                                    == Some(subject)
+                            })
+                            .filter_map(|observation| {
+                                observation
+                                    .pointer("/value/values")
+                                    .and_then(serde_json::Value::as_array)
+                            })
+                            .flatten()
+                            .filter_map(serde_json::Value::as_str)
+                            .find(|assignment| {
+                                assignment
+                                    .split_once('=')
+                                    .is_some_and(|(candidate, _)| candidate == key)
+                            });
+                        Ok(source
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| format!("{key}=validated")))
+                    })
+                    .collect::<Result<Vec<String>, &'static str>>()?;
+                if scenario == "production-task-coordination-commitment-conflict"
+                    && subject == "technical_commitment"
+                {
+                    let assignment = assignments
+                        .iter_mut()
+                        .find(|assignment| {
+                            assignment.contains("project_delivery_context")
+                                && assignment.contains("required_capability")
+                        })
+                        .ok_or("host-owned source coordination key")?;
+                    let (key, _) = assignment
+                        .split_once('=')
+                        .ok_or("source coordination assignment")?;
+                    *assignment = format!("{key}=structural_engineering");
+                }
+                if scenario == "production-task-coordination-responsibility-conflict"
+                    && subject == "responsible_party"
+                {
+                    let assignment = assignments.first_mut().ok_or("responsibility assignment")?;
+                    let (key, _) = assignment.split_once('=').ok_or("responsibility key")?;
+                    *assignment = format!("{key}=unapproved_profile");
+                }
+                if matches!(
+                    scenario,
+                    "production-task-coordination-date-source-responsibility-conflict"
+                ) && subject == "responsible_party"
+                {
+                    let assignment = assignments
+                        .iter_mut()
+                        .find(|assignment| !assignment.starts_with("task:"))
+                        .ok_or("source responsibility assignment")?;
+                    let (key, _) = assignment
+                        .split_once('=')
+                        .ok_or("source responsibility key")?;
+                    *assignment = format!("{key}=contractor");
+                }
+                if matches!(
+                    scenario,
+                    "production-task-coordination-date-conflict"
+                        | "production-task-coordination-date-source-responsibility-conflict"
+                ) && subject == "submission_deadline"
+                {
+                    let assignment = assignments.first_mut().ok_or("deadline assignment")?;
+                    let (key, _) = assignment
+                        .split_once('=')
+                        .ok_or("deadline coordination key")?;
+                    *assignment = format!("{key}=2099-12-31T23:59:59Z");
+                }
+                if scenario == "production-task-coordination-wrong-key" && !wrong_key_injected {
+                    let assignment = assignments
+                        .first_mut()
+                        .ok_or("required coordination assignment")?;
+                    *assignment = "agent_invented_key=validated".into();
+                    wrong_key_injected = true;
+                }
+                coordination_observations.extend(assignments.chunks(32).map(|assignments| {
+                    serde_json::json!({
+                        "evidence_references": [coordination_evidence.clone()],
+                        "subject": subject,
+                        "value": { "kind": "text_set", "values": assignments },
+                    })
+                }));
+            } else if subject == "expected_delivery_cost" {
+                coordination_observations.push(serde_json::json!({
+                    "evidence_references": [coordination_evidence.clone()],
+                    "subject": subject,
+                    "value": {
+                        "currency": "EGP",
+                        "kind": "amount",
+                        "value": if scenario == "production-task-coordination-cost-conflict" {
+                            "999"
+                        } else {
+                            "150"
+                        },
+                    },
+                }));
+            } else {
+                let value = source_observations
+                    .iter()
+                    .find(|observation| {
+                        observation
+                            .get("subject")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(subject)
+                    })
+                    .and_then(|observation| observation.get("value"))
+                    .cloned()
+                    .ok_or("required scalar coordination source")?;
+                coordination_observations.push(serde_json::json!({
+                    "evidence_references": [coordination_evidence.clone()],
+                    "subject": subject,
+                    "value": value,
+                }));
+            }
+        }
         let mut output = serde_json::json!({
+            "coordination_observations": coordination_observations,
             "evidence_references": evidence_references,
             "gaps": [],
             "summary": format!("Completed the exact bounded production task for {tender_name}.")
         });
+        if scenario == "production-task-coordination-missing" {
+            output
+                .as_object_mut()
+                .ok_or("production output object")?
+                .remove("coordination_observations");
+        }
         let approved_query_treatments = provider_data_view
             .get("approved_query_treatments")
             .and_then(serde_json::Value::as_array)
@@ -2223,6 +2499,108 @@ fn run_agent_turn(
     Ok(true)
 }
 
+fn multiplexed_production_candidate(
+    provider_data_view: &serde_json::Value,
+    evidence_reference: &str,
+    suffix: &str,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let coordination_contract = provider_data_view
+        .get("coordination_contract")
+        .ok_or("multiplexed production coordination contract")?;
+    let required_subjects = coordination_contract
+        .get("required_subjects")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("multiplexed required coordination subjects")?;
+    let assignment_contracts = coordination_contract
+        .get("assignment_contracts")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("multiplexed coordination assignment contracts")?;
+    let source_observations = coordination_contract
+        .get("source_observations")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("multiplexed coordination source observations")?;
+    let mut coordination_observations = Vec::new();
+    for subject in required_subjects {
+        let subject = subject
+            .as_str()
+            .ok_or("multiplexed required coordination subject")?;
+        if let Some(assignment_contract) = assignment_contracts.iter().find(|contract| {
+            contract.get("subject").and_then(serde_json::Value::as_str) == Some(subject)
+        }) {
+            let assignments = assignment_contract
+                .get("required_keys")
+                .and_then(serde_json::Value::as_array)
+                .ok_or("multiplexed required coordination assignment keys")?
+                .iter()
+                .map(|key| {
+                    let key = key
+                        .as_str()
+                        .ok_or("multiplexed coordination assignment key")?;
+                    let source = source_observations
+                        .iter()
+                        .filter(|observation| {
+                            observation
+                                .get("subject")
+                                .and_then(serde_json::Value::as_str)
+                                == Some(subject)
+                        })
+                        .filter_map(|observation| {
+                            observation
+                                .pointer("/value/values")
+                                .and_then(serde_json::Value::as_array)
+                        })
+                        .flatten()
+                        .filter_map(serde_json::Value::as_str)
+                        .find(|assignment| {
+                            assignment
+                                .split_once('=')
+                                .is_some_and(|(candidate, _)| candidate == key)
+                        });
+                    Ok(source
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("{key}=validated")))
+                })
+                .collect::<Result<Vec<String>, Box<dyn std::error::Error>>>()?;
+            coordination_observations.extend(assignments.chunks(32).map(|assignments| {
+                serde_json::json!({
+                    "evidence_references": [evidence_reference],
+                    "subject": subject,
+                    "value": { "kind": "text_set", "values": assignments },
+                })
+            }));
+        } else if subject == "expected_delivery_cost" {
+            coordination_observations.push(serde_json::json!({
+                "evidence_references": [evidence_reference],
+                "subject": subject,
+                "value": { "currency": "EGP", "kind": "amount", "value": "150" },
+            }));
+        } else {
+            let value = source_observations
+                .iter()
+                .find(|observation| {
+                    observation
+                        .get("subject")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(subject)
+                })
+                .and_then(|observation| observation.get("value"))
+                .cloned()
+                .ok_or("multiplexed required scalar coordination source")?;
+            coordination_observations.push(serde_json::json!({
+                "evidence_references": [evidence_reference],
+                "subject": subject,
+                "value": value,
+            }));
+        }
+    }
+    Ok(serde_json::json!({
+        "coordination_observations": coordination_observations,
+        "evidence_references": [evidence_reference],
+        "gaps": [],
+        "summary": format!("Completed multiplexed production task {suffix}.")
+    }))
+}
+
 fn run_multiplexed_production_turns(
     executable: &Path,
     requests: &mut impl Iterator<Item = io::Result<String>>,
@@ -2346,7 +2724,7 @@ fn run_multiplexed_production_turns(
                     .ok_or("multiplexed turn used an unknown thread")?;
                 if turns
                     .iter()
-                    .any(|(_, candidate, _, _, _)| candidate == thread_id)
+                    .any(|(_, candidate, _, _)| candidate == thread_id)
                 {
                     return Err("multiplexed thread received more than one turn".into());
                 }
@@ -2381,18 +2759,21 @@ fn run_multiplexed_production_turns(
                         .and_then(serde_json::Value::as_str)
                         .ok_or("multiplexed provider instruction bundle")?,
                 )?;
-                let review = provider_input
-                    .pointer("/provider_data_views/0/payload/review_candidate")
+                let provider_data_view = provider_input
+                    .pointer("/provider_data_views/0/payload")
+                    .ok_or("multiplexed provider Data View")?;
+                let review = provider_data_view
+                    .get("review_candidate")
                     .is_some_and(|candidate| !candidate.is_null());
                 let evidence_reference = if review {
-                    provider_input
-                        .pointer("/provider_data_views/0/payload/review_candidate/payload/evidence_references/0")
+                    provider_data_view
+                        .pointer("/review_candidate/payload/evidence_references/0")
                         .and_then(serde_json::Value::as_str)
                         .ok_or("multiplexed review evidence")?
                         .to_owned()
                 } else {
-                    let input = provider_input
-                        .pointer("/provider_data_views/0/payload/production_task/exact_inputs/0")
+                    let input = provider_data_view
+                        .pointer("/production_task/exact_inputs/0")
                         .ok_or("multiplexed production exact input")?;
                     format!(
                         "{}:{}:{}",
@@ -2410,13 +2791,20 @@ fn run_multiplexed_production_turns(
                             .ok_or("input version")?,
                     )
                 };
-                turns.push((
-                    suffix,
-                    thread_id.to_owned(),
-                    turn_id,
-                    review,
-                    evidence_reference,
-                ));
+                let candidate = if review {
+                    serde_json::json!({
+                        "result": "satisfied",
+                        "resolved_finding_ids": [],
+                        "findings": []
+                    })
+                } else {
+                    multiplexed_production_candidate(
+                        provider_data_view,
+                        &evidence_reference,
+                        suffix,
+                    )?
+                };
+                turns.push((suffix, thread_id.to_owned(), turn_id, candidate));
             }
             _ => return Err("unexpected multiplexed production request".into()),
         }
@@ -2428,7 +2816,7 @@ fn run_multiplexed_production_turns(
         )?;
     }
 
-    for (suffix, _, _, _, _) in &turns {
+    for (suffix, _, _, _) in &turns {
         if automatic {
             continue;
         }
@@ -2449,20 +2837,7 @@ fn run_multiplexed_production_turns(
         }
     }
 
-    for (suffix, thread_id, turn_id, review, evidence_reference) in turns {
-        let candidate = if review {
-            serde_json::json!({
-                "result": "satisfied",
-                "resolved_finding_ids": [],
-                "findings": []
-            })
-        } else {
-            serde_json::json!({
-                "evidence_references": [evidence_reference],
-                "gaps": [],
-                "summary": format!("Completed multiplexed production task {suffix}.")
-            })
-        };
+    for (suffix, thread_id, turn_id, candidate) in turns {
         let final_item = serde_json::json!({
             "id": format!("message_fixture_{suffix}"),
             "type": "agentMessage",

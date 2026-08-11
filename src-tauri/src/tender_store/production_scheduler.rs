@@ -1,6 +1,7 @@
 use garde::Validate;
 use jiff::Timestamp;
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
+use rust_decimal::Decimal;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use ts_rs::TS;
@@ -30,8 +31,8 @@ use super::{
     },
     append_audit_event, append_audit_event_with_sequence, lock_mutex_with_check, random_identifier,
     require_setup, sha256_hex, sql_error, sqlite_timestamp, BidPackageOperationBudget,
-    MajorFindingPolicy, TenderCommandError, TenderErrorCode, TenderId, TenderStore,
-    WorkPlanDecision, WorkPlanProfileBinding, WorkPlanTask,
+    MajorFindingPolicy, TenderCommandError, TenderErrorCode, TenderId, TenderRecordKind,
+    TenderStore, WorkPlanDecision, WorkPlanProfileBinding, WorkPlanTask,
 };
 
 const MAX_PRODUCTION_TASKS: usize = 256;
@@ -40,6 +41,9 @@ const MAX_PRODUCTION_FINDINGS: usize = 32;
 const MAX_PRODUCTION_EVIDENCE_REFERENCES: usize = 256;
 const MAX_PRODUCTION_REVIEW_SCOPE_ITEMS: usize = 16;
 const MAX_PRODUCTION_REVIEW_CRITERIA: usize = 16;
+const MAX_PRODUCTION_COORDINATION_ASSIGNMENTS: usize = 1_024;
+const MAX_PRODUCTION_COORDINATION_OUTPUT_BYTES: usize = 192 * 1024;
+const MAX_PRODUCTION_COORDINATION_CONTRACT_BYTES: usize = 1024 * 1024;
 
 type StoredProductionActivation = (String, String, u32, String, String, String, String, String);
 type PreparedProductionTaskRow = (
@@ -398,6 +402,7 @@ pub struct ProductionArtifactPayload {
     pub summary: String,
     pub evidence_references: Vec<String>,
     pub gaps: Vec<String>,
+    pub coordination_observations: Vec<ProductionCoordinationObservation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub remediations: Vec<ProductionRemediation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -406,6 +411,64 @@ pub struct ProductionArtifactPayload {
     pub query_proposals: Vec<AgentTenderQueryProposal>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub query_updates: Vec<AgentTenderQueryUpdate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ProductionCoordinationObservationSubject {
+    SubmissionDeadline,
+    ResponsibleParty,
+    ScopeQualification,
+    ScopeExclusion,
+    ExpectedDeliveryCost,
+    ApprovedTenderPrice,
+    CommercialAppetite,
+    TechnicalCommitment,
+    ProgrammeCommitment,
+    ProcurementCommitment,
+    ContractualCommitment,
+    RiskCommitment,
+    SubmissionCommitment,
+    QueryTreatment,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[ts(export)]
+pub enum ProductionCoordinationObservationValue {
+    Text { text: String },
+    Amount { value: String, currency: String },
+    TextSet { values: Vec<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ProductionCoordinationObservation {
+    pub subject: ProductionCoordinationObservationSubject,
+    pub value: ProductionCoordinationObservationValue,
+    pub evidence_references: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ProductionCoordinationSourceObservation {
+    subject: ProductionCoordinationObservationSubject,
+    value: ProductionCoordinationObservationValue,
+    reference: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ProductionCoordinationAssignmentContract {
+    subject: ProductionCoordinationObservationSubject,
+    required_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ProductionCoordinationContract {
+    required_subjects: Vec<ProductionCoordinationObservationSubject>,
+    assignment_contracts: Vec<ProductionCoordinationAssignmentContract>,
+    source_observations: Vec<ProductionCoordinationSourceObservation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -649,7 +712,9 @@ impl TenderStore {
                            SELECT 1 FROM work_plan_heads
                            JOIN tender ON tender.singleton = 1
                            WHERE plan_id = ?1 AND current_version = ?2
-                             AND tender.lifecycle_phase = 'active_production'
+                              AND tender.lifecycle_phase IN (
+                                'active_production', 'integrated_review', 'package_production'
+                              )
                          )",
                         params![activation.1, activation.2],
                         |row| row.get::<_, bool>(0),
@@ -721,6 +786,9 @@ impl TenderStore {
             }
             for definition in plan_tasks {
                 check()?;
+                if production_coordination_contract(&self.connection, &definition).is_err() {
+                    return Ok(false);
+                }
                 let stored: Option<(String, String, String, Option<String>)> = self
                     .connection
                     .query_row(
@@ -2033,7 +2101,11 @@ impl TenderStore {
                     |row| row.get(0),
                 )
                 .map_err(sql_error)?;
+            let coordination_contract = matches!(attempt_kind, "author" | "remediation")
+                .then(|| production_coordination_contract(&transaction, &definition))
+                .transpose()?;
             let payload = json!({
+                "coordination_contract": coordination_contract,
                 "data_classification": task.permissions.data_classifications
                     .iter()
                     .max()
@@ -2340,6 +2412,31 @@ impl TenderStore {
             )?;
             transaction.commit().map_err(sql_error)?;
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+
+        for task in &plan.tasks {
+            budget.check()?;
+            match production_coordination_contract(&transaction, task) {
+                Ok(_) => {}
+                Err(error) if error.code == TenderErrorCode::InvalidCommand => {
+                    append_audit_event(
+                        &transaction,
+                        tender_id.as_str(),
+                        "production_activation_denied",
+                        tender_revision,
+                        json!({
+                            "plan_id": command.plan_id,
+                            "plan_version": command.plan_version.to_string(),
+                            "reason": "coordination_contract_boundary",
+                            "task_key": task.task_key,
+                        }),
+                        &created_at,
+                    )?;
+                    transaction.commit().map_err(sql_error)?;
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            }
         }
 
         let activation_id = random_identifier(&transaction)?;
@@ -3732,11 +3829,12 @@ pub(super) fn production_completion_payload_is_valid(
         return Ok(true);
     };
     let valid = if matches!(attempt_kind.as_str(), "author" | "remediation") {
-        parse_canonical_json::<ProductionArtifactPayload>(payload_json)
-            .ok()
-            .is_some_and(|candidate| {
+        match parse_canonical_json::<ProductionArtifactPayload>(payload_json) {
+            Ok(candidate) => {
                 validate_artifact_candidate(connection, task_id, &candidate, &attempt_kind).is_ok()
-            })
+            }
+            Err(_) => false,
+        }
     } else if attempt_kind == "query_control" {
         parse_canonical_json::<ProductionQueryControlCandidate>(payload_json)
             .ok()
@@ -4203,11 +4301,22 @@ fn validate_artifact_candidate(
         || candidate.summary.len() > 4_000
         || candidate.evidence_references.is_empty()
         || candidate.evidence_references.len() > MAX_PRODUCTION_EVIDENCE_REFERENCES
+        || candidate.coordination_observations.is_empty()
+        || candidate.coordination_observations.len() > 32
         || !candidate.gaps.is_empty()
     {
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
     let task = load_task(transaction, task_id)?;
+    let definition_json: String = transaction
+        .query_row(
+            "SELECT task_definition_json FROM production_tasks WHERE task_id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    let definition: WorkPlanTask = parse_canonical_json(&definition_json)?;
+    let coordination_contract = production_coordination_contract(transaction, &definition)?;
     let allowed = task
         .exact_inputs
         .iter()
@@ -4217,10 +4326,82 @@ fn validate_artifact_candidate(
         .evidence_references
         .iter()
         .collect::<std::collections::HashSet<_>>();
+    let observation_subjects = candidate
+        .coordination_observations
+        .iter()
+        .map(|observation| observation.subject)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut observed_assignment_keys =
+        std::collections::BTreeMap::<ProductionCoordinationObservationSubject, Vec<String>>::new();
+    for observation in &candidate.coordination_observations {
+        if !coordination_contract
+            .assignment_contracts
+            .iter()
+            .any(|contract| contract.subject == observation.subject)
+        {
+            continue;
+        }
+        let ProductionCoordinationObservationValue::TextSet { values } = &observation.value else {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        };
+        observed_assignment_keys
+            .entry(observation.subject)
+            .or_default()
+            .extend(
+                values
+                    .iter()
+                    .filter_map(|value| value.split_once('=').map(|(key, _)| key.to_owned())),
+            );
+    }
+    let assignments_are_exact = coordination_contract
+        .assignment_contracts
+        .iter()
+        .all(|contract| {
+            let observed = observed_assignment_keys
+                .get(&contract.subject)
+                .cloned()
+                .unwrap_or_default();
+            let observed_set = observed
+                .iter()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>();
+            observed.len() == observed_set.len()
+                && observed_set
+                    == contract
+                        .required_keys
+                        .iter()
+                        .cloned()
+                        .collect::<std::collections::BTreeSet<_>>()
+        });
     if evidence.len() != candidate.evidence_references.len()
         || evidence
             .iter()
             .any(|reference| !allowed.contains(*reference))
+        || !coordination_contract
+            .required_subjects
+            .iter()
+            .all(|subject| observation_subjects.contains(subject))
+        || !assignments_are_exact
+        || candidate
+            .coordination_observations
+            .iter()
+            .any(|observation| {
+                canonical_coordination_observation_value(observation.subject, &observation.value)
+                    .is_none()
+                    || !coordination_subject_is_allowed(&coordination_contract, observation.subject)
+                    || observation.evidence_references.is_empty()
+                    || observation.evidence_references.len() > MAX_PRODUCTION_EVIDENCE_REFERENCES
+                    || observation
+                        .evidence_references
+                        .iter()
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len()
+                        != observation.evidence_references.len()
+                    || observation
+                        .evidence_references
+                        .iter()
+                        .any(|reference| !allowed.contains(reference))
+            })
         || !agent_query_publication_is_valid(
             transaction,
             task_id,
@@ -4357,6 +4538,551 @@ fn validate_artifact_candidate(
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
     Ok(())
+}
+
+fn required_coordination_subject(workstream_key: &str) -> ProductionCoordinationObservationSubject {
+    let workstream_key = workstream_key.to_ascii_lowercase();
+    if workstream_key.contains("cost") || workstream_key.contains("commercial") {
+        ProductionCoordinationObservationSubject::ExpectedDeliveryCost
+    } else if workstream_key.contains("document") || workstream_key.contains("submission") {
+        ProductionCoordinationObservationSubject::SubmissionCommitment
+    } else if workstream_key.contains("assurance") || workstream_key.contains("risk") {
+        ProductionCoordinationObservationSubject::RiskCommitment
+    } else if workstream_key.contains("analysis") || workstream_key.contains("technical") {
+        ProductionCoordinationObservationSubject::TechnicalCommitment
+    } else if workstream_key.contains("programme") || workstream_key.contains("schedule") {
+        ProductionCoordinationObservationSubject::ProgrammeCommitment
+    } else if workstream_key.contains("procurement") || workstream_key.contains("supplier") {
+        ProductionCoordinationObservationSubject::ProcurementCommitment
+    } else if workstream_key.contains("contract") {
+        ProductionCoordinationObservationSubject::ContractualCommitment
+    } else {
+        ProductionCoordinationObservationSubject::TechnicalCommitment
+    }
+}
+
+fn production_coordination_contract(
+    connection: &rusqlite::Connection,
+    task: &WorkPlanTask,
+) -> Result<ProductionCoordinationContract, TenderCommandError> {
+    let mut required_subjects = required_coordination_subjects(task);
+    let task_deadline_required =
+        required_subjects.contains(&ProductionCoordinationObservationSubject::SubmissionDeadline);
+    let primary_subject = required_coordination_subject(&task.workstream_key);
+    let mut assignment_keys = std::collections::BTreeMap::<
+        ProductionCoordinationObservationSubject,
+        std::collections::BTreeSet<String>,
+    >::new();
+    let mut source_observations = Vec::new();
+    let task_assignment_key = coordination_task_assignment_key(&task.task_key);
+    if coordination_subject_uses_assignments(primary_subject) {
+        assignment_keys
+            .entry(primary_subject)
+            .or_default()
+            .insert(task_assignment_key.clone());
+    }
+    let package = task
+        .exact_inputs
+        .iter()
+        .find(|input| input.kind == "bid_decision_package")
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let mut statement = connection
+        .prepare(
+            "WITH package_records AS (
+                   SELECT record_id, record_version
+                   FROM bid_compliance_rows
+                   WHERE package_id = ?1 AND package_version = ?2
+                     AND verification_status = 'verified'
+                     AND trust_class IN (
+                       'deterministic_fact', 'verified', 'engineer_verified', 'approved_assumption'
+                     )
+                   UNION
+                   SELECT record_id, record_version
+                   FROM bid_decision_package_record_bindings
+                   WHERE package_id = ?1 AND package_version = ?2
+                 )
+                 SELECT records.stable_key, versions.kind, versions.fields_json,
+                        versions.record_id, versions.version
+                 FROM package_records
+                 JOIN tender_records AS records USING (record_id)
+                 JOIN tender_record_versions AS versions USING (record_id)
+                 WHERE versions.version = package_records.record_version
+                 ORDER BY records.stable_key, versions.record_id LIMIT 257",
+        )
+        .map_err(sql_error)?;
+    let records = statement
+        .query_map(params![package.reference, package.version], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, u32>(4)?,
+            ))
+        })
+        .map_err(sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_error)?;
+    if records.len() > 256 {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    for (stable_key, kind, fields_json, record_id, version) in records {
+        let kind = TenderRecordKind::parse(&kind)?;
+        let fields: Vec<serde_json::Value> = parse_canonical_json(&fields_json)?;
+        if fields.len() > 64 {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        for field in fields {
+            let Some(field_name) = field.get("name").and_then(serde_json::Value::as_str) else {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            };
+            let Some(value) = field
+                .get("normalized_value")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| field.get("value").and_then(serde_json::Value::as_str))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let Some((subject, typed_value)) =
+                record_coordination_observation(kind, &stable_key, field_name, value)
+            else {
+                continue;
+            };
+            if canonical_coordination_observation_value(subject, &typed_value).is_none() {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            let ProductionCoordinationObservationValue::TextSet { values } = &typed_value else {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            };
+            if values.len() != 1 {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            let key = values[0]
+                .split_once('=')
+                .map(|(key, _)| key)
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            if key.is_empty()
+                || key.len() > 512
+                || !assignment_keys
+                    .entry(subject)
+                    .or_default()
+                    .insert(key.to_owned())
+            {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            required_subjects.insert(subject);
+            source_observations.push(ProductionCoordinationSourceObservation {
+                subject,
+                value: typed_value,
+                reference: format!("tender_record_version:{record_id}:{version}"),
+            });
+        }
+    }
+    assignment_keys
+        .entry(ProductionCoordinationObservationSubject::ResponsibleParty)
+        .or_default()
+        .insert(task_assignment_key.clone());
+    source_observations.push(ProductionCoordinationSourceObservation {
+        subject: ProductionCoordinationObservationSubject::ResponsibleParty,
+        value: ProductionCoordinationObservationValue::TextSet {
+            values: vec![format!("{task_assignment_key}={}", task.profile_id)],
+        },
+        reference: format!("work_plan_task:{}", task.task_key),
+    });
+    if task_deadline_required {
+        let deadline_key = coordination_task_assignment_key(&task.task_key);
+        let deadline = ProductionCoordinationObservationValue::TextSet {
+            values: vec![format!("{deadline_key}={}", task.deadline)],
+        };
+        if canonical_coordination_observation_value(
+            ProductionCoordinationObservationSubject::SubmissionDeadline,
+            &deadline,
+        )
+        .is_none()
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        assignment_keys
+            .entry(ProductionCoordinationObservationSubject::SubmissionDeadline)
+            .or_default()
+            .insert(deadline_key);
+        source_observations.push(ProductionCoordinationSourceObservation {
+            subject: ProductionCoordinationObservationSubject::SubmissionDeadline,
+            value: deadline,
+            reference: format!("work_plan_task:{}", task.task_key),
+        });
+    }
+    let assignment_contracts = assignment_keys
+        .into_iter()
+        .map(
+            |(subject, required_keys)| ProductionCoordinationAssignmentContract {
+                subject,
+                required_keys: required_keys.into_iter().collect(),
+            },
+        )
+        .collect();
+    let contract = ProductionCoordinationContract {
+        required_subjects: required_subjects.into_iter().collect(),
+        assignment_contracts,
+        source_observations,
+    };
+    if !coordination_contract_is_representable(&contract)? {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    Ok(contract)
+}
+
+fn coordination_contract_is_representable(
+    contract: &ProductionCoordinationContract,
+) -> Result<bool, TenderCommandError> {
+    let assignment_count = contract
+        .assignment_contracts
+        .iter()
+        .map(|assignment| assignment.required_keys.len())
+        .sum::<usize>();
+    let assignment_subjects = contract
+        .assignment_contracts
+        .iter()
+        .map(|assignment| assignment.subject)
+        .collect::<std::collections::BTreeSet<_>>();
+    let observation_count = contract
+        .assignment_contracts
+        .iter()
+        .map(|assignment| assignment.required_keys.len().div_ceil(32))
+        .sum::<usize>()
+        + contract
+            .required_subjects
+            .iter()
+            .filter(|subject| !assignment_subjects.contains(subject))
+            .count();
+    let assignment_bytes = contract
+        .source_observations
+        .iter()
+        .map(|observation| canonical_json(&observation.value).map(|value| value.len() + 32))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .sum::<usize>()
+        .saturating_add(
+            contract
+                .assignment_contracts
+                .iter()
+                .flat_map(|assignment| assignment.required_keys.iter())
+                .map(|key| key.len().saturating_add("=validated".len() + 32))
+                .sum::<usize>(),
+        );
+    Ok(assignment_count <= MAX_PRODUCTION_COORDINATION_ASSIGNMENTS
+        && observation_count <= 32
+        && assignment_bytes <= MAX_PRODUCTION_COORDINATION_OUTPUT_BYTES
+        && canonical_json(contract)?.len() <= MAX_PRODUCTION_COORDINATION_CONTRACT_BYTES)
+}
+
+fn required_coordination_subjects(
+    task: &WorkPlanTask,
+) -> std::collections::BTreeSet<ProductionCoordinationObservationSubject> {
+    let mut subjects = std::collections::BTreeSet::from([
+        required_coordination_subject(&task.workstream_key),
+        ProductionCoordinationObservationSubject::ResponsibleParty,
+    ]);
+    let workstream = task.workstream_key.to_ascii_lowercase();
+    if workstream.contains("programme")
+        || workstream.contains("schedule")
+        || workstream.contains("coordination")
+        || workstream.contains("document")
+        || workstream.contains("submission")
+    {
+        subjects.insert(ProductionCoordinationObservationSubject::SubmissionDeadline);
+    }
+    subjects
+}
+
+pub(crate) fn record_coordination_observation(
+    kind: TenderRecordKind,
+    stable_key: &str,
+    field_name: &str,
+    value: &str,
+) -> Option<(
+    ProductionCoordinationObservationSubject,
+    ProductionCoordinationObservationValue,
+)> {
+    let normalized_field_name = normalize_coordination_identifier(field_name);
+    let assignment_key = coordination_assignment_key(stable_key, field_name);
+    let (subject, assigned_value) = if kind == TenderRecordKind::Deadline
+        || normalized_field_name.contains("deadline")
+        || normalized_field_name.contains("due_date")
+        || normalized_field_name.contains("cutoff")
+    {
+        (
+            ProductionCoordinationObservationSubject::SubmissionDeadline,
+            value.to_owned(),
+        )
+    } else if normalized_field_name.contains("responsib")
+        || normalized_field_name.contains("owner")
+        || normalized_field_name.contains("party")
+    {
+        (
+            ProductionCoordinationObservationSubject::ResponsibleParty,
+            normalize_coordination_text(value),
+        )
+    } else if normalized_field_name.contains("qualification")
+        || normalized_field_name.contains("assumption")
+        || kind == TenderRecordKind::Assumption
+    {
+        (
+            ProductionCoordinationObservationSubject::ScopeQualification,
+            normalize_coordination_text(value),
+        )
+    } else if normalized_field_name.contains("exclusion") {
+        (
+            ProductionCoordinationObservationSubject::ScopeExclusion,
+            normalize_coordination_text(value),
+        )
+    } else {
+        let subject = match kind {
+            TenderRecordKind::Requirement => {
+                ProductionCoordinationObservationSubject::ProcurementCommitment
+            }
+            TenderRecordKind::Clause => {
+                ProductionCoordinationObservationSubject::ContractualCommitment
+            }
+            TenderRecordKind::Risk => ProductionCoordinationObservationSubject::RiskCommitment,
+            TenderRecordKind::Deliverable | TenderRecordKind::Form => {
+                ProductionCoordinationObservationSubject::SubmissionCommitment
+            }
+            TenderRecordKind::EvaluationCriterion | TenderRecordKind::ProjectCharacteristic => {
+                ProductionCoordinationObservationSubject::TechnicalCommitment
+            }
+            TenderRecordKind::Assumption
+            | TenderRecordKind::TenderQuery
+            | TenderRecordKind::Deadline => return None,
+        };
+        (subject, normalize_coordination_text(value))
+    };
+    let typed_value = ProductionCoordinationObservationValue::TextSet {
+        values: vec![format!("{assignment_key}={assigned_value}")],
+    };
+    Some((subject, typed_value))
+}
+
+fn normalize_coordination_identifier(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '_' | '-')
+            {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn coordination_subject_uses_assignments(
+    subject: ProductionCoordinationObservationSubject,
+) -> bool {
+    matches!(
+        subject,
+        ProductionCoordinationObservationSubject::SubmissionDeadline
+            | ProductionCoordinationObservationSubject::ResponsibleParty
+            | ProductionCoordinationObservationSubject::ScopeQualification
+            | ProductionCoordinationObservationSubject::ScopeExclusion
+            | ProductionCoordinationObservationSubject::TechnicalCommitment
+            | ProductionCoordinationObservationSubject::ProgrammeCommitment
+            | ProductionCoordinationObservationSubject::ProcurementCommitment
+            | ProductionCoordinationObservationSubject::ContractualCommitment
+            | ProductionCoordinationObservationSubject::RiskCommitment
+            | ProductionCoordinationObservationSubject::SubmissionCommitment
+    )
+}
+
+pub(crate) fn coordination_assignment_key(stable_key: &str, field_name: &str) -> String {
+    format!(
+        "{}.{}",
+        coordination_assignment_key_component(stable_key),
+        coordination_assignment_key_component(field_name)
+    )
+}
+
+pub(crate) fn coordination_task_assignment_key(task_key: &str) -> String {
+    format!("task:{}", coordination_assignment_key_component(task_key))
+}
+
+fn coordination_assignment_key_component(value: &str) -> String {
+    if !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
+    {
+        return format!("v:{value}");
+    }
+    let mut encoded = String::with_capacity(2 + value.len() * 2);
+    encoded.push_str("x:");
+    for byte in value.as_bytes() {
+        use std::fmt::Write;
+        write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    encoded
+}
+
+fn coordination_subject_is_allowed(
+    contract: &ProductionCoordinationContract,
+    subject: ProductionCoordinationObservationSubject,
+) -> bool {
+    contract.required_subjects.contains(&subject)
+        || contract
+            .assignment_contracts
+            .iter()
+            .any(|assignment| assignment.subject == subject)
+        || (matches!(
+            subject,
+            ProductionCoordinationObservationSubject::CommercialAppetite
+                | ProductionCoordinationObservationSubject::ApprovedTenderPrice
+        ) && contract
+            .required_subjects
+            .contains(&ProductionCoordinationObservationSubject::ExpectedDeliveryCost))
+}
+
+pub(crate) fn canonical_coordination_observation_value(
+    subject: ProductionCoordinationObservationSubject,
+    value: &ProductionCoordinationObservationValue,
+) -> Option<String> {
+    match (subject, value) {
+        (
+            ProductionCoordinationObservationSubject::SubmissionDeadline,
+            ProductionCoordinationObservationValue::TextSet { values },
+        ) if !values.is_empty()
+            && values.len() <= 32
+            && values.iter().all(valid_coordination_deadline_assignment) =>
+        {
+            let mut values = values
+                .iter()
+                .map(|value| {
+                    let (key, timestamp) = value
+                        .split_once('=')
+                        .expect("validated deadline assignment");
+                    let timestamp = timestamp
+                        .parse::<Timestamp>()
+                        .expect("validated deadline timestamp");
+                    format!("{key}={timestamp}")
+                })
+                .collect::<Vec<_>>();
+            values.sort();
+            values.dedup();
+            canonical_json(&values).ok()
+        }
+        (
+            ProductionCoordinationObservationSubject::ExpectedDeliveryCost
+            | ProductionCoordinationObservationSubject::ApprovedTenderPrice,
+            ProductionCoordinationObservationValue::Amount { value, currency },
+        ) if currency.len() == 3 && currency.bytes().all(|byte| byte.is_ascii_uppercase()) => value
+            .parse::<Decimal>()
+            .ok()
+            .map(|value| format!("{} {currency}", value.normalize())),
+        (
+            ProductionCoordinationObservationSubject::ResponsibleParty
+            | ProductionCoordinationObservationSubject::ScopeQualification
+            | ProductionCoordinationObservationSubject::ScopeExclusion,
+            ProductionCoordinationObservationValue::TextSet { values },
+        ) if values.len() <= 32
+            && (subject != ProductionCoordinationObservationSubject::ResponsibleParty
+                || !values.is_empty())
+            && values.iter().all(|value| {
+                !value.trim().is_empty()
+                    && value.trim() == value
+                    && value.len() <= 4_608
+                    && (subject != ProductionCoordinationObservationSubject::ResponsibleParty
+                        || value
+                            .split_once('=')
+                            .is_some_and(|(responsibility, party)| {
+                                !responsibility.trim().is_empty()
+                                    && responsibility.trim() == responsibility
+                                    && !party.trim().is_empty()
+                                    && party.trim() == party
+                            }))
+            }) =>
+        {
+            let mut values = values
+                .iter()
+                .map(|value| normalize_coordination_text(value))
+                .collect::<Vec<_>>();
+            values.sort();
+            values.dedup();
+            canonical_json(&values).ok()
+        }
+        (
+            ProductionCoordinationObservationSubject::TechnicalCommitment
+            | ProductionCoordinationObservationSubject::ProgrammeCommitment
+            | ProductionCoordinationObservationSubject::ProcurementCommitment
+            | ProductionCoordinationObservationSubject::ContractualCommitment
+            | ProductionCoordinationObservationSubject::RiskCommitment
+            | ProductionCoordinationObservationSubject::SubmissionCommitment,
+            ProductionCoordinationObservationValue::TextSet { values },
+        ) if !values.is_empty()
+            && values.len() <= 32
+            && values.iter().all(valid_coordination_assignment) =>
+        {
+            let mut values = values
+                .iter()
+                .map(|value| {
+                    let (key, assigned) = value
+                        .split_once('=')
+                        .expect("validated coordination assignment");
+                    format!("{key}={}", normalize_coordination_text(assigned))
+                })
+                .collect::<Vec<_>>();
+            values.sort();
+            values.dedup();
+            canonical_json(&values).ok()
+        }
+        (
+            ProductionCoordinationObservationSubject::CommercialAppetite
+            | ProductionCoordinationObservationSubject::QueryTreatment,
+            ProductionCoordinationObservationValue::Text { text },
+        ) if !text.trim().is_empty() && text.trim() == text && text.len() <= 4_000 => {
+            Some(normalize_coordination_text(text))
+        }
+        _ => None,
+    }
+}
+
+fn valid_coordination_assignment(value: &String) -> bool {
+    if value.trim() != value || value.len() > 4_608 {
+        return false;
+    }
+    value.split_once('=').is_some_and(|(key, assigned)| {
+        !key.is_empty()
+            && key.len() <= 512
+            && key.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'_' | b'-' | b'.' | b':')
+            })
+            && !assigned.trim().is_empty()
+            && assigned.trim() == assigned
+    })
+}
+
+fn valid_coordination_deadline_assignment(value: &String) -> bool {
+    if !valid_coordination_assignment(value) {
+        return false;
+    }
+    value
+        .split_once('=')
+        .is_some_and(|(_, timestamp)| timestamp.parse::<Timestamp>().is_ok())
+}
+
+fn normalize_coordination_text(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 fn validate_query_control_candidate(
@@ -5151,6 +5877,51 @@ fn production_remediation_output_contract() -> Result<String, TenderCommandError
     canonical_json(&json!({
         "additionalProperties": false,
         "properties": {
+            "coordination_observations": {
+                "description": "Emit every subject in coordination_contract.required_subjects. For each entry in coordination_contract.assignment_contracts, emit every required key exactly once as key=value across one or more observations; copy Host source observations exactly unless the artifact must surface a contradiction.",
+                "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                        "subject": {
+                            "enum": ["submission_deadline", "responsible_party", "scope_qualification", "scope_exclusion", "expected_delivery_cost", "approved_tender_price", "commercial_appetite", "technical_commitment", "programme_commitment", "procurement_commitment", "contractual_commitment", "risk_commitment", "submission_commitment", "query_treatment"],
+                            "type": "string"
+                        },
+                        "evidence_references": {
+                            "items": { "maxLength": 400, "minLength": 1, "type": "string" },
+                            "maxItems": MAX_PRODUCTION_EVIDENCE_REFERENCES,
+                            "minItems": 1,
+                            "type": "array"
+                        },
+                        "value": {
+                            "additionalProperties": false,
+                            "properties": {
+                                "currency": { "maxLength": 3, "minLength": 3, "type": "string" },
+                                "kind": { "enum": ["text", "amount", "text_set"], "type": "string" },
+                                "text": { "maxLength": 4000, "minLength": 1, "type": "string" },
+                                "value": { "maxLength": 100, "minLength": 1, "type": "string" },
+                                "values": {
+                                    "items": {
+                                        "description": "A Host-authorized lowercase coordination key followed by '=' and the exact current value.",
+                                        "maxLength": 4608,
+                                        "minLength": 3,
+                                        "pattern": "^[a-z0-9_.:-]{1,512}=.+$",
+                                        "type": "string"
+                                    },
+                                    "maxItems": 32,
+                                    "type": "array"
+                                }
+                            },
+                            "required": ["kind"],
+                            "type": "object"
+                        }
+                    },
+                    "required": ["subject", "value", "evidence_references"],
+                    "type": "object"
+                },
+                "maxItems": 32,
+                "minItems": 1,
+                "type": "array"
+            },
             "evidence_references": {
                 "items": { "maxLength": 400, "minLength": 1, "type": "string" },
                 "maxItems": MAX_PRODUCTION_EVIDENCE_REFERENCES,
@@ -5198,7 +5969,7 @@ fn production_remediation_output_contract() -> Result<String, TenderCommandError
             },
             "summary": { "maxLength": 4000, "minLength": 1, "type": "string" }
         },
-        "required": ["summary", "evidence_references", "gaps"],
+        "required": ["summary", "evidence_references", "gaps", "coordination_observations"],
         "type": "object"
     }))
 }
@@ -5254,4 +6025,83 @@ where
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
     Ok(parsed)
+}
+
+#[cfg(test)]
+mod coordination_contract_tests {
+    use super::*;
+
+    fn contract_with_assignments(count: usize, value_len: usize) -> ProductionCoordinationContract {
+        let required_keys = (0..count)
+            .map(|index| format!("source_{index:04}"))
+            .collect::<Vec<_>>();
+        let source_observations = required_keys
+            .iter()
+            .map(|key| ProductionCoordinationSourceObservation {
+                subject: ProductionCoordinationObservationSubject::TechnicalCommitment,
+                value: ProductionCoordinationObservationValue::TextSet {
+                    values: vec![format!("{key}={}", "v".repeat(value_len))],
+                },
+                reference: "tender_record_version:00000000000000000000000000000000:1".into(),
+            })
+            .collect();
+        ProductionCoordinationContract {
+            required_subjects: vec![ProductionCoordinationObservationSubject::TechnicalCommitment],
+            assignment_contracts: vec![ProductionCoordinationAssignmentContract {
+                subject: ProductionCoordinationObservationSubject::TechnicalCommitment,
+                required_keys,
+            }],
+            source_observations,
+        }
+    }
+
+    #[test]
+    fn coordination_contract_accepts_exact_assignment_capacity_and_rejects_overflow() {
+        assert!(
+            coordination_contract_is_representable(&contract_with_assignments(
+                MAX_PRODUCTION_COORDINATION_ASSIGNMENTS,
+                1,
+            ))
+            .expect("exact coordination capacity")
+        );
+        assert!(
+            !coordination_contract_is_representable(&contract_with_assignments(
+                MAX_PRODUCTION_COORDINATION_ASSIGNMENTS + 1,
+                1,
+            ))
+            .expect("overflowing coordination capacity")
+        );
+    }
+
+    #[test]
+    fn coordination_contract_rejects_the_first_output_byte_overflow() {
+        let boundary = (1..=MAX_PRODUCTION_COORDINATION_ASSIGNMENTS)
+            .find(|count| {
+                !coordination_contract_is_representable(&contract_with_assignments(*count, 4_000))
+                    .expect("coordination byte boundary")
+            })
+            .expect("bounded output byte ceiling");
+        assert!(boundary > 1);
+        assert!(
+            coordination_contract_is_representable(
+                &contract_with_assignments(boundary - 1, 4_000,)
+            )
+            .expect("last representable coordination byte payload")
+        );
+    }
+
+    #[test]
+    fn coordination_keys_preserve_hyphen_and_underscore_identity() {
+        assert_ne!(
+            coordination_assignment_key("fire-rating", "value"),
+            coordination_assignment_key("fire_rating", "value")
+        );
+    }
+
+    #[test]
+    fn remediation_contract_instructions_name_the_serialized_coordination_fields() {
+        let contract = production_remediation_output_contract().expect("remediation contract");
+        assert!(contract.contains("coordination_contract.required_subjects"));
+        assert!(contract.contains("coordination_contract.assignment_contracts"));
+    }
 }
