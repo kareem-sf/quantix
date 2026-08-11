@@ -35,7 +35,7 @@ use super::{
 const MAX_DECIMAL_BYTES: usize = 64;
 const CALCULATION_ENGINE_VERSION: &str = "quantix-exact-decimal/1";
 const BOQ_RULE_NAME: &str = "Controlled BOQ line and estimate aggregation";
-const BOQ_RULE_FORMULA: &str = "line=convert(quantity, quantity_unit, rate_basis_unit) × unit_rate × exchange_rate; aggregate=sum(approved_line_final_amounts)";
+const CONTROLLED_CALCULATION_RULE_FORMULA: &str = "line=convert(quantity, quantity_unit, rate_basis_unit) × unit_rate × exchange_rate; aggregate=sum(approved_line_final_amounts); pricing=round(baseline + sum(add_adjustments) - sum(deduct_adjustments), approved_precision, approved_rounding_policy)";
 const MAX_CALCULATION_RUNS: u32 = 1_000;
 const MAX_CALCULATION_SCENARIOS: u32 = 1_000;
 pub(crate) const CALCULATION_RULE_REVIEW_CAPABILITY: &str = "review_cost_estimation";
@@ -503,6 +503,84 @@ pub struct EstimateAggregateCalculationRun {
     pub currency: String,
     pub manifest_sha256: String,
     pub approved_for_reliance: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum PricingAdjustmentDirection {
+    Add,
+    Deduct,
+}
+
+impl PricingAdjustmentDirection {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Deduct => "deduct",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct PricingCalculationAdjustmentInput {
+    pub adjustment_id: String,
+    pub adjustment_version: u32,
+    pub adjustment_manifest_sha256: String,
+    pub calculation_run_id: String,
+    pub calculation_manifest_sha256: String,
+    pub direction: PricingAdjustmentDirection,
+    pub amount: String,
+    pub currency: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct PricingCalculationRun {
+    pub pricing_calculation_run_id: String,
+    pub tender_revision: u32,
+    pub baseline_aggregate_run_id: String,
+    pub baseline_aggregate_manifest_sha256: String,
+    pub baseline_amount: String,
+    pub adjustments: Vec<PricingCalculationAdjustmentInput>,
+    pub rule_id: String,
+    pub rule_version: u32,
+    pub rule_approval_id: String,
+    pub scenario_id: String,
+    pub scenario_version: u32,
+    pub precision: u32,
+    pub rounding_mode: CalculationRoundingMode,
+    pub engine_version: String,
+    pub final_amount: String,
+    pub currency: String,
+    pub manifest_sha256: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PricingCalculationManifest {
+    schema_version: u32,
+    pricing_calculation_run_id: String,
+    tender_revision: u32,
+    baseline_aggregate_run_id: String,
+    baseline_aggregate_manifest_sha256: String,
+    baseline_amount: String,
+    adjustments: Vec<PricingCalculationAdjustmentInput>,
+    rule_id: String,
+    rule_version: u32,
+    rule_approval_id: String,
+    scenario_id: String,
+    scenario_version: u32,
+    precision: u32,
+    rounding_mode: CalculationRoundingMode,
+    engine_version: String,
+    final_amount: String,
+    currency: String,
+    created_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -1080,6 +1158,34 @@ fn valid_iso_date(value: &str) -> bool {
     value.len() == 10 && Date::from_str(value).is_ok_and(|date| date.to_string().as_str() == value)
 }
 
+fn evaluate_pricing_amount(
+    baseline_amount: &str,
+    adjustments: &[(PricingAdjustmentDirection, &str)],
+    precision: u32,
+    rounding: CalculationRoundingMode,
+) -> Option<String> {
+    let mut total = Decimal::from_str(baseline_amount).ok()?;
+    for (direction, value) in adjustments {
+        let amount = Decimal::from_str(value).ok()?;
+        total = match direction {
+            PricingAdjustmentDirection::Add => total.checked_add(amount),
+            PricingAdjustmentDirection::Deduct => total.checked_sub(amount),
+        }?;
+    }
+    if total.is_sign_negative() {
+        return None;
+    }
+    let strategy = match rounding {
+        CalculationRoundingMode::MidpointAwayFromZero => RoundingStrategy::MidpointAwayFromZero,
+        CalculationRoundingMode::MidpointNearestEven => RoundingStrategy::MidpointNearestEven,
+    };
+    let rounded = total.round_dp_with_strategy(precision, strategy);
+    Some(format!(
+        "{rounded:.precision$}",
+        precision = precision as usize
+    ))
+}
+
 fn deterministic_rule_tests() -> Result<Vec<CalculationRuleTestResult>, TenderCommandError> {
     struct Case {
         name: &'static str,
@@ -1138,7 +1244,7 @@ fn deterministic_rule_tests() -> Result<Vec<CalculationRuleTestResult>, TenderCo
             expected: "1.00",
         },
     ];
-    cases
+    let mut results = cases
         .into_iter()
         .map(|case| {
             let actual = evaluate_boq_line(
@@ -1161,7 +1267,68 @@ fn deterministic_rule_tests() -> Result<Vec<CalculationRuleTestResult>, TenderCo
                 actual_final_amount: actual,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, TenderCommandError>>()?;
+    struct PricingCase {
+        name: &'static str,
+        baseline: &'static str,
+        adjustments: &'static [(PricingAdjustmentDirection, &'static str)],
+        precision: u32,
+        rounding: CalculationRoundingMode,
+        expected: &'static str,
+    }
+    let pricing_cases = [
+        PricingCase {
+            name: "pricing add and deduct",
+            baseline: "100.00",
+            adjustments: &[
+                (PricingAdjustmentDirection::Add, "12.50"),
+                (PricingAdjustmentDirection::Deduct, "2.25"),
+            ],
+            precision: 2,
+            rounding: CalculationRoundingMode::MidpointAwayFromZero,
+            expected: "110.25",
+        },
+        PricingCase {
+            name: "pricing midpoint away from zero",
+            baseline: "1.005",
+            adjustments: &[],
+            precision: 2,
+            rounding: CalculationRoundingMode::MidpointAwayFromZero,
+            expected: "1.01",
+        },
+        PricingCase {
+            name: "pricing midpoint nearest even",
+            baseline: "1.005",
+            adjustments: &[],
+            precision: 2,
+            rounding: CalculationRoundingMode::MidpointNearestEven,
+            expected: "1.00",
+        },
+        PricingCase {
+            name: "pricing negative total is invalid",
+            baseline: "1.00",
+            adjustments: &[(PricingAdjustmentDirection::Deduct, "1.01")],
+            precision: 2,
+            rounding: CalculationRoundingMode::MidpointAwayFromZero,
+            expected: "invalid",
+        },
+    ];
+    results.extend(pricing_cases.into_iter().map(|case| {
+        let actual = evaluate_pricing_amount(
+            case.baseline,
+            case.adjustments,
+            case.precision,
+            case.rounding,
+        )
+        .unwrap_or_else(|| "invalid".into());
+        CalculationRuleTestResult {
+            case_name: case.name.into(),
+            expected_final_amount: case.expected.into(),
+            passed: actual == case.expected,
+            actual_final_amount: actual,
+        }
+    }));
+    Ok(results)
 }
 
 fn calculation_rule_review_output_contract() -> String {
@@ -2471,7 +2638,7 @@ impl TenderStore {
             rule_id: rule_id.clone(),
             version,
             name: BOQ_RULE_NAME.into(),
-            formula: BOQ_RULE_FORMULA.into(),
+            formula: CONTROLLED_CALCULATION_RULE_FORMULA.into(),
             engine_version: CALCULATION_ENGINE_VERSION.into(),
             supported_units: supported_units(),
             supported_currencies: supported_currencies(),
@@ -3254,7 +3421,7 @@ impl TenderStore {
             });
             if row.1 != expected_version
                 || row.2 != BOQ_RULE_NAME
-                || row.3 != BOQ_RULE_FORMULA
+                || row.3 != CONTROLLED_CALCULATION_RULE_FORMULA
                 || row.4 != CALCULATION_ENGINE_VERSION
                 || supported_unit_values != supported_units()
                 || normalize_rounding_policy(&supported_rounding_values).as_ref()
@@ -3441,7 +3608,7 @@ impl TenderStore {
         };
         if stored_rule.1 != counts.1
             || stored_rule.2 != BOQ_RULE_NAME
-            || stored_rule.3 != BOQ_RULE_FORMULA
+            || stored_rule.3 != CONTROLLED_CALCULATION_RULE_FORMULA
             || stored_rule.4 != CALCULATION_ENGINE_VERSION
             || rule_manifest.supported_units != supported_units()
             || rule_manifest.supported_currencies != supported_currencies()
@@ -4868,6 +5035,273 @@ pub(crate) fn load_estimate_aggregate_calculation(
         manifest_sha256,
         approval_exists,
     )))
+}
+
+pub(crate) struct RecordPricingCalculation<'a> {
+    pub pricing_calculation_run_id: &'a str,
+    pub tender_revision: u32,
+    pub baseline_aggregate_run_id: &'a str,
+    pub baseline_aggregate_manifest_sha256: &'a str,
+    pub baseline_amount: &'a str,
+    pub adjustments: Vec<PricingCalculationAdjustmentInput>,
+    pub created_at: &'a str,
+}
+
+pub(crate) fn record_pricing_calculation(
+    transaction: &Transaction<'_>,
+    mut request: RecordPricingCalculation<'_>,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<PricingCalculationRun, TenderCommandError> {
+    check()?;
+    let baseline =
+        load_estimate_aggregate_calculation(transaction, request.baseline_aggregate_run_id, check)?
+            .filter(|run| run.approved_for_reliance)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+    if baseline.manifest_sha256 != request.baseline_aggregate_manifest_sha256
+        || baseline.final_amount != request.baseline_amount
+        || request.adjustments.len() > 64
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    request.adjustments.sort_by(|left, right| {
+        (&left.adjustment_id, left.adjustment_version)
+            .cmp(&(&right.adjustment_id, right.adjustment_version))
+    });
+    let mut seen_adjustments = std::collections::HashSet::new();
+    let mut seen_runs = std::collections::HashSet::new();
+    for adjustment in &request.adjustments {
+        check()?;
+        if !seen_adjustments.insert((
+            adjustment.adjustment_id.clone(),
+            adjustment.adjustment_version,
+        )) || !seen_runs.insert(adjustment.calculation_run_id.clone())
+            || adjustment.currency != baseline.currency
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let run = approved_calculation_run_for_estimate(
+            transaction,
+            &adjustment.calculation_run_id,
+            check,
+        )?
+        .filter(|run| {
+            run.status == ControlledBoqCalculationStatus::Completed
+                && run.tender_revision == request.tender_revision
+        })
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if run.manifest_sha256 != adjustment.calculation_manifest_sha256
+            || run.final_amount.as_deref() != Some(adjustment.amount.as_str())
+            || run.output_currency != adjustment.currency
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+    }
+    let arithmetic_inputs = request
+        .adjustments
+        .iter()
+        .map(|adjustment| (adjustment.direction, adjustment.amount.as_str()))
+        .collect::<Vec<_>>();
+    let final_amount = evaluate_pricing_amount(
+        request.baseline_amount,
+        &arithmetic_inputs,
+        baseline.precision,
+        baseline.rounding_mode,
+    )
+    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+    let manifest = PricingCalculationManifest {
+        schema_version: 1,
+        pricing_calculation_run_id: request.pricing_calculation_run_id.into(),
+        tender_revision: request.tender_revision,
+        baseline_aggregate_run_id: baseline.aggregate_run_id.clone(),
+        baseline_aggregate_manifest_sha256: baseline.manifest_sha256.clone(),
+        baseline_amount: baseline.final_amount.clone(),
+        adjustments: request.adjustments,
+        rule_id: baseline.rule_id.clone(),
+        rule_version: baseline.rule_version,
+        rule_approval_id: baseline.rule_approval_id.clone(),
+        scenario_id: baseline.scenario_id.clone(),
+        scenario_version: baseline.scenario_version,
+        precision: baseline.precision,
+        rounding_mode: baseline.rounding_mode,
+        engine_version: CALCULATION_ENGINE_VERSION.into(),
+        final_amount: final_amount.clone(),
+        currency: baseline.currency.clone(),
+        created_at: request.created_at.into(),
+    };
+    let manifest_json = canonical_json(&manifest)?;
+    let manifest_sha256 = sha256_hex(manifest_json.as_bytes());
+    transaction
+        .execute(
+            "INSERT INTO pricing_calculation_runs (
+               pricing_calculation_run_id, tender_revision, baseline_aggregate_run_id,
+               baseline_aggregate_manifest_sha256, final_amount, currency,
+               manifest_json, manifest_sha256, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                manifest.pricing_calculation_run_id,
+                manifest.tender_revision,
+                manifest.baseline_aggregate_run_id,
+                manifest.baseline_aggregate_manifest_sha256,
+                manifest.final_amount,
+                manifest.currency,
+                manifest_json,
+                manifest_sha256,
+                manifest.created_at,
+            ],
+        )
+        .map_err(sql_error)?;
+    Ok(PricingCalculationRun {
+        pricing_calculation_run_id: manifest.pricing_calculation_run_id,
+        tender_revision: manifest.tender_revision,
+        baseline_aggregate_run_id: manifest.baseline_aggregate_run_id,
+        baseline_aggregate_manifest_sha256: manifest.baseline_aggregate_manifest_sha256,
+        baseline_amount: manifest.baseline_amount,
+        adjustments: manifest.adjustments,
+        rule_id: manifest.rule_id,
+        rule_version: manifest.rule_version,
+        rule_approval_id: manifest.rule_approval_id,
+        scenario_id: manifest.scenario_id,
+        scenario_version: manifest.scenario_version,
+        precision: manifest.precision,
+        rounding_mode: manifest.rounding_mode,
+        engine_version: manifest.engine_version,
+        final_amount: manifest.final_amount,
+        currency: manifest.currency,
+        manifest_sha256,
+        created_at: manifest.created_at,
+    })
+}
+
+pub(crate) fn load_pricing_calculation(
+    connection: &rusqlite::Connection,
+    pricing_calculation_run_id: &str,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<PricingCalculationRun, TenderCommandError> {
+    check()?;
+    type Stored = (u32, String, String, String, String, String, String, String);
+    let stored: Stored = connection
+        .query_row(
+            "SELECT tender_revision, baseline_aggregate_run_id,
+                    baseline_aggregate_manifest_sha256, final_amount, currency,
+                    manifest_json, manifest_sha256, created_at
+             FROM pricing_calculation_runs
+             WHERE pricing_calculation_run_id = ?1",
+            [pricing_calculation_run_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::NotFound))?;
+    if sha256_hex(stored.5.as_bytes()) != stored.6 {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let manifest: PricingCalculationManifest = parse_canonical(&stored.5)?;
+    let baseline = load_estimate_aggregate_calculation(
+        connection,
+        &manifest.baseline_aggregate_run_id,
+        check,
+    )?
+    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let rule_approval = load_rule_approval(connection, &manifest.rule_id, manifest.rule_version)?
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let mut canonical_adjustments = manifest.adjustments.clone();
+    canonical_adjustments.sort_by(|left, right| {
+        (&left.adjustment_id, left.adjustment_version)
+            .cmp(&(&right.adjustment_id, right.adjustment_version))
+    });
+    let mut seen_adjustments = std::collections::HashSet::new();
+    let mut seen_runs = std::collections::HashSet::new();
+    for adjustment in &manifest.adjustments {
+        check()?;
+        if !seen_adjustments.insert((
+            adjustment.adjustment_id.clone(),
+            adjustment.adjustment_version,
+        )) || !seen_runs.insert(adjustment.calculation_run_id.clone())
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let run = approved_calculation_run_for_estimate(
+            connection,
+            &adjustment.calculation_run_id,
+            check,
+        )?
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        if run.manifest_sha256 != adjustment.calculation_manifest_sha256
+            || run.final_amount.as_deref() != Some(adjustment.amount.as_str())
+            || run.output_currency != adjustment.currency
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+    }
+    let arithmetic_inputs = manifest
+        .adjustments
+        .iter()
+        .map(|adjustment| (adjustment.direction, adjustment.amount.as_str()))
+        .collect::<Vec<_>>();
+    let expected = evaluate_pricing_amount(
+        &manifest.baseline_amount,
+        &arithmetic_inputs,
+        manifest.precision,
+        manifest.rounding_mode,
+    )
+    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    if manifest.schema_version != 1
+        || manifest.pricing_calculation_run_id != pricing_calculation_run_id
+        || manifest.tender_revision != stored.0
+        || manifest.baseline_aggregate_run_id != stored.1
+        || manifest.baseline_aggregate_manifest_sha256 != stored.2
+        || manifest.final_amount != stored.3
+        || manifest.currency != stored.4
+        || manifest.created_at != stored.7
+        || manifest.engine_version != CALCULATION_ENGINE_VERSION
+        || manifest.baseline_aggregate_manifest_sha256 != baseline.manifest_sha256
+        || manifest.baseline_amount != baseline.final_amount
+        || manifest.currency != baseline.currency
+        || manifest.rule_id != baseline.rule_id
+        || manifest.rule_version != baseline.rule_version
+        || manifest.rule_approval_id != baseline.rule_approval_id
+        || manifest.rule_approval_id != rule_approval.approval_id
+        || manifest.scenario_id != baseline.scenario_id
+        || manifest.scenario_version != baseline.scenario_version
+        || manifest.precision != baseline.precision
+        || manifest.rounding_mode != baseline.rounding_mode
+        || manifest.adjustments.len() > 64
+        || manifest.adjustments != canonical_adjustments
+        || manifest.final_amount != expected
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(PricingCalculationRun {
+        pricing_calculation_run_id: manifest.pricing_calculation_run_id,
+        tender_revision: manifest.tender_revision,
+        baseline_aggregate_run_id: manifest.baseline_aggregate_run_id,
+        baseline_aggregate_manifest_sha256: manifest.baseline_aggregate_manifest_sha256,
+        baseline_amount: manifest.baseline_amount,
+        adjustments: manifest.adjustments,
+        rule_id: manifest.rule_id,
+        rule_version: manifest.rule_version,
+        rule_approval_id: manifest.rule_approval_id,
+        scenario_id: manifest.scenario_id,
+        scenario_version: manifest.scenario_version,
+        precision: manifest.precision,
+        rounding_mode: manifest.rounding_mode,
+        engine_version: manifest.engine_version,
+        final_amount: manifest.final_amount,
+        currency: manifest.currency,
+        manifest_sha256: stored.6,
+        created_at: manifest.created_at,
+    })
 }
 
 fn estimate_aggregate_manifest_is_valid(

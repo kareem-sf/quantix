@@ -46,12 +46,13 @@ pub use tender_intake::{
 };
 pub use tender_store::{
     ActivateTenderProductionCommand, AgentTenderQueryProposal, AgentTenderQueryUpdate,
-    ApproveBasisOfEstimateCommand, ApproveCalculationRuleCommand,
+    ApproveBasisOfEstimateCommand, ApproveCalculationRuleCommand, ApproveCommercialStrategyCommand,
     ApproveControlledBoqCalculationRunCommand, ApproveExternalRfiForIssueCommand,
-    ApproveProductionFindingExceptionCommand, ApprovedQueryTreatment, BasisOfEstimateApproval,
-    BasisOfEstimateReview, BasisOfEstimateReviewFinding, BasisOfEstimateReviewOutcome,
-    BasisOfEstimateReviewResult, BasisOfEstimateVersion, BidDecisionApprovalDecision,
-    BidDecisionApprovalHistoryPage, BidDecisionApprovalInvalidation,
+    ApprovePricedCostBaselineCommand, ApprovePricingAdjustmentCommand,
+    ApproveProductionFindingExceptionCommand, ApproveTenderPriceCommand, ApprovedQueryTreatment,
+    ApprovedTenderPrice, BasisOfEstimateReview, BasisOfEstimateReviewFinding,
+    BasisOfEstimateReviewOutcome, BasisOfEstimateReviewResult, BasisOfEstimateVersion,
+    BidDecisionApprovalDecision, BidDecisionApprovalHistoryPage, BidDecisionApprovalInvalidation,
     BidDecisionApprovalInvalidationResult, BidDecisionApprovalRecord, BidDecisionApprovalResult,
     BidDecisionGateBlocker, BidDecisionPackageChangeSummary, BidDecisionPackageInspection,
     BidDecisionPackageRecordBinding, BidDecisionPackageRecordCategory,
@@ -64,33 +65,42 @@ pub use tender_store::{
     CalculationRuleReviewFinding, CalculationRuleReviewOutcome, CalculationRuleReviewResult,
     CalculationRuleTestResult, CalculationRuleVersion, CalculationScenarioVersion,
     CalculationWorkspaceInspection, CapabilityDemand, CapabilityDemandClassification,
-    ComplianceDisposition, ComplianceDispositionUpdate, ComplianceMatrixPage, ComplianceMatrixRow,
+    CommercialStrategy, CommercialStrategyApproval, ComplianceDisposition,
+    ComplianceDispositionUpdate, ComplianceMatrixPage, ComplianceMatrixRow,
     ComposeTenderOfficeCommand, ContentVersionSummary, ControlledBoqCalculationRun,
     ControlledBoqCalculationStatus, CostBreakdownComponent, CostComponentCategory,
     CostEstimatorBasisResult, CostEstimatorCalculationResult, CreateBidDecisionPackageCommand,
-    CreateCalculationScenarioCommand, CreateExternalRfiDraftCommand, CreateTenderBackupCommand,
-    CreateTenderCommand, CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
-    DecideBidDecisionPackageCommand, DecideTenderQueryTreatmentCommand, DecideTenderRecordCommand,
-    DecideWorkPlanProposalCommand, DesignateBoqTableCommand, EstimateAggregateCalculationInput,
-    EstimateAggregateCalculationRun, EstimateAllowance, EstimateMaterialAssumption,
-    EstimateQueryObservation, EstimateQueryReference, EstimateQuotation, EstimateQuotationKind,
-    EstimateWorkspaceInspection, ExchangeRateType, ExportApprovedExternalRfiCommand,
-    ExternalRfiApproval, ExternalRfiDraft, ExternalRfiEligibleQuery, ExternalRfiEligibleQueryPage,
-    ExternalRfiExportRecord, ExternalRfiFindingSeverity, ExternalRfiPage,
-    ExternalRfiQueryReference, ExternalRfiQuestion, ExternalRfiRecipient,
-    ExternalRfiResponseCandidatePage, ExternalRfiResponseInterpretation, ExternalRfiResponseLink,
-    ExternalRfiReview, ExternalRfiReviewFinding, ExternalRfiReviewOutcome, ExternalRfiReviewResult,
-    InspectBidDecisionApprovalHistoryCommand, InspectBidDecisionPackageRecordsCommand,
-    InspectCalculationWorkspaceCommand, InspectComplianceMatrixCommand,
-    InspectEstimateWorkspaceCommand, InspectExternalRfiEligibleQueriesCommand,
-    InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
-    InspectProductionTaskReviewCommand, InspectTenderQueriesCommand, InspectTenderRecordsCommand,
-    InterpretExternalRfiResponseCommand, InvalidateBidDecisionApprovalCommand, MajorFindingPolicy,
-    ManagerCapabilityDemandInput, OpenTenderCommand, PrepareTenderRecoveryCommand,
-    ProductionArtifactPayload, ProductionArtifactVersion, ProductionArtifactVersionSummary,
-    ProductionFindingDisposition, ProductionFindingDispositionKind, ProductionFindingSeverity,
-    ProductionIntegrationReadiness, ProductionQueryTreatmentApplication, ProductionRemediation,
-    ProductionReview, ProductionReviewFinding, ProductionReviewResult, ProductionTaskInspection,
+    CreateCalculationScenarioCommand, CreateCommercialStrategyCommand,
+    CreateExternalRfiDraftCommand, CreatePricedCostBaselineCommand, CreatePricingAdjustmentCommand,
+    CreatePricingScenarioCommand, CreateTenderBackupCommand, CreateTenderCommand,
+    CreateTenderEngineerEntryCommand, CreateTenderQueryCommand, DecideBidDecisionPackageCommand,
+    DecideTenderQueryTreatmentCommand, DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
+    DesignateBoqTableCommand, EstimateAggregateCalculationInput, EstimateAggregateCalculationRun,
+    EstimateAllowance, EstimateMaterialAssumption, EstimateQueryObservation,
+    EstimateQueryReference, EstimateQuotation, EstimateQuotationKind, EstimateWorkspaceInspection,
+    ExchangeRateType, ExportApprovedExternalRfiCommand, ExternalRfiApproval, ExternalRfiDraft,
+    ExternalRfiEligibleQuery, ExternalRfiEligibleQueryPage, ExternalRfiExportRecord,
+    ExternalRfiFindingSeverity, ExternalRfiPage, ExternalRfiQueryReference, ExternalRfiQuestion,
+    ExternalRfiRecipient, ExternalRfiResponseCandidatePage, ExternalRfiResponseInterpretation,
+    ExternalRfiResponseLink, ExternalRfiReview, ExternalRfiReviewFinding, ExternalRfiReviewOutcome,
+    ExternalRfiReviewResult, InspectBidDecisionApprovalHistoryCommand,
+    InspectBidDecisionPackageRecordsCommand, InspectCalculationWorkspaceCommand,
+    InspectComplianceMatrixCommand, InspectEstimateWorkspaceCommand,
+    InspectExternalRfiEligibleQueriesCommand, InspectExternalRfiResponseCandidatesCommand,
+    InspectExternalRfisCommand, InspectPricingWorkspaceCommand, InspectProductionTaskReviewCommand,
+    InspectTenderQueriesCommand, InspectTenderRecordsCommand, InterpretExternalRfiResponseCommand,
+    InvalidateBidDecisionApprovalCommand, MajorFindingPolicy, ManagerCapabilityDemandInput,
+    OpenTenderCommand, PrepareTenderRecoveryCommand, PricedCostBaselineApproval,
+    PricedCostBaselineReview, PricedCostBaselineReviewFinding, PricedCostBaselineReviewOutcome,
+    PricedCostBaselineReviewResult, PricedCostBaselineVersion, PricingAdjustmentApproval,
+    PricingAdjustmentDirection, PricingAdjustmentKind, PricingAdjustmentReference,
+    PricingAdjustmentReviewResult, PricingAdjustmentVersion, PricingCalculationAdjustmentInput,
+    PricingCalculationRun, PricingDecisionHistoryEntry, PricingScenarioSelection,
+    PricingScenarioVersion, PricingWorkspaceInspection, ProductionArtifactPayload,
+    ProductionArtifactVersion, ProductionArtifactVersionSummary, ProductionFindingDisposition,
+    ProductionFindingDispositionKind, ProductionFindingSeverity, ProductionIntegrationReadiness,
+    ProductionQueryTreatmentApplication, ProductionRemediation, ProductionReview,
+    ProductionReviewFinding, ProductionReviewResult, ProductionTaskInspection,
     ProductionTaskReviewInspection, ProductionTaskRunResult, ProductionTaskState,
     ProposeBoqCalculationRuleCommand, RegisterExternalRfiResponseCommand,
     RegisterTenderContentCommand, ResolveBidDecisionReturnReworkCommand,
@@ -99,22 +109,24 @@ pub use tender_store::{
     ReviseWorkPlanProposalCommand, RunBasisOfEstimateReviewCommand,
     RunBidDecisionPackageReviewCommand, RunCalculationRuleReviewCommand,
     RunCostEstimatorBasisCommand, RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand,
+    RunPricedCostBaselineReviewCommand, RunPricingAdjustmentReviewCommand,
     RunProductionTaskCommand, RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand,
-    StartupReconciliationReport, TenderBackupRecord, TenderBackupState, TenderCatalogueEntry,
-    TenderCommandError, TenderErrorCode, TenderEvidenceReference, TenderInspection,
-    TenderIntegrityIssue, TenderIntegrityReport, TenderIntegrityState, TenderLifecyclePhase,
-    TenderProductionInspection, TenderQuery, TenderQueryInvalidation, TenderQueryPage,
-    TenderQueryResponse, TenderQueryStatus, TenderQueryTreatment, TenderQueryTreatmentProposal,
-    TenderQueryTreatmentProposalInput, TenderQueryType, TenderRecordAuthority,
-    TenderRecordAuthorityKind, TenderRecordAuthorityReference, TenderRecordBasisKind,
-    TenderRecordContradiction, TenderRecordDecisionResult, TenderRecordEngineerDecisionKind,
-    TenderRecordEvidence, TenderRecordExtractionResult, TenderRecordField, TenderRecordInspection,
-    TenderRecordKind, TenderRecordPage, TenderRecordReview, TenderRecordReviewOutcome,
-    TenderRecordReviewResult, TenderRecordSourceRelationship, TenderRecordTrustClass,
-    TenderRecordVersionReference, TenderRecoveryChoice, TenderRecoveryDecision,
-    TenderRecoveryDecisionRecord, TenderRecoveryRecord, TenderRecoveryState, TenderSummary,
-    WorkPlanApprovalRecord, WorkPlanCapabilityGap, WorkPlanDecision, WorkPlanProfileBinding,
-    WorkPlanProposalInspection, WorkPlanRevisionAction, WorkPlanTask, WorkPlanWorkstream,
+    SelectPricingScenarioCommand, StartupReconciliationReport, TenderBackupRecord,
+    TenderBackupState, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
+    TenderEvidenceReference, TenderInspection, TenderIntegrityIssue, TenderIntegrityReport,
+    TenderIntegrityState, TenderLifecyclePhase, TenderProductionInspection, TenderQuery,
+    TenderQueryInvalidation, TenderQueryPage, TenderQueryResponse, TenderQueryStatus,
+    TenderQueryTreatment, TenderQueryTreatmentProposal, TenderQueryTreatmentProposalInput,
+    TenderQueryType, TenderRecordAuthority, TenderRecordAuthorityKind,
+    TenderRecordAuthorityReference, TenderRecordBasisKind, TenderRecordContradiction,
+    TenderRecordDecisionResult, TenderRecordEngineerDecisionKind, TenderRecordEvidence,
+    TenderRecordExtractionResult, TenderRecordField, TenderRecordInspection, TenderRecordKind,
+    TenderRecordPage, TenderRecordReview, TenderRecordReviewOutcome, TenderRecordReviewResult,
+    TenderRecordSourceRelationship, TenderRecordTrustClass, TenderRecordVersionReference,
+    TenderRecoveryChoice, TenderRecoveryDecision, TenderRecoveryDecisionRecord,
+    TenderRecoveryRecord, TenderRecoveryState, TenderSummary, WorkPlanApprovalRecord,
+    WorkPlanCapabilityGap, WorkPlanDecision, WorkPlanProfileBinding, WorkPlanProposalInspection,
+    WorkPlanRevisionAction, WorkPlanTask, WorkPlanWorkstream,
 };
 
 use tauri::Manager;
@@ -124,17 +136,21 @@ mod tauri_commands {
         ensure_quantix_setup as ensure_setup, ActivateTenderProductionCommand,
         AgentAccessRequestView, AgentRunActivity, AgentRunHistoryPage, AgentRunInspection,
         AgentRunRecoveryDecision, ApproveAgentAccessCommand, ApproveBasisOfEstimateCommand,
-        ApproveCalculationRuleCommand, ApproveControlledBoqCalculationRunCommand,
-        ApproveExternalRfiForIssueCommand, ApproveProductionFindingExceptionCommand,
+        ApproveCalculationRuleCommand, ApproveCommercialStrategyCommand,
+        ApproveControlledBoqCalculationRunCommand, ApproveExternalRfiForIssueCommand,
+        ApprovePricedCostBaselineCommand, ApprovePricingAdjustmentCommand,
+        ApproveProductionFindingExceptionCommand, ApproveTenderPriceCommand,
         BasisOfEstimateReviewResult, BasisOfEstimateVersion, BidDecisionApprovalHistoryPage,
         BidDecisionApprovalInvalidationResult, BidDecisionApprovalResult,
         BidDecisionPackageInspection, BidDecisionPackageRecordPage, BidDecisionPackageReviewResult,
         BidDecisionReturnReworkResult, BoqTableDesignation, CalculationRuleReviewResult,
         CalculationRuleVersion, CalculationScenarioVersion, CalculationWorkspaceInspection,
-        ChooseTenderPackageCommand, ComplianceMatrixPage, ComposeTenderOfficeCommand,
-        ConfirmSourceRelationshipCommand, ControlledBoqCalculationRun, CostEstimatorBasisResult,
-        CostEstimatorCalculationResult, CreateBidDecisionPackageCommand,
-        CreateCalculationScenarioCommand, CreateExternalRfiDraftCommand, CreateTenderBackupCommand,
+        ChooseTenderPackageCommand, CommercialStrategy, ComplianceMatrixPage,
+        ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand, ControlledBoqCalculationRun,
+        CostEstimatorBasisResult, CostEstimatorCalculationResult, CreateBidDecisionPackageCommand,
+        CreateCalculationScenarioCommand, CreateCommercialStrategyCommand,
+        CreateExternalRfiDraftCommand, CreatePricedCostBaselineCommand,
+        CreatePricingAdjustmentCommand, CreatePricingScenarioCommand, CreateTenderBackupCommand,
         CreateTenderCommand, CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
         DecideBidDecisionPackageCommand, DecideTenderQueryTreatmentCommand,
         DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DesignateBoqTableCommand,
@@ -147,10 +163,13 @@ mod tauri_commands {
         InspectCalculationWorkspaceCommand, InspectComplianceMatrixCommand,
         InspectEstimateWorkspaceCommand, InspectExternalRfiEligibleQueriesCommand,
         InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
-        InspectProductionTaskReviewCommand, InspectTenderQueriesCommand,
-        InspectTenderRecordsCommand, InterpretExternalRfiResponseCommand, InterruptAgentRunCommand,
+        InspectPricingWorkspaceCommand, InspectProductionTaskReviewCommand,
+        InspectTenderQueriesCommand, InspectTenderRecordsCommand,
+        InterpretExternalRfiResponseCommand, InterruptAgentRunCommand,
         InvalidateBidDecisionApprovalCommand, OpenTenderCommand, ParseSourceArtifactCommand,
-        PrepareTenderRecoveryCommand, ProductionTaskReviewInspection, ProductionTaskRunResult,
+        PrepareTenderRecoveryCommand, PricedCostBaselineReviewResult, PricedCostBaselineVersion,
+        PricingAdjustmentReviewResult, PricingAdjustmentVersion, PricingScenarioVersion,
+        PricingWorkspaceInspection, ProductionTaskReviewInspection, ProductionTaskRunResult,
         ProposeBoqCalculationRuleCommand, QuantixHost, RegisterExternalRfiResponseCommand,
         RequestAgentAccessCommand, ResolveAgentAccessCommand,
         ResolveBidDecisionReturnReworkCommand, ResolveIndeterminateAgentRunCommand,
@@ -158,14 +177,15 @@ mod tauri_commands {
         ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand, RunBasisOfEstimateReviewCommand,
         RunBidDecisionPackageReviewCommand, RunBootstrapAgentCommand,
         RunCalculationRuleReviewCommand, RunCostEstimatorBasisCommand,
-        RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand, RunProductionTaskCommand,
-        RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, RuntimeReadiness,
-        SearchEvidenceCommand, SetupOutcome, TenderBackupRecord, TenderCatalogueEntry,
-        TenderCommandError, TenderErrorCode, TenderIntegrityReport, TenderPackageImportResult,
-        TenderPackageSourceKind, TenderProductionInspection, TenderQuery, TenderQueryPage,
-        TenderRecordAuthority, TenderRecordDecisionResult, TenderRecordExtractionResult,
-        TenderRecordPage, TenderRecordReviewResult, TenderRecoveryRecord, TenderSummary,
-        WorkPlanProposalInspection,
+        RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand,
+        RunPricedCostBaselineReviewCommand, RunPricingAdjustmentReviewCommand,
+        RunProductionTaskCommand, RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand,
+        RuntimeReadiness, SearchEvidenceCommand, SelectPricingScenarioCommand, SetupOutcome,
+        TenderBackupRecord, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
+        TenderIntegrityReport, TenderPackageImportResult, TenderPackageSourceKind,
+        TenderProductionInspection, TenderQuery, TenderQueryPage, TenderRecordAuthority,
+        TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordPage,
+        TenderRecordReviewResult, TenderRecoveryRecord, TenderSummary, WorkPlanProposalInspection,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -859,6 +879,152 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn create_priced_cost_baseline(
+        host: tauri::State<'_, QuantixHost>,
+        command: CreatePricedCostBaselineCommand,
+    ) -> Result<PricedCostBaselineVersion, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.create_priced_cost_baseline(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn run_priced_cost_baseline_review(
+        host: tauri::State<'_, QuantixHost>,
+        command: RunPricedCostBaselineReviewCommand,
+    ) -> Result<PricedCostBaselineReviewResult, TenderCommandError> {
+        host.inner().run_priced_cost_baseline_review(command).await
+    }
+
+    #[tauri::command]
+    pub(super) async fn approve_priced_cost_baseline(
+        host: tauri::State<'_, QuantixHost>,
+        command: ApprovePricedCostBaselineCommand,
+    ) -> Result<PricedCostBaselineVersion, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.approve_priced_cost_baseline(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn create_pricing_adjustment(
+        host: tauri::State<'_, QuantixHost>,
+        command: CreatePricingAdjustmentCommand,
+    ) -> Result<PricingAdjustmentVersion, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.create_pricing_adjustment(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn run_pricing_adjustment_review(
+        host: tauri::State<'_, QuantixHost>,
+        command: RunPricingAdjustmentReviewCommand,
+    ) -> Result<PricingAdjustmentReviewResult, TenderCommandError> {
+        host.inner().run_pricing_adjustment_review(command).await
+    }
+
+    #[tauri::command]
+    pub(super) async fn approve_pricing_adjustment(
+        host: tauri::State<'_, QuantixHost>,
+        command: ApprovePricingAdjustmentCommand,
+    ) -> Result<PricingAdjustmentVersion, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.approve_pricing_adjustment(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn create_commercial_strategy(
+        host: tauri::State<'_, QuantixHost>,
+        command: CreateCommercialStrategyCommand,
+    ) -> Result<CommercialStrategy, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.create_commercial_strategy(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn approve_commercial_strategy(
+        host: tauri::State<'_, QuantixHost>,
+        command: ApproveCommercialStrategyCommand,
+    ) -> Result<CommercialStrategy, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.approve_commercial_strategy(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn create_pricing_scenario(
+        host: tauri::State<'_, QuantixHost>,
+        command: CreatePricingScenarioCommand,
+    ) -> Result<PricingScenarioVersion, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.create_pricing_scenario(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn select_pricing_scenario(
+        host: tauri::State<'_, QuantixHost>,
+        command: SelectPricingScenarioCommand,
+    ) -> Result<PricingScenarioVersion, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.select_pricing_scenario(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn approve_tender_price(
+        host: tauri::State<'_, QuantixHost>,
+        command: ApproveTenderPriceCommand,
+    ) -> Result<PricingScenarioVersion, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.approve_tender_price(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_pricing_workspace(
+        host: tauri::State<'_, QuantixHost>,
+        command: InspectPricingWorkspaceCommand,
+    ) -> Result<PricingWorkspaceInspection, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.inspect_pricing_workspace(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
     pub(super) async fn create_bid_decision_package(
         host: tauri::State<'_, QuantixHost>,
         command: CreateBidDecisionPackageCommand,
@@ -1287,6 +1453,18 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
         tauri_commands::run_basis_of_estimate_review,
         tauri_commands::approve_basis_of_estimate,
         tauri_commands::inspect_estimate_workspace,
+        tauri_commands::create_priced_cost_baseline,
+        tauri_commands::run_priced_cost_baseline_review,
+        tauri_commands::approve_priced_cost_baseline,
+        tauri_commands::create_pricing_adjustment,
+        tauri_commands::run_pricing_adjustment_review,
+        tauri_commands::approve_pricing_adjustment,
+        tauri_commands::create_commercial_strategy,
+        tauri_commands::approve_commercial_strategy,
+        tauri_commands::create_pricing_scenario,
+        tauri_commands::select_pricing_scenario,
+        tauri_commands::approve_tender_price,
+        tauri_commands::inspect_pricing_workspace,
         tauri_commands::create_bid_decision_package,
         tauri_commands::inspect_current_bid_decision_package,
         tauri_commands::compose_tender_office,

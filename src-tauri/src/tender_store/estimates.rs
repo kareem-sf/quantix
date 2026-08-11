@@ -2252,13 +2252,13 @@ fn material_assumption(decision: &ApprovedQueryTreatment) -> EstimateMaterialAss
     }
 }
 
-struct ActiveEstimateProfile {
-    tender_revision: u32,
-    tender_name: String,
-    plan_id: String,
-    plan_version: u32,
-    profile: AgentProfileVersionView,
-    task_keys: Vec<String>,
+pub(crate) struct ActiveEstimateProfile {
+    pub(crate) tender_revision: u32,
+    pub(crate) tender_name: String,
+    pub(crate) plan_id: String,
+    pub(crate) plan_version: u32,
+    pub(crate) profile: AgentProfileVersionView,
+    pub(crate) task_keys: Vec<String>,
 }
 
 fn estimate_profile_task_keys(
@@ -2299,7 +2299,7 @@ fn estimate_task_keys_for_plan(
     estimate_profile_task_keys(&tasks_json, profile_id, profile_version)
 }
 
-fn active_estimate_profile(
+pub(crate) fn active_estimate_profile(
     connection: &rusqlite::Connection,
     capability: &str,
     excluded_profile_id: Option<&str>,
@@ -2539,23 +2539,23 @@ fn query_references_from_inventory(
         .collect()
 }
 
-struct PlannedRunRequest<'a> {
-    tender_id: &'a TenderId,
-    root: &'a Path,
-    run_id: &'a str,
-    plan_version: u32,
-    tender_revision: u32,
-    profile: &'a AgentProfileVersionView,
-    task: &'a TenderTaskView,
-    payload: &'a Value,
-    created_at: &'a str,
-    deadline: &'a str,
-    started_event_summary: &'a str,
-    audit_event_type: &'a str,
-    audit_payload: Value,
+pub(crate) struct PlannedRunRequest<'a> {
+    pub(crate) tender_id: &'a TenderId,
+    pub(crate) root: &'a Path,
+    pub(crate) run_id: &'a str,
+    pub(crate) plan_version: u32,
+    pub(crate) tender_revision: u32,
+    pub(crate) profile: &'a AgentProfileVersionView,
+    pub(crate) task: &'a TenderTaskView,
+    pub(crate) payload: &'a Value,
+    pub(crate) created_at: &'a str,
+    pub(crate) deadline: &'a str,
+    pub(crate) started_event_summary: &'a str,
+    pub(crate) audit_event_type: &'a str,
+    pub(crate) audit_payload: Value,
 }
 
-fn insert_planned_run(
+pub(crate) fn insert_planned_run(
     transaction: &Transaction<'_>,
     request: PlannedRunRequest<'_>,
 ) -> Result<PreparedAgentRun, TenderCommandError> {
@@ -2687,27 +2687,27 @@ fn insert_planned_run(
 }
 
 #[derive(Clone, Copy)]
-enum EstimatePlanAssignment {
+pub(crate) enum EstimatePlanAssignment {
     Author,
     Reviewer,
 }
 
-struct EstimateRunIntegrityRequest<'a> {
-    run_id: &'a str,
-    expected_profile: &'a AgentProfileVersionView,
-    expected_task: &'a TenderTaskView,
-    expected_payload: &'a Value,
-    expected_candidate_json: &'a str,
-    result_created_at: &'a str,
-    plan_id: &'a str,
-    plan_version: u32,
-    capability: &'a str,
-    assignment: EstimatePlanAssignment,
-    started_event_type: &'a str,
-    expected_started_change: Value,
+pub(crate) struct EstimateRunIntegrityRequest<'a> {
+    pub run_id: &'a str,
+    pub expected_profile: &'a AgentProfileVersionView,
+    pub expected_task: &'a TenderTaskView,
+    pub expected_payload: &'a Value,
+    pub expected_candidate_json: &'a str,
+    pub result_created_at: &'a str,
+    pub plan_id: &'a str,
+    pub plan_version: u32,
+    pub capability: &'a str,
+    pub assignment: EstimatePlanAssignment,
+    pub started_event_type: &'a str,
+    pub expected_started_change: Value,
 }
 
-fn estimate_run_envelope_is_valid(
+pub(crate) fn estimate_run_envelope_is_valid(
     connection: &rusqlite::Connection,
     request: EstimateRunIntegrityRequest<'_>,
     check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
@@ -4127,7 +4127,7 @@ fn load_basis_version(
     load_basis_version_with_check(connection, basis_id, version, &mut || Ok(()))
 }
 
-fn load_basis_version_with_check(
+pub(crate) fn load_basis_version_with_check(
     connection: &rusqlite::Connection,
     basis_id: &str,
     version: u32,
@@ -4759,7 +4759,7 @@ impl QuantixHost {
     }
 }
 
-fn audit_is_exact(
+pub(crate) fn audit_is_exact(
     connection: &rusqlite::Connection,
     sequence: i64,
     event_type: &str,

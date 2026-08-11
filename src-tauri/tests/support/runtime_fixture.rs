@@ -454,6 +454,8 @@ fn run_agent_turn(
         || scenario.starts_with("cost-estimator-calculation")
         || scenario.starts_with("cost-estimator-basis")
         || scenario.starts_with("basis-of-estimate-review")
+        || scenario.starts_with("priced-cost-baseline-review")
+        || scenario.starts_with("pricing-adjustment-review")
         || scenario.starts_with("production-task");
     let dynamic_tools_are_exact = if is_record_scenario {
         thread_request
@@ -934,6 +936,10 @@ fn run_agent_turn(
             | "cost-estimator-basis-uncontrolled-allowance"
             | "basis-of-estimate-review"
             | "basis-of-estimate-review-failed"
+            | "priced-cost-baseline-review"
+            | "priced-cost-baseline-review-failed"
+            | "pricing-adjustment-review"
+            | "pricing-adjustment-review-failed"
             | "production-task"
             | "production-task-delayed-a"
             | "production-task-delayed-b"
@@ -1867,6 +1873,30 @@ fn run_agent_turn(
                     "code": "unresolved_basis_gap",
                     "summary": "The exact Basis retains a material unresolved rate-source gap.",
                     "affected_boq_row_keys": [row_key]
+                }]
+            })
+        } else {
+            serde_json::json!({ "outcome": "passed", "findings": [] })
+        }
+    } else if scenario.starts_with("priced-cost-baseline-review") {
+        if scenario == "priced-cost-baseline-review-failed" {
+            serde_json::json!({
+                "outcome": "failed",
+                "findings": [{
+                    "code": "baseline_reconciliation_failed",
+                    "summary": "The Priced Cost Baseline does not reproduce the exact approved Basis aggregate."
+                }]
+            })
+        } else {
+            serde_json::json!({ "outcome": "passed", "findings": [] })
+        }
+    } else if scenario.starts_with("pricing-adjustment-review") {
+        if scenario == "pricing-adjustment-review-failed" {
+            serde_json::json!({
+                "outcome": "failed",
+                "findings": [{
+                    "code": "adjustment_provenance_failed",
+                    "summary": "The adjustment does not reconcile to its exact controlled Calculation Run."
                 }]
             })
         } else {

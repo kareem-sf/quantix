@@ -16,6 +16,7 @@ import { ControlledBoqCalculationPanel } from "./ControlledBoqCalculationPanel";
 import { BasisOfEstimatePanel } from "./BasisOfEstimatePanel";
 import { DocumentEvidenceOffice } from "./DocumentEvidenceOffice";
 import { ExternalRfiPanel } from "./ExternalRfiPanel";
+import { PricingDecisionPanel } from "./PricingDecisionPanel";
 import { TenderBackupPanel } from "./TenderBackupPanel";
 import { TenderRecoveryPanel } from "./TenderRecoveryPanel";
 import { TenderRecordsPanel } from "./TenderRecordsPanel";
@@ -719,6 +720,14 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
               />
               <BasisOfEstimatePanel
                 key={`basis-of-estimate-${selected.tender_id}`}
+                tenderId={selected.tender_id}
+                runtimeReady={runtimeReady}
+                refreshToken={tenderStateVersion}
+                reportCommandFailure={reportCommandFailure}
+                onTenderStateChange={reportTenderStateChange}
+              />
+              <PricingDecisionPanel
+                key={`pricing-decision-${selected.tender_id}`}
                 tenderId={selected.tender_id}
                 runtimeReady={runtimeReady}
                 refreshToken={tenderStateVersion}

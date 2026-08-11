@@ -2,6 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type { ApproveCalculationRuleCommand } from "./bindings/ApproveCalculationRuleCommand";
 import type { ApproveBasisOfEstimateCommand } from "./bindings/ApproveBasisOfEstimateCommand";
+import type { ApproveCommercialStrategyCommand } from "./bindings/ApproveCommercialStrategyCommand";
+import type { ApprovePricedCostBaselineCommand } from "./bindings/ApprovePricedCostBaselineCommand";
+import type { ApprovePricingAdjustmentCommand } from "./bindings/ApprovePricingAdjustmentCommand";
+import type { ApproveTenderPriceCommand } from "./bindings/ApproveTenderPriceCommand";
 import type { BoqTableDesignation } from "./bindings/BoqTableDesignation";
 import type { DesignateBoqTableCommand } from "./bindings/DesignateBoqTableCommand";
 import type { BasisOfEstimateReviewResult } from "./bindings/BasisOfEstimateReviewResult";
@@ -10,16 +14,31 @@ import type { ApproveControlledBoqCalculationRunCommand } from "./bindings/Appro
 import type { CostEstimatorBasisResult } from "./bindings/CostEstimatorBasisResult";
 import type { CostEstimatorCalculationResult } from "./bindings/CostEstimatorCalculationResult";
 import type { CreateCalculationScenarioCommand } from "./bindings/CreateCalculationScenarioCommand";
+import type { CreateCommercialStrategyCommand } from "./bindings/CreateCommercialStrategyCommand";
+import type { CreatePricedCostBaselineCommand } from "./bindings/CreatePricedCostBaselineCommand";
+import type { CreatePricingAdjustmentCommand } from "./bindings/CreatePricingAdjustmentCommand";
+import type { CreatePricingScenarioCommand } from "./bindings/CreatePricingScenarioCommand";
 import type { CalculationRuleReviewResult } from "./bindings/CalculationRuleReviewResult";
 import type { CalculationRuleVersion } from "./bindings/CalculationRuleVersion";
 import type { CalculationScenarioVersion } from "./bindings/CalculationScenarioVersion";
 import type { CalculationWorkspaceInspection } from "./bindings/CalculationWorkspaceInspection";
 import type { ControlledBoqCalculationRun } from "./bindings/ControlledBoqCalculationRun";
 import type { InspectCalculationWorkspaceCommand } from "./bindings/InspectCalculationWorkspaceCommand";
+import type { InspectPricingWorkspaceCommand } from "./bindings/InspectPricingWorkspaceCommand";
+import type { PricingAdjustmentVersion } from "./bindings/PricingAdjustmentVersion";
+import type { PricingScenarioVersion } from "./bindings/PricingScenarioVersion";
+import type { PricingWorkspaceInspection } from "./bindings/PricingWorkspaceInspection";
+import type { PricedCostBaselineReviewResult } from "./bindings/PricedCostBaselineReviewResult";
+import type { PricedCostBaselineVersion } from "./bindings/PricedCostBaselineVersion";
+import type { CommercialStrategy } from "./bindings/CommercialStrategy";
 import type { EstimateWorkspaceInspection } from "./bindings/EstimateWorkspaceInspection";
 import type { InspectEstimateWorkspaceCommand } from "./bindings/InspectEstimateWorkspaceCommand";
 import type { ProposeBoqCalculationRuleCommand } from "./bindings/ProposeBoqCalculationRuleCommand";
 import type { RunCalculationRuleReviewCommand } from "./bindings/RunCalculationRuleReviewCommand";
+import type { RunPricedCostBaselineReviewCommand } from "./bindings/RunPricedCostBaselineReviewCommand";
+import type { RunPricingAdjustmentReviewCommand } from "./bindings/RunPricingAdjustmentReviewCommand";
+import type { PricingAdjustmentReviewResult } from "./bindings/PricingAdjustmentReviewResult";
+import type { SelectPricingScenarioCommand } from "./bindings/SelectPricingScenarioCommand";
 import type { RunBasisOfEstimateReviewCommand } from "./bindings/RunBasisOfEstimateReviewCommand";
 import type { RunCostEstimatorBasisCommand } from "./bindings/RunCostEstimatorBasisCommand";
 import type { RunCostEstimatorCalculationCommand } from "./bindings/RunCostEstimatorCalculationCommand";
@@ -466,6 +485,97 @@ export function inspectEstimateWorkspace(
     boq_candidate_cursor: boqCandidateCursor,
   };
   return invoke<EstimateWorkspaceInspection>("inspect_estimate_workspace", {
+    command,
+  });
+}
+
+export function createPricedCostBaseline(
+  command: CreatePricedCostBaselineCommand,
+): Promise<PricedCostBaselineVersion> {
+  return invoke<PricedCostBaselineVersion>("create_priced_cost_baseline", {
+    command,
+  });
+}
+
+export function runPricedCostBaselineReview(
+  command: RunPricedCostBaselineReviewCommand,
+): Promise<PricedCostBaselineReviewResult> {
+  return invoke<PricedCostBaselineReviewResult>(
+    "run_priced_cost_baseline_review",
+    { command },
+  );
+}
+
+export function approvePricedCostBaseline(
+  command: ApprovePricedCostBaselineCommand,
+): Promise<PricedCostBaselineVersion> {
+  return invoke<PricedCostBaselineVersion>("approve_priced_cost_baseline", {
+    command,
+  });
+}
+
+export function createPricingAdjustment(
+  command: CreatePricingAdjustmentCommand,
+): Promise<PricingAdjustmentVersion> {
+  return invoke<PricingAdjustmentVersion>("create_pricing_adjustment", {
+    command,
+  });
+}
+
+export function runPricingAdjustmentReview(
+  command: RunPricingAdjustmentReviewCommand,
+): Promise<PricingAdjustmentReviewResult> {
+  return invoke<PricingAdjustmentReviewResult>(
+    "run_pricing_adjustment_review",
+    { command },
+  );
+}
+
+export function approvePricingAdjustment(
+  command: ApprovePricingAdjustmentCommand,
+): Promise<PricingAdjustmentVersion> {
+  return invoke<PricingAdjustmentVersion>("approve_pricing_adjustment", {
+    command,
+  });
+}
+
+export function createCommercialStrategy(
+  command: CreateCommercialStrategyCommand,
+): Promise<CommercialStrategy> {
+  return invoke<CommercialStrategy>("create_commercial_strategy", { command });
+}
+
+export function approveCommercialStrategy(
+  command: ApproveCommercialStrategyCommand,
+): Promise<CommercialStrategy> {
+  return invoke<CommercialStrategy>("approve_commercial_strategy", {
+    command,
+  });
+}
+
+export function createPricingScenario(
+  command: CreatePricingScenarioCommand,
+): Promise<PricingScenarioVersion> {
+  return invoke<PricingScenarioVersion>("create_pricing_scenario", { command });
+}
+
+export function selectPricingScenario(
+  command: SelectPricingScenarioCommand,
+): Promise<PricingScenarioVersion> {
+  return invoke<PricingScenarioVersion>("select_pricing_scenario", { command });
+}
+
+export function approveTenderPrice(
+  command: ApproveTenderPriceCommand,
+): Promise<PricingScenarioVersion> {
+  return invoke<PricingScenarioVersion>("approve_tender_price", { command });
+}
+
+export function inspectPricingWorkspace(
+  tenderId: string,
+): Promise<PricingWorkspaceInspection> {
+  const command: InspectPricingWorkspaceCommand = { tender_id: tenderId };
+  return invoke<PricingWorkspaceInspection>("inspect_pricing_workspace", {
     command,
   });
 }

@@ -40,6 +40,10 @@ use super::external_rfis::{
     external_rfi_review_target_is_open, publish_external_rfi_review, ExternalRfiReviewCandidate,
     ExternalRfiReviewPublication,
 };
+use super::pricing::{
+    publish_priced_cost_baseline_review, publish_pricing_adjustment_review,
+    PricedCostBaselineReviewCandidate, PricingReviewPublication,
+};
 use super::production_scheduler::{
     finish_production_task, production_completion_payload_is_valid, production_task_for_run,
     work_plan_package_dependencies_are_current,
@@ -90,6 +94,26 @@ fn task_is_basis_review(task: &TenderTaskView) -> bool {
     task.exact_inputs
         .iter()
         .any(|input| input.kind == "basis_of_estimate_version")
+        && !task
+            .exact_inputs
+            .iter()
+            .any(|input| input.kind == "priced_cost_baseline_version")
+}
+
+fn task_is_priced_cost_baseline_review(task: &TenderTaskView) -> bool {
+    task.exact_inputs
+        .iter()
+        .any(|input| input.kind == "priced_cost_baseline_version")
+        && !task
+            .exact_inputs
+            .iter()
+            .any(|input| input.kind == "pricing_adjustment_version")
+}
+
+fn task_is_pricing_adjustment_review(task: &TenderTaskView) -> bool {
+    task.exact_inputs
+        .iter()
+        .any(|input| input.kind == "pricing_adjustment_version")
 }
 
 fn profile_supports_linked_retry(profile: &AgentProfileVersionView, task: &TenderTaskView) -> bool {
@@ -98,6 +122,8 @@ fn profile_supports_linked_retry(profile: &AgentProfileVersionView, task: &Tende
         && !task_is_cost_estimator_calculation(task)
         && !task_is_cost_estimator_basis(task)
         && !task_is_basis_review(task)
+        && !task_is_priced_cost_baseline_review(task)
+        && !task_is_pricing_adjustment_review(task)
         && !profile.capabilities.iter().any(|capability| {
             matches!(
                 capability.as_str(),
@@ -460,6 +486,8 @@ impl TenderStore {
         let mut cost_estimator_calculation: Option<CostEstimatorCalculationCandidate> = None;
         let mut cost_estimator_basis: Option<BasisOfEstimateCandidate> = None;
         let mut basis_review: Option<BasisOfEstimateReviewCandidate> = None;
+        let mut priced_cost_baseline_review: Option<PricedCostBaselineReviewCandidate> = None;
+        let mut pricing_adjustment_review: Option<PricedCostBaselineReviewCandidate> = None;
         let mut denied_record_publication_count = None;
         if execution.state == AgentRunState::Completed
             && prepared
@@ -699,6 +727,63 @@ impl TenderStore {
             }
         }
         if execution.state == AgentRunState::Completed
+            && task_is_priced_cost_baseline_review(&prepared.task)
+        {
+            let validation = execution
+                .candidate_payload_json
+                .as_deref()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                .and_then(|payload| {
+                    self.validate_priced_cost_baseline_review_candidate(&prepared.task, payload)
+                });
+            match validation {
+                Ok(candidate) => priced_cost_baseline_review = Some(candidate),
+                Err(_) => {
+                    execution.state = AgentRunState::Failed;
+                    execution.failure = Some(ProviderFailure::new(
+                        ProviderFailureCategory::OutputInvalid,
+                        false,
+                        "Review the exact current Priced Cost Baseline with bounded attributable findings.",
+                        Some("The independent Priced Cost Baseline review failed exact validation."),
+                    ));
+                    execution.candidate_payload_json = None;
+                    if let Some(event) = execution
+                        .events
+                        .iter_mut()
+                        .rev()
+                        .find(|event| event.kind == ProviderEventKind::Terminal)
+                    {
+                        event.summary =
+                            "Independent Priced Cost Baseline review failed validation".into();
+                    }
+                }
+            }
+        }
+        if execution.state == AgentRunState::Completed
+            && task_is_pricing_adjustment_review(&prepared.task)
+        {
+            let validation = execution
+                .candidate_payload_json
+                .as_deref()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                .and_then(|payload| {
+                    self.validate_pricing_adjustment_review_candidate(&prepared.task, payload)
+                });
+            match validation {
+                Ok(candidate) => pricing_adjustment_review = Some(candidate),
+                Err(_) => {
+                    execution.state = AgentRunState::Failed;
+                    execution.failure = Some(ProviderFailure::new(
+                        ProviderFailureCategory::OutputInvalid,
+                        false,
+                        "Review the exact current Pricing Adjustment with bounded findings.",
+                        Some("The independent Pricing Adjustment review failed exact validation."),
+                    ));
+                    execution.candidate_payload_json = None;
+                }
+            }
+        }
+        if execution.state == AgentRunState::Completed
             && prepared
                 .profile
                 .capabilities
@@ -884,6 +969,47 @@ impl TenderStore {
                     "Basis review rejected because its exact target is no longer open".into();
             }
         }
+        if execution.state == AgentRunState::Completed
+            && priced_cost_baseline_review.is_some()
+            && !self.priced_cost_baseline_review_target_is_open(&prepared.task, &mut || {
+                operation_budget.check()
+            })?
+        {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Review the current exact Priced Cost Baseline version.",
+                Some("The baseline was superseded, reviewed, approved, or its exact Basis changed before publication."),
+            ));
+            execution.candidate_payload_json = None;
+            priced_cost_baseline_review = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary =
+                    "Priced Cost Baseline review rejected because its exact target is no longer open".into();
+            }
+        }
+        if execution.state == AgentRunState::Completed
+            && pricing_adjustment_review.is_some()
+            && !self.pricing_adjustment_review_target_is_open(&prepared.task, &mut || {
+                operation_budget.check()
+            })?
+        {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Review the current exact Pricing Adjustment version.",
+                Some("The adjustment was superseded, reviewed, approved, or its basis changed before publication."),
+            ));
+            execution.candidate_payload_json = None;
+            pricing_adjustment_review = None;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -912,6 +1038,8 @@ impl TenderStore {
             cost_estimator_calculation = None;
             cost_estimator_basis = None;
             basis_review = None;
+            priced_cost_baseline_review = None;
+            pricing_adjustment_review = None;
             if let Some(event) = execution
                 .events
                 .iter_mut()
@@ -1379,6 +1507,42 @@ impl TenderStore {
                 &prepared.task,
                 candidate,
                 &completed_at,
+                &mut || operation_budget.check(),
+            )?;
+        }
+        if let Some(candidate) = priced_cost_baseline_review.as_ref() {
+            if result_id.is_none() {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            publish_priced_cost_baseline_review(
+                &transaction,
+                PricingReviewPublication {
+                    tender_id,
+                    tender_revision,
+                    reviewer_run_id: &prepared.run_id,
+                    profile: &prepared.profile,
+                    task: &prepared.task,
+                    created_at: &completed_at,
+                },
+                candidate,
+                &mut || operation_budget.check(),
+            )?;
+        }
+        if let Some(candidate) = pricing_adjustment_review.as_ref() {
+            if result_id.is_none() {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            publish_pricing_adjustment_review(
+                &transaction,
+                PricingReviewPublication {
+                    tender_id,
+                    tender_revision,
+                    reviewer_run_id: &prepared.run_id,
+                    profile: &prepared.profile,
+                    task: &prepared.task,
+                    created_at: &completed_at,
+                },
+                candidate,
                 &mut || operation_budget.check(),
             )?;
         }

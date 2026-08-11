@@ -6,36 +6,42 @@ use sha2::{Digest, Sha256};
 use quantix_lib::{
     ensure_quantix_setup, ActivateTenderProductionCommand, AgentProfileStatus,
     AgentRunRecoveryDisposition, AgentRunState, AgentTaskInputReference,
-    ApproveBasisOfEstimateCommand, ApproveCalculationRuleCommand,
+    ApproveBasisOfEstimateCommand, ApproveCalculationRuleCommand, ApproveCommercialStrategyCommand,
     ApproveControlledBoqCalculationRunCommand, ApproveExternalRfiForIssueCommand,
-    ApproveProductionFindingExceptionCommand, BasisOfEstimateReviewOutcome,
-    BidDecisionApprovalDecision, BidDecisionPackageInspection, BidDecisionPackageReviewOutcome,
-    BidRecommendationOutcome, BoqRowDisposition, CalculationDecimalInput, CalculationInputState,
-    CalculationRoundingMode, CalculationRuleReviewOutcome, ComplianceDisposition,
-    ComplianceDispositionUpdate, ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand,
-    ControlledBoqCalculationStatus, CreateBidDecisionPackageCommand,
-    CreateCalculationScenarioCommand, CreateExternalRfiDraftCommand, CreateTenderCommand,
-    CreateTenderEngineerEntryCommand, CreateTenderQueryCommand, DecideBidDecisionPackageCommand,
-    DecideTenderQueryTreatmentCommand, DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
-    DesignateBoqTableCommand, DeviceProtection, ExchangeRateType, ExportApprovedExternalRfiCommand,
-    ExternalRfiQueryReference, ExternalRfiRecipient, ImportTenderPackageCommand,
-    InspectBidDecisionApprovalHistoryCommand, InspectCalculationWorkspaceCommand,
-    InspectEstimateWorkspaceCommand, InspectExternalRfiResponseCandidatesCommand,
-    InspectExternalRfisCommand, InspectProductionTaskReviewCommand, InspectTenderQueriesCommand,
+    ApprovePricedCostBaselineCommand, ApprovePricingAdjustmentCommand,
+    ApproveProductionFindingExceptionCommand, ApproveTenderPriceCommand,
+    BasisOfEstimateReviewOutcome, BasisOfEstimateVersion, BidDecisionApprovalDecision,
+    BidDecisionPackageInspection, BidDecisionPackageReviewOutcome, BidRecommendationOutcome,
+    BoqRowDisposition, CalculationDecimalInput, CalculationInputState, CalculationRoundingMode,
+    CalculationRuleReviewOutcome, ComplianceDisposition, ComplianceDispositionUpdate,
+    ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand, ControlledBoqCalculationStatus,
+    CreateBidDecisionPackageCommand, CreateCalculationScenarioCommand,
+    CreateCommercialStrategyCommand, CreateExternalRfiDraftCommand,
+    CreatePricedCostBaselineCommand, CreatePricingAdjustmentCommand, CreatePricingScenarioCommand,
+    CreateTenderCommand, CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
+    DecideBidDecisionPackageCommand, DecideTenderQueryTreatmentCommand, DecideTenderRecordCommand,
+    DecideWorkPlanProposalCommand, DesignateBoqTableCommand, DeviceProtection, ExchangeRateType,
+    ExportApprovedExternalRfiCommand, ExternalRfiQueryReference, ExternalRfiRecipient,
+    ImportTenderPackageCommand, InspectBidDecisionApprovalHistoryCommand,
+    InspectCalculationWorkspaceCommand, InspectEstimateWorkspaceCommand,
+    InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
+    InspectProductionTaskReviewCommand, InspectTenderQueriesCommand,
     InterpretExternalRfiResponseCommand, InvalidateBidDecisionApprovalCommand, MajorFindingPolicy,
-    ManagerCapabilityDemandInput, ParseSourceArtifactCommand, ProductionFindingDispositionKind,
-    ProductionFindingSeverity, ProductionTaskState, ProposeBoqCalculationRuleCommand,
-    ProviderFailureCategory, QuantixHost, RegisterExternalRfiResponseCommand,
-    ResolveBidDecisionReturnReworkCommand, ResolveIndeterminateAgentRunCommand,
-    ReviseExternalRfiDraftCommand, ReviseTenderCommand, ReviseTenderQueryCommand,
-    ReviseWorkPlanProposalCommand, RunBasisOfEstimateReviewCommand,
+    ManagerCapabilityDemandInput, ParseSourceArtifactCommand, PricedCostBaselineReviewOutcome,
+    PricingAdjustmentDirection, PricingAdjustmentKind, PricingAdjustmentReference,
+    ProductionFindingDispositionKind, ProductionFindingSeverity, ProductionTaskState,
+    ProposeBoqCalculationRuleCommand, ProviderFailureCategory, QuantixHost,
+    RegisterExternalRfiResponseCommand, ResolveBidDecisionReturnReworkCommand,
+    ResolveIndeterminateAgentRunCommand, ReviseExternalRfiDraftCommand, ReviseTenderCommand,
+    ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand, RunBasisOfEstimateReviewCommand,
     RunBidDecisionPackageReviewCommand, RunBootstrapAgentCommand, RunCalculationRuleReviewCommand,
     RunCostEstimatorBasisCommand, RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand,
-    RunProductionTaskCommand, RunTenderRecordExtractionCommand, RuntimeLayout, SetupPlatform,
-    SetupState, SourceRelationshipKind, StoragePermissions, TenderErrorCode,
-    TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase, TenderQuery,
-    TenderQueryTreatment, TenderQueryTreatmentProposalInput, TenderQueryType,
-    TenderRecordEngineerDecisionKind, TenderRecordInspection, TenderRecordKind,
+    RunPricedCostBaselineReviewCommand, RunPricingAdjustmentReviewCommand,
+    RunProductionTaskCommand, RunTenderRecordExtractionCommand, RuntimeLayout,
+    SelectPricingScenarioCommand, SetupPlatform, SetupState, SourceRelationshipKind,
+    StoragePermissions, TenderErrorCode, TenderEvidenceReference, TenderIntegrityState,
+    TenderLifecyclePhase, TenderQuery, TenderQueryTreatment, TenderQueryTreatmentProposalInput,
+    TenderQueryType, TenderRecordEngineerDecisionKind, TenderRecordInspection, TenderRecordKind,
     TenderRecordVersionReference, WorkPlanDecision, WorkPlanRevisionAction,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
@@ -4725,6 +4731,974 @@ async fn prepare_estimate_basis(harness: &Harness) -> PreparedEstimateBasis {
     }
 }
 
+async fn prepare_and_approve_exact_basis_for_pricing(
+    harness: &Harness,
+) -> (BasisOfEstimateVersion, PreparedEstimateBasis) {
+    let prepared = prepare_estimate_basis(harness).await;
+    harness.set_agent_scenario("cost-estimator-basis");
+    let proposed = harness
+        .host
+        .run_cost_estimator_basis(RunCostEstimatorBasisCommand {
+            tender_id: harness.tender_id.clone(),
+            quotation_evidence: vec![prepared.quotation_evidence.clone()],
+            calculation_run_ids: vec![
+                prepared.calculation_run_id.clone(),
+                prepared.quotation_calculation_run_id.clone(),
+                prepared.total_calculation_run_id.clone(),
+            ],
+        })
+        .await
+        .expect("Cost Estimator publishes the pricing Basis")
+        .basis
+        .expect("canonical pricing Basis");
+    harness.set_agent_scenario("basis-of-estimate-review");
+    let reviewed = harness
+        .host
+        .run_basis_of_estimate_review(RunBasisOfEstimateReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            basis_id: proposed.basis_id.clone(),
+            version: proposed.version,
+        })
+        .await
+        .expect("independently review the pricing Basis")
+        .basis;
+    let approved = harness
+        .host
+        .approve_basis_of_estimate(ApproveBasisOfEstimateCommand {
+            tender_id: harness.tender_id.clone(),
+            basis_id: reviewed.basis_id.clone(),
+            version: reviewed.version,
+            manifest_sha256: reviewed.manifest_sha256.clone(),
+            rationale: "Approve the exact reviewed Basis before pricing decisions.".into(),
+        })
+        .expect("approve exact pricing Basis");
+    (approved, prepared)
+}
+
+async fn approve_exact_basis_for_pricing(harness: &Harness) -> BasisOfEstimateVersion {
+    prepare_and_approve_exact_basis_for_pricing(harness).await.0
+}
+
+#[tokio::test]
+async fn priced_cost_baseline_is_distinct_independently_reviewed_and_exactly_approved() {
+    let harness = Harness::new("record-extraction");
+    active_production(&harness).await;
+    let basis = approve_exact_basis_for_pricing(&harness).await;
+
+    let baseline = harness
+        .host
+        .create_priced_cost_baseline(CreatePricedCostBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            basis_id: basis.basis_id.clone(),
+            basis_version: basis.version,
+            basis_manifest_sha256: basis.manifest_sha256.clone(),
+            rationale: "Establish expected delivery cost separately from sell price.".into(),
+        })
+        .expect("create exact Priced Cost Baseline");
+    assert_eq!(baseline.amount, basis.total_amount);
+    assert_eq!(baseline.currency, basis.total_currency);
+    assert!(baseline.current);
+    assert!(baseline.review.is_none());
+    assert!(baseline.approval.is_none());
+    assert_eq!(
+        harness
+            .host
+            .approve_priced_cost_baseline(ApprovePricedCostBaselineCommand {
+                tender_id: harness.tender_id.clone(),
+                baseline_id: baseline.baseline_id.clone(),
+                version: baseline.version,
+                manifest_sha256: baseline.manifest_sha256.clone(),
+                rationale: "A separate qualified review is mandatory.".into(),
+            })
+            .expect_err("unreviewed cost baseline cannot be approved")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+
+    harness.set_agent_scenario("priced-cost-baseline-review");
+    let reviewed = harness
+        .host
+        .run_priced_cost_baseline_review(RunPricedCostBaselineReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id.clone(),
+            version: baseline.version,
+        })
+        .await
+        .expect("independently review exact Priced Cost Baseline");
+    assert_eq!(
+        reviewed.run.state,
+        AgentRunState::Completed,
+        "{:#?}\nfixture: {:?}",
+        reviewed.run,
+        fs::read_to_string(harness.codex.with_extension("fixture-error"))
+    );
+    assert_ne!(reviewed.run.profile.profile_id, basis.author_profile_id);
+    assert!(reviewed.baseline.review.is_some());
+    assert!(reviewed.baseline.approval.is_none());
+
+    let approved = harness
+        .host
+        .approve_priced_cost_baseline(ApprovePricedCostBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id,
+            version: baseline.version,
+            manifest_sha256: baseline.manifest_sha256,
+            rationale: "EITL approves the exact independently reviewed expected cost.".into(),
+        })
+        .expect("approve exact Priced Cost Baseline");
+    assert!(approved.current);
+    assert!(approved.approval.is_some());
+    assert_eq!(approved.amount, basis.total_amount);
+    assert_ne!(approved.manifest_sha256, basis.manifest_sha256);
+}
+
+#[tokio::test]
+async fn failed_priced_cost_baseline_review_is_remediated_by_an_exact_basis_successor() {
+    let harness = Harness::new("record-extraction");
+    active_production(&harness).await;
+    let (basis, prepared) = prepare_and_approve_exact_basis_for_pricing(&harness).await;
+    let first = harness
+        .host
+        .create_priced_cost_baseline(CreatePricedCostBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            basis_id: basis.basis_id,
+            basis_version: basis.version,
+            basis_manifest_sha256: basis.manifest_sha256,
+            rationale: "Establish the first immutable expected-cost basis.".into(),
+        })
+        .expect("create first Priced Cost Baseline");
+    harness.set_agent_scenario("priced-cost-baseline-review-failed");
+    let first = harness
+        .host
+        .run_priced_cost_baseline_review(RunPricedCostBaselineReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: first.baseline_id,
+            version: first.version,
+        })
+        .await
+        .expect("record findings against first Priced Cost Baseline")
+        .baseline;
+    let failed_review_manifest_sha256 = first
+        .review
+        .as_ref()
+        .expect("failed baseline review")
+        .manifest_sha256
+        .clone();
+
+    let query_page = harness
+        .host
+        .inspect_tender_queries(InspectTenderQueriesCommand {
+            tender_id: harness.tender_id.clone(),
+            cursor: None,
+            limit: 8,
+        })
+        .expect("inspect Query Register before successor Basis");
+    let owner = query_page
+        .owner_profiles
+        .first()
+        .expect("approved Query owner");
+    let evidence = prepared.boq_evidence.first().expect("BOQ Evidence");
+    let evidence = AgentTaskInputReference {
+        kind: "source_evidence".into(),
+        reference: format!("{}#{}", evidence.artifact_id, evidence.ordinal),
+        version: evidence.version,
+    };
+    let query = harness
+        .host
+        .create_tender_query(CreateTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_type: TenderQueryType::Ambiguity,
+            question: "Which updated productivity qualification governs the priced cost?".into(),
+            ambiguity_or_gap: "A new exact commercial clarification changes the estimate basis."
+                .into(),
+            owner_profile_id: owner.profile_id.clone(),
+            owner_profile_version: owner.version,
+            evidence: vec![evidence],
+            affected_records: Vec::new(),
+            affected_task_keys: vec!["*".into()],
+            due_at: "2099-01-01T00:00:00.000Z".into(),
+            material: false,
+            release_blocking: false,
+            proposed_treatments: vec![TenderQueryTreatmentProposalInput {
+                treatment: TenderQueryTreatment::ApprovedAssumption,
+                rationale: "Carry the clarified productivity basis into a successor estimate."
+                    .into(),
+            }],
+        })
+        .expect("create exact changed estimate dependency");
+    harness
+        .host
+        .decide_tender_query_treatment(DecideTenderQueryTreatmentCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: query.query_id,
+            query_version: query.version,
+            treatment: TenderQueryTreatment::ApprovedAssumption,
+            rationale: "EITL approves the exact changed productivity assumption.".into(),
+            treatment_details: "Apply only to the successor Basis and dependent pricing facts."
+                .into(),
+            closes_query: true,
+        })
+        .expect("approve exact successor estimate assumption");
+
+    harness.set_agent_scenario("cost-estimator-basis");
+    let successor_basis = harness
+        .host
+        .run_cost_estimator_basis(RunCostEstimatorBasisCommand {
+            tender_id: harness.tender_id.clone(),
+            quotation_evidence: vec![prepared.quotation_evidence],
+            calculation_run_ids: vec![
+                prepared.calculation_run_id,
+                prepared.quotation_calculation_run_id,
+                prepared.total_calculation_run_id,
+            ],
+        })
+        .await
+        .expect("publish successor Basis from changed exact inputs")
+        .basis
+        .expect("successor Basis");
+    assert_eq!(successor_basis.version, 2);
+    harness.set_agent_scenario("basis-of-estimate-review");
+    let successor_basis = harness
+        .host
+        .run_basis_of_estimate_review(RunBasisOfEstimateReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            basis_id: successor_basis.basis_id,
+            version: successor_basis.version,
+        })
+        .await
+        .expect("review successor Basis")
+        .basis;
+    let successor_basis = harness
+        .host
+        .approve_basis_of_estimate(ApproveBasisOfEstimateCommand {
+            tender_id: harness.tender_id.clone(),
+            basis_id: successor_basis.basis_id,
+            version: successor_basis.version,
+            manifest_sha256: successor_basis.manifest_sha256,
+            rationale: "Approve the exact successor estimate basis.".into(),
+        })
+        .expect("approve exact successor Basis");
+
+    let successor = harness
+        .host
+        .create_priced_cost_baseline(CreatePricedCostBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            basis_id: successor_basis.basis_id,
+            basis_version: successor_basis.version,
+            basis_manifest_sha256: successor_basis.manifest_sha256,
+            rationale: "Supersede the stale baseline with the current approved Basis.".into(),
+        })
+        .expect("create exact Priced Cost Baseline successor");
+    assert_eq!(successor.baseline_id, first.baseline_id);
+    assert_eq!(successor.version, 2);
+    assert_eq!(
+        successor.supersedes_baseline_manifest_sha256.as_deref(),
+        Some(first.manifest_sha256.as_str())
+    );
+    assert_eq!(
+        successor.remediates_review_manifest_sha256.as_deref(),
+        Some(failed_review_manifest_sha256.as_str())
+    );
+    assert!(successor.current);
+    assert!(successor.review.is_none());
+    assert!(successor.approval.is_none());
+    harness.set_agent_scenario("priced-cost-baseline-review");
+    let successor = harness
+        .host
+        .run_priced_cost_baseline_review(RunPricedCostBaselineReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: successor.baseline_id,
+            version: successor.version,
+        })
+        .await
+        .expect("independently review remediated baseline")
+        .baseline;
+    let successor = harness
+        .host
+        .approve_priced_cost_baseline(ApprovePricedCostBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: successor.baseline_id,
+            version: successor.version,
+            manifest_sha256: successor.manifest_sha256,
+            rationale: "Approve the exact independently reviewed remediated baseline.".into(),
+        })
+        .expect("approve remediated Priced Cost Baseline");
+    assert!(successor.approved_for_commercial_pricing);
+
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close baseline-successor Tender");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold-verify exact baseline successor lineage")
+            .state,
+        TenderIntegrityState::Ready
+    );
+}
+
+#[tokio::test]
+async fn priced_cost_baseline_findings_fail_closed_and_remain_cold_integrity_valid() {
+    let harness = Harness::new("record-extraction");
+    active_production(&harness).await;
+    let basis = approve_exact_basis_for_pricing(&harness).await;
+    let baseline = harness
+        .host
+        .create_priced_cost_baseline(CreatePricedCostBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            basis_id: basis.basis_id,
+            basis_version: basis.version,
+            basis_manifest_sha256: basis.manifest_sha256,
+            rationale: "Bind the exact expected cost for independent challenge.".into(),
+        })
+        .expect("create review target");
+    harness.set_agent_scenario("priced-cost-baseline-review-failed");
+    let reviewed = harness
+        .host
+        .run_priced_cost_baseline_review(RunPricedCostBaselineReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id.clone(),
+            version: baseline.version,
+        })
+        .await
+        .expect("record attributable review findings")
+        .baseline;
+    assert_eq!(
+        reviewed.review.as_ref().map(|review| review.outcome),
+        Some(PricedCostBaselineReviewOutcome::Failed)
+    );
+    assert!(!reviewed
+        .review
+        .as_ref()
+        .expect("failed review")
+        .findings
+        .is_empty());
+    assert_eq!(
+        harness
+            .host
+            .approve_priced_cost_baseline(ApprovePricedCostBaselineCommand {
+                tender_id: harness.tender_id.clone(),
+                baseline_id: reviewed.baseline_id,
+                version: reviewed.version,
+                manifest_sha256: reviewed.manifest_sha256,
+                rationale: "A failed independent review must never be waived here.".into(),
+            })
+            .expect_err("review findings block baseline approval")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close failed-review Tender");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify attributable failed review");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+}
+
+#[tokio::test]
+async fn pricing_scenarios_use_reviewed_adjustments_ordered_eitl_decisions_and_revoke_stale_price()
+{
+    let harness = Harness::new("record-extraction");
+    active_production(&harness).await;
+    let basis = approve_exact_basis_for_pricing(&harness).await;
+    let baseline = harness
+        .host
+        .create_priced_cost_baseline(CreatePricedCostBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            basis_id: basis.basis_id.clone(),
+            basis_version: basis.version,
+            basis_manifest_sha256: basis.manifest_sha256.clone(),
+            rationale: "Bind expected delivery cost before commercial pricing.".into(),
+        })
+        .expect("create pricing baseline");
+    harness.set_agent_scenario("priced-cost-baseline-review");
+    let baseline = harness
+        .host
+        .run_priced_cost_baseline_review(RunPricedCostBaselineReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id.clone(),
+            version: baseline.version,
+        })
+        .await
+        .expect("review pricing baseline")
+        .baseline;
+    let baseline = harness
+        .host
+        .approve_priced_cost_baseline(ApprovePricedCostBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id,
+            version: baseline.version,
+            manifest_sha256: baseline.manifest_sha256,
+            rationale: "Approve exact expected cost independently of sell price.".into(),
+        })
+        .expect("approve pricing baseline");
+
+    let calculation_workspace = harness
+        .host
+        .inspect_calculation_workspace(InspectCalculationWorkspaceCommand {
+            tender_id: harness.tender_id.clone(),
+            scenario_offset: 0,
+            run_offset: 0,
+        })
+        .expect("inspect controlled calculation inputs");
+    let calculation_scenario = calculation_workspace
+        .recent_scenarios
+        .first()
+        .expect("active calculation scenario");
+    let evidence = calculation_workspace
+        .recent_runs
+        .iter()
+        .flat_map(|run| run.quantity.evidence.iter())
+        .next()
+        .expect("calculation Evidence")
+        .clone();
+    let contingency_run = run_cost_estimator_fixture(
+        &harness,
+        "cost-estimator-calculation",
+        calculation_scenario.scenario_id.clone(),
+        calculation_scenario.version,
+        "Commercial contingency adjustment",
+        &evidence,
+    )
+    .await;
+    let contingency_run = harness
+        .host
+        .approve_controlled_boq_calculation_run(ApproveControlledBoqCalculationRunCommand {
+            tender_id: harness.tender_id.clone(),
+            calculation_run_id: contingency_run.calculation_run_id,
+            manifest_sha256: contingency_run.manifest_sha256,
+            rationale: "Approve the exact controlled contingency amount.".into(),
+        })
+        .expect("approve adjustment Calculation Run");
+    let adjustment = harness
+        .host
+        .create_pricing_adjustment(CreatePricingAdjustmentCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id.clone(),
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256.clone(),
+            calculation_run_id: contingency_run.calculation_run_id,
+            calculation_manifest_sha256: contingency_run.manifest_sha256,
+            kind: PricingAdjustmentKind::Contingency,
+            direction: PricingAdjustmentDirection::Add,
+            scope: "Tender-wide delivery uncertainty only.".into(),
+            rationale: "Keep contingency visible as a separate reviewed input.".into(),
+            commercial_appetite: None,
+            exclusions: Vec::new(),
+            qualifications: Vec::new(),
+            remediates: Vec::new(),
+        })
+        .expect("create exact adjustment");
+    harness.set_agent_scenario("pricing-adjustment-review");
+    let adjustment = harness
+        .host
+        .run_pricing_adjustment_review(RunPricingAdjustmentReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            adjustment_id: adjustment.adjustment_id.clone(),
+            version: adjustment.version,
+        })
+        .await
+        .expect("review exact adjustment")
+        .adjustment;
+    let adjustment = harness
+        .host
+        .approve_pricing_adjustment(ApprovePricingAdjustmentCommand {
+            tender_id: harness.tender_id.clone(),
+            adjustment_id: adjustment.adjustment_id,
+            version: adjustment.version,
+            manifest_sha256: adjustment.manifest_sha256,
+            rationale: "Tendering Manager approves the exact reviewed contingency.".into(),
+        })
+        .expect("approve exact adjustment");
+
+    let changed_rate_scenario = harness
+        .host
+        .create_calculation_scenario(CreateCalculationScenarioCommand {
+            tender_id: harness.tender_id.clone(),
+            name: "Changed commercial FX rate".into(),
+            quantity_unit: "mm".into(),
+            rate_basis_unit: "m".into(),
+            rate_currency: "USD".into(),
+            exchange_rate: CalculationDecimalInput {
+                state: CalculationInputState::Provided,
+                value: Some("51".into()),
+                evidence: vec![evidence.clone()],
+            },
+            exchange_rate_effective_date: Some("2026-08-02".into()),
+            pricing_date: "2026-08-10".into(),
+            exchange_rate_type: Some(ExchangeRateType::Spot),
+            output_currency: baseline.currency.clone(),
+            precision: 2,
+            rounding_mode: CalculationRoundingMode::MidpointAwayFromZero,
+            rationale:
+                "Compare an exact changed Exchange Rate without overwriting the prior scenario."
+                    .into(),
+        })
+        .expect("create immutable changed-rate calculation scenario");
+    let changed_rate_run = run_cost_estimator_fixture(
+        &harness,
+        "cost-estimator-calculation",
+        changed_rate_scenario.scenario_id.clone(),
+        changed_rate_scenario.version,
+        "Commercial contingency at changed Exchange Rate",
+        &evidence,
+    )
+    .await;
+    let changed_rate_run = harness
+        .host
+        .approve_controlled_boq_calculation_run(ApproveControlledBoqCalculationRunCommand {
+            tender_id: harness.tender_id.clone(),
+            calculation_run_id: changed_rate_run.calculation_run_id,
+            manifest_sha256: changed_rate_run.manifest_sha256,
+            rationale: "Approve the separately reproduced changed-rate amount.".into(),
+        })
+        .expect("approve changed-rate Calculation Run");
+    let changed_rate_adjustment = harness
+        .host
+        .create_pricing_adjustment(CreatePricingAdjustmentCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id.clone(),
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256.clone(),
+            calculation_run_id: changed_rate_run.calculation_run_id,
+            calculation_manifest_sha256: changed_rate_run.manifest_sha256,
+            kind: PricingAdjustmentKind::CommercialStrategy,
+            direction: PricingAdjustmentDirection::Add,
+            scope: "Changed-rate comparison only.".into(),
+            rationale: "Keep the changed FX basis in a separate reviewed adjustment.".into(),
+            commercial_appetite: Some(
+                "Protect delivery certainty while the changed-rate basis is reviewed.".into(),
+            ),
+            exclusions: vec!["Unpriced scope outside the issued BOQ.".into()],
+            qualifications: vec!["Price validity follows the approved quotation window.".into()],
+            remediates: Vec::new(),
+        })
+        .expect("create changed-rate adjustment");
+    harness.set_agent_scenario("pricing-adjustment-review-failed");
+    let failed_changed_rate_adjustment = harness
+        .host
+        .run_pricing_adjustment_review(RunPricingAdjustmentReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            adjustment_id: changed_rate_adjustment.adjustment_id.clone(),
+            version: changed_rate_adjustment.version,
+        })
+        .await
+        .expect("record findings against changed-rate adjustment")
+        .adjustment;
+    assert_eq!(
+        failed_changed_rate_adjustment
+            .review
+            .as_ref()
+            .map(|review| review.outcome),
+        Some(PricedCostBaselineReviewOutcome::Failed)
+    );
+
+    let remediated_rate_run = run_cost_estimator_fixture(
+        &harness,
+        "cost-estimator-calculation",
+        changed_rate_scenario.scenario_id,
+        changed_rate_scenario.version,
+        "Remediated commercial strategy at changed Exchange Rate",
+        &evidence,
+    )
+    .await;
+    let remediated_rate_run = harness
+        .host
+        .approve_controlled_boq_calculation_run(ApproveControlledBoqCalculationRunCommand {
+            tender_id: harness.tender_id.clone(),
+            calculation_run_id: remediated_rate_run.calculation_run_id,
+            manifest_sha256: remediated_rate_run.manifest_sha256,
+            rationale: "Approve the corrected changed-rate commercial input.".into(),
+        })
+        .expect("approve remediated changed-rate Calculation Run");
+    let changed_rate_adjustment = harness
+        .host
+        .create_pricing_adjustment(CreatePricingAdjustmentCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id.clone(),
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256.clone(),
+            calculation_run_id: remediated_rate_run.calculation_run_id,
+            calculation_manifest_sha256: remediated_rate_run.manifest_sha256,
+            kind: PricingAdjustmentKind::CommercialStrategy,
+            direction: PricingAdjustmentDirection::Add,
+            scope: "Corrected changed-rate commercial strategy input.".into(),
+            rationale: "Remediate the exact failed review without rewriting its findings.".into(),
+            commercial_appetite: Some(
+                "Protect delivery certainty without hidden margin overrides.".into(),
+            ),
+            exclusions: vec!["Unpriced scope outside the issued BOQ.".into()],
+            qualifications: vec!["Price validity follows the approved quotation window.".into()],
+            remediates: vec![PricingAdjustmentReference {
+                adjustment_id: failed_changed_rate_adjustment.adjustment_id.clone(),
+                version: failed_changed_rate_adjustment.version,
+                manifest_sha256: failed_changed_rate_adjustment.manifest_sha256.clone(),
+            }],
+        })
+        .expect("create attributable adjustment remediation");
+    assert_eq!(
+        changed_rate_adjustment
+            .supersedes_adjustment_manifest_sha256
+            .as_deref(),
+        Some(failed_changed_rate_adjustment.manifest_sha256.as_str())
+    );
+    harness.set_agent_scenario("pricing-adjustment-review");
+    let changed_rate_adjustment = harness
+        .host
+        .run_pricing_adjustment_review(RunPricingAdjustmentReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            adjustment_id: changed_rate_adjustment.adjustment_id.clone(),
+            version: changed_rate_adjustment.version,
+        })
+        .await
+        .expect("review remediated changed-rate adjustment")
+        .adjustment;
+    let changed_rate_adjustment = harness
+        .host
+        .approve_pricing_adjustment(ApprovePricingAdjustmentCommand {
+            tender_id: harness.tender_id.clone(),
+            adjustment_id: changed_rate_adjustment.adjustment_id,
+            version: changed_rate_adjustment.version,
+            manifest_sha256: changed_rate_adjustment.manifest_sha256,
+            rationale: "Approve the exact changed-rate comparison input.".into(),
+        })
+        .expect("approve changed-rate adjustment");
+    assert_eq!(
+        changed_rate_adjustment.commercial_appetite.as_deref(),
+        Some("Protect delivery certainty without hidden margin overrides.")
+    );
+
+    let strategy = harness
+        .host
+        .create_commercial_strategy(CreateCommercialStrategyCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id.clone(),
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256.clone(),
+            reviewed_inputs: vec![PricingAdjustmentReference {
+                adjustment_id: changed_rate_adjustment.adjustment_id.clone(),
+                version: changed_rate_adjustment.version,
+                manifest_sha256: changed_rate_adjustment.manifest_sha256.clone(),
+            }],
+        })
+        .expect("create exact commercial strategy");
+    assert_eq!(
+        strategy.commercial_appetite,
+        changed_rate_adjustment
+            .commercial_appetite
+            .clone()
+            .expect("reviewed commercial appetite")
+    );
+    assert_eq!(strategy.exclusions, changed_rate_adjustment.exclusions);
+    assert_eq!(
+        strategy.qualifications,
+        changed_rate_adjustment.qualifications
+    );
+    assert_eq!(
+        harness
+            .host
+            .create_pricing_scenario(CreatePricingScenarioCommand {
+                tender_id: harness.tender_id.clone(),
+                name: "Recommended sell scenario".into(),
+                baseline_id: baseline.baseline_id.clone(),
+                baseline_version: baseline.version,
+                baseline_manifest_sha256: baseline.manifest_sha256.clone(),
+                strategy_id: strategy.strategy_id.clone(),
+                strategy_manifest_sha256: strategy.manifest_sha256.clone(),
+                adjustments: vec![],
+            })
+            .expect_err("commercial strategy needs its own EITL approval")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let strategy = harness
+        .host
+        .approve_commercial_strategy(ApproveCommercialStrategyCommand {
+            tender_id: harness.tender_id.clone(),
+            strategy_id: strategy.strategy_id,
+            manifest_sha256: strategy.manifest_sha256,
+            rationale: "Tendering Manager approves the exact commercial appetite.".into(),
+        })
+        .expect("approve commercial strategy");
+    let scenario = harness
+        .host
+        .create_pricing_scenario(CreatePricingScenarioCommand {
+            tender_id: harness.tender_id.clone(),
+            name: "Recommended sell scenario".into(),
+            baseline_id: baseline.baseline_id.clone(),
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256.clone(),
+            strategy_id: strategy.strategy_id.clone(),
+            strategy_manifest_sha256: strategy.manifest_sha256.clone(),
+            adjustments: vec![PricingAdjustmentReference {
+                adjustment_id: adjustment.adjustment_id,
+                version: adjustment.version,
+                manifest_sha256: adjustment.manifest_sha256,
+            }],
+        })
+        .expect("create immutable calculated pricing scenario");
+    let comparison = harness
+        .host
+        .create_pricing_scenario(CreatePricingScenarioCommand {
+            tender_id: harness.tender_id.clone(),
+            name: "Cost-only comparison".into(),
+            baseline_id: baseline.baseline_id.clone(),
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256.clone(),
+            strategy_id: strategy.strategy_id.clone(),
+            strategy_manifest_sha256: strategy.manifest_sha256.clone(),
+            adjustments: vec![],
+        })
+        .expect("coexisting immutable comparison scenario");
+    let changed_rate_comparison = harness
+        .host
+        .create_pricing_scenario(CreatePricingScenarioCommand {
+            tender_id: harness.tender_id.clone(),
+            name: "Changed-rate sell comparison".into(),
+            baseline_id: baseline.baseline_id.clone(),
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256.clone(),
+            strategy_id: strategy.strategy_id.clone(),
+            strategy_manifest_sha256: strategy.manifest_sha256.clone(),
+            adjustments: vec![PricingAdjustmentReference {
+                adjustment_id: changed_rate_adjustment.adjustment_id,
+                version: changed_rate_adjustment.version,
+                manifest_sha256: changed_rate_adjustment.manifest_sha256,
+            }],
+        })
+        .expect("coexisting changed-rate pricing scenario");
+    assert_eq!(comparison.calculation.final_amount, baseline.amount);
+    assert_ne!(scenario.calculation.final_amount, baseline.amount);
+    assert_ne!(
+        changed_rate_comparison.calculation.final_amount, scenario.calculation.final_amount,
+        "an exact changed Exchange Rate produces a distinct immutable result"
+    );
+    assert_eq!(
+        harness
+            .host
+            .approve_tender_price(ApproveTenderPriceCommand {
+                tender_id: harness.tender_id.clone(),
+                pricing_scenario_id: scenario.pricing_scenario_id.clone(),
+                version: scenario.version,
+                manifest_sha256: scenario.manifest_sha256.clone(),
+                calculation_manifest_sha256: scenario.calculation.manifest_sha256.clone(),
+                rationale: "Final Price must not precede exact scenario selection.".into(),
+            })
+            .expect_err("selection is a separate EITL decision")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let selected = harness
+        .host
+        .select_pricing_scenario(SelectPricingScenarioCommand {
+            tender_id: harness.tender_id.clone(),
+            pricing_scenario_id: scenario.pricing_scenario_id,
+            version: scenario.version,
+            manifest_sha256: scenario.manifest_sha256,
+            rationale: "Select the evidence-linked recommended scenario.".into(),
+        })
+        .expect("select exact scenario");
+    let priced = harness
+        .host
+        .approve_tender_price(ApproveTenderPriceCommand {
+            tender_id: harness.tender_id.clone(),
+            pricing_scenario_id: selected.pricing_scenario_id.clone(),
+            version: selected.version,
+            manifest_sha256: selected.manifest_sha256.clone(),
+            calculation_manifest_sha256: selected.calculation.manifest_sha256.clone(),
+            rationale: "EITL approves one exact calculated Final Price.".into(),
+        })
+        .expect("approve exact Final Price");
+    let final_price = priced
+        .approved_tender_price
+        .as_ref()
+        .expect("immutable Approved Tender Price");
+    assert!(final_price.current);
+    assert_eq!(final_price.amount, priced.calculation.final_amount);
+    assert_eq!(
+        final_price.calculation_manifest_sha256,
+        priced.calculation.manifest_sha256
+    );
+
+    let comparison = harness
+        .host
+        .select_pricing_scenario(SelectPricingScenarioCommand {
+            tender_id: harness.tender_id.clone(),
+            pricing_scenario_id: comparison.pricing_scenario_id,
+            version: comparison.version,
+            manifest_sha256: comparison.manifest_sha256,
+            rationale: "Supersede the first choice with the exact cost-only comparison.".into(),
+        })
+        .expect("record immutable scenario-selection successor");
+    let repriced = harness
+        .host
+        .approve_tender_price(ApproveTenderPriceCommand {
+            tender_id: harness.tender_id.clone(),
+            pricing_scenario_id: comparison.pricing_scenario_id,
+            version: comparison.version,
+            manifest_sha256: comparison.manifest_sha256,
+            calculation_manifest_sha256: comparison.calculation.manifest_sha256,
+            rationale: "Approve the exact superseding Final Price decision.".into(),
+        })
+        .expect("approve immutable Final Price successor");
+    assert!(
+        repriced
+            .selection
+            .as_ref()
+            .expect("successor selection")
+            .current
+    );
+    assert!(
+        repriced
+            .approved_tender_price
+            .as_ref()
+            .expect("successor Final Price")
+            .current
+    );
+    let superseded_workspace = harness
+        .host
+        .inspect_pricing_workspace(quantix_lib::InspectPricingWorkspaceCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect immutable pricing-decision succession");
+    let superseded_price = superseded_workspace
+        .scenarios
+        .iter()
+        .find(|value| value.pricing_scenario_id == priced.pricing_scenario_id)
+        .and_then(|value| value.approved_tender_price.as_ref())
+        .expect("prior Approved Tender Price remains inspectable");
+    assert!(!superseded_price.current);
+    assert_eq!(superseded_workspace.decision_history.len(), 2);
+    assert!(superseded_workspace.decision_history[0].selection.current);
+    assert!(
+        !superseded_workspace.decision_history[1].selection.current,
+        "the superseded exact selection remains visible as immutable history"
+    );
+    assert!(
+        superseded_workspace.decision_history[1]
+            .approved_tender_price
+            .as_ref()
+            .is_some_and(|price| !price.current),
+        "the superseded Final Price remains visible but revoked"
+    );
+
+    let query_page = harness
+        .host
+        .inspect_tender_queries(InspectTenderQueriesCommand {
+            tender_id: harness.tender_id.clone(),
+            cursor: None,
+            limit: 8,
+        })
+        .expect("inspect Query Register for a changed pricing dependency");
+    let owner = query_page
+        .owner_profiles
+        .first()
+        .expect("approved Query owner");
+    harness
+        .host
+        .create_tender_query(CreateTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_type: TenderQueryType::Ambiguity,
+            question: "Does the employer require a revised commercial validity basis?".into(),
+            ambiguity_or_gap: "The approved pricing basis predates a new commercial clarification."
+                .into(),
+            owner_profile_id: owner.profile_id.clone(),
+            owner_profile_version: owner.version,
+            evidence: vec![evidence],
+            affected_records: Vec::new(),
+            affected_task_keys: vec!["*".into()],
+            due_at: "2099-01-01T00:00:00.000Z".into(),
+            material: true,
+            release_blocking: true,
+            proposed_treatments: vec![TenderQueryTreatmentProposalInput {
+                treatment: TenderQueryTreatment::ExternalRfiDrafting,
+                rationale: "Obtain an attributable commercial clarification before reliance."
+                    .into(),
+            }],
+        })
+        .expect("record changed pricing dependency");
+    let workspace = harness
+        .host
+        .inspect_pricing_workspace(quantix_lib::InspectPricingWorkspaceCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect automatic pricing revocation");
+    let revoked = workspace
+        .scenarios
+        .iter()
+        .find(|value| value.pricing_scenario_id == repriced.pricing_scenario_id)
+        .expect("priced scenario remains inspectable");
+    assert!(!revoked.current);
+    assert!(
+        !revoked
+            .selection
+            .as_ref()
+            .expect("selection history retained")
+            .current
+    );
+    assert!(
+        !revoked
+            .approved_tender_price
+            .as_ref()
+            .expect("approval history retained")
+            .current
+    );
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close pricing Tender before cold verification");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify immutable pricing history and automatic revocation");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+
+    let pricing_calculation_run_id = repriced.calculation.pricing_calculation_run_id.clone();
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(&database).expect("open exact pricing store");
+    connection
+        .execute_batch("DROP TRIGGER pricing_calculation_runs_no_update")
+        .expect("disable pricing calculation immutability only for corruption probe");
+    connection
+        .execute(
+            "UPDATE pricing_calculation_runs SET created_at = '2099-01-01T00:00:00.000Z'
+             WHERE pricing_calculation_run_id = ?1",
+            [&pricing_calculation_run_id],
+        )
+        .expect("tamper only the stored pricing calculation timestamp");
+    drop(connection);
+    let timestamp_corrupted_host =
+        QuantixHost::with_setup_platform(&harness.application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(
+        ensure_quantix_setup(&timestamp_corrupted_host).state,
+        SetupState::Ready
+    );
+    assert_eq!(
+        timestamp_corrupted_host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("inspect pricing calculation timestamp corruption")
+            .state,
+        TenderIntegrityState::RecoveryRequired
+    );
+}
+
 #[tokio::test]
 async fn controlled_boq_calculation_is_reviewed_exact_replayable_and_tamper_evident() {
     let harness = Harness::new("record-extraction");
@@ -4741,6 +5715,14 @@ async fn controlled_boq_calculation_is_reviewed_exact_replayable_and_tamper_evid
         })
         .expect("propose deterministic BOQ rule");
     assert!(rule.deterministic_tests.iter().all(|test| test.passed));
+    assert_eq!(
+        rule.deterministic_tests
+            .iter()
+            .filter(|test| test.case_name.starts_with("pricing"))
+            .count(),
+        4,
+        "the approved rule must govern pricing add/deduct, rounding, and negative-total rejection"
+    );
     assert_eq!(
         harness
             .host

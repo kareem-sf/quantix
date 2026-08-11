@@ -37,6 +37,7 @@ mod bid_decisions;
 mod calculations;
 mod estimates;
 mod external_rfis;
+mod pricing;
 mod production_scheduler;
 mod team_composer;
 mod tender_queries;
@@ -73,14 +74,15 @@ pub use calculations::{
     ControlledBoqCalculationRun, ControlledBoqCalculationStatus, CostEstimatorCalculationResult,
     CreateCalculationScenarioCommand, EstimateAggregateCalculationInput,
     EstimateAggregateCalculationRun, ExchangeRateType, InspectCalculationWorkspaceCommand,
+    PricingAdjustmentDirection, PricingCalculationAdjustmentInput, PricingCalculationRun,
     ProposeBoqCalculationRuleCommand, RunCalculationRuleReviewCommand,
     RunCostEstimatorCalculationCommand,
 };
 pub use estimates::{
-    ApproveBasisOfEstimateCommand, BasisOfEstimateApproval, BasisOfEstimateReview,
-    BasisOfEstimateReviewFinding, BasisOfEstimateReviewOutcome, BasisOfEstimateReviewResult,
-    BasisOfEstimateVersion, BoqAccountRow, BoqInventoryRow, BoqRowDisposition, BoqTableCandidate,
-    BoqTableDesignation, CostBreakdownComponent, CostComponentCategory, CostEstimatorBasisResult,
+    ApproveBasisOfEstimateCommand, BasisOfEstimateReview, BasisOfEstimateReviewFinding,
+    BasisOfEstimateReviewOutcome, BasisOfEstimateReviewResult, BasisOfEstimateVersion,
+    BoqAccountRow, BoqInventoryRow, BoqRowDisposition, BoqTableCandidate, BoqTableDesignation,
+    CostBreakdownComponent, CostComponentCategory, CostEstimatorBasisResult,
     DesignateBoqTableCommand, EstimateAllowance, EstimateMaterialAssumption,
     EstimateQueryObservation, EstimateQueryReference, EstimateQuotation, EstimateQuotationKind,
     EstimateWorkspaceInspection, InspectEstimateWorkspaceCommand, RunBasisOfEstimateReviewCommand,
@@ -97,6 +99,19 @@ pub use external_rfis::{
     InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
     InterpretExternalRfiResponseCommand, RegisterExternalRfiResponseCommand,
     ReviseExternalRfiDraftCommand, RunExternalRfiReviewCommand,
+};
+pub use pricing::{
+    ApproveCommercialStrategyCommand, ApprovePricedCostBaselineCommand,
+    ApprovePricingAdjustmentCommand, ApproveTenderPriceCommand, ApprovedTenderPrice,
+    CommercialStrategy, CommercialStrategyApproval, CreateCommercialStrategyCommand,
+    CreatePricedCostBaselineCommand, CreatePricingAdjustmentCommand, CreatePricingScenarioCommand,
+    InspectPricingWorkspaceCommand, PricedCostBaselineApproval, PricedCostBaselineReview,
+    PricedCostBaselineReviewFinding, PricedCostBaselineReviewOutcome,
+    PricedCostBaselineReviewResult, PricedCostBaselineVersion, PricingAdjustmentApproval,
+    PricingAdjustmentKind, PricingAdjustmentReference, PricingAdjustmentReviewResult,
+    PricingAdjustmentVersion, PricingDecisionHistoryEntry, PricingScenarioSelection,
+    PricingScenarioVersion, PricingWorkspaceInspection, RunPricedCostBaselineReviewCommand,
+    RunPricingAdjustmentReviewCommand, SelectPricingScenarioCommand,
 };
 pub use production_scheduler::{
     ActivateTenderProductionCommand, ApproveProductionFindingExceptionCommand,
@@ -697,6 +712,271 @@ CREATE TABLE basis_of_estimate_approvals (
   FOREIGN KEY (basis_id, basis_version)
     REFERENCES basis_of_estimate_versions(basis_id, version),
   FOREIGN KEY (review_id) REFERENCES basis_of_estimate_reviews(review_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE priced_cost_baselines (
+  baseline_id TEXT PRIMARY KEY CHECK (length(baseline_id) = 32),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE priced_cost_baseline_versions (
+  baseline_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 32),
+  tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  basis_id TEXT NOT NULL,
+  basis_version INTEGER NOT NULL CHECK (basis_version BETWEEN 1 AND 32),
+  basis_manifest_sha256 TEXT NOT NULL CHECK (length(basis_manifest_sha256) = 64),
+  aggregate_run_id TEXT NOT NULL,
+  aggregate_manifest_sha256 TEXT NOT NULL CHECK (length(aggregate_manifest_sha256) = 64),
+  amount TEXT NOT NULL CHECK (length(CAST(amount AS BLOB)) BETWEEN 1 AND 128),
+  currency TEXT NOT NULL CHECK (length(currency) = 3),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (
+    json_valid(manifest_json)
+    AND length(CAST(manifest_json AS BLOB)) <= 1048576
+  ),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (baseline_id, version),
+  FOREIGN KEY (baseline_id) REFERENCES priced_cost_baselines(baseline_id),
+  FOREIGN KEY (basis_id, basis_version)
+    REFERENCES basis_of_estimate_versions(basis_id, version),
+  FOREIGN KEY (aggregate_run_id)
+    REFERENCES estimate_aggregate_calculation_runs(aggregate_run_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE priced_cost_baseline_heads (
+  baseline_id TEXT PRIMARY KEY,
+  current_version INTEGER NOT NULL CHECK (current_version BETWEEN 1 AND 32),
+  FOREIGN KEY (baseline_id, current_version)
+    REFERENCES priced_cost_baseline_versions(baseline_id, version)
+);
+CREATE TABLE priced_cost_baseline_reviews (
+  review_id TEXT PRIMARY KEY CHECK (length(review_id) = 32),
+  baseline_id TEXT NOT NULL,
+  baseline_version INTEGER NOT NULL CHECK (baseline_version BETWEEN 1 AND 32),
+  baseline_manifest_sha256 TEXT NOT NULL CHECK (length(baseline_manifest_sha256) = 64),
+  reviewer_run_id TEXT NOT NULL UNIQUE,
+  reviewer_profile_id TEXT NOT NULL CHECK (length(reviewer_profile_id) = 32),
+  reviewer_profile_version INTEGER NOT NULL CHECK (reviewer_profile_version > 0),
+  outcome TEXT NOT NULL CHECK (outcome IN ('passed', 'failed')),
+  findings_json TEXT NOT NULL CHECK (json_valid(findings_json)),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (baseline_id, baseline_version),
+  FOREIGN KEY (baseline_id, baseline_version)
+    REFERENCES priced_cost_baseline_versions(baseline_id, version),
+  FOREIGN KEY (reviewer_run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (reviewer_profile_id, reviewer_profile_version)
+    REFERENCES agent_profile_versions(profile_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE priced_cost_baseline_approvals (
+  approval_id TEXT PRIMARY KEY CHECK (length(approval_id) = 32),
+  baseline_id TEXT NOT NULL,
+  baseline_version INTEGER NOT NULL CHECK (baseline_version BETWEEN 1 AND 32),
+  baseline_manifest_sha256 TEXT NOT NULL CHECK (length(baseline_manifest_sha256) = 64),
+  review_id TEXT NOT NULL UNIQUE,
+  review_manifest_sha256 TEXT NOT NULL CHECK (length(review_manifest_sha256) = 64),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  approved_by TEXT NOT NULL CHECK (approved_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'engineer_in_the_loop'),
+  tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (baseline_id, baseline_version),
+  FOREIGN KEY (baseline_id, baseline_version)
+    REFERENCES priced_cost_baseline_versions(baseline_id, version),
+  FOREIGN KEY (review_id) REFERENCES priced_cost_baseline_reviews(review_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE pricing_calculation_runs (
+  pricing_calculation_run_id TEXT PRIMARY KEY CHECK (length(pricing_calculation_run_id) = 32),
+  tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  baseline_aggregate_run_id TEXT NOT NULL,
+  baseline_aggregate_manifest_sha256 TEXT NOT NULL CHECK (length(baseline_aggregate_manifest_sha256) = 64),
+  final_amount TEXT NOT NULL CHECK (length(CAST(final_amount AS BLOB)) BETWEEN 1 AND 128),
+  currency TEXT NOT NULL CHECK (length(currency) = 3),
+  manifest_json TEXT NOT NULL CHECK (
+    json_valid(manifest_json)
+    AND length(CAST(manifest_json AS BLOB)) <= 1048576
+  ),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (baseline_aggregate_run_id)
+    REFERENCES estimate_aggregate_calculation_runs(aggregate_run_id)
+);
+CREATE TABLE pricing_adjustments (
+  adjustment_id TEXT PRIMARY KEY CHECK (length(adjustment_id) = 32),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE pricing_adjustment_versions (
+  adjustment_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 32),
+  tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  baseline_id TEXT NOT NULL,
+  baseline_version INTEGER NOT NULL CHECK (baseline_version BETWEEN 1 AND 32),
+  calculation_run_id TEXT NOT NULL,
+  calculation_manifest_sha256 TEXT NOT NULL CHECK (length(calculation_manifest_sha256) = 64),
+  kind TEXT NOT NULL CHECK (kind IN ('contingency', 'markup', 'exclusion', 'qualification', 'commercial_strategy', 'other')),
+  direction TEXT NOT NULL CHECK (direction IN ('add', 'deduct')),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (adjustment_id, version),
+  FOREIGN KEY (adjustment_id) REFERENCES pricing_adjustments(adjustment_id),
+  FOREIGN KEY (baseline_id, baseline_version)
+    REFERENCES priced_cost_baseline_versions(baseline_id, version),
+  FOREIGN KEY (calculation_run_id) REFERENCES calculation_runs(calculation_run_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE pricing_adjustment_heads (
+  adjustment_id TEXT PRIMARY KEY,
+  current_version INTEGER NOT NULL CHECK (current_version BETWEEN 1 AND 32),
+  FOREIGN KEY (adjustment_id, current_version)
+    REFERENCES pricing_adjustment_versions(adjustment_id, version)
+);
+CREATE TABLE pricing_adjustment_reviews (
+  review_id TEXT PRIMARY KEY CHECK (length(review_id) = 32),
+  adjustment_id TEXT NOT NULL,
+  adjustment_version INTEGER NOT NULL CHECK (adjustment_version BETWEEN 1 AND 32),
+  adjustment_manifest_sha256 TEXT NOT NULL CHECK (length(adjustment_manifest_sha256) = 64),
+  reviewer_run_id TEXT NOT NULL UNIQUE,
+  reviewer_profile_id TEXT NOT NULL CHECK (length(reviewer_profile_id) = 32),
+  reviewer_profile_version INTEGER NOT NULL CHECK (reviewer_profile_version > 0),
+  outcome TEXT NOT NULL CHECK (outcome IN ('passed', 'failed')),
+  findings_json TEXT NOT NULL CHECK (json_valid(findings_json)),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (adjustment_id, adjustment_version),
+  FOREIGN KEY (adjustment_id, adjustment_version)
+    REFERENCES pricing_adjustment_versions(adjustment_id, version),
+  FOREIGN KEY (reviewer_run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE pricing_adjustment_approvals (
+  approval_id TEXT PRIMARY KEY CHECK (length(approval_id) = 32),
+  adjustment_id TEXT NOT NULL,
+  adjustment_version INTEGER NOT NULL CHECK (adjustment_version BETWEEN 1 AND 32),
+  adjustment_manifest_sha256 TEXT NOT NULL CHECK (length(adjustment_manifest_sha256) = 64),
+  review_id TEXT NOT NULL UNIQUE,
+  review_manifest_sha256 TEXT NOT NULL CHECK (length(review_manifest_sha256) = 64),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  approved_by TEXT NOT NULL CHECK (approved_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (adjustment_id, adjustment_version),
+  FOREIGN KEY (adjustment_id, adjustment_version)
+    REFERENCES pricing_adjustment_versions(adjustment_id, version),
+  FOREIGN KEY (review_id) REFERENCES pricing_adjustment_reviews(review_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE commercial_strategies (
+  strategy_id TEXT PRIMARY KEY CHECK (length(strategy_id) = 32),
+  baseline_id TEXT NOT NULL,
+  baseline_version INTEGER NOT NULL CHECK (baseline_version BETWEEN 1 AND 32),
+  tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (baseline_id, baseline_version)
+    REFERENCES priced_cost_baseline_versions(baseline_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE commercial_strategy_approvals (
+  approval_id TEXT PRIMARY KEY CHECK (length(approval_id) = 32),
+  strategy_id TEXT NOT NULL UNIQUE,
+  strategy_manifest_sha256 TEXT NOT NULL CHECK (length(strategy_manifest_sha256) = 64),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  approved_by TEXT NOT NULL CHECK (approved_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (strategy_id) REFERENCES commercial_strategies(strategy_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE pricing_scenarios (
+  pricing_scenario_id TEXT PRIMARY KEY CHECK (length(pricing_scenario_id) = 32),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE pricing_scenario_versions (
+  pricing_scenario_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 32),
+  tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  baseline_id TEXT NOT NULL,
+  baseline_version INTEGER NOT NULL CHECK (baseline_version BETWEEN 1 AND 32),
+  strategy_id TEXT NOT NULL,
+  pricing_calculation_run_id TEXT NOT NULL UNIQUE,
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (pricing_scenario_id, version),
+  FOREIGN KEY (pricing_scenario_id) REFERENCES pricing_scenarios(pricing_scenario_id),
+  FOREIGN KEY (baseline_id, baseline_version)
+    REFERENCES priced_cost_baseline_versions(baseline_id, version),
+  FOREIGN KEY (strategy_id) REFERENCES commercial_strategies(strategy_id),
+  FOREIGN KEY (pricing_calculation_run_id)
+    REFERENCES pricing_calculation_runs(pricing_calculation_run_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE pricing_scenario_selections (
+  selection_id TEXT PRIMARY KEY CHECK (length(selection_id) = 32),
+  pricing_scenario_id TEXT NOT NULL,
+  pricing_scenario_version INTEGER NOT NULL CHECK (pricing_scenario_version BETWEEN 1 AND 32),
+  scenario_manifest_sha256 TEXT NOT NULL CHECK (length(scenario_manifest_sha256) = 64),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  selected_by TEXT NOT NULL CHECK (selected_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (pricing_scenario_id, pricing_scenario_version)
+    REFERENCES pricing_scenario_versions(pricing_scenario_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE pricing_selection_head (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  selection_id TEXT NOT NULL UNIQUE,
+  FOREIGN KEY (selection_id) REFERENCES pricing_scenario_selections(selection_id)
+);
+CREATE TABLE approved_tender_prices (
+  approval_id TEXT PRIMARY KEY CHECK (length(approval_id) = 32),
+  pricing_scenario_id TEXT NOT NULL,
+  pricing_scenario_version INTEGER NOT NULL CHECK (pricing_scenario_version BETWEEN 1 AND 32),
+  scenario_manifest_sha256 TEXT NOT NULL CHECK (length(scenario_manifest_sha256) = 64),
+  selection_id TEXT NOT NULL UNIQUE,
+  strategy_approval_id TEXT NOT NULL,
+  pricing_calculation_run_id TEXT NOT NULL,
+  calculation_manifest_sha256 TEXT NOT NULL CHECK (length(calculation_manifest_sha256) = 64),
+  final_amount TEXT NOT NULL CHECK (length(CAST(final_amount AS BLOB)) BETWEEN 1 AND 128),
+  currency TEXT NOT NULL CHECK (length(currency) = 3),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  approved_by TEXT NOT NULL CHECK (approved_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'engineer_in_the_loop'),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (pricing_scenario_id, pricing_scenario_version)
+    REFERENCES pricing_scenario_versions(pricing_scenario_id, version),
+  FOREIGN KEY (selection_id) REFERENCES pricing_scenario_selections(selection_id),
+  FOREIGN KEY (strategy_approval_id) REFERENCES commercial_strategy_approvals(approval_id),
+  FOREIGN KEY (pricing_calculation_run_id)
+    REFERENCES pricing_calculation_runs(pricing_calculation_run_id),
   FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
 );
 CREATE TABLE source_artifacts (
@@ -1750,6 +2030,91 @@ BEFORE DELETE ON basis_of_estimate_approvals
 BEGIN
   SELECT RAISE(ABORT, 'Basis of Estimate Approvals are immutable');
 END;
+CREATE TRIGGER priced_cost_baselines_no_update
+BEFORE UPDATE ON priced_cost_baselines
+BEGIN
+  SELECT RAISE(ABORT, 'Priced Cost Baseline identities are immutable');
+END;
+CREATE TRIGGER priced_cost_baselines_no_delete
+BEFORE DELETE ON priced_cost_baselines
+BEGIN
+  SELECT RAISE(ABORT, 'Priced Cost Baseline identities are immutable');
+END;
+CREATE TRIGGER priced_cost_baseline_versions_no_update
+BEFORE UPDATE ON priced_cost_baseline_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Priced Cost Baseline Versions are immutable');
+END;
+CREATE TRIGGER priced_cost_baseline_versions_no_delete
+BEFORE DELETE ON priced_cost_baseline_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Priced Cost Baseline Versions are immutable');
+END;
+CREATE TRIGGER priced_cost_baseline_heads_identity_immutable
+BEFORE UPDATE ON priced_cost_baseline_heads
+WHEN NEW.baseline_id != OLD.baseline_id
+BEGIN
+  SELECT RAISE(ABORT, 'Priced Cost Baseline head identity is immutable');
+END;
+CREATE TRIGGER priced_cost_baseline_heads_no_delete
+BEFORE DELETE ON priced_cost_baseline_heads
+BEGIN
+  SELECT RAISE(ABORT, 'Priced Cost Baseline heads cannot be deleted');
+END;
+CREATE TRIGGER priced_cost_baseline_reviews_no_update
+BEFORE UPDATE ON priced_cost_baseline_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'Priced Cost Baseline Reviews are immutable');
+END;
+CREATE TRIGGER priced_cost_baseline_reviews_no_delete
+BEFORE DELETE ON priced_cost_baseline_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'Priced Cost Baseline Reviews are immutable');
+END;
+CREATE TRIGGER priced_cost_baseline_approvals_no_update
+BEFORE UPDATE ON priced_cost_baseline_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Priced Cost Baseline Approvals are immutable');
+END;
+CREATE TRIGGER priced_cost_baseline_approvals_no_delete
+BEFORE DELETE ON priced_cost_baseline_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Priced Cost Baseline Approvals are immutable');
+END;
+CREATE TRIGGER pricing_calculation_runs_no_update
+BEFORE UPDATE ON pricing_calculation_runs
+BEGIN
+  SELECT RAISE(ABORT, 'Pricing Calculation Runs are immutable');
+END;
+CREATE TRIGGER pricing_calculation_runs_no_delete
+BEFORE DELETE ON pricing_calculation_runs
+BEGIN
+  SELECT RAISE(ABORT, 'Pricing Calculation Runs are immutable');
+END;
+CREATE TRIGGER pricing_adjustments_no_update BEFORE UPDATE ON pricing_adjustments BEGIN SELECT RAISE(ABORT, 'Pricing Adjustments are immutable'); END;
+CREATE TRIGGER pricing_adjustments_no_delete BEFORE DELETE ON pricing_adjustments BEGIN SELECT RAISE(ABORT, 'Pricing Adjustments are immutable'); END;
+CREATE TRIGGER pricing_adjustment_versions_no_update BEFORE UPDATE ON pricing_adjustment_versions BEGIN SELECT RAISE(ABORT, 'Pricing Adjustment Versions are immutable'); END;
+CREATE TRIGGER pricing_adjustment_versions_no_delete BEFORE DELETE ON pricing_adjustment_versions BEGIN SELECT RAISE(ABORT, 'Pricing Adjustment Versions are immutable'); END;
+CREATE TRIGGER pricing_adjustment_heads_identity_immutable BEFORE UPDATE ON pricing_adjustment_heads WHEN NEW.adjustment_id != OLD.adjustment_id BEGIN SELECT RAISE(ABORT, 'Pricing Adjustment head identity is immutable'); END;
+CREATE TRIGGER pricing_adjustment_heads_no_delete BEFORE DELETE ON pricing_adjustment_heads BEGIN SELECT RAISE(ABORT, 'Pricing Adjustment heads cannot be deleted'); END;
+CREATE TRIGGER pricing_adjustment_reviews_no_update BEFORE UPDATE ON pricing_adjustment_reviews BEGIN SELECT RAISE(ABORT, 'Pricing Adjustment Reviews are immutable'); END;
+CREATE TRIGGER pricing_adjustment_reviews_no_delete BEFORE DELETE ON pricing_adjustment_reviews BEGIN SELECT RAISE(ABORT, 'Pricing Adjustment Reviews are immutable'); END;
+CREATE TRIGGER pricing_adjustment_approvals_no_update BEFORE UPDATE ON pricing_adjustment_approvals BEGIN SELECT RAISE(ABORT, 'Pricing Adjustment Approvals are immutable'); END;
+CREATE TRIGGER pricing_adjustment_approvals_no_delete BEFORE DELETE ON pricing_adjustment_approvals BEGIN SELECT RAISE(ABORT, 'Pricing Adjustment Approvals are immutable'); END;
+CREATE TRIGGER commercial_strategies_no_update BEFORE UPDATE ON commercial_strategies BEGIN SELECT RAISE(ABORT, 'Commercial Strategies are immutable'); END;
+CREATE TRIGGER commercial_strategies_no_delete BEFORE DELETE ON commercial_strategies BEGIN SELECT RAISE(ABORT, 'Commercial Strategies are immutable'); END;
+CREATE TRIGGER commercial_strategy_approvals_no_update BEFORE UPDATE ON commercial_strategy_approvals BEGIN SELECT RAISE(ABORT, 'Commercial Strategy Approvals are immutable'); END;
+CREATE TRIGGER commercial_strategy_approvals_no_delete BEFORE DELETE ON commercial_strategy_approvals BEGIN SELECT RAISE(ABORT, 'Commercial Strategy Approvals are immutable'); END;
+CREATE TRIGGER pricing_scenarios_no_update BEFORE UPDATE ON pricing_scenarios BEGIN SELECT RAISE(ABORT, 'Pricing Scenario identities are immutable'); END;
+CREATE TRIGGER pricing_scenarios_no_delete BEFORE DELETE ON pricing_scenarios BEGIN SELECT RAISE(ABORT, 'Pricing Scenario identities are immutable'); END;
+CREATE TRIGGER pricing_scenario_versions_no_update BEFORE UPDATE ON pricing_scenario_versions BEGIN SELECT RAISE(ABORT, 'Pricing Scenario Versions are immutable'); END;
+CREATE TRIGGER pricing_scenario_versions_no_delete BEFORE DELETE ON pricing_scenario_versions BEGIN SELECT RAISE(ABORT, 'Pricing Scenario Versions are immutable'); END;
+CREATE TRIGGER pricing_scenario_selections_no_update BEFORE UPDATE ON pricing_scenario_selections BEGIN SELECT RAISE(ABORT, 'Pricing Scenario Selections are immutable'); END;
+CREATE TRIGGER pricing_scenario_selections_no_delete BEFORE DELETE ON pricing_scenario_selections BEGIN SELECT RAISE(ABORT, 'Pricing Scenario Selections are immutable'); END;
+CREATE TRIGGER pricing_selection_head_identity_immutable BEFORE UPDATE ON pricing_selection_head WHEN NEW.singleton != OLD.singleton BEGIN SELECT RAISE(ABORT, 'Pricing Selection head identity is immutable'); END;
+CREATE TRIGGER pricing_selection_head_no_delete BEFORE DELETE ON pricing_selection_head BEGIN SELECT RAISE(ABORT, 'Pricing Selection head cannot be deleted'); END;
+CREATE TRIGGER approved_tender_prices_no_update BEFORE UPDATE ON approved_tender_prices BEGIN SELECT RAISE(ABORT, 'Approved Tender Prices are immutable'); END;
+CREATE TRIGGER approved_tender_prices_no_delete BEFORE DELETE ON approved_tender_prices BEGIN SELECT RAISE(ABORT, 'Approved Tender Prices are immutable'); END;
 CREATE TRIGGER source_artifacts_no_update
 BEFORE UPDATE ON source_artifacts
 BEGIN
@@ -3051,6 +3416,9 @@ impl TenderStore {
             return Ok(false);
         }
         if !self.estimate_manifests_are_valid_with_check(check)? {
+            return Ok(false);
+        }
+        if !self.pricing_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
         if !self.bid_decision_manifests_are_valid_with_check(check)? {
