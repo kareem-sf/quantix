@@ -34,9 +34,8 @@ use super::{
 
 const MAX_DECIMAL_BYTES: usize = 64;
 const CALCULATION_ENGINE_VERSION: &str = "quantix-exact-decimal/1";
-const BOQ_RULE_NAME: &str = "Controlled BOQ quantity × unit rate";
-const BOQ_RULE_FORMULA: &str =
-    "convert(quantity, quantity_unit, rate_basis_unit) × unit_rate × exchange_rate";
+const BOQ_RULE_NAME: &str = "Controlled BOQ line and estimate aggregation";
+const BOQ_RULE_FORMULA: &str = "line=convert(quantity, quantity_unit, rate_basis_unit) × unit_rate × exchange_rate; aggregate=sum(approved_line_final_amounts)";
 const MAX_CALCULATION_RUNS: u32 = 1_000;
 const MAX_CALCULATION_SCENARIOS: u32 = 1_000;
 pub(crate) const CALCULATION_RULE_REVIEW_CAPABILITY: &str = "review_cost_estimation";
@@ -473,6 +472,42 @@ pub struct ControlledBoqCalculationRun {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 #[ts(export)]
+pub struct EstimateAggregateCalculationInput {
+    pub build_up_id: String,
+    pub cbs_component_id: String,
+    pub calculation_run_id: String,
+    pub calculation_manifest_sha256: String,
+    pub amount: String,
+    pub currency: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct EstimateAggregateCalculationRun {
+    pub aggregate_run_id: String,
+    pub author_run_id: String,
+    pub comparison_total_calculation_run_id: String,
+    pub comparison_total_manifest_sha256: String,
+    pub comparison_total_amount: String,
+    pub rule_id: String,
+    pub rule_version: u32,
+    pub rule_approval_id: String,
+    pub scenario_id: String,
+    pub scenario_version: u32,
+    pub precision: u32,
+    pub rounding_mode: CalculationRoundingMode,
+    pub engine_version: String,
+    pub inputs: Vec<EstimateAggregateCalculationInput>,
+    pub final_amount: String,
+    pub currency: String,
+    pub manifest_sha256: String,
+    pub approved_for_reliance: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
 pub struct CalculationRunApproval {
     pub approval_id: String,
     pub calculation_run_id: String,
@@ -809,6 +844,10 @@ fn valid_currency(value: &str) -> bool {
     BOQ_RULE_SUPPORTED_CURRENCIES.binary_search(&value).is_ok()
 }
 
+pub(crate) fn valid_estimate_currency(value: &str) -> bool {
+    valid_currency(value)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CalculationRuleManifest {
     schema_version: u32,
@@ -919,6 +958,47 @@ struct CalculationRunApprovalManifest {
     approved_by: String,
     acting_role: String,
     tender_revision: u32,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EstimateAggregateCalculationManifest {
+    schema_version: u32,
+    aggregate_run_id: String,
+    author_run_id: String,
+    comparison_total_calculation_run_id: String,
+    comparison_total_manifest_sha256: String,
+    comparison_total_amount: String,
+    tender_revision: u32,
+    rule_id: String,
+    rule_version: u32,
+    rule_approval_id: String,
+    rule_manifest_sha256: String,
+    rule_approval_manifest_sha256: String,
+    scenario_id: String,
+    scenario_version: u32,
+    scenario_manifest_sha256: String,
+    precision: u32,
+    rounding_mode: CalculationRoundingMode,
+    engine_version: String,
+    inputs: Vec<EstimateAggregateCalculationInput>,
+    final_amount: String,
+    currency: String,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EstimateAggregateCalculationApprovalManifest {
+    schema_version: u32,
+    approval_id: String,
+    aggregate_run_id: String,
+    aggregate_manifest_sha256: String,
+    basis_id: String,
+    basis_version: u32,
+    basis_manifest_sha256: String,
+    rationale: String,
+    approved_by: String,
+    acting_role: String,
     created_at: String,
 }
 
@@ -1589,6 +1669,22 @@ impl TenderStore {
         budget.check()?;
         validate_calculation_evidence_basket(&command.quantity_evidence)?;
         validate_calculation_evidence_basket(&command.unit_rate_evidence)?;
+        let mut quantity_evidence = command.quantity_evidence.clone();
+        quantity_evidence.sort_by(|left, right| {
+            (&left.kind, &left.reference, left.version).cmp(&(
+                &right.kind,
+                &right.reference,
+                right.version,
+            ))
+        });
+        let mut unit_rate_evidence = command.unit_rate_evidence.clone();
+        unit_rate_evidence.sort_by(|left, right| {
+            (&left.kind, &left.reference, left.version).cmp(&(
+                &right.kind,
+                &right.reference,
+                right.version,
+            ))
+        });
         let scenario = load_calculation_scenario(
             &self.connection,
             &command.scenario_id,
@@ -1611,11 +1707,11 @@ impl TenderStore {
             budget.check()?;
             if !calculation_evidence_basket_is_authoritative(
                 &transaction,
-                &command.quantity_evidence,
+                &quantity_evidence,
                 &mut || budget.check(),
             )? || !calculation_evidence_basket_is_authoritative(
                 &transaction,
-                &command.unit_rate_evidence,
+                &unit_rate_evidence,
                 &mut || budget.check(),
             )? {
                 return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
@@ -1724,8 +1820,8 @@ impl TenderStore {
                 plan_id: &plan_id,
                 plan_version,
                 description: command.description.trim(),
-                quantity_evidence: &command.quantity_evidence,
-                unit_rate_evidence: &command.unit_rate_evidence,
+                quantity_evidence: &quantity_evidence,
+                unit_rate_evidence: &unit_rate_evidence,
                 deadline: deadline.clone(),
                 profile: &profile,
                 scenario: &scenario,
@@ -1744,7 +1840,7 @@ impl TenderStore {
                 "description": command.description.trim(),
                 "quantity_evidence": calculation_source_evidence_view(
                     &transaction,
-                    &command.quantity_evidence,
+                    &quantity_evidence,
                     &mut || budget.check(),
                 )?,
                 "rules": {
@@ -1759,7 +1855,7 @@ impl TenderStore {
                 },
                 "unit_rate_evidence": calculation_source_evidence_view(
                     &transaction,
-                    &command.unit_rate_evidence,
+                    &unit_rate_evidence,
                     &mut || budget.check(),
                 )?,
             });
@@ -3855,6 +3951,14 @@ fn calculation_source_evidence_view(
     Ok(result)
 }
 
+pub(crate) fn calculation_evidence_view_for_estimate(
+    connection: &rusqlite::Connection,
+    references: &[AgentTaskInputReference],
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<Vec<serde_json::Value>, TenderCommandError> {
+    calculation_source_evidence_view(connection, references, check)
+}
+
 fn evaluate_candidate(
     candidate: &CostEstimatorCalculationCandidate,
     scenario: &CalculationScenarioVersion,
@@ -4460,6 +4564,624 @@ fn calculation_run_approval_is_valid(
                     && authority.created_at == approval.9
             }),
     )
+}
+
+pub(crate) fn approved_calculation_run_for_estimate(
+    connection: &rusqlite::Connection,
+    calculation_run_id: &str,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<Option<ControlledBoqCalculationRun>, TenderCommandError> {
+    let Some(stored) = load_stored_calculation_run(connection, calculation_run_id)? else {
+        return Ok(None);
+    };
+    let Some(manifest) = calculation_run_core_is_valid(connection, &stored, check)? else {
+        return Ok(None);
+    };
+    if !calculation_run_approval_is_valid(connection, &manifest, &stored.9, check)? {
+        return Ok(None);
+    }
+    let run = calculation_run_view(connection, &stored.8, stored.9)?;
+    Ok(run.approval.is_some().then_some(run))
+}
+
+pub(crate) struct RecordEstimateAggregateCalculation<'a> {
+    pub aggregate_run_id: &'a str,
+    pub author_run_id: &'a str,
+    pub comparison_total_calculation_run_id: &'a str,
+    pub tender_revision: u32,
+    pub inputs: Vec<EstimateAggregateCalculationInput>,
+    pub tender_id: &'a str,
+    pub created_at: &'a str,
+}
+
+pub(crate) fn evaluate_estimate_aggregate(
+    inputs: &[EstimateAggregateCalculationInput],
+    precision: u32,
+    rounding_mode: CalculationRoundingMode,
+) -> Result<String, TenderCommandError> {
+    let mut sum = Decimal::ZERO;
+    for input in inputs {
+        sum = sum
+            .checked_add(
+                Decimal::from_str(&input.amount)
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            )
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    }
+    let strategy = match rounding_mode {
+        CalculationRoundingMode::MidpointAwayFromZero => RoundingStrategy::MidpointAwayFromZero,
+        CalculationRoundingMode::MidpointNearestEven => RoundingStrategy::MidpointNearestEven,
+    };
+    let rounded = sum.round_dp_with_strategy(precision, strategy);
+    Ok(format!(
+        "{rounded:.precision$}",
+        precision = precision as usize
+    ))
+}
+
+pub(crate) fn record_estimate_aggregate_calculation(
+    transaction: &Transaction<'_>,
+    mut request: RecordEstimateAggregateCalculation<'_>,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<EstimateAggregateCalculationRun, TenderCommandError> {
+    check()?;
+    let comparison = approved_calculation_run_for_estimate(
+        transaction,
+        request.comparison_total_calculation_run_id,
+        check,
+    )?
+    .filter(|run| {
+        run.status == ControlledBoqCalculationStatus::Completed
+            && run.tender_revision == request.tender_revision
+    })
+    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+    if request.inputs.len() > 256
+        || request
+            .inputs
+            .iter()
+            .any(|input| input.currency != comparison.output_currency)
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    request.inputs.sort_by(|left, right| {
+        (
+            &left.cbs_component_id,
+            &left.build_up_id,
+            &left.calculation_run_id,
+        )
+            .cmp(&(
+                &right.cbs_component_id,
+                &right.build_up_id,
+                &right.calculation_run_id,
+            ))
+    });
+    let mut seen = std::collections::HashSet::new();
+    for input in &request.inputs {
+        check()?;
+        if !seen.insert(input.calculation_run_id.clone()) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let run =
+            approved_calculation_run_for_estimate(transaction, &input.calculation_run_id, check)?
+                .filter(|run| {
+                    run.status == ControlledBoqCalculationStatus::Completed
+                        && run.tender_revision == request.tender_revision
+                })
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if run.manifest_sha256 != input.calculation_manifest_sha256
+            || run.final_amount.as_deref() != Some(input.amount.as_str())
+            || run.output_currency != input.currency
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+    }
+    let final_amount = evaluate_estimate_aggregate(
+        &request.inputs,
+        comparison.precision,
+        comparison.rounding_mode,
+    )?;
+    let comparison_total_amount = comparison
+        .final_amount
+        .clone()
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    type RuleBasis = (String, String, String);
+    let rule_basis: RuleBasis = transaction
+        .query_row(
+            "SELECT versions.manifest_sha256, approvals.manifest_sha256,
+                    scenarios.manifest_sha256
+             FROM calculation_rule_versions AS versions
+             JOIN calculation_rule_approvals AS approvals
+               ON approvals.rule_id = versions.rule_id
+              AND approvals.rule_version = versions.version
+             JOIN calculation_scenario_versions AS scenarios
+               ON scenarios.scenario_id = ?4 AND scenarios.version = ?5
+             WHERE versions.rule_id = ?1 AND versions.version = ?2
+               AND approvals.approval_id = ?3",
+            params![
+                comparison.rule_id,
+                comparison.rule_version,
+                comparison.rule_approval_id,
+                comparison.scenario_id,
+                comparison.scenario_version,
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(sql_error)?;
+    let manifest = EstimateAggregateCalculationManifest {
+        schema_version: 1,
+        aggregate_run_id: request.aggregate_run_id.into(),
+        author_run_id: request.author_run_id.into(),
+        comparison_total_calculation_run_id: request.comparison_total_calculation_run_id.into(),
+        comparison_total_manifest_sha256: comparison.manifest_sha256.clone(),
+        comparison_total_amount,
+        tender_revision: request.tender_revision,
+        rule_id: comparison.rule_id.clone(),
+        rule_version: comparison.rule_version,
+        rule_approval_id: comparison.rule_approval_id.clone(),
+        rule_manifest_sha256: rule_basis.0,
+        rule_approval_manifest_sha256: rule_basis.1,
+        scenario_id: comparison.scenario_id.clone(),
+        scenario_version: comparison.scenario_version,
+        scenario_manifest_sha256: rule_basis.2,
+        precision: comparison.precision,
+        rounding_mode: comparison.rounding_mode,
+        engine_version: CALCULATION_ENGINE_VERSION.into(),
+        inputs: request.inputs,
+        final_amount: final_amount.clone(),
+        currency: comparison.output_currency.clone(),
+        created_at: request.created_at.into(),
+    };
+    let manifest_json = canonical_json(&manifest)?;
+    let manifest_sha256 = sha256_hex(manifest_json.as_bytes());
+    let audit_sequence = append_audit_event_with_sequence(
+        transaction,
+        request.tender_id,
+        "estimate_aggregate_calculation_recorded",
+        request.tender_revision,
+        json!({
+            "aggregate_run_id": request.aggregate_run_id,
+            "author_run_id": request.author_run_id,
+            "comparison_total_calculation_run_id": request.comparison_total_calculation_run_id,
+            "manifest_sha256": manifest_sha256,
+        }),
+        request.created_at,
+    )?;
+    transaction
+        .execute(
+            "INSERT INTO estimate_aggregate_calculation_runs (
+               aggregate_run_id, author_run_id, comparison_total_calculation_run_id,
+               tender_revision, rule_id, rule_version, rule_approval_id,
+               scenario_id, scenario_version, precision, rounding_mode,
+               final_amount, currency, manifest_json, manifest_sha256,
+               audit_sequence, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                       ?12, ?13, ?14, ?15, ?16, ?17)",
+            params![
+                manifest.aggregate_run_id,
+                manifest.author_run_id,
+                manifest.comparison_total_calculation_run_id,
+                manifest.tender_revision,
+                manifest.rule_id,
+                manifest.rule_version,
+                manifest.rule_approval_id,
+                manifest.scenario_id,
+                manifest.scenario_version,
+                manifest.precision,
+                manifest.rounding_mode.as_str(),
+                manifest.final_amount,
+                manifest.currency,
+                manifest_json,
+                manifest_sha256,
+                audit_sequence,
+                manifest.created_at,
+            ],
+        )
+        .map_err(sql_error)?;
+    Ok(aggregate_view(manifest, manifest_sha256, false))
+}
+
+fn aggregate_view(
+    manifest: EstimateAggregateCalculationManifest,
+    manifest_sha256: String,
+    approved_for_reliance: bool,
+) -> EstimateAggregateCalculationRun {
+    EstimateAggregateCalculationRun {
+        aggregate_run_id: manifest.aggregate_run_id,
+        author_run_id: manifest.author_run_id,
+        comparison_total_calculation_run_id: manifest.comparison_total_calculation_run_id,
+        comparison_total_manifest_sha256: manifest.comparison_total_manifest_sha256,
+        comparison_total_amount: manifest.comparison_total_amount,
+        rule_id: manifest.rule_id,
+        rule_version: manifest.rule_version,
+        rule_approval_id: manifest.rule_approval_id,
+        scenario_id: manifest.scenario_id,
+        scenario_version: manifest.scenario_version,
+        precision: manifest.precision,
+        rounding_mode: manifest.rounding_mode,
+        engine_version: manifest.engine_version,
+        inputs: manifest.inputs,
+        final_amount: manifest.final_amount,
+        currency: manifest.currency,
+        manifest_sha256,
+        approved_for_reliance,
+    }
+}
+
+pub(crate) fn load_estimate_aggregate_calculation(
+    connection: &rusqlite::Connection,
+    aggregate_run_id: &str,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<Option<EstimateAggregateCalculationRun>, TenderCommandError> {
+    check()?;
+    let stored: Option<(String, String, i64, String)> = connection
+        .query_row(
+            "SELECT manifest_json, manifest_sha256, audit_sequence, created_at
+             FROM estimate_aggregate_calculation_runs WHERE aggregate_run_id = ?1",
+            [aggregate_run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let Some((manifest_json, manifest_sha256, audit_sequence, created_at)) = stored else {
+        return Ok(None);
+    };
+    let manifest: EstimateAggregateCalculationManifest = parse_canonical(&manifest_json)?;
+    let expected_change = json!({
+        "aggregate_run_id": manifest.aggregate_run_id,
+        "author_run_id": manifest.author_run_id,
+        "comparison_total_calculation_run_id": manifest.comparison_total_calculation_run_id,
+        "manifest_sha256": manifest_sha256,
+    });
+    if manifest.schema_version != 1
+        || manifest.aggregate_run_id != aggregate_run_id
+        || manifest.created_at != created_at
+        || manifest.engine_version != CALCULATION_ENGINE_VERSION
+        || sha256_hex(manifest_json.as_bytes()) != manifest_sha256
+        || !calculation_audit_is_exact(
+            connection,
+            audit_sequence,
+            "estimate_aggregate_calculation_recorded",
+            &created_at,
+            &expected_change,
+        )?
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    if !estimate_aggregate_manifest_is_valid(connection, &manifest, check)? {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let approval_count: u32 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM estimate_aggregate_calculation_approvals
+             WHERE aggregate_run_id = ?1",
+            [aggregate_run_id],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    let approval_exists =
+        estimate_aggregate_approval_is_valid(connection, &manifest, &manifest_sha256)?;
+    if approval_count > 1 || (approval_count == 1) != approval_exists {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(Some(aggregate_view(
+        manifest,
+        manifest_sha256,
+        approval_exists,
+    )))
+}
+
+fn estimate_aggregate_manifest_is_valid(
+    connection: &rusqlite::Connection,
+    manifest: &EstimateAggregateCalculationManifest,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<bool, TenderCommandError> {
+    check()?;
+    type StoredCore = (
+        String,
+        String,
+        u32,
+        String,
+        u32,
+        String,
+        String,
+        u32,
+        u32,
+        String,
+        String,
+        String,
+    );
+    let stored: Option<StoredCore> = connection
+        .query_row(
+            "SELECT author_run_id, comparison_total_calculation_run_id,
+                    tender_revision, rule_id, rule_version, rule_approval_id,
+                    scenario_id, scenario_version, precision, rounding_mode,
+                    final_amount, currency
+             FROM estimate_aggregate_calculation_runs WHERE aggregate_run_id = ?1",
+            [&manifest.aggregate_run_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
+                    row.get(11)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let Some(stored) = stored else {
+        return Ok(false);
+    };
+    if stored.0 != manifest.author_run_id
+        || stored.1 != manifest.comparison_total_calculation_run_id
+        || stored.2 != manifest.tender_revision
+        || stored.3 != manifest.rule_id
+        || stored.4 != manifest.rule_version
+        || stored.5 != manifest.rule_approval_id
+        || stored.6 != manifest.scenario_id
+        || stored.7 != manifest.scenario_version
+        || stored.8 != manifest.precision
+        || stored.9 != manifest.rounding_mode.as_str()
+        || stored.10 != manifest.final_amount
+        || stored.11 != manifest.currency
+        || manifest.engine_version != CALCULATION_ENGINE_VERSION
+        || manifest.inputs.len() > 256
+    {
+        return Ok(false);
+    }
+    let comparison = approved_calculation_run_for_estimate(
+        connection,
+        &manifest.comparison_total_calculation_run_id,
+        check,
+    )?;
+    let Some(comparison) = comparison else {
+        return Ok(false);
+    };
+    if comparison.tender_revision != manifest.tender_revision
+        || comparison.rule_id != manifest.rule_id
+        || comparison.rule_version != manifest.rule_version
+        || comparison.rule_approval_id != manifest.rule_approval_id
+        || comparison.scenario_id != manifest.scenario_id
+        || comparison.scenario_version != manifest.scenario_version
+        || comparison.precision != manifest.precision
+        || comparison.rounding_mode != manifest.rounding_mode
+        || comparison.output_currency != manifest.currency
+        || comparison.manifest_sha256 != manifest.comparison_total_manifest_sha256
+        || comparison.final_amount.as_deref() != Some(manifest.comparison_total_amount.as_str())
+    {
+        return Ok(false);
+    }
+    let hashes: (String, String, String) = connection
+        .query_row(
+            "SELECT versions.manifest_sha256, approvals.manifest_sha256,
+                    scenarios.manifest_sha256
+             FROM calculation_rule_versions AS versions
+             JOIN calculation_rule_approvals AS approvals
+               ON approvals.rule_id = versions.rule_id
+              AND approvals.rule_version = versions.version
+             JOIN calculation_scenario_versions AS scenarios
+               ON scenarios.scenario_id = ?4 AND scenarios.version = ?5
+             WHERE versions.rule_id = ?1 AND versions.version = ?2
+               AND approvals.approval_id = ?3",
+            params![
+                manifest.rule_id,
+                manifest.rule_version,
+                manifest.rule_approval_id,
+                manifest.scenario_id,
+                manifest.scenario_version,
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(sql_error)?;
+    if hashes.0 != manifest.rule_manifest_sha256
+        || hashes.1 != manifest.rule_approval_manifest_sha256
+        || hashes.2 != manifest.scenario_manifest_sha256
+    {
+        return Ok(false);
+    }
+    let mut seen_runs = std::collections::HashSet::new();
+    for input in &manifest.inputs {
+        check()?;
+        if !seen_runs.insert(input.calculation_run_id.clone()) {
+            return Ok(false);
+        }
+        let Some(run) =
+            approved_calculation_run_for_estimate(connection, &input.calculation_run_id, check)?
+        else {
+            return Ok(false);
+        };
+        if run.tender_revision != manifest.tender_revision
+            || run.manifest_sha256 != input.calculation_manifest_sha256
+            || run.final_amount.as_deref() != Some(input.amount.as_str())
+            || run.output_currency != input.currency
+            || input.currency != manifest.currency
+        {
+            return Ok(false);
+        }
+    }
+    Ok(
+        evaluate_estimate_aggregate(&manifest.inputs, manifest.precision, manifest.rounding_mode)?
+            == manifest.final_amount,
+    )
+}
+
+fn estimate_aggregate_approval_is_valid(
+    connection: &rusqlite::Connection,
+    aggregate: &EstimateAggregateCalculationManifest,
+    aggregate_manifest_sha256: &str,
+) -> Result<bool, TenderCommandError> {
+    type StoredApproval = (
+        String,
+        String,
+        u32,
+        String,
+        String,
+        String,
+        i64,
+        String,
+        String,
+        String,
+    );
+    let stored: Option<StoredApproval> = connection
+        .query_row(
+            "SELECT approval_id, basis_id, basis_version, basis_manifest_sha256,
+                    rationale, manifest_json, audit_sequence, manifest_sha256,
+                    approved_by, created_at
+             FROM estimate_aggregate_calculation_approvals
+             WHERE aggregate_run_id = ?1",
+            [&aggregate.aggregate_run_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let Some(stored) = stored else {
+        return Ok(false);
+    };
+    let manifest: EstimateAggregateCalculationApprovalManifest = parse_canonical(&stored.5)?;
+    let basis_manifest: Option<String> = connection
+        .query_row(
+            "SELECT manifest_sha256 FROM basis_of_estimate_versions
+             WHERE basis_id = ?1 AND version = ?2",
+            params![stored.1, stored.2],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let expected_change = json!({
+        "aggregate_manifest_sha256": aggregate_manifest_sha256,
+        "aggregate_run_id": aggregate.aggregate_run_id,
+        "approval_id": stored.0,
+        "basis_id": stored.1,
+        "basis_manifest_sha256": stored.3,
+        "basis_version": stored.2.to_string(),
+        "manifest_sha256": stored.7,
+    });
+    Ok(manifest.schema_version == 1
+        && manifest.approval_id == stored.0
+        && manifest.aggregate_run_id == aggregate.aggregate_run_id
+        && manifest.aggregate_manifest_sha256 == aggregate_manifest_sha256
+        && manifest.basis_id == stored.1
+        && manifest.basis_version == stored.2
+        && manifest.basis_manifest_sha256 == stored.3
+        && manifest.rationale == stored.4
+        && manifest.approved_by == "engineer_user"
+        && manifest.acting_role == "engineer_in_the_loop"
+        && manifest.created_at == stored.9
+        && stored.8 == "engineer_user"
+        && sha256_hex(stored.5.as_bytes()) == stored.7
+        && basis_manifest.as_deref() == Some(stored.3.as_str())
+        && calculation_audit_is_exact(
+            connection,
+            stored.6,
+            "estimate_aggregate_calculation_approved",
+            &stored.9,
+            &expected_change,
+        )?)
+}
+
+pub(crate) struct ApproveEstimateAggregateCalculation<'a> {
+    pub aggregate_run_id: &'a str,
+    pub aggregate_manifest_sha256: &'a str,
+    pub basis_id: &'a str,
+    pub basis_version: u32,
+    pub basis_manifest_sha256: &'a str,
+    pub rationale: &'a str,
+    pub tender_id: &'a str,
+    pub tender_revision: u32,
+    pub created_at: &'a str,
+}
+
+pub(crate) fn approve_estimate_aggregate_calculation(
+    transaction: &Transaction<'_>,
+    request: ApproveEstimateAggregateCalculation<'_>,
+    check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+) -> Result<(), TenderCommandError> {
+    let _aggregate =
+        load_estimate_aggregate_calculation(transaction, request.aggregate_run_id, check)?
+            .filter(|run| {
+                !run.approved_for_reliance
+                    && run.manifest_sha256 == request.aggregate_manifest_sha256
+                    && run.final_amount.len() <= MAX_DECIMAL_BYTES
+            })
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+    let approval_id = random_identifier(transaction)?;
+    let manifest = EstimateAggregateCalculationApprovalManifest {
+        schema_version: 1,
+        approval_id: approval_id.clone(),
+        aggregate_run_id: request.aggregate_run_id.into(),
+        aggregate_manifest_sha256: request.aggregate_manifest_sha256.into(),
+        basis_id: request.basis_id.into(),
+        basis_version: request.basis_version,
+        basis_manifest_sha256: request.basis_manifest_sha256.into(),
+        rationale: request.rationale.into(),
+        approved_by: "engineer_user".into(),
+        acting_role: "engineer_in_the_loop".into(),
+        created_at: request.created_at.into(),
+    };
+    let manifest_json = canonical_json(&manifest)?;
+    let manifest_sha256 = sha256_hex(manifest_json.as_bytes());
+    let audit_sequence = append_audit_event_with_sequence(
+        transaction,
+        request.tender_id,
+        "estimate_aggregate_calculation_approved",
+        request.tender_revision,
+        json!({
+            "aggregate_manifest_sha256": request.aggregate_manifest_sha256,
+            "aggregate_run_id": request.aggregate_run_id,
+            "approval_id": approval_id,
+            "basis_id": request.basis_id,
+            "basis_manifest_sha256": request.basis_manifest_sha256,
+            "basis_version": request.basis_version.to_string(),
+            "manifest_sha256": manifest_sha256,
+        }),
+        request.created_at,
+    )?;
+    transaction
+        .execute(
+            "INSERT INTO estimate_aggregate_calculation_approvals (
+               approval_id, aggregate_run_id, aggregate_manifest_sha256,
+               basis_id, basis_version, basis_manifest_sha256, rationale,
+               approved_by, acting_role, audit_sequence, manifest_json,
+               manifest_sha256, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'engineer_user',
+                       'engineer_in_the_loop', ?8, ?9, ?10, ?11)",
+            params![
+                approval_id,
+                request.aggregate_run_id,
+                request.aggregate_manifest_sha256,
+                request.basis_id,
+                request.basis_version,
+                request.basis_manifest_sha256,
+                request.rationale,
+                audit_sequence,
+                manifest_json,
+                manifest_sha256,
+                request.created_at,
+            ],
+        )
+        .map_err(sql_error)?;
+    Ok(())
 }
 
 fn cost_estimator_run_is_valid(
@@ -5397,6 +6119,29 @@ mod tests {
         assert_eq!(result.unrounded_source_amount, "3");
         assert_eq!(result.unrounded_output_amount, "150");
         assert_eq!(result.final_amount, "150.00");
+    }
+
+    #[test]
+    fn estimate_aggregate_uses_the_governed_midpoint_rounding_policy_once() {
+        let inputs = vec![EstimateAggregateCalculationInput {
+            build_up_id: "b".repeat(32),
+            cbs_component_id: "c".repeat(32),
+            calculation_run_id: "r".repeat(32),
+            calculation_manifest_sha256: "a".repeat(64),
+            amount: "1.005".into(),
+            currency: "USD".into(),
+        }];
+
+        assert_eq!(
+            evaluate_estimate_aggregate(&inputs, 2, CalculationRoundingMode::MidpointAwayFromZero,)
+                .expect("controlled aggregate"),
+            "1.01"
+        );
+        assert_eq!(
+            evaluate_estimate_aggregate(&inputs, 2, CalculationRoundingMode::MidpointNearestEven,)
+                .expect("controlled aggregate"),
+            "1.00"
+        );
     }
 
     #[test]

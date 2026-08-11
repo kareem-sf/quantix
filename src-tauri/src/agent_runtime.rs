@@ -16,17 +16,18 @@ use ts_rs::TS;
 use crate::{
     process_supervisor::{ProcessError, ProcessSpec, ProcessTermination, SupervisedConversation},
     tender_store::{
-        lock_mutex_with_check, require_setup, BidDecisionApprovalHistoryPage,
-        BidDecisionApprovalInvalidationResult, BidDecisionApprovalResult,
-        BidDecisionPackageInspection, BidDecisionPackageRecordCategory,
+        lock_mutex_with_check, require_setup, BasisOfEstimateReviewResult,
+        BidDecisionApprovalHistoryPage, BidDecisionApprovalInvalidationResult,
+        BidDecisionApprovalResult, BidDecisionPackageInspection, BidDecisionPackageRecordCategory,
         BidDecisionPackageRecordPage, BidDecisionPackageReviewResult,
         BidDecisionReturnReworkResult, BidPackageOperationBudget, CalculationRuleReviewResult,
-        ComplianceMatrixPage, CostEstimatorCalculationResult, CreateBidDecisionPackageCommand,
-        CreateTenderEngineerEntryCommand, DecideBidDecisionPackageCommand,
-        DecideTenderRecordCommand, ExternalRfiReviewResult,
+        ComplianceMatrixPage, CostEstimatorBasisResult, CostEstimatorCalculationResult,
+        CreateBidDecisionPackageCommand, CreateTenderEngineerEntryCommand,
+        DecideBidDecisionPackageCommand, DecideTenderRecordCommand, ExternalRfiReviewResult,
         InspectBidDecisionApprovalHistoryCommand, InvalidateBidDecisionApprovalCommand,
         ProductionTaskRunResult, ProductionTaskState, ResolveBidDecisionReturnReworkCommand,
-        RunBidDecisionPackageReviewCommand, RunCalculationRuleReviewCommand,
+        RunBasisOfEstimateReviewCommand, RunBidDecisionPackageReviewCommand,
+        RunCalculationRuleReviewCommand, RunCostEstimatorBasisCommand,
         RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand, RunProductionTaskCommand,
         RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, TenderCommandError,
         TenderErrorCode, TenderId, TenderRecordAuthority, TenderRecordDecisionResult,
@@ -1216,6 +1217,150 @@ impl QuantixHost {
             Ok(CostEstimatorCalculationResult {
                 run: locked.inspect_agent_run(&complete_prepared.run_id)?,
                 calculation,
+            })
+        })
+        .await
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+    }
+
+    pub async fn run_cost_estimator_basis(
+        &self,
+        command: RunCostEstimatorBasisCommand,
+    ) -> Result<CostEstimatorBasisResult, TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        let _active = ActiveAgentRunGuard {
+            host: self.clone(),
+            lease_id: lease_id.clone(),
+        };
+        let prepare_host = self.clone();
+        let prepare_tender_id = tender_id.clone();
+        let prepare_command = command.clone();
+        let (store, prepared) = tauri::async_runtime::spawn_blocking(move || {
+            let budget = BidPackageOperationBudget::for_tender(&prepare_tender_id);
+            let store =
+                prepare_host.tender_store_with_check(&prepare_tender_id, &mut || budget.check())?;
+            let mut locked = lock_mutex_with_check(&store, &mut || budget.check())?;
+            if prepare_command.validate().is_err() {
+                locked.record_estimate_denial(
+                    &prepare_tender_id,
+                    "run_cost_estimator_basis",
+                    None,
+                    "command_shape",
+                )?;
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            match locked.prepare_cost_estimator_basis_run(
+                &prepare_tender_id,
+                &prepare_command,
+                budget,
+            ) {
+                Ok(prepared) => Ok((store.clone(), prepared)),
+                Err(error) => {
+                    if error.code == TenderErrorCode::InvalidCommand {
+                        locked.record_estimate_denial(
+                            &prepare_tender_id,
+                            "run_cost_estimator_basis",
+                            None,
+                            "guard_denied",
+                        )?;
+                    }
+                    Err(error)
+                }
+            }
+        })
+        .await
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))??;
+        self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
+        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let complete_tender_id = tender_id.clone();
+        let complete_prepared = prepared.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let budget = BidPackageOperationBudget::for_tender(&complete_tender_id);
+            let mut locked = lock_mutex_with_check(&store, &mut || budget.check())?;
+            locked.complete_agent_run(&complete_tender_id, &complete_prepared, execution)?;
+            budget.check()?;
+            let basis = match locked.load_basis_for_author_run(&complete_prepared.run_id) {
+                Ok(basis) => Some(basis),
+                Err(error) if error.code == TenderErrorCode::NotFound => None,
+                Err(error) => return Err(error),
+            };
+            Ok(CostEstimatorBasisResult {
+                run: locked.inspect_agent_run(&complete_prepared.run_id)?,
+                basis,
+            })
+        })
+        .await
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+    }
+
+    pub async fn run_basis_of_estimate_review(
+        &self,
+        command: RunBasisOfEstimateReviewCommand,
+    ) -> Result<BasisOfEstimateReviewResult, TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        let _active = ActiveAgentRunGuard {
+            host: self.clone(),
+            lease_id: lease_id.clone(),
+        };
+        let prepare_host = self.clone();
+        let prepare_tender_id = tender_id.clone();
+        let prepare_command = command.clone();
+        let (store, prepared) = tauri::async_runtime::spawn_blocking(move || {
+            let budget = BidPackageOperationBudget::for_tender(&prepare_tender_id);
+            let store =
+                prepare_host.tender_store_with_check(&prepare_tender_id, &mut || budget.check())?;
+            let mut locked = lock_mutex_with_check(&store, &mut || budget.check())?;
+            if prepare_command.validate().is_err() {
+                locked.record_estimate_denial(
+                    &prepare_tender_id,
+                    "run_basis_of_estimate_review",
+                    Some(&prepare_command.basis_id),
+                    "command_shape",
+                )?;
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            match locked.prepare_basis_review_run(
+                &prepare_tender_id,
+                &prepare_command.basis_id,
+                prepare_command.version,
+                budget,
+            ) {
+                Ok(prepared) => Ok((store.clone(), prepared)),
+                Err(error) => {
+                    if error.code == TenderErrorCode::InvalidCommand {
+                        locked.record_estimate_denial(
+                            &prepare_tender_id,
+                            "run_basis_of_estimate_review",
+                            Some(&prepare_command.basis_id),
+                            "guard_denied",
+                        )?;
+                    }
+                    Err(error)
+                }
+            }
+        })
+        .await
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))??;
+        self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
+        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let complete_tender_id = tender_id.clone();
+        let complete_prepared = prepared.clone();
+        let result_basis_id = command.basis_id.clone();
+        let result_version = command.version;
+        tauri::async_runtime::spawn_blocking(move || {
+            let budget = BidPackageOperationBudget::for_tender(&complete_tender_id);
+            let mut locked = lock_mutex_with_check(&store, &mut || budget.check())?;
+            locked.complete_agent_run(&complete_tender_id, &complete_prepared, execution)?;
+            budget.check()?;
+            Ok(BasisOfEstimateReviewResult {
+                run: locked.inspect_agent_run(&complete_prepared.run_id)?,
+                basis: locked.load_basis_of_estimate(&result_basis_id, result_version)?,
             })
         })
         .await

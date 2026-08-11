@@ -32,6 +32,10 @@ use super::calculations::{
     publish_calculation_rule_review, publish_cost_estimator_calculation,
     CalculationRuleReviewCandidate, CostEstimatorCalculationCandidate,
 };
+use super::estimates::{
+    publish_basis_of_estimate, publish_basis_of_estimate_review, BasisOfEstimateCandidate,
+    BasisOfEstimateReviewCandidate,
+};
 use super::external_rfis::{
     external_rfi_review_target_is_open, publish_external_rfi_review, ExternalRfiReviewCandidate,
     ExternalRfiReviewPublication,
@@ -48,8 +52,8 @@ use super::tender_records::{
 };
 use super::{
     append_audit_event, metadata_is_unsafe_storage_link, random_identifier, sql_error,
-    sqlite_timestamp, store_unavailable, TenderCommandError, TenderErrorCode, TenderId,
-    TenderStore,
+    sqlite_timestamp, store_unavailable, BidPackageOperationBudget, TenderCommandError,
+    TenderErrorCode, TenderId, TenderStore,
 };
 
 const BOOTSTRAP_STABLE_IDENTITY: &str = "quantix.bootstrap.tender-analyst";
@@ -76,10 +80,24 @@ fn task_is_cost_estimator_calculation(task: &TenderTaskView) -> bool {
         .any(|input| input.kind == "calculation_scenario_version")
 }
 
+fn task_is_cost_estimator_basis(task: &TenderTaskView) -> bool {
+    task.exact_inputs
+        .iter()
+        .any(|input| input.kind == "basis_of_estimate_request")
+}
+
+fn task_is_basis_review(task: &TenderTaskView) -> bool {
+    task.exact_inputs
+        .iter()
+        .any(|input| input.kind == "basis_of_estimate_version")
+}
+
 fn profile_supports_linked_retry(profile: &AgentProfileVersionView, task: &TenderTaskView) -> bool {
     !task_is_external_rfi_review(task)
         && !task_is_calculation_rule_review(task)
         && !task_is_cost_estimator_calculation(task)
+        && !task_is_cost_estimator_basis(task)
+        && !task_is_basis_review(task)
         && !profile.capabilities.iter().any(|capability| {
             matches!(
                 capability.as_str(),
@@ -424,6 +442,8 @@ impl TenderStore {
         prepared: &PreparedAgentRun,
         mut execution: ProviderExecution,
     ) -> Result<(), TenderCommandError> {
+        let operation_budget = BidPackageOperationBudget::for_tender(tender_id);
+        operation_budget.check()?;
         self.require_change_intake_writable()?;
         if execution.state == AgentRunState::Running
             || (execution.state == AgentRunState::Completed
@@ -438,6 +458,8 @@ impl TenderStore {
         let mut external_rfi_review: Option<ExternalRfiReviewCandidate> = None;
         let mut calculation_rule_review: Option<CalculationRuleReviewCandidate> = None;
         let mut cost_estimator_calculation: Option<CostEstimatorCalculationCandidate> = None;
+        let mut cost_estimator_basis: Option<BasisOfEstimateCandidate> = None;
+        let mut basis_review: Option<BasisOfEstimateReviewCandidate> = None;
         let mut denied_record_publication_count = None;
         if execution.state == AgentRunState::Completed
             && prepared
@@ -609,6 +631,74 @@ impl TenderStore {
             }
         }
         if execution.state == AgentRunState::Completed
+            && task_is_cost_estimator_basis(&prepared.task)
+        {
+            let validation = execution
+                .candidate_payload_json
+                .as_deref()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                .and_then(|payload| {
+                    self.validate_basis_candidate(&prepared.task, payload, &mut || {
+                        operation_budget.check()
+                    })
+                });
+            match validation {
+                Ok(candidate) => cost_estimator_basis = Some(candidate),
+                Err(_) => {
+                    execution.state = AgentRunState::Failed;
+                    execution.failure = Some(ProviderFailure::new(
+                        ProviderFailureCategory::OutputInvalid,
+                        false,
+                        "Start a new Cost Estimator run with the exact BOQ, quotation, Query and approved Calculation Run basket.",
+                        Some("The proposed Basis of Estimate failed exact accounting, provenance or reconciliation validation."),
+                    ));
+                    execution.candidate_payload_json = None;
+                    if let Some(event) = execution
+                        .events
+                        .iter_mut()
+                        .rev()
+                        .find(|event| event.kind == ProviderEventKind::Terminal)
+                    {
+                        event.summary =
+                            "Basis of Estimate candidate failed exact validation".into();
+                    }
+                }
+            }
+        }
+        if execution.state == AgentRunState::Completed && task_is_basis_review(&prepared.task) {
+            let validation = execution
+                .candidate_payload_json
+                .as_deref()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                .and_then(|payload| {
+                    self.validate_basis_review_candidate(&prepared.task, payload, &mut || {
+                        operation_budget.check()
+                    })
+                });
+            match validation {
+                Ok(candidate) => basis_review = Some(candidate),
+                Err(_) => {
+                    execution.state = AgentRunState::Failed;
+                    execution.failure = Some(ProviderFailure::new(
+                        ProviderFailureCategory::OutputInvalid,
+                        false,
+                        "Review the exact current Basis again with bounded attributable findings.",
+                        Some("The independent Basis of Estimate review failed exact validation."),
+                    ));
+                    execution.candidate_payload_json = None;
+                    if let Some(event) = execution
+                        .events
+                        .iter_mut()
+                        .rev()
+                        .find(|event| event.kind == ProviderEventKind::Terminal)
+                    {
+                        event.summary =
+                            "Independent Basis of Estimate review failed validation".into();
+                    }
+                }
+            }
+        }
+        if execution.state == AgentRunState::Completed
             && prepared
                 .profile
                 .capabilities
@@ -745,6 +835,55 @@ impl TenderStore {
                     "Cost Estimator calculation rejected because its basis is stale".into();
             }
         }
+        if execution.state == AgentRunState::Completed
+            && cost_estimator_basis.is_some()
+            && !self.basis_target_is_open(&prepared.task, &prepared.run_id, &mut || {
+                operation_budget.check()
+            })?
+        {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Start a new Cost Estimator run against the current exact estimate inputs and Work Plan.",
+                Some("The Basis of Estimate target changed before publication."),
+            ));
+            execution.candidate_payload_json = None;
+            cost_estimator_basis = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary =
+                    "Basis of Estimate rejected because its exact target is no longer open".into();
+            }
+        }
+        if execution.state == AgentRunState::Completed
+            && basis_review.is_some()
+            && !self
+                .basis_review_target_is_open(&prepared.task, &mut || operation_budget.check())?
+        {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Review the current exact Basis of Estimate version.",
+                Some("The Basis was superseded, reviewed, approved, or its Work Plan authority changed before publication."),
+            ));
+            execution.candidate_payload_json = None;
+            basis_review = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary =
+                    "Basis review rejected because its exact target is no longer open".into();
+            }
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -771,6 +910,8 @@ impl TenderStore {
             external_rfi_review = None;
             calculation_rule_review = None;
             cost_estimator_calculation = None;
+            cost_estimator_basis = None;
+            basis_review = None;
             if let Some(event) = execution
                 .events
                 .iter_mut()
@@ -1207,6 +1348,38 @@ impl TenderStore {
                 &prepared.task,
                 candidate,
                 &completed_at,
+            )?;
+        }
+        if let Some(candidate) = cost_estimator_basis.as_ref() {
+            if result_id.is_none() {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            publish_basis_of_estimate(
+                &transaction,
+                tender_id,
+                tender_revision,
+                &prepared.run_id,
+                &prepared.profile,
+                &prepared.task,
+                candidate,
+                &completed_at,
+                &mut || operation_budget.check(),
+            )?;
+        }
+        if let Some(candidate) = basis_review.as_ref() {
+            if result_id.is_none() {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            publish_basis_of_estimate_review(
+                &transaction,
+                tender_id,
+                tender_revision,
+                &prepared.run_id,
+                &prepared.profile,
+                &prepared.task,
+                candidate,
+                &completed_at,
+                &mut || operation_budget.check(),
             )?;
         }
         finish_production_task(

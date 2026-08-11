@@ -13,6 +13,7 @@ import type { TenderRecoveryRecord } from "./bindings/TenderRecoveryRecord";
 import { AgentRunOffice } from "./AgentRunOffice";
 import { BidDecisionPanel } from "./BidDecisionPanel";
 import { ControlledBoqCalculationPanel } from "./ControlledBoqCalculationPanel";
+import { BasisOfEstimatePanel } from "./BasisOfEstimatePanel";
 import { DocumentEvidenceOffice } from "./DocumentEvidenceOffice";
 import { ExternalRfiPanel } from "./ExternalRfiPanel";
 import { TenderBackupPanel } from "./TenderBackupPanel";
@@ -710,6 +711,14 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
               />
               <ControlledBoqCalculationPanel
                 key={`controlled-boq-${selected.tender_id}`}
+                tenderId={selected.tender_id}
+                runtimeReady={runtimeReady}
+                refreshToken={tenderStateVersion}
+                reportCommandFailure={reportCommandFailure}
+                onTenderStateChange={reportTenderStateChange}
+              />
+              <BasisOfEstimatePanel
+                key={`basis-of-estimate-${selected.tender_id}`}
                 tenderId={selected.tender_id}
                 runtimeReady={runtimeReady}
                 refreshToken={tenderStateVersion}

@@ -35,6 +35,7 @@ mod agent_records;
 pub(crate) mod backups;
 mod bid_decisions;
 mod calculations;
+mod estimates;
 mod external_rfis;
 mod production_scheduler;
 mod team_composer;
@@ -70,9 +71,20 @@ pub use calculations::{
     CalculationRuleReviewOutcome, CalculationRuleReviewResult, CalculationRuleTestResult,
     CalculationRuleVersion, CalculationScenarioVersion, CalculationWorkspaceInspection,
     ControlledBoqCalculationRun, ControlledBoqCalculationStatus, CostEstimatorCalculationResult,
-    CreateCalculationScenarioCommand, ExchangeRateType, InspectCalculationWorkspaceCommand,
+    CreateCalculationScenarioCommand, EstimateAggregateCalculationInput,
+    EstimateAggregateCalculationRun, ExchangeRateType, InspectCalculationWorkspaceCommand,
     ProposeBoqCalculationRuleCommand, RunCalculationRuleReviewCommand,
     RunCostEstimatorCalculationCommand,
+};
+pub use estimates::{
+    ApproveBasisOfEstimateCommand, BasisOfEstimateApproval, BasisOfEstimateReview,
+    BasisOfEstimateReviewFinding, BasisOfEstimateReviewOutcome, BasisOfEstimateReviewResult,
+    BasisOfEstimateVersion, BoqAccountRow, BoqInventoryRow, BoqRowDisposition, BoqTableCandidate,
+    BoqTableDesignation, CostBreakdownComponent, CostComponentCategory, CostEstimatorBasisResult,
+    DesignateBoqTableCommand, EstimateAllowance, EstimateMaterialAssumption,
+    EstimateQueryObservation, EstimateQueryReference, EstimateQuotation, EstimateQuotationKind,
+    EstimateWorkspaceInspection, InspectEstimateWorkspaceCommand, RunBasisOfEstimateReviewCommand,
+    RunCostEstimatorBasisCommand,
 };
 pub use external_rfis::{
     ApproveExternalRfiForIssueCommand, CreateExternalRfiDraftCommand,
@@ -542,6 +554,149 @@ CREATE TABLE calculation_run_approvals (
   manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
   created_at TEXT NOT NULL,
   FOREIGN KEY (calculation_run_id) REFERENCES calculation_runs(calculation_run_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE estimate_aggregate_calculation_runs (
+  aggregate_run_id TEXT PRIMARY KEY CHECK (length(aggregate_run_id) = 32),
+  author_run_id TEXT NOT NULL,
+  comparison_total_calculation_run_id TEXT NOT NULL,
+  tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  rule_id TEXT NOT NULL,
+  rule_version INTEGER NOT NULL CHECK (rule_version BETWEEN 1 AND 32),
+  rule_approval_id TEXT NOT NULL,
+  scenario_id TEXT NOT NULL,
+  scenario_version INTEGER NOT NULL CHECK (scenario_version = 1),
+  precision INTEGER NOT NULL CHECK (precision BETWEEN 0 AND 12),
+  rounding_mode TEXT NOT NULL CHECK (rounding_mode IN (
+    'midpoint_away_from_zero', 'midpoint_nearest_even'
+  )),
+  final_amount TEXT NOT NULL,
+  currency TEXT NOT NULL CHECK (length(currency) = 3),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (author_run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (comparison_total_calculation_run_id)
+    REFERENCES calculation_runs(calculation_run_id),
+  FOREIGN KEY (rule_id, rule_version)
+    REFERENCES calculation_rule_versions(rule_id, version),
+  FOREIGN KEY (rule_approval_id) REFERENCES calculation_rule_approvals(approval_id),
+  FOREIGN KEY (scenario_id, scenario_version)
+    REFERENCES calculation_scenario_versions(scenario_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE estimate_aggregate_calculation_approvals (
+  approval_id TEXT PRIMARY KEY CHECK (length(approval_id) = 32),
+  aggregate_run_id TEXT NOT NULL UNIQUE,
+  aggregate_manifest_sha256 TEXT NOT NULL CHECK (length(aggregate_manifest_sha256) = 64),
+  basis_id TEXT NOT NULL,
+  basis_version INTEGER NOT NULL CHECK (basis_version BETWEEN 1 AND 32),
+  basis_manifest_sha256 TEXT NOT NULL CHECK (length(basis_manifest_sha256) = 64),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  approved_by TEXT NOT NULL CHECK (approved_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'engineer_in_the_loop'),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (aggregate_run_id)
+    REFERENCES estimate_aggregate_calculation_runs(aggregate_run_id),
+  FOREIGN KEY (basis_id, basis_version)
+    REFERENCES basis_of_estimate_versions(basis_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE boq_table_designations (
+  designation_id TEXT PRIMARY KEY CHECK (length(designation_id) = 32),
+  artifact_id TEXT NOT NULL,
+  artifact_version INTEGER NOT NULL CHECK (artifact_version > 0),
+  table_number INTEGER NOT NULL CHECK (table_number > 0),
+  header_row_count INTEGER NOT NULL CHECK (header_row_count BETWEEN 0 AND 8),
+  designated_by TEXT NOT NULL CHECK (designated_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'engineer_in_the_loop'),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (artifact_id, artifact_version, table_number),
+  FOREIGN KEY (artifact_id, artifact_version)
+    REFERENCES source_artifact_versions(artifact_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE basis_of_estimates (
+  basis_id TEXT PRIMARY KEY CHECK (length(basis_id) = 32),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE basis_of_estimate_versions (
+  basis_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 32),
+  tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  author_run_id TEXT NOT NULL UNIQUE,
+  author_profile_id TEXT NOT NULL CHECK (length(author_profile_id) = 32),
+  author_profile_version INTEGER NOT NULL CHECK (author_profile_version > 0),
+  complete INTEGER NOT NULL CHECK (complete IN (0, 1)),
+  reconciled INTEGER NOT NULL CHECK (reconciled IN (0, 1)),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (
+    json_valid(manifest_json)
+    AND length(CAST(manifest_json AS BLOB)) <= 4194304
+  ),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (basis_id, version),
+  FOREIGN KEY (basis_id) REFERENCES basis_of_estimates(basis_id),
+  FOREIGN KEY (author_run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (author_profile_id, author_profile_version)
+    REFERENCES agent_profile_versions(profile_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE basis_of_estimate_heads (
+  basis_id TEXT PRIMARY KEY,
+  current_version INTEGER NOT NULL CHECK (current_version BETWEEN 1 AND 32),
+  FOREIGN KEY (basis_id, current_version)
+    REFERENCES basis_of_estimate_versions(basis_id, version)
+);
+CREATE TABLE basis_of_estimate_reviews (
+  review_id TEXT PRIMARY KEY CHECK (length(review_id) = 32),
+  basis_id TEXT NOT NULL,
+  basis_version INTEGER NOT NULL CHECK (basis_version BETWEEN 1 AND 32),
+  basis_manifest_sha256 TEXT NOT NULL CHECK (length(basis_manifest_sha256) = 64),
+  reviewer_run_id TEXT NOT NULL UNIQUE,
+  reviewer_profile_id TEXT NOT NULL CHECK (length(reviewer_profile_id) = 32),
+  reviewer_profile_version INTEGER NOT NULL CHECK (reviewer_profile_version > 0),
+  outcome TEXT NOT NULL CHECK (outcome IN ('passed', 'failed')),
+  findings_json TEXT NOT NULL CHECK (json_valid(findings_json)),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (basis_id, basis_version),
+  FOREIGN KEY (basis_id, basis_version)
+    REFERENCES basis_of_estimate_versions(basis_id, version),
+  FOREIGN KEY (reviewer_run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (reviewer_profile_id, reviewer_profile_version)
+    REFERENCES agent_profile_versions(profile_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE basis_of_estimate_approvals (
+  approval_id TEXT PRIMARY KEY CHECK (length(approval_id) = 32),
+  basis_id TEXT NOT NULL,
+  basis_version INTEGER NOT NULL CHECK (basis_version BETWEEN 1 AND 32),
+  basis_manifest_sha256 TEXT NOT NULL CHECK (length(basis_manifest_sha256) = 64),
+  review_id TEXT NOT NULL UNIQUE,
+  review_manifest_sha256 TEXT NOT NULL CHECK (length(review_manifest_sha256) = 64),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  approved_by TEXT NOT NULL CHECK (approved_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'engineer_in_the_loop'),
+  tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (basis_id, basis_version),
+  FOREIGN KEY (basis_id, basis_version)
+    REFERENCES basis_of_estimate_versions(basis_id, version),
+  FOREIGN KEY (review_id) REFERENCES basis_of_estimate_reviews(review_id),
   FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
 );
 CREATE TABLE source_artifacts (
@@ -1513,6 +1668,87 @@ CREATE TRIGGER calculation_run_approvals_no_delete
 BEFORE DELETE ON calculation_run_approvals
 BEGIN
   SELECT RAISE(ABORT, 'Calculation Run approvals are immutable');
+END;
+CREATE TRIGGER estimate_aggregate_calculation_runs_no_update
+BEFORE UPDATE ON estimate_aggregate_calculation_runs
+BEGIN
+  SELECT RAISE(ABORT, 'Estimate aggregate Calculation Runs are immutable');
+END;
+CREATE TRIGGER estimate_aggregate_calculation_runs_no_delete
+BEFORE DELETE ON estimate_aggregate_calculation_runs
+BEGIN
+  SELECT RAISE(ABORT, 'Estimate aggregate Calculation Runs are immutable');
+END;
+CREATE TRIGGER estimate_aggregate_calculation_approvals_no_update
+BEFORE UPDATE ON estimate_aggregate_calculation_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Estimate aggregate Calculation Run approvals are immutable');
+END;
+CREATE TRIGGER estimate_aggregate_calculation_approvals_no_delete
+BEFORE DELETE ON estimate_aggregate_calculation_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Estimate aggregate Calculation Run approvals are immutable');
+END;
+CREATE TRIGGER boq_table_designations_no_update
+BEFORE UPDATE ON boq_table_designations
+BEGIN
+  SELECT RAISE(ABORT, 'BOQ table designations are immutable');
+END;
+CREATE TRIGGER boq_table_designations_no_delete
+BEFORE DELETE ON boq_table_designations
+BEGIN
+  SELECT RAISE(ABORT, 'BOQ table designations are immutable');
+END;
+CREATE TRIGGER basis_of_estimates_no_update
+BEFORE UPDATE ON basis_of_estimates
+BEGIN
+  SELECT RAISE(ABORT, 'Basis of Estimate identities are immutable');
+END;
+CREATE TRIGGER basis_of_estimates_no_delete
+BEFORE DELETE ON basis_of_estimates
+BEGIN
+  SELECT RAISE(ABORT, 'Basis of Estimate identities are immutable');
+END;
+CREATE TRIGGER basis_of_estimate_versions_no_update
+BEFORE UPDATE ON basis_of_estimate_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Basis of Estimate Versions are immutable');
+END;
+CREATE TRIGGER basis_of_estimate_versions_no_delete
+BEFORE DELETE ON basis_of_estimate_versions
+BEGIN
+  SELECT RAISE(ABORT, 'Basis of Estimate Versions are immutable');
+END;
+CREATE TRIGGER basis_of_estimate_heads_identity_immutable
+BEFORE UPDATE ON basis_of_estimate_heads
+WHEN NEW.basis_id != OLD.basis_id
+BEGIN
+  SELECT RAISE(ABORT, 'Basis of Estimate head identity is immutable');
+END;
+CREATE TRIGGER basis_of_estimate_heads_no_delete
+BEFORE DELETE ON basis_of_estimate_heads
+BEGIN
+  SELECT RAISE(ABORT, 'Basis of Estimate heads cannot be deleted');
+END;
+CREATE TRIGGER basis_of_estimate_reviews_no_update
+BEFORE UPDATE ON basis_of_estimate_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'Basis of Estimate Reviews are immutable');
+END;
+CREATE TRIGGER basis_of_estimate_reviews_no_delete
+BEFORE DELETE ON basis_of_estimate_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'Basis of Estimate Reviews are immutable');
+END;
+CREATE TRIGGER basis_of_estimate_approvals_no_update
+BEFORE UPDATE ON basis_of_estimate_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Basis of Estimate Approvals are immutable');
+END;
+CREATE TRIGGER basis_of_estimate_approvals_no_delete
+BEFORE DELETE ON basis_of_estimate_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Basis of Estimate Approvals are immutable');
 END;
 CREATE TRIGGER source_artifacts_no_update
 BEFORE UPDATE ON source_artifacts
@@ -2812,6 +3048,9 @@ impl TenderStore {
             return Ok(false);
         }
         if !self.calculation_manifests_are_valid_with_check(check)? {
+            return Ok(false);
+        }
+        if !self.estimate_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
         if !self.bid_decision_manifests_are_valid_with_check(check)? {

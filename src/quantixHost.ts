@@ -1,7 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type { ApproveCalculationRuleCommand } from "./bindings/ApproveCalculationRuleCommand";
+import type { ApproveBasisOfEstimateCommand } from "./bindings/ApproveBasisOfEstimateCommand";
+import type { BoqTableDesignation } from "./bindings/BoqTableDesignation";
+import type { DesignateBoqTableCommand } from "./bindings/DesignateBoqTableCommand";
+import type { BasisOfEstimateReviewResult } from "./bindings/BasisOfEstimateReviewResult";
+import type { BasisOfEstimateVersion } from "./bindings/BasisOfEstimateVersion";
 import type { ApproveControlledBoqCalculationRunCommand } from "./bindings/ApproveControlledBoqCalculationRunCommand";
+import type { CostEstimatorBasisResult } from "./bindings/CostEstimatorBasisResult";
 import type { CostEstimatorCalculationResult } from "./bindings/CostEstimatorCalculationResult";
 import type { CreateCalculationScenarioCommand } from "./bindings/CreateCalculationScenarioCommand";
 import type { CalculationRuleReviewResult } from "./bindings/CalculationRuleReviewResult";
@@ -10,8 +16,12 @@ import type { CalculationScenarioVersion } from "./bindings/CalculationScenarioV
 import type { CalculationWorkspaceInspection } from "./bindings/CalculationWorkspaceInspection";
 import type { ControlledBoqCalculationRun } from "./bindings/ControlledBoqCalculationRun";
 import type { InspectCalculationWorkspaceCommand } from "./bindings/InspectCalculationWorkspaceCommand";
+import type { EstimateWorkspaceInspection } from "./bindings/EstimateWorkspaceInspection";
+import type { InspectEstimateWorkspaceCommand } from "./bindings/InspectEstimateWorkspaceCommand";
 import type { ProposeBoqCalculationRuleCommand } from "./bindings/ProposeBoqCalculationRuleCommand";
 import type { RunCalculationRuleReviewCommand } from "./bindings/RunCalculationRuleReviewCommand";
+import type { RunBasisOfEstimateReviewCommand } from "./bindings/RunBasisOfEstimateReviewCommand";
+import type { RunCostEstimatorBasisCommand } from "./bindings/RunCostEstimatorBasisCommand";
 import type { RunCostEstimatorCalculationCommand } from "./bindings/RunCostEstimatorCalculationCommand";
 import type { AgentRunInspection } from "./bindings/AgentRunInspection";
 import type { AgentRunActivity } from "./bindings/AgentRunActivity";
@@ -413,6 +423,51 @@ export function inspectCalculationWorkspace(
       command,
     },
   );
+}
+
+export function runCostEstimatorBasis(
+  command: RunCostEstimatorBasisCommand,
+): Promise<CostEstimatorBasisResult> {
+  return invoke<CostEstimatorBasisResult>("run_cost_estimator_basis", {
+    command,
+  });
+}
+
+export function designateBoqTable(
+  command: DesignateBoqTableCommand,
+): Promise<BoqTableDesignation> {
+  return invoke<BoqTableDesignation>("designate_boq_table", { command });
+}
+
+export function runBasisOfEstimateReview(
+  command: RunBasisOfEstimateReviewCommand,
+): Promise<BasisOfEstimateReviewResult> {
+  return invoke<BasisOfEstimateReviewResult>("run_basis_of_estimate_review", {
+    command,
+  });
+}
+
+export function approveBasisOfEstimate(
+  command: ApproveBasisOfEstimateCommand,
+): Promise<BasisOfEstimateVersion> {
+  return invoke<BasisOfEstimateVersion>("approve_basis_of_estimate", {
+    command,
+  });
+}
+
+export function inspectEstimateWorkspace(
+  tenderId: string,
+  basisOffset = 0,
+  boqCandidateCursor: string | null = null,
+): Promise<EstimateWorkspaceInspection> {
+  const command: InspectEstimateWorkspaceCommand = {
+    tender_id: tenderId,
+    basis_offset: basisOffset,
+    boq_candidate_cursor: boqCandidateCursor,
+  };
+  return invoke<EstimateWorkspaceInspection>("inspect_estimate_workspace", {
+    command,
+  });
 }
 
 export function chooseAndImportTenderPackage(

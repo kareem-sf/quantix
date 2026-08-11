@@ -452,6 +452,8 @@ fn run_agent_turn(
         || scenario.starts_with("external-rfi-review")
         || scenario.starts_with("calculation-rule-review")
         || scenario.starts_with("cost-estimator-calculation")
+        || scenario.starts_with("cost-estimator-basis")
+        || scenario.starts_with("basis-of-estimate-review")
         || scenario.starts_with("production-task");
     let dynamic_tools_are_exact = if is_record_scenario {
         thread_request
@@ -920,6 +922,18 @@ fn run_agent_turn(
             | "cost-estimator-calculation-unavailable"
             | "cost-estimator-calculation-invalid"
             | "cost-estimator-calculation-delayed"
+            | "cost-estimator-basis"
+            | "cost-estimator-basis-delayed"
+            | "cost-estimator-basis-unresolved-query-delayed"
+            | "cost-estimator-basis-incomplete"
+            | "cost-estimator-basis-quote-scope-mismatch"
+            | "cost-estimator-basis-unresolved-query"
+            | "cost-estimator-basis-reconciliation-mismatch"
+            | "cost-estimator-basis-missing-rate"
+            | "cost-estimator-basis-allowance"
+            | "cost-estimator-basis-uncontrolled-allowance"
+            | "basis-of-estimate-review"
+            | "basis-of-estimate-review-failed"
             | "production-task"
             | "production-task-delayed-a"
             | "production-task-delayed-b"
@@ -1529,30 +1543,46 @@ fn run_agent_turn(
             }
         }
         let quantity_evidence = provider_data_view
-            .pointer("/quantity_evidence/0/reference")
-            .cloned()
-            .ok_or("Cost Estimator quantity Evidence")?;
+            .get("quantity_evidence")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("Cost Estimator quantity Evidence")?
+            .iter()
+            .map(|value| {
+                value
+                    .get("reference")
+                    .cloned()
+                    .ok_or("quantity Evidence reference")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let unit_rate_evidence = provider_data_view
-            .pointer("/unit_rate_evidence/0/reference")
-            .cloned()
-            .ok_or("Cost Estimator unit-rate Evidence")?;
+            .get("unit_rate_evidence")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("Cost Estimator unit-rate Evidence")?
+            .iter()
+            .map(|value| {
+                value
+                    .get("reference")
+                    .cloned()
+                    .ok_or("unit-rate Evidence reference")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let quantity = match scenario {
             "cost-estimator-calculation-missing" => {
                 serde_json::json!({ "state": "missing", "value": null, "evidence": [] })
             }
             "cost-estimator-calculation-ambiguous" => {
-                serde_json::json!({ "state": "ambiguous", "value": null, "evidence": [quantity_evidence] })
+                serde_json::json!({ "state": "ambiguous", "value": null, "evidence": quantity_evidence })
             }
             "cost-estimator-calculation-unavailable" => {
-                serde_json::json!({ "state": "unavailable", "value": null, "evidence": [quantity_evidence] })
+                serde_json::json!({ "state": "unavailable", "value": null, "evidence": quantity_evidence })
             }
             "cost-estimator-calculation-invalid" => {
-                serde_json::json!({ "state": "provided", "value": "not-a-decimal", "evidence": [quantity_evidence] })
+                serde_json::json!({ "state": "provided", "value": "not-a-decimal", "evidence": quantity_evidence })
             }
             _ => serde_json::json!({
                 "state": "provided",
                 "value": if scenario == "cost-estimator-calculation-zero" { "0" } else { "1250" },
-                "evidence": [quantity_evidence]
+                "evidence": quantity_evidence
             }),
         };
         serde_json::json!({
@@ -1560,9 +1590,288 @@ fn run_agent_turn(
             "unit_rate": {
                 "state": "provided",
                 "value": "2.40",
-                "evidence": [unit_rate_evidence]
+                "evidence": unit_rate_evidence
             }
         })
+    } else if scenario.starts_with("cost-estimator-basis") {
+        if matches!(
+            scenario,
+            "cost-estimator-basis-delayed" | "cost-estimator-basis-unresolved-query-delayed"
+        ) {
+            fs::write(
+                executable.with_extension("cost-estimator-basis-waiting"),
+                b"waiting",
+            )?;
+            for _ in 0..2_000 {
+                if executable
+                    .with_extension("cost-estimator-basis-release")
+                    .is_file()
+                {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            if !executable
+                .with_extension("cost-estimator-basis-release")
+                .is_file()
+            {
+                return Err("timed out waiting to release Cost Estimator Basis output".into());
+            }
+        }
+        let boq_row = provider_data_view
+            .pointer("/boq_rows/0")
+            .ok_or("Basis BOQ row")?;
+        let boq_row_key = boq_row.get("row_key").cloned().ok_or("Basis BOQ row key")?;
+        let boq_references = boq_row
+            .get("evidence")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("Basis BOQ row Evidence")?
+            .iter()
+            .map(|value| {
+                value
+                    .get("reference")
+                    .cloned()
+                    .ok_or("Basis BOQ Evidence reference")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let quote_reference = provider_data_view
+            .pointer("/quotation_evidence/0/reference")
+            .cloned()
+            .ok_or("Basis quotation Evidence reference")?;
+        let evidence_value = |reference: &serde_json::Value| -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+            let kind = reference.get("kind").and_then(serde_json::Value::as_str).ok_or("Evidence kind")?;
+            if kind != "source_evidence" {
+                return Err("Basis input is not source Evidence".into());
+            }
+            let exact = reference.get("reference").and_then(serde_json::Value::as_str).ok_or("Evidence reference")?;
+            let (artifact_id, ordinal) = exact.rsplit_once('#').ok_or("Evidence ordinal")?;
+            Ok(serde_json::json!({
+                "artifact_id": artifact_id,
+                "version": reference.get("version").cloned().ok_or("Evidence version")?,
+                "ordinal": ordinal.parse::<u32>()?
+            }))
+        };
+        let calculations = provider_data_view
+            .get("approved_calculation_runs")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("approved Calculation Runs")?;
+        let calculation = calculations
+            .iter()
+            .find(|run| {
+                run.get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|description| {
+                        description.to_ascii_lowercase().contains("boq-001")
+                            && !description.to_ascii_lowercase().contains("quotation")
+                            && !description.to_ascii_lowercase().contains("total")
+                    })
+            })
+            .or_else(|| calculations.first())
+            .ok_or("approved Calculation Run")?;
+        let calculation_run_id = calculation
+            .get("calculation_run_id")
+            .cloned()
+            .ok_or("Calculation Run id")?;
+        let quote_calculation_run_id = calculations
+            .iter()
+            .find(|run| {
+                run.get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|description| {
+                        description.to_ascii_lowercase().contains("quotation")
+                    })
+            })
+            .or(if scenario == "cost-estimator-basis-missing-rate" {
+                Some(calculation)
+            } else {
+                None
+            })
+            .unwrap_or(calculation)
+            .get("calculation_run_id")
+            .cloned()
+            .ok_or("quotation normalization Calculation Run id")?;
+        let comparison_total_calculation_run_id = calculations
+            .iter()
+            .find(|run| {
+                run.get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|description| description.to_ascii_lowercase().contains("total"))
+            })
+            .or_else(|| calculations.last())
+            .and_then(|run| run.get("calculation_run_id"))
+            .cloned()
+            .ok_or("comparison total Calculation Run id")?;
+        let tender_queries = provider_data_view
+            .get("tender_queries")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("material assumption Queries")?;
+        let query_reference =
+            |entry: &serde_json::Value| -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+                let query = entry.get("query").ok_or("Query")?;
+                Ok(serde_json::json!({
+                    "query_id": query.get("query_id").cloned().ok_or("Query id")?,
+                    "version": query.get("version").cloned().ok_or("Query version")?
+                }))
+            };
+        let approved_assumptions = tender_queries
+            .iter()
+            .filter(|entry| {
+                entry.pointer("/approved_treatment/treatment")
+                    == Some(&serde_json::Value::String("approved_assumption".into()))
+            })
+            .map(&query_reference)
+            .collect::<Result<Vec<_>, _>>()?;
+        let unresolved_queries = tender_queries
+            .iter()
+            .filter(|entry| {
+                entry
+                    .get("approved_treatment")
+                    .is_none_or(serde_json::Value::is_null)
+            })
+            .map(&query_reference)
+            .collect::<Result<Vec<_>, _>>()?;
+        let unresolved_query = unresolved_queries
+            .first()
+            .cloned()
+            .or_else(|| approved_assumptions.first().cloned())
+            .ok_or("estimate Query")?;
+        let approved_assumption_entry = tender_queries.iter().find(|entry| {
+            entry.pointer("/approved_treatment/treatment")
+                == Some(&serde_json::Value::String("approved_assumption".into()))
+        });
+        let approved_allowance_entry = tender_queries.iter().find(|entry| {
+            entry.pointer("/approved_treatment/treatment")
+                == Some(&serde_json::Value::String("allowance".into()))
+        });
+        let uses_allowance = matches!(
+            scenario,
+            "cost-estimator-basis-allowance" | "cost-estimator-basis-uncontrolled-allowance"
+        );
+        let boq_rows = if scenario == "cost-estimator-basis-missing-rate" {
+            serde_json::json!([{
+                "row_key": boq_row_key,
+                "description": "Cable containment without an approved rate",
+                "disposition": "missing",
+                "evidence": boq_references.iter().map(&evidence_value).collect::<Result<Vec<_>, _>>()?,
+                "calculation_run_id": null,
+                "affected_queries": [unresolved_query.clone()]
+            }])
+        } else {
+            serde_json::json!([{
+                "row_key": boq_row_key,
+                "description": "Cable containment",
+                "disposition": "priced",
+                "evidence": boq_references.iter().map(&evidence_value).collect::<Result<Vec<_>, _>>()?,
+                "calculation_run_id": calculation_run_id,
+                "affected_queries": if matches!(scenario, "cost-estimator-basis-unresolved-query" | "cost-estimator-basis-unresolved-query-delayed") {
+                    serde_json::json!(unresolved_queries)
+                } else {
+                    serde_json::json!([])
+                }
+            }])
+        };
+        serde_json::json!({
+            "scope": "Complete BOQ account for the controlled tender scope.",
+            "pricing_date": calculation.get("pricing_date").cloned().ok_or("pricing date")?,
+            "currencies": [calculation.get("output_currency").cloned().ok_or("output currency")?],
+            "taxes": ["Taxes are excluded unless expressly included in an approved build-up."],
+            "rate_sources": ["Exact supplier quotation and approved Calculation Run inputs."],
+            "productivity": ["Use only the exact EITL-approved productivity assumption."],
+            "design_maturity": "Tender design is sufficiently defined for this controlled BOQ row.",
+            "gaps": if scenario == "cost-estimator-basis-incomplete" {
+                serde_json::json!(["One evidence-backed rate-source gap remains unresolved."])
+            } else {
+                serde_json::json!([])
+            },
+            "exclusions": ["No unpriced scope is included in the canonical total."],
+            "boq_rows": boq_rows,
+            "cbs_components": if scenario == "cost-estimator-basis-missing-rate" {
+                serde_json::json!([])
+            } else {
+                serde_json::json!([{
+                    "component_id": "cccccccccccccccccccccccccccccccc",
+                    "cost_code": "LAB-001",
+                    "work_package": "Electrical containment",
+                    "category": if uses_allowance { "risk" } else { "labor" },
+                    "description": "Installation labor build-up",
+                    "boq_row_keys": [boq_row_key.clone()],
+                    "resource_build_up_ids": ["eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"]
+                }])
+            },
+            "resource_build_ups": if scenario == "cost-estimator-basis-missing-rate" {
+                serde_json::json!([])
+            } else {
+                serde_json::json!([{
+                    "build_up_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                    "cbs_component_id": "cccccccccccccccccccccccccccccccc",
+                    "category": if uses_allowance { "risk" } else { "labor" },
+                    "description": "One exact approved labor build-up for BOQ-001.",
+                    "calculation_run_id": calculation_run_id
+                }])
+            },
+            "quotations": [{
+                "quotation_id": "dddddddddddddddddddddddddddddddd",
+                "kind": "supplier",
+                "counterparty": "Controlled supplier",
+                "exact_scope": "BOQ-001 cable containment",
+                "quotation_date": "2026-08-01",
+                "currency": calculation.get("output_currency").cloned().ok_or("quote currency")?,
+                "exclusions": ["Installation by others"],
+                "valid_until": "2026-12-31",
+                "evidence": evidence_value(&quote_reference)?,
+                "normalization_calculation_run_id": quote_calculation_run_id,
+                "covered_boq_row_keys": [if scenario == "cost-estimator-basis-quote-scope-mismatch" {
+                    serde_json::json!("BOQ-404")
+                } else {
+                    boq_row_key.clone()
+                }],
+                "comparison_assumptions": ["Compare at the exact approved pricing date and currency basis."]
+            }],
+            "allowances": if uses_allowance {
+                let entry = if scenario == "cost-estimator-basis-allowance" {
+                    approved_allowance_entry.ok_or("approved allowance basis")?
+                } else {
+                    approved_assumption_entry.ok_or("approved assumption allowance basis")?
+                };
+                let reference = query_reference(entry)?;
+                serde_json::json!([{
+                    "allowance_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "description": if scenario == "cost-estimator-basis-allowance" {
+                        "Controlled risk allowance bound to the exact approved treatment"
+                    } else {
+                        "Attempted allowance without an Allowance treatment"
+                    },
+                    "cbs_component_id": "cccccccccccccccccccccccccccccccc",
+                    "resource_build_up_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                    "query_id": reference.get("query_id").cloned().ok_or("allowance Query id")?,
+                    "query_version": reference.get("version").cloned().ok_or("allowance Query version")?,
+                    "decision_id": entry.pointer("/approved_treatment/decision_id").cloned().ok_or("allowance decision id")?,
+                    "evidence": boq_references.iter().map(&evidence_value).collect::<Result<Vec<_>, _>>()?,
+                    "rationale": entry.pointer("/approved_treatment/rationale").cloned().ok_or("allowance rationale")?
+                }])
+            } else {
+                serde_json::json!([])
+            },
+            "material_assumptions": serde_json::json!(approved_assumptions),
+            "comparison_total_calculation_run_id": comparison_total_calculation_run_id
+        })
+    } else if scenario.starts_with("basis-of-estimate-review") {
+        if scenario == "basis-of-estimate-review-failed" {
+            let row_key = provider_data_view
+                .pointer("/basis_of_estimate/boq_rows/0/row_key")
+                .cloned()
+                .ok_or("Basis review BOQ row key")?;
+            serde_json::json!({
+                "outcome": "failed",
+                "findings": [{
+                    "code": "unresolved_basis_gap",
+                    "summary": "The exact Basis retains a material unresolved rate-source gap.",
+                    "affected_boq_row_keys": [row_key]
+                }]
+            })
+        } else {
+            serde_json::json!({ "outcome": "passed", "findings": [] })
+        }
     } else if scenario == "production-task-output-over-budget" {
         serde_json::json!({
             "evidence_references": (0..256)
