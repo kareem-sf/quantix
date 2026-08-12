@@ -1,4 +1,5 @@
 .scratch
+.worktrees
 dist
 docs
 node_modules
