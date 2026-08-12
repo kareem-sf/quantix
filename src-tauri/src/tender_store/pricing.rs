@@ -4988,144 +4988,149 @@ impl TenderStore {
         &self,
         budget: BidPackageOperationBudget,
     ) -> Result<PricingWorkspaceInspection, TenderCommandError> {
+        inspect_pricing_workspace_in_connection(&self.connection, budget)
+    }
+}
+
+pub(crate) fn inspect_pricing_workspace_in_connection(
+    connection: &rusqlite::Connection,
+    budget: BidPackageOperationBudget,
+) -> Result<PricingWorkspaceInspection, TenderCommandError> {
+    budget.check()?;
+    let baseline_key: Option<(String, u32)> = connection
+        .query_row(
+            "SELECT baseline_id, current_version FROM priced_cost_baseline_heads LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let baseline = baseline_key
+        .map(|(id, version)| {
+            load_priced_cost_baseline_with_check(connection, &id, version, &mut || budget.check())
+        })
+        .transpose()?;
+    let adjustment_keys = {
+        let mut statement = connection.prepare("SELECT adjustment_id, current_version FROM pricing_adjustment_heads ORDER BY adjustment_id LIMIT 64").map_err(sql_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+            })
+            .map_err(sql_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_error)?;
+        rows
+    };
+    let mut adjustments = Vec::with_capacity(adjustment_keys.len());
+    for (id, version) in adjustment_keys {
         budget.check()?;
-        let baseline_key: Option<(String, u32)> = self
-            .connection
+        adjustments.push(load_pricing_adjustment_with_check(
+            connection,
+            &id,
+            version,
+            &mut || budget.check(),
+        )?);
+    }
+    let strategy_ids = {
+        let mut statement = connection
+            .prepare(
+                "SELECT strategy_id FROM commercial_strategies ORDER BY created_at DESC LIMIT 32",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(sql_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_error)?;
+        rows
+    };
+    let mut strategies = Vec::with_capacity(strategy_ids.len());
+    for id in strategy_ids {
+        budget.check()?;
+        strategies.push(load_strategy_with_check(connection, &id, &mut || {
+            budget.check()
+        })?);
+    }
+    let scenario_keys = {
+        let mut statement = connection.prepare("SELECT pricing_scenario_id, version FROM pricing_scenario_versions ORDER BY created_at DESC LIMIT 32").map_err(sql_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+            })
+            .map_err(sql_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_error)?;
+        rows
+    };
+    let mut scenarios = Vec::with_capacity(scenario_keys.len());
+    for (id, version) in scenario_keys {
+        budget.check()?;
+        scenarios.push(load_scenario_with_check(
+            connection,
+            &id,
+            version,
+            &mut || budget.check(),
+        )?);
+    }
+    let decision_ids = {
+        let mut statement = connection
+            .prepare(
+                "SELECT selection_id FROM pricing_scenario_selections
+                     ORDER BY audit_sequence DESC LIMIT 128",
+            )
+            .map_err(sql_error)?;
+        let values = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(sql_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_error)?;
+        values
+    };
+    let mut decision_history = Vec::with_capacity(decision_ids.len());
+    for selection_id in decision_ids {
+        budget.check()?;
+        let (scenario_id, scenario_version, mut selection) =
+            load_selection_with_check(connection, &selection_id, &mut || budget.check())?;
+        let scenario = scenarios
+            .iter()
+            .find(|value| {
+                value.pricing_scenario_id == scenario_id && value.version == scenario_version
+            })
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        selection.current &= scenario.current;
+        let price_id: Option<String> = connection
             .query_row(
-                "SELECT baseline_id, current_version FROM priced_cost_baseline_heads LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                "SELECT approval_id FROM approved_tender_prices WHERE selection_id = ?1",
+                [&selection_id],
+                |row| row.get(0),
             )
             .optional()
             .map_err(sql_error)?;
-        let baseline = baseline_key
-            .map(|(id, version)| {
-                load_priced_cost_baseline_with_check(&self.connection, &id, version, &mut || {
-                    budget.check()
-                })
+        let approved_tender_price = price_id
+            .map(|approval_id| {
+                load_price_with_check(connection, &approval_id, &mut || budget.check()).map(
+                    |(_, _, mut price)| {
+                        price.current &= scenario.current;
+                        price
+                    },
+                )
             })
             .transpose()?;
-        let adjustment_keys = {
-            let mut statement = self.connection.prepare("SELECT adjustment_id, current_version FROM pricing_adjustment_heads ORDER BY adjustment_id LIMIT 64").map_err(sql_error)?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
-                })
-                .map_err(sql_error)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(sql_error)?;
-            rows
-        };
-        let mut adjustments = Vec::with_capacity(adjustment_keys.len());
-        for (id, version) in adjustment_keys {
-            budget.check()?;
-            adjustments.push(load_pricing_adjustment_with_check(
-                &self.connection,
-                &id,
-                version,
-                &mut || budget.check(),
-            )?);
-        }
-        let strategy_ids = {
-            let mut statement = self.connection.prepare("SELECT strategy_id FROM commercial_strategies ORDER BY created_at DESC LIMIT 32").map_err(sql_error)?;
-            let rows = statement
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(sql_error)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(sql_error)?;
-            rows
-        };
-        let mut strategies = Vec::with_capacity(strategy_ids.len());
-        for id in strategy_ids {
-            budget.check()?;
-            strategies.push(load_strategy_with_check(
-                &self.connection,
-                &id,
-                &mut || budget.check(),
-            )?);
-        }
-        let scenario_keys = {
-            let mut statement = self.connection.prepare("SELECT pricing_scenario_id, version FROM pricing_scenario_versions ORDER BY created_at DESC LIMIT 32").map_err(sql_error)?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
-                })
-                .map_err(sql_error)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(sql_error)?;
-            rows
-        };
-        let mut scenarios = Vec::with_capacity(scenario_keys.len());
-        for (id, version) in scenario_keys {
-            budget.check()?;
-            scenarios.push(load_scenario_with_check(
-                &self.connection,
-                &id,
-                version,
-                &mut || budget.check(),
-            )?);
-        }
-        let decision_ids = {
-            let mut statement = self
-                .connection
-                .prepare(
-                    "SELECT selection_id FROM pricing_scenario_selections
-                     ORDER BY audit_sequence DESC LIMIT 128",
-                )
-                .map_err(sql_error)?;
-            let values = statement
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(sql_error)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(sql_error)?;
-            values
-        };
-        let mut decision_history = Vec::with_capacity(decision_ids.len());
-        for selection_id in decision_ids {
-            budget.check()?;
-            let (scenario_id, scenario_version, mut selection) =
-                load_selection_with_check(&self.connection, &selection_id, &mut || budget.check())?;
-            let scenario = scenarios
-                .iter()
-                .find(|value| {
-                    value.pricing_scenario_id == scenario_id && value.version == scenario_version
-                })
-                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-            selection.current &= scenario.current;
-            let price_id: Option<String> = self
-                .connection
-                .query_row(
-                    "SELECT approval_id FROM approved_tender_prices WHERE selection_id = ?1",
-                    [&selection_id],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(sql_error)?;
-            let approved_tender_price = price_id
-                .map(|approval_id| {
-                    load_price_with_check(&self.connection, &approval_id, &mut || budget.check())
-                        .map(|(_, _, mut price)| {
-                            price.current &= scenario.current;
-                            price
-                        })
-                })
-                .transpose()?;
-            decision_history.push(PricingDecisionHistoryEntry {
-                pricing_scenario_id: scenario_id,
-                pricing_scenario_version: scenario_version,
-                scenario_name: scenario.name.clone(),
-                selection,
-                approved_tender_price,
-            });
-        }
-        Ok(PricingWorkspaceInspection {
-            baseline,
-            adjustments,
-            strategies,
-            scenarios,
-            decision_history,
-        })
+        decision_history.push(PricingDecisionHistoryEntry {
+            pricing_scenario_id: scenario_id,
+            pricing_scenario_version: scenario_version,
+            scenario_name: scenario.name.clone(),
+            selection,
+            approved_tender_price,
+        });
     }
+    Ok(PricingWorkspaceInspection {
+        baseline,
+        adjustments,
+        strategies,
+        scenarios,
+        decision_history,
+    })
 }
 
 pub(crate) fn publish_priced_cost_baseline_review(

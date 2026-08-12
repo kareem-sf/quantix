@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use garde::Validate;
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use ts_rs::TS;
@@ -25,6 +25,152 @@ const MAX_BASELINE_VERSIONS: u32 = 32;
 const MAX_BASELINE_BINDINGS: usize = 1_024;
 const MAX_BASELINE_CONTRADICTIONS: usize = 256;
 const MAX_BASELINE_BLOCKERS: usize = 512;
+
+pub(crate) fn exact_approved_coordinated_baseline_is_current_in_connection(
+    connection: &Connection,
+    baseline_id: &str,
+    version: u32,
+    manifest_sha256: &str,
+    approval_id: &str,
+    budget: BidPackageOperationBudget,
+) -> Result<bool, TenderCommandError> {
+    budget.check()?;
+    type Row = (
+        u32,
+        String,
+        String,
+        u32,
+        String,
+        String,
+        u32,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        String,
+        String,
+    );
+    let row: Option<Row> = connection
+        .query_row(
+            "SELECT versions.tender_revision, versions.activation_id, versions.plan_id,
+                    versions.plan_version, versions.plan_manifest_sha256,
+                    versions.coordinator_profile_id, versions.coordinator_profile_version,
+                    versions.bindings_json, versions.contradictions_json, versions.blockers_json,
+                    versions.explanation, versions.preceding_version_manifest_sha256,
+                    versions.manifest_json, versions.manifest_sha256, versions.created_at
+             FROM coordinated_bid_baseline_head AS head
+             JOIN coordinated_bid_baseline_versions AS versions
+               ON versions.baseline_id = head.baseline_id
+              AND versions.version = head.current_version
+             JOIN coordinated_bid_baseline_approvals AS approvals
+               ON approvals.baseline_id = versions.baseline_id
+              AND approvals.baseline_version = versions.version
+             WHERE versions.baseline_id = ?1 AND versions.version = ?2
+               AND versions.manifest_sha256 = ?3
+               AND approvals.approval_id = ?4
+               AND approvals.baseline_manifest_sha256 = ?3
+               AND approvals.decision = 'approve'",
+            params![baseline_id, version, manifest_sha256, approval_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
+                    row.get(11)?,
+                    row.get(12)?,
+                    row.get(13)?,
+                    row.get(14)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let Some(row) = row else {
+        return Ok(false);
+    };
+    let bindings = parse_canonical::<Vec<CoordinatedBidBaselineBinding>>(&row.7)?;
+    let contradictions = parse_canonical::<Vec<CoordinatedBidBaselineContradiction>>(&row.8)?;
+    let blockers = parse_canonical::<Vec<CoordinatedBidBaselineBlocker>>(&row.9)?;
+    let manifest = BaselineManifest {
+        schema_version: 1,
+        baseline_id: baseline_id.to_owned(),
+        version,
+        tender_revision: row.0,
+        activation_id: row.1.clone(),
+        plan_id: row.2.clone(),
+        plan_version: row.3,
+        plan_manifest_sha256: row.4.clone(),
+        coordinator_profile_id: row.5.clone(),
+        coordinator_profile_version: row.6,
+        bindings: bindings.clone(),
+        contradictions: contradictions.clone(),
+        blockers: blockers.clone(),
+        explanation: row.10.clone(),
+        preceding_version_manifest_sha256: row.11.clone(),
+        created_at: row.14,
+    };
+    if canonical_json(&manifest)? != row.12 || sha256_hex(row.12.as_bytes()) != row.13 {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let approval =
+        load_coordinated_bid_baseline_approval_in_connection(connection, baseline_id, version)?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    if approval.approval_id != approval_id
+        || approval.baseline_manifest_sha256 != row.13
+        || approval.decision != CoordinatedBidBaselineDecision::Approve
+        || approval.supporting_reviews_sha256 != supporting_reviews_sha256(&bindings)?
+        || approval.decided_by != "engineer_user"
+        || approval.acting_role != "tendering_manager"
+        || approval.lifecycle_before != TenderLifecyclePhase::IntegratedReview
+        || approval.lifecycle_after != TenderLifecyclePhase::PackageProduction
+        || approval.rationale.trim().is_empty()
+        || approval.conditions.len() > MAX_APPROVAL_ITEMS
+        || approval.exceptions.len() > MAX_APPROVAL_ITEMS
+        || bindings.len() > MAX_BASELINE_BINDINGS
+        || contradictions.len() > MAX_BASELINE_CONTRADICTIONS
+        || blockers.len() > MAX_BASELINE_BLOCKERS
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let affected: bool = connection
+        .query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM change_assessment_impacts AS impacts
+               JOIN change_assessment_decisions AS decisions USING (assessment_id)
+               WHERE impacts.kind = 'coordinated_baseline'
+                 AND impacts.object_id = ?1 AND impacts.object_version = ?2
+                 AND decisions.classification = 'material'
+             )",
+            params![baseline_id, version],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if affected {
+        return Ok(false);
+    }
+    let snapshot = derive_coordinated_baseline_snapshot_in_connection(connection, budget)?;
+    Ok(snapshot.tender_revision == row.0
+        && snapshot.activation_id == row.1
+        && snapshot.plan_id == row.2
+        && snapshot.plan_version == row.3
+        && snapshot.plan_manifest_sha256 == row.4
+        && snapshot.coordinator_profile_id == row.5
+        && snapshot.coordinator_profile_version == row.6
+        && snapshot.bindings == bindings
+        && snapshot.contradictions == contradictions
+        && snapshot.blockers == blockers)
+}
+
 const MAX_APPROVAL_ITEMS: usize = 32;
 const MAX_PAGE_ITEMS: u32 = 4;
 const MAX_PAGE_BYTES: usize = 8 * 1024 * 1024;
@@ -399,6 +545,30 @@ impl QuantixHost {
 }
 
 impl TenderStore {
+    pub(crate) fn load_exact_current_approved_coordinated_baseline(
+        &self,
+        baseline_id: &str,
+        version: u32,
+        manifest_sha256: &str,
+        budget: BidPackageOperationBudget,
+    ) -> Result<CoordinatedBidBaseline, TenderCommandError> {
+        budget.check()?;
+        if !self.coordinated_baseline_manifests_are_valid_with_check(&mut || budget.check())? {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let baseline = self.load_coordinated_bid_baseline(baseline_id, version, budget)?;
+        if !baseline.current
+            || baseline.manifest_sha256 != manifest_sha256
+            || baseline
+                .approval
+                .as_ref()
+                .is_none_or(|approval| approval.decision != CoordinatedBidBaselineDecision::Approve)
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        Ok(baseline)
+    }
+
     fn record_baseline_denial(
         &mut self,
         tender_id: &TenderId,
@@ -1013,135 +1183,147 @@ impl TenderStore {
         baseline_id: &str,
         version: u32,
     ) -> Result<Option<CoordinatedBidBaselineApproval>, TenderCommandError> {
-        type Row = (
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-        );
-        let row: Option<Row> = self
-            .connection
-            .query_row(
-                "SELECT approval_id, baseline_manifest_sha256, decision, rationale,
-                        conditions_json, exceptions_json, supporting_reviews_sha256,
-                        decided_by, acting_role, lifecycle_before, lifecycle_after,
-                        preceding_approval_hash, manifest_json, approval_sha256, created_at
-                 FROM coordinated_bid_baseline_approvals
-                 WHERE baseline_id = ?1 AND baseline_version = ?2",
-                params![baseline_id, version],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                        row.get(7)?,
-                        row.get(8)?,
-                        row.get(9)?,
-                        row.get(10)?,
-                        row.get(11)?,
-                        row.get(12)?,
-                        row.get(13)?,
-                        row.get(14)?,
-                    ))
-                },
-            )
-            .optional()
-            .map_err(sql_error)?;
-        row.map(|row| {
-            let decision = CoordinatedBidBaselineDecision::parse(&row.2)?;
-            let conditions = parse_canonical::<Vec<String>>(&row.4)?;
-            let exceptions = parse_canonical::<Vec<String>>(&row.5)?;
-            let lifecycle_before = TenderLifecyclePhase::parse(&row.9)?;
-            let lifecycle_after = TenderLifecyclePhase::parse(&row.10)?;
-            let manifest = ApprovalManifest {
-                schema_version: 1,
-                approval_id: row.0.clone(),
-                baseline_id: baseline_id.to_owned(),
-                baseline_version: version,
-                baseline_manifest_sha256: row.1.clone(),
-                decision,
-                rationale: row.3.clone(),
-                conditions: conditions.clone(),
-                exceptions: exceptions.clone(),
-                supporting_reviews_sha256: row.6.clone(),
-                decided_by: row.7.clone(),
-                acting_role: row.8.clone(),
-                lifecycle_before,
-                lifecycle_after,
-                preceding_approval_hash: row.11.clone(),
-                created_at: row.14.clone(),
-            };
-            if canonical_json(&manifest)? != row.12 || sha256_hex(row.12.as_bytes()) != row.13 {
-                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-            }
-            Ok(CoordinatedBidBaselineApproval {
-                approval_id: row.0,
-                baseline_id: baseline_id.to_owned(),
-                baseline_version: version,
-                baseline_manifest_sha256: row.1,
-                decision,
-                rationale: row.3,
-                conditions,
-                exceptions,
-                supporting_reviews_sha256: row.6,
-                decided_by: row.7,
-                acting_role: row.8,
-                lifecycle_before,
-                lifecycle_after,
-                preceding_approval_hash: row.11,
-                approval_sha256: row.13,
-                created_at: row.14,
-            })
-        })
-        .transpose()
+        load_coordinated_bid_baseline_approval_in_connection(&self.connection, baseline_id, version)
     }
 
     fn derive_coordinated_baseline_snapshot(
         &self,
         budget: BidPackageOperationBudget,
     ) -> Result<BaselineSnapshot, TenderCommandError> {
-        budget.check()?;
-        let tender_revision: u32 = self
-            .connection
-            .query_row(
-                "SELECT current_revision FROM tender WHERE singleton = 1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(sql_error)?;
-        let (activation_id, plan_id, plan_version, plan_manifest_sha256): (
-            String,
-            String,
-            u32,
-            String,
-        ) = self
-            .connection
-            .query_row(
-                "SELECT activation_id, plan_id, plan_version, plan_manifest_sha256
+        derive_coordinated_baseline_snapshot_in_connection(&self.connection, budget)
+    }
+}
+
+fn load_coordinated_bid_baseline_approval_in_connection(
+    connection: &Connection,
+    baseline_id: &str,
+    version: u32,
+) -> Result<Option<CoordinatedBidBaselineApproval>, TenderCommandError> {
+    type Row = (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+    );
+    let row: Option<Row> = connection
+        .query_row(
+            "SELECT approval_id, baseline_manifest_sha256, decision, rationale,
+                        conditions_json, exceptions_json, supporting_reviews_sha256,
+                        decided_by, acting_role, lifecycle_before, lifecycle_after,
+                        preceding_approval_hash, manifest_json, approval_sha256, created_at
+                 FROM coordinated_bid_baseline_approvals
+                 WHERE baseline_id = ?1 AND baseline_version = ?2",
+            params![baseline_id, version],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
+                    row.get(11)?,
+                    row.get(12)?,
+                    row.get(13)?,
+                    row.get(14)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?;
+    row.map(|row| {
+        let decision = CoordinatedBidBaselineDecision::parse(&row.2)?;
+        let conditions = parse_canonical::<Vec<String>>(&row.4)?;
+        let exceptions = parse_canonical::<Vec<String>>(&row.5)?;
+        let lifecycle_before = TenderLifecyclePhase::parse(&row.9)?;
+        let lifecycle_after = TenderLifecyclePhase::parse(&row.10)?;
+        let manifest = ApprovalManifest {
+            schema_version: 1,
+            approval_id: row.0.clone(),
+            baseline_id: baseline_id.to_owned(),
+            baseline_version: version,
+            baseline_manifest_sha256: row.1.clone(),
+            decision,
+            rationale: row.3.clone(),
+            conditions: conditions.clone(),
+            exceptions: exceptions.clone(),
+            supporting_reviews_sha256: row.6.clone(),
+            decided_by: row.7.clone(),
+            acting_role: row.8.clone(),
+            lifecycle_before,
+            lifecycle_after,
+            preceding_approval_hash: row.11.clone(),
+            created_at: row.14.clone(),
+        };
+        if canonical_json(&manifest)? != row.12 || sha256_hex(row.12.as_bytes()) != row.13 {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        Ok(CoordinatedBidBaselineApproval {
+            approval_id: row.0,
+            baseline_id: baseline_id.to_owned(),
+            baseline_version: version,
+            baseline_manifest_sha256: row.1,
+            decision,
+            rationale: row.3,
+            conditions,
+            exceptions,
+            supporting_reviews_sha256: row.6,
+            decided_by: row.7,
+            acting_role: row.8,
+            lifecycle_before,
+            lifecycle_after,
+            preceding_approval_hash: row.11,
+            approval_sha256: row.13,
+            created_at: row.14,
+        })
+    })
+    .transpose()
+}
+
+fn derive_coordinated_baseline_snapshot_in_connection(
+    connection: &Connection,
+    budget: BidPackageOperationBudget,
+) -> Result<BaselineSnapshot, TenderCommandError> {
+    budget.check()?;
+    let tender_revision: u32 = connection
+        .query_row(
+            "SELECT current_revision FROM tender WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    let (activation_id, plan_id, plan_version, plan_manifest_sha256): (
+        String,
+        String,
+        u32,
+        String,
+    ) = connection
+        .query_row(
+            "SELECT activation_id, plan_id, plan_version, plan_manifest_sha256
                  FROM production_activations WHERE status = 'active'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .map_err(sql_error)?;
-        let (coordinator_profile_id, coordinator_profile_version): (String, u32) = self
-            .connection
-            .query_row(
-                "SELECT json_extract(binding.value, '$.profile.profile_id'),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .map_err(sql_error)?;
+    let (coordinator_profile_id, coordinator_profile_version): (String, u32) = connection
+        .query_row(
+            "SELECT json_extract(binding.value, '$.profile.profile_id'),
                         json_extract(binding.value, '$.profile.version')
                  FROM work_plan_versions AS plans,
                       json_each(plans.profiles_json) AS binding
@@ -1156,83 +1338,92 @@ impl TenderStore {
                  ORDER BY CASE json_extract(binding.value, '$.archetype')
                             WHEN 'tender_office_coordinator' THEN 0 ELSE 1 END
                  LIMIT 1",
-                params![plan_id, plan_version],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(sql_error)?;
-        let mut bindings = Vec::new();
-        let mut contradictions = Vec::new();
-        let mut blockers = Vec::new();
-        let mut field_observations = Vec::new();
-        self.collect_production_bindings(
-            &activation_id,
-            &mut bindings,
-            &mut blockers,
-            &mut field_observations,
-            budget,
-        )?;
-        self.collect_record_bindings(
-            &mut bindings,
-            &mut contradictions,
-            &mut blockers,
-            &mut field_observations,
-            budget,
-        )?;
-        self.collect_query_bindings(
-            &mut bindings,
-            &mut blockers,
-            &mut field_observations,
-            budget,
-        )?;
-        self.collect_external_rfi_bindings(&mut bindings, budget)?;
-        self.collect_pricing_bindings(
-            &mut bindings,
-            &mut blockers,
-            &mut field_observations,
-            tender_revision,
-            budget,
-        )?;
-        self.collect_capability_gap_blockers(&plan_id, plan_version, &mut blockers)?;
-        collect_field_contradictions(&field_observations, &mut contradictions)?;
-        for category in [
-            CoordinatedBidBaselineCategory::Technical,
-            CoordinatedBidBaselineCategory::Programme,
-            CoordinatedBidBaselineCategory::Procurement,
-            CoordinatedBidBaselineCategory::Contractual,
-            CoordinatedBidBaselineCategory::Risk,
-            CoordinatedBidBaselineCategory::Query,
-            CoordinatedBidBaselineCategory::Qualification,
-            CoordinatedBidBaselineCategory::Exclusion,
-            CoordinatedBidBaselineCategory::Submission,
-            CoordinatedBidBaselineCategory::Commercial,
-        ] {
-            if !bindings.iter().any(|binding| binding.category == category) {
-                blockers.push(CoordinatedBidBaselineBlocker {
-                    code: CoordinatedBidBaselineBlockerCode::WorkstreamEvidenceMissing,
-                    summary: format!(
-                        "No exact reviewed {} record or artifact is bound.",
-                        category.as_str()
-                    ),
-                    references: vec![category.as_str().into()],
-                });
-            }
-        }
-        if !contradictions.is_empty() {
+            params![plan_id, plan_version],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(sql_error)?;
+    let mut bindings = Vec::new();
+    let mut contradictions = Vec::new();
+    let mut blockers = Vec::new();
+    let mut field_observations = Vec::new();
+    collect_production_bindings_in_connection(
+        connection,
+        &activation_id,
+        &mut bindings,
+        &mut blockers,
+        &mut field_observations,
+        budget,
+    )?;
+    collect_record_bindings_in_connection(
+        connection,
+        &mut bindings,
+        &mut contradictions,
+        &mut blockers,
+        &mut field_observations,
+        budget,
+    )?;
+    collect_query_bindings_in_connection(
+        connection,
+        &mut bindings,
+        &mut blockers,
+        &mut field_observations,
+        budget,
+    )?;
+    collect_external_rfi_bindings_in_connection(connection, &mut bindings, budget)?;
+    collect_pricing_bindings_in_connection(
+        connection,
+        &mut bindings,
+        &mut blockers,
+        &mut field_observations,
+        tender_revision,
+        budget,
+    )?;
+    collect_capability_gap_blockers_in_connection(
+        connection,
+        &plan_id,
+        plan_version,
+        &mut blockers,
+    )?;
+    collect_field_contradictions(&field_observations, &mut contradictions)?;
+    for category in [
+        CoordinatedBidBaselineCategory::Technical,
+        CoordinatedBidBaselineCategory::Programme,
+        CoordinatedBidBaselineCategory::Procurement,
+        CoordinatedBidBaselineCategory::Contractual,
+        CoordinatedBidBaselineCategory::Risk,
+        CoordinatedBidBaselineCategory::Query,
+        CoordinatedBidBaselineCategory::Qualification,
+        CoordinatedBidBaselineCategory::Exclusion,
+        CoordinatedBidBaselineCategory::Submission,
+        CoordinatedBidBaselineCategory::Commercial,
+    ] {
+        if !bindings.iter().any(|binding| binding.category == category) {
             blockers.push(CoordinatedBidBaselineBlocker {
-                code: CoordinatedBidBaselineBlockerCode::ContradictionOpen,
+                code: CoordinatedBidBaselineBlockerCode::WorkstreamEvidenceMissing,
                 summary: format!(
-                    "{} cross-workstream contradiction(s) require reconciliation.",
-                    contradictions.len()
+                    "No exact reviewed {} record or artifact is bound.",
+                    category.as_str()
                 ),
-                references: contradictions
-                    .iter()
-                    .flat_map(|value| value.references.iter().cloned())
-                    .take(64)
-                    .collect(),
+                references: vec![category.as_str().into()],
             });
         }
-        sort_and_validate_snapshot(&mut bindings, &mut contradictions, &mut blockers)?;
-        let explanation = format!(
+    }
+    if !contradictions.is_empty() {
+        blockers.push(CoordinatedBidBaselineBlocker {
+            code: CoordinatedBidBaselineBlockerCode::ContradictionOpen,
+            summary: format!(
+                "{} cross-workstream contradiction(s) require reconciliation.",
+                contradictions.len()
+            ),
+            references: contradictions
+                .iter()
+                .flat_map(|value| value.references.iter().cloned())
+                .take(64)
+                .collect(),
+        });
+    }
+    sort_and_validate_snapshot(&mut bindings, &mut contradictions, &mut blockers)?;
+    let explanation = format!(
             "Tender Office Coordinator assembled {} exact validated binding(s) from approved Work Plan {} version {}, with {} contradiction(s) and {} blocking control(s) disclosed for the Tendering Manager.",
             bindings.len(),
             plan_id,
@@ -1240,108 +1431,106 @@ impl TenderStore {
             contradictions.len(),
             blockers.len(),
         );
-        Ok(BaselineSnapshot {
-            tender_revision,
-            activation_id,
-            plan_id,
-            plan_version,
-            plan_manifest_sha256,
-            coordinator_profile_id,
-            coordinator_profile_version,
-            bindings,
-            contradictions,
-            blockers,
-            explanation,
-        })
-    }
+    Ok(BaselineSnapshot {
+        tender_revision,
+        activation_id,
+        plan_id,
+        plan_version,
+        plan_manifest_sha256,
+        coordinator_profile_id,
+        coordinator_profile_version,
+        bindings,
+        contradictions,
+        blockers,
+        explanation,
+    })
+}
 
-    fn collect_production_bindings(
-        &self,
-        activation_id: &str,
-        bindings: &mut Vec<CoordinatedBidBaselineBinding>,
-        blockers: &mut Vec<CoordinatedBidBaselineBlocker>,
-        observations: &mut Vec<FieldObservation>,
-        budget: BidPackageOperationBudget,
-    ) -> Result<(), TenderCommandError> {
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT production_task_id, task_key, task_definition_json, status
+fn collect_production_bindings_in_connection(
+    connection: &Connection,
+    activation_id: &str,
+    bindings: &mut Vec<CoordinatedBidBaselineBinding>,
+    blockers: &mut Vec<CoordinatedBidBaselineBlocker>,
+    observations: &mut Vec<FieldObservation>,
+    budget: BidPackageOperationBudget,
+) -> Result<(), TenderCommandError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT production_task_id, task_key, task_definition_json, status
                  FROM production_tasks WHERE activation_id = ?1 ORDER BY task_key",
-            )
-            .map_err(sql_error)?;
-        let tasks = statement
-            .query_map([activation_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
-            })
-            .map_err(sql_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(sql_error)?;
-        if tasks.is_empty() || tasks.len() > 256 {
-            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        )
+        .map_err(sql_error)?;
+    let tasks = statement
+        .query_map([activation_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_error)?;
+    if tasks.is_empty() || tasks.len() > 256 {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    for (production_task_id, task_key, definition_json, status) in tasks {
+        budget.check()?;
+        if status != "ready_for_integration" {
+            blockers.push(CoordinatedBidBaselineBlocker {
+                code: CoordinatedBidBaselineBlockerCode::ProductionTaskNotReady,
+                summary: format!("Production task {task_key} is {status}."),
+                references: vec![production_task_id],
+            });
+            continue;
         }
-        for (production_task_id, task_key, definition_json, status) in tasks {
-            budget.check()?;
-            if status != "ready_for_integration" {
-                blockers.push(CoordinatedBidBaselineBlocker {
-                    code: CoordinatedBidBaselineBlockerCode::ProductionTaskNotReady,
-                    summary: format!("Production task {task_key} is {status}."),
-                    references: vec![production_task_id],
-                });
-                continue;
-            }
-            let definition: WorkPlanTask = parse_canonical(&definition_json)?;
-            let workstream = definition.workstream_key.as_str();
-            let objective = definition.objective.as_str();
-            let plan_reference = format!("work_plan_task:{task_key}");
-            let responsibility = ProductionCoordinationObservationValue::TextSet {
+        let definition: WorkPlanTask = parse_canonical(&definition_json)?;
+        let workstream = definition.workstream_key.as_str();
+        let objective = definition.objective.as_str();
+        let plan_reference = format!("work_plan_task:{task_key}");
+        let responsibility = ProductionCoordinationObservationValue::TextSet {
+            values: vec![format!(
+                "{}={}",
+                coordination_task_assignment_key(&task_key),
+                definition.profile_id
+            )],
+        };
+        observations.push(FieldObservation {
+            subject: ProductionCoordinationObservationSubject::ResponsibleParty,
+            scope: "global".into(),
+            value: canonical_coordination_observation_value(
+                ProductionCoordinationObservationSubject::ResponsibleParty,
+                &responsibility,
+            )
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            reference: plan_reference.clone(),
+            keyed: true,
+        });
+        if coordination_deadline_is_required(workstream) {
+            let deadline = ProductionCoordinationObservationValue::TextSet {
                 values: vec![format!(
                     "{}={}",
                     coordination_task_assignment_key(&task_key),
-                    definition.profile_id
+                    definition.deadline
                 )],
             };
             observations.push(FieldObservation {
-                subject: ProductionCoordinationObservationSubject::ResponsibleParty,
+                subject: ProductionCoordinationObservationSubject::SubmissionDeadline,
                 scope: "global".into(),
                 value: canonical_coordination_observation_value(
-                    ProductionCoordinationObservationSubject::ResponsibleParty,
-                    &responsibility,
+                    ProductionCoordinationObservationSubject::SubmissionDeadline,
+                    &deadline,
                 )
                 .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
-                reference: plan_reference.clone(),
+                reference: plan_reference,
                 keyed: true,
             });
-            if coordination_deadline_is_required(workstream) {
-                let deadline = ProductionCoordinationObservationValue::TextSet {
-                    values: vec![format!(
-                        "{}={}",
-                        coordination_task_assignment_key(&task_key),
-                        definition.deadline
-                    )],
-                };
-                observations.push(FieldObservation {
-                    subject: ProductionCoordinationObservationSubject::SubmissionDeadline,
-                    scope: "global".into(),
-                    value: canonical_coordination_observation_value(
-                        ProductionCoordinationObservationSubject::SubmissionDeadline,
-                        &deadline,
-                    )
-                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
-                    reference: plan_reference,
-                    keyed: true,
-                });
-            }
-            type ReadyRow = (String, u32, String, String, Option<String>, String);
-            let ready: ReadyRow = self
-                .connection
-                .query_row(
-                    "SELECT readiness.artifact_id, readiness.artifact_version,
+        }
+        type ReadyRow = (String, u32, String, String, Option<String>, String);
+        let ready: ReadyRow = connection
+            .query_row(
+                "SELECT readiness.artifact_id, readiness.artifact_version,
                             readiness.payload_sha256, artifacts.payload_json, readiness.review_id,
                             readiness.finding_dispositions_sha256
                      FROM production_integration_readiness AS readiness
@@ -1350,67 +1539,64 @@ impl TenderStore {
                       AND artifacts.version = readiness.artifact_version
                      WHERE readiness.production_task_id = ?1
                      ORDER BY readiness.rowid DESC LIMIT 1",
-                    [&production_task_id],
-                    |row| {
-                        Ok((
-                            row.get(0)?,
-                            row.get(1)?,
-                            row.get(2)?,
-                            row.get(3)?,
-                            row.get(4)?,
-                            row.get(5)?,
-                        ))
-                    },
-                )
-                .map_err(sql_error)?;
-            let readiness_digest = sha256_hex(
-                canonical_json(&json!({
-                    "artifact_payload_sha256": &ready.2,
-                    "review_id": &ready.4,
-                    "finding_dispositions_sha256": &ready.5,
-                }))?
-                .as_bytes(),
-            );
-            bindings.push(CoordinatedBidBaselineBinding {
-                category: category_for_workstream(workstream),
-                kind: CoordinatedBidBaselineBindingKind::ProductionArtifactVersion,
-                reference_id: ready.0.clone(),
-                version: ready.1,
-                manifest_sha256: readiness_digest,
-                source: task_key.clone(),
-                summary: objective.to_owned(),
-                supporting_review_id: ready.4,
-                approval_id: None,
+                [&production_task_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .map_err(sql_error)?;
+        let readiness_digest = sha256_hex(
+            canonical_json(&json!({
+                "artifact_payload_sha256": &ready.2,
+                "review_id": &ready.4,
+                "finding_dispositions_sha256": &ready.5,
+            }))?
+            .as_bytes(),
+        );
+        bindings.push(CoordinatedBidBaselineBinding {
+            category: category_for_workstream(workstream),
+            kind: CoordinatedBidBaselineBindingKind::ProductionArtifactVersion,
+            reference_id: ready.0.clone(),
+            version: ready.1,
+            manifest_sha256: readiness_digest,
+            source: task_key.clone(),
+            summary: objective.to_owned(),
+            supporting_review_id: ready.4,
+            approval_id: None,
+        });
+        let payload: ProductionArtifactPayload = parse_canonical(&ready.3)?;
+        if payload.coordination_observations.is_empty() {
+            blockers.push(CoordinatedBidBaselineBlocker {
+                code: CoordinatedBidBaselineBlockerCode::WorkstreamEvidenceMissing,
+                summary: format!(
+                    "Ready-for-Integration task {task_key} has no typed coordination observation."
+                ),
+                references: vec![production_task_id.clone()],
             });
-            let payload: ProductionArtifactPayload = parse_canonical(&ready.3)?;
-            if payload.coordination_observations.is_empty() {
-                blockers.push(CoordinatedBidBaselineBlocker {
-                    code: CoordinatedBidBaselineBlockerCode::WorkstreamEvidenceMissing,
-                    summary: format!(
-                        "Ready-for-Integration task {task_key} has no typed coordination observation."
-                    ),
-                    references: vec![production_task_id.clone()],
-                });
-            }
-            for observation in payload.coordination_observations {
-                let value = canonical_coordination_observation_value(
-                    observation.subject,
-                    &observation.value,
-                )
-                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-                observations.push(FieldObservation {
-                    subject: observation.subject,
-                    scope: coordination_observation_scope(observation.subject, &task_key),
-                    value,
-                    reference: format!("{}:{}", ready.0, ready.1),
-                    keyed: coordination_observation_is_keyed(observation.subject),
-                });
-            }
         }
-        let mut finding_statement = self
-            .connection
-            .prepare(
-                "SELECT findings.finding_id, findings.severity, findings.summary
+        for observation in payload.coordination_observations {
+            let value =
+                canonical_coordination_observation_value(observation.subject, &observation.value)
+                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            observations.push(FieldObservation {
+                subject: observation.subject,
+                scope: coordination_observation_scope(observation.subject, &task_key),
+                value,
+                reference: format!("{}:{}", ready.0, ready.1),
+                keyed: coordination_observation_is_keyed(observation.subject),
+            });
+        }
+    }
+    let mut finding_statement = connection
+        .prepare(
+            "SELECT findings.finding_id, findings.severity, findings.summary
                  FROM production_review_findings AS findings
                  JOIN production_reviews AS reviews ON reviews.review_id = findings.review_id
                  JOIN production_tasks AS tasks
@@ -1420,183 +1606,183 @@ impl TenderStore {
                  WHERE tasks.activation_id = ?1 AND dispositions.finding_id IS NULL
                    AND findings.severity IN ('critical', 'major')
                  ORDER BY findings.finding_id LIMIT 257",
-            )
-            .map_err(sql_error)?;
-        let findings = finding_statement
-            .query_map([activation_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })
-            .map_err(sql_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(sql_error)?;
-        if findings.len() > 256 {
-            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-        }
-        for (finding_id, severity, summary) in findings {
-            blockers.push(CoordinatedBidBaselineBlocker {
-                code: if severity == "critical" {
-                    CoordinatedBidBaselineBlockerCode::OpenCriticalFinding
-                } else {
-                    CoordinatedBidBaselineBlockerCode::OpenMajorFinding
-                },
-                summary,
-                references: vec![finding_id],
-            });
-        }
-        Ok(())
+        )
+        .map_err(sql_error)?;
+    let findings = finding_statement
+        .query_map([activation_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_error)?;
+    if findings.len() > 256 {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
+    for (finding_id, severity, summary) in findings {
+        blockers.push(CoordinatedBidBaselineBlocker {
+            code: if severity == "critical" {
+                CoordinatedBidBaselineBlockerCode::OpenCriticalFinding
+            } else {
+                CoordinatedBidBaselineBlockerCode::OpenMajorFinding
+            },
+            summary,
+            references: vec![finding_id],
+        });
+    }
+    Ok(())
+}
 
-    fn collect_record_bindings(
-        &self,
-        bindings: &mut Vec<CoordinatedBidBaselineBinding>,
-        contradictions: &mut Vec<CoordinatedBidBaselineContradiction>,
-        blockers: &mut Vec<CoordinatedBidBaselineBlocker>,
-        observations: &mut Vec<FieldObservation>,
-        budget: BidPackageOperationBudget,
-    ) -> Result<(), TenderCommandError> {
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT heads.record_id, heads.current_version
+fn collect_record_bindings_in_connection(
+    connection: &Connection,
+    bindings: &mut Vec<CoordinatedBidBaselineBinding>,
+    contradictions: &mut Vec<CoordinatedBidBaselineContradiction>,
+    blockers: &mut Vec<CoordinatedBidBaselineBlocker>,
+    observations: &mut Vec<FieldObservation>,
+    budget: BidPackageOperationBudget,
+) -> Result<(), TenderCommandError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT heads.record_id, heads.current_version
                  FROM tender_record_heads AS heads
                  JOIN tender_records AS records ON records.record_id = heads.record_id
                  ORDER BY records.stable_key LIMIT 257",
-            )
-            .map_err(sql_error)?;
-        let records = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
-            })
-            .map_err(sql_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(sql_error)?;
-        if records.len() > 256 {
-            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-        }
-        for (record_id, version) in records {
-            budget.check()?;
-            let record = self.inspect_tender_record_version(&record_id, version)?;
-            if record.verification_status != VerificationStatus::Verified
-                || matches!(
-                    record.trust_class,
-                    TenderRecordTrustClass::AiProposal
-                        | TenderRecordTrustClass::UnresolvedGap
-                        | TenderRecordTrustClass::PriorDecision
-                )
-            {
-                blockers.push(CoordinatedBidBaselineBlocker {
-                    code: if matches!(
-                        record.verification_status,
-                        VerificationStatus::Stale | VerificationStatus::Superseded
-                    ) {
-                        CoordinatedBidBaselineBlockerCode::StaleInput
-                    } else {
-                        CoordinatedBidBaselineBlockerCode::UnverifiedInput
-                    },
-                    summary: format!(
-                        "Tender Record '{}' is not a current admitted fact.",
-                        record.title
-                    ),
-                    references: vec![format!("{}:{}", record.record_id, record.version)],
-                });
-                continue;
-            }
-            let supporting_review_id = record.reviews.last().map(|review| review.review_id.clone());
-            let immutable_record = json!({
-                "record_id": record.record_id,
-                "stable_key": record.stable_key,
-                "version": record.version,
-                "kind": record.kind,
-                "title": record.title,
-                "generation_instruction": record.generation_instruction,
-                "fields": record.fields,
-                "contradictions": record.contradictions,
-                "author_run_id": record.author_run_id,
-                "author_profile_id": record.author_profile_id,
-                "supporting_review_id": supporting_review_id,
-                "trust_class": record.trust_class,
-            });
-            let digest = sha256_hex(canonical_json(&immutable_record)?.as_bytes());
-            let reference = format!("{}:{}", record.record_id, record.version);
-            bindings.push(CoordinatedBidBaselineBinding {
-                category: category_for_record(record.kind, &record.title),
-                kind: CoordinatedBidBaselineBindingKind::TenderRecordVersion,
-                reference_id: record.record_id.clone(),
-                version: record.version,
-                manifest_sha256: digest,
-                source: record.stable_key.clone(),
-                summary: record.title.clone(),
-                supporting_review_id,
-                approval_id: None,
-            });
-            for contradiction in &record.contradictions {
-                contradictions.push(CoordinatedBidBaselineContradiction {
-                    category: contradiction_category(&contradiction.field_name),
-                    key: format!("{}:{}", record.stable_key, contradiction.field_name),
-                    summary: contradiction.summary.clone(),
-                    references: vec![reference.clone()],
-                });
-            }
-            for field in &record.fields {
-                let Some(value) = field
-                    .normalized_value
-                    .as_deref()
-                    .or(field.value.as_deref())
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                else {
-                    continue;
-                };
-                let Some((subject, typed_value)) = record_coordination_observation(
-                    record.kind,
-                    &record.stable_key,
-                    &field.name,
-                    value,
-                ) else {
-                    continue;
-                };
-                let value = canonical_coordination_observation_value(subject, &typed_value)
-                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-                observations.push(FieldObservation {
-                    subject,
-                    scope: "global".into(),
-                    value,
-                    reference: reference.clone(),
-                    keyed: true,
-                });
-            }
-        }
-        Ok(())
+        )
+        .map_err(sql_error)?;
+    let records = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+        })
+        .map_err(sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_error)?;
+    if records.len() > 256 {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
+    for (record_id, version) in records {
+        budget.check()?;
+        let record = super::tender_records::inspect_tender_record_version_in_connection(
+            connection, &record_id, version,
+        )?;
+        if record.verification_status != VerificationStatus::Verified
+            || matches!(
+                record.trust_class,
+                TenderRecordTrustClass::AiProposal
+                    | TenderRecordTrustClass::UnresolvedGap
+                    | TenderRecordTrustClass::PriorDecision
+            )
+        {
+            blockers.push(CoordinatedBidBaselineBlocker {
+                code: if matches!(
+                    record.verification_status,
+                    VerificationStatus::Stale | VerificationStatus::Superseded
+                ) {
+                    CoordinatedBidBaselineBlockerCode::StaleInput
+                } else {
+                    CoordinatedBidBaselineBlockerCode::UnverifiedInput
+                },
+                summary: format!(
+                    "Tender Record '{}' is not a current admitted fact.",
+                    record.title
+                ),
+                references: vec![format!("{}:{}", record.record_id, record.version)],
+            });
+            continue;
+        }
+        let supporting_review_id = record.reviews.last().map(|review| review.review_id.clone());
+        let immutable_record = json!({
+            "record_id": record.record_id,
+            "stable_key": record.stable_key,
+            "version": record.version,
+            "kind": record.kind,
+            "title": record.title,
+            "generation_instruction": record.generation_instruction,
+            "fields": record.fields,
+            "contradictions": record.contradictions,
+            "author_run_id": record.author_run_id,
+            "author_profile_id": record.author_profile_id,
+            "supporting_review_id": supporting_review_id,
+            "trust_class": record.trust_class,
+        });
+        let digest = sha256_hex(canonical_json(&immutable_record)?.as_bytes());
+        let reference = format!("{}:{}", record.record_id, record.version);
+        bindings.push(CoordinatedBidBaselineBinding {
+            category: category_for_record(record.kind, &record.title),
+            kind: CoordinatedBidBaselineBindingKind::TenderRecordVersion,
+            reference_id: record.record_id.clone(),
+            version: record.version,
+            manifest_sha256: digest,
+            source: record.stable_key.clone(),
+            summary: record.title.clone(),
+            supporting_review_id,
+            approval_id: None,
+        });
+        for contradiction in &record.contradictions {
+            contradictions.push(CoordinatedBidBaselineContradiction {
+                category: contradiction_category(&contradiction.field_name),
+                key: format!("{}:{}", record.stable_key, contradiction.field_name),
+                summary: contradiction.summary.clone(),
+                references: vec![reference.clone()],
+            });
+        }
+        for field in &record.fields {
+            let Some(value) = field
+                .normalized_value
+                .as_deref()
+                .or(field.value.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let Some((subject, typed_value)) = record_coordination_observation(
+                record.kind,
+                &record.stable_key,
+                &field.name,
+                value,
+            ) else {
+                continue;
+            };
+            let value = canonical_coordination_observation_value(subject, &typed_value)
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            observations.push(FieldObservation {
+                subject,
+                scope: "global".into(),
+                value,
+                reference: reference.clone(),
+                keyed: true,
+            });
+        }
+    }
+    Ok(())
+}
 
-    fn collect_query_bindings(
-        &self,
-        bindings: &mut Vec<CoordinatedBidBaselineBinding>,
-        blockers: &mut Vec<CoordinatedBidBaselineBlocker>,
-        observations: &mut Vec<FieldObservation>,
-        budget: BidPackageOperationBudget,
-    ) -> Result<(), TenderCommandError> {
-        type Row = (
-            String,
-            u32,
-            String,
-            bool,
-            bool,
-            Option<String>,
-            Option<String>,
-            Option<bool>,
-            Option<String>,
-            Option<String>,
-            String,
-        );
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT versions.query_id, versions.version, versions.manifest_sha256,
+fn collect_query_bindings_in_connection(
+    connection: &Connection,
+    bindings: &mut Vec<CoordinatedBidBaselineBinding>,
+    blockers: &mut Vec<CoordinatedBidBaselineBlocker>,
+    observations: &mut Vec<FieldObservation>,
+    budget: BidPackageOperationBudget,
+) -> Result<(), TenderCommandError> {
+    type Row = (
+        String,
+        u32,
+        String,
+        bool,
+        bool,
+        Option<String>,
+        Option<String>,
+        Option<bool>,
+        Option<String>,
+        Option<String>,
+        String,
+    );
+    let mut statement = connection
+        .prepare(
+            "SELECT versions.query_id, versions.version, versions.manifest_sha256,
                         versions.material, versions.release_blocking, decisions.decision_id,
                         decisions.treatment, decisions.closes_query, decisions.manifest_sha256,
                         decisions.treatment_details, versions.affected_task_keys_json
@@ -1608,101 +1794,99 @@ impl TenderStore {
                    ON decisions.query_id = versions.query_id
                   AND decisions.query_version = versions.version
                  ORDER BY versions.query_id LIMIT 257",
-            )
-            .map_err(sql_error)?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                    row.get(8)?,
-                    row.get(9)?,
-                    row.get(10)?,
-                ))
-            })
-            .map_err(sql_error)?
-            .collect::<Result<Vec<Row>, _>>()
-            .map_err(sql_error)?;
-        if rows.len() > 256 {
-            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-        }
-        for row in rows {
-            budget.check()?;
-            let unresolved = matches!(row.6.as_deref(), Some("external_rfi_drafting" | "blocked"))
-                || ((row.3 || row.4) && (row.5.is_none() || row.7 != Some(true)));
-            if unresolved {
-                blockers.push(CoordinatedBidBaselineBlocker {
-                    code: CoordinatedBidBaselineBlockerCode::OpenMaterialQuery,
-                    summary: "A material or release-blocking Query remains unresolved.".into(),
-                    references: vec![format!("{}:{}", row.0, row.1)],
-                });
-            }
-            let digest = sha256_hex(
-                canonical_json(&json!({
-                    "query_manifest_sha256": row.2,
-                    "decision_id": row.5,
-                    "decision_manifest_sha256": row.8,
-                }))?
-                .as_bytes(),
-            );
-            if let (Some(treatment), Some(treatment_details)) = (row.6.as_deref(), row.9.as_deref())
-            {
-                let affected_task_keys: Vec<String> = parse_canonical(&row.10)?;
-                let subject = ProductionCoordinationObservationSubject::QueryTreatment;
-                let value = canonical_coordination_observation_value(
-                    subject,
-                    &ProductionCoordinationObservationValue::Text {
-                        text: format!(
-                            "{treatment}:{}:{}",
-                            affected_task_keys.join(","),
-                            treatment_details
-                        ),
-                    },
-                )
-                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-                observations.push(FieldObservation {
-                    subject,
-                    scope: row.0.clone(),
-                    value,
-                    reference: format!("{}:{}", row.0, row.1),
-                    keyed: false,
-                });
-            }
-            bindings.push(CoordinatedBidBaselineBinding {
-                category: match row.6.as_deref() {
-                    Some("qualification") | Some("approved_assumption") => {
-                        CoordinatedBidBaselineCategory::Qualification
-                    }
-                    Some("exclusion") => CoordinatedBidBaselineCategory::Exclusion,
-                    Some("allowance") => CoordinatedBidBaselineCategory::Commercial,
-                    _ => CoordinatedBidBaselineCategory::Query,
-                },
-                kind: CoordinatedBidBaselineBindingKind::TenderQueryVersion,
-                reference_id: row.0,
-                version: row.1,
-                manifest_sha256: digest,
-                source: "query_register".into(),
-                summary: row.6.unwrap_or_else(|| "unresolved_query".into()),
-                supporting_review_id: None,
-                approval_id: row.5,
+        )
+        .map_err(sql_error)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+                row.get(10)?,
+            ))
+        })
+        .map_err(sql_error)?
+        .collect::<Result<Vec<Row>, _>>()
+        .map_err(sql_error)?;
+    if rows.len() > 256 {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    for row in rows {
+        budget.check()?;
+        let unresolved = matches!(row.6.as_deref(), Some("external_rfi_drafting" | "blocked"))
+            || ((row.3 || row.4) && (row.5.is_none() || row.7 != Some(true)));
+        if unresolved {
+            blockers.push(CoordinatedBidBaselineBlocker {
+                code: CoordinatedBidBaselineBlockerCode::OpenMaterialQuery,
+                summary: "A material or release-blocking Query remains unresolved.".into(),
+                references: vec![format!("{}:{}", row.0, row.1)],
             });
         }
-        Ok(())
+        let digest = sha256_hex(
+            canonical_json(&json!({
+                "query_manifest_sha256": row.2,
+                "decision_id": row.5,
+                "decision_manifest_sha256": row.8,
+            }))?
+            .as_bytes(),
+        );
+        if let (Some(treatment), Some(treatment_details)) = (row.6.as_deref(), row.9.as_deref()) {
+            let affected_task_keys: Vec<String> = parse_canonical(&row.10)?;
+            let subject = ProductionCoordinationObservationSubject::QueryTreatment;
+            let value = canonical_coordination_observation_value(
+                subject,
+                &ProductionCoordinationObservationValue::Text {
+                    text: format!(
+                        "{treatment}:{}:{}",
+                        affected_task_keys.join(","),
+                        treatment_details
+                    ),
+                },
+            )
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            observations.push(FieldObservation {
+                subject,
+                scope: row.0.clone(),
+                value,
+                reference: format!("{}:{}", row.0, row.1),
+                keyed: false,
+            });
+        }
+        bindings.push(CoordinatedBidBaselineBinding {
+            category: match row.6.as_deref() {
+                Some("qualification") | Some("approved_assumption") => {
+                    CoordinatedBidBaselineCategory::Qualification
+                }
+                Some("exclusion") => CoordinatedBidBaselineCategory::Exclusion,
+                Some("allowance") => CoordinatedBidBaselineCategory::Commercial,
+                _ => CoordinatedBidBaselineCategory::Query,
+            },
+            kind: CoordinatedBidBaselineBindingKind::TenderQueryVersion,
+            reference_id: row.0,
+            version: row.1,
+            manifest_sha256: digest,
+            source: "query_register".into(),
+            summary: row.6.unwrap_or_else(|| "unresolved_query".into()),
+            supporting_review_id: None,
+            approval_id: row.5,
+        });
     }
+    Ok(())
+}
 
-    fn collect_external_rfi_bindings(
-        &self,
-        bindings: &mut Vec<CoordinatedBidBaselineBinding>,
-        budget: BidPackageOperationBudget,
-    ) -> Result<(), TenderCommandError> {
-        let mut statement = self
-            .connection
+fn collect_external_rfi_bindings_in_connection(
+    connection: &Connection,
+    bindings: &mut Vec<CoordinatedBidBaselineBinding>,
+    budget: BidPackageOperationBudget,
+) -> Result<(), TenderCommandError> {
+    let mut statement = connection
             .prepare(
                 "SELECT versions.rfi_id, versions.version, versions.manifest_sha256,
                         approvals.approval_id, approvals.approval_sha256
@@ -1714,69 +1898,68 @@ impl TenderStore {
                  ORDER BY versions.rfi_id LIMIT 65",
             )
             .map_err(sql_error)?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, u32>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                ))
-            })
-            .map_err(sql_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(sql_error)?;
-        if rows.len() > 64 {
-            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-        }
-        for row in rows {
-            budget.check()?;
-            bindings.push(CoordinatedBidBaselineBinding {
-                category: CoordinatedBidBaselineCategory::Query,
-                kind: CoordinatedBidBaselineBindingKind::ExternalRfiVersion,
-                reference_id: row.0,
-                version: row.1,
-                manifest_sha256: sha256_hex(
-                    canonical_json(&json!({"version": row.2, "approval": row.4}))?.as_bytes(),
-                ),
-                source: "external_rfi_register".into(),
-                summary: "Approved exact External RFI version".into(),
-                supporting_review_id: None,
-                approval_id: Some(row.3),
-            });
-        }
-        Ok(())
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, u32>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_error)?;
+    if rows.len() > 64 {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
+    for row in rows {
+        budget.check()?;
+        bindings.push(CoordinatedBidBaselineBinding {
+            category: CoordinatedBidBaselineCategory::Query,
+            kind: CoordinatedBidBaselineBindingKind::ExternalRfiVersion,
+            reference_id: row.0,
+            version: row.1,
+            manifest_sha256: sha256_hex(
+                canonical_json(&json!({"version": row.2, "approval": row.4}))?.as_bytes(),
+            ),
+            source: "external_rfi_register".into(),
+            summary: "Approved exact External RFI version".into(),
+            supporting_review_id: None,
+            approval_id: Some(row.3),
+        });
+    }
+    Ok(())
+}
 
-    fn collect_pricing_bindings(
-        &self,
-        bindings: &mut Vec<CoordinatedBidBaselineBinding>,
-        blockers: &mut Vec<CoordinatedBidBaselineBlocker>,
-        observations: &mut Vec<FieldObservation>,
-        tender_revision: u32,
-        budget: BidPackageOperationBudget,
-    ) -> Result<(), TenderCommandError> {
-        type Row = (
-            String,
-            u32,
-            String,
-            String,
-            String,
-            String,
-            String,
-            u32,
-            String,
-            u32,
-            String,
-            String,
-            String,
-            String,
-            String,
-            String,
-        );
-        let row: Option<Row> = self
-            .connection
+fn collect_pricing_bindings_in_connection(
+    connection: &Connection,
+    bindings: &mut Vec<CoordinatedBidBaselineBinding>,
+    blockers: &mut Vec<CoordinatedBidBaselineBlocker>,
+    observations: &mut Vec<FieldObservation>,
+    tender_revision: u32,
+    budget: BidPackageOperationBudget,
+) -> Result<(), TenderCommandError> {
+    type Row = (
+        String,
+        u32,
+        String,
+        String,
+        String,
+        String,
+        String,
+        u32,
+        String,
+        u32,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+    );
+    let row: Option<Row> = connection
             .query_row(
                 "SELECT scenarios.pricing_scenario_id, scenarios.version,
                         scenarios.manifest_sha256, prices.approval_id, prices.manifest_sha256,
@@ -1820,198 +2003,200 @@ impl TenderStore {
             )
             .optional()
             .map_err(sql_error)?;
-        let Some(row) = row else {
-            blockers.push(CoordinatedBidBaselineBlocker {
-                code: CoordinatedBidBaselineBlockerCode::PricedCostBaselineMissing,
-                summary: "No current independently reviewed and approved Priced Cost Baseline is available.".into(),
-                references: Vec::new(),
-            });
-            blockers.push(CoordinatedBidBaselineBlocker {
-                code: CoordinatedBidBaselineBlockerCode::ApprovedTenderPriceMissing,
-                summary: "No current Approved Tender Price is available.".into(),
-                references: Vec::new(),
-            });
-            return Ok(());
-        };
-        budget.check()?;
-        let pricing_workspace = self.inspect_pricing_workspace(budget)?;
-        let selected_scenario = pricing_workspace
-            .scenarios
-            .iter()
-            .find(|scenario| scenario.pricing_scenario_id == row.0 && scenario.version == row.1);
-        let pricing_current = selected_scenario.is_some_and(|scenario| {
-            scenario.current
-                && scenario
-                    .selection
-                    .as_ref()
-                    .is_some_and(|selection| selection.current)
-                && scenario
-                    .approved_tender_price
-                    .as_ref()
-                    .is_some_and(|price| price.current)
+    let Some(row) = row else {
+        blockers.push(CoordinatedBidBaselineBlocker {
+            code: CoordinatedBidBaselineBlockerCode::PricedCostBaselineMissing,
+            summary:
+                "No current independently reviewed and approved Priced Cost Baseline is available."
+                    .into(),
+            references: Vec::new(),
         });
-        if row.7 != tender_revision || !pricing_current {
-            blockers.push(CoordinatedBidBaselineBlocker {
-                code: CoordinatedBidBaselineBlockerCode::StaleInput,
-                summary:
-                    "The selected Approved Tender Price or one of its exact dependencies is stale."
-                        .into(),
-                references: vec![format!("{}:{}", row.0, row.1)],
-            });
-        }
-        let selected_scenario = selected_scenario
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-        let approved_price = selected_scenario
-            .approved_tender_price
-            .as_ref()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let cost_baseline = pricing_workspace
-            .baseline
-            .as_ref()
-            .filter(|baseline| baseline.baseline_id == row.8 && baseline.version == row.9)
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let cost_subject = ProductionCoordinationObservationSubject::ExpectedDeliveryCost;
-        let cost_value = canonical_coordination_observation_value(
-            cost_subject,
-            &ProductionCoordinationObservationValue::Amount {
-                value: cost_baseline.amount.clone(),
-                currency: cost_baseline.currency.clone(),
-            },
-        )
+        blockers.push(CoordinatedBidBaselineBlocker {
+            code: CoordinatedBidBaselineBlockerCode::ApprovedTenderPriceMissing,
+            summary: "No current Approved Tender Price is available.".into(),
+            references: Vec::new(),
+        });
+        return Ok(());
+    };
+    budget.check()?;
+    let pricing_workspace =
+        super::pricing::inspect_pricing_workspace_in_connection(connection, budget)?;
+    let selected_scenario = pricing_workspace
+        .scenarios
+        .iter()
+        .find(|scenario| scenario.pricing_scenario_id == row.0 && scenario.version == row.1);
+    let pricing_current = selected_scenario.is_some_and(|scenario| {
+        scenario.current
+            && scenario
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.current)
+            && scenario
+                .approved_tender_price
+                .as_ref()
+                .is_some_and(|price| price.current)
+    });
+    if row.7 != tender_revision || !pricing_current {
+        blockers.push(CoordinatedBidBaselineBlocker {
+            code: CoordinatedBidBaselineBlockerCode::StaleInput,
+            summary:
+                "The selected Approved Tender Price or one of its exact dependencies is stale."
+                    .into(),
+            references: vec![format!("{}:{}", row.0, row.1)],
+        });
+    }
+    let selected_scenario = selected_scenario
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+    let approved_price = selected_scenario
+        .approved_tender_price
+        .as_ref()
         .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        observations.push(FieldObservation {
-            subject: cost_subject,
-            scope: "global".into(),
-            value: cost_value,
-            reference: format!("{}:{}", row.8, row.9),
-            keyed: false,
-        });
-        let price_subject = ProductionCoordinationObservationSubject::ApprovedTenderPrice;
-        let price_value = canonical_coordination_observation_value(
-            price_subject,
-            &ProductionCoordinationObservationValue::Amount {
-                value: approved_price.amount.clone(),
-                currency: approved_price.currency.clone(),
-            },
-        )
+    let cost_baseline = pricing_workspace
+        .baseline
+        .as_ref()
+        .filter(|baseline| baseline.baseline_id == row.8 && baseline.version == row.9)
         .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        observations.push(FieldObservation {
-            subject: price_subject,
-            scope: "global".into(),
-            value: price_value,
-            reference: format!("{}:{}", row.0, row.1),
-            keyed: false,
-        });
-        bindings.push(CoordinatedBidBaselineBinding {
-            category: CoordinatedBidBaselineCategory::Commercial,
-            kind: CoordinatedBidBaselineBindingKind::PricedCostBaseline,
-            reference_id: row.8,
-            version: row.9,
-            manifest_sha256: row.10,
-            source: "priced_cost_baseline".into(),
-            summary: "Independently reviewed and EITL-approved expected delivery cost".into(),
-            supporting_review_id: Some(row.12),
-            approval_id: Some(row.11),
-        });
-        bindings.push(CoordinatedBidBaselineBinding {
-            category: CoordinatedBidBaselineCategory::Commercial,
-            kind: CoordinatedBidBaselineBindingKind::ApprovedTenderPrice,
-            reference_id: row.0,
-            version: row.1,
-            manifest_sha256: row.4,
-            source: "approved_tender_price".into(),
-            summary: "Exact selected and EITL-approved Final Price".into(),
-            supporting_review_id: None,
-            approval_id: Some(row.3),
-        });
-        bindings.push(CoordinatedBidBaselineBinding {
-            category: CoordinatedBidBaselineCategory::Commercial,
-            kind: CoordinatedBidBaselineBindingKind::CalculationManifest,
-            reference_id: row.5,
-            version: 1,
-            manifest_sha256: row.6,
-            source: "pricing_calculation".into(),
-            summary: "Controlled Final Price Calculation Manifest".into(),
-            supporting_review_id: None,
-            approval_id: None,
-        });
-        let strategy: Value = parse_canonical(&row.14)?;
-        let strategy_review_id = strategy
-            .get("input_review_id")
-            .and_then(Value::as_str)
+    let cost_subject = ProductionCoordinationObservationSubject::ExpectedDeliveryCost;
+    let cost_value = canonical_coordination_observation_value(
+        cost_subject,
+        &ProductionCoordinationObservationValue::Amount {
+            value: cost_baseline.amount.clone(),
+            currency: cost_baseline.currency.clone(),
+        },
+    )
+    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    observations.push(FieldObservation {
+        subject: cost_subject,
+        scope: "global".into(),
+        value: cost_value,
+        reference: format!("{}:{}", row.8, row.9),
+        keyed: false,
+    });
+    let price_subject = ProductionCoordinationObservationSubject::ApprovedTenderPrice;
+    let price_value = canonical_coordination_observation_value(
+        price_subject,
+        &ProductionCoordinationObservationValue::Amount {
+            value: approved_price.amount.clone(),
+            currency: approved_price.currency.clone(),
+        },
+    )
+    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    observations.push(FieldObservation {
+        subject: price_subject,
+        scope: "global".into(),
+        value: price_value,
+        reference: format!("{}:{}", row.0, row.1),
+        keyed: false,
+    });
+    bindings.push(CoordinatedBidBaselineBinding {
+        category: CoordinatedBidBaselineCategory::Commercial,
+        kind: CoordinatedBidBaselineBindingKind::PricedCostBaseline,
+        reference_id: row.8,
+        version: row.9,
+        manifest_sha256: row.10,
+        source: "priced_cost_baseline".into(),
+        summary: "Independently reviewed and EITL-approved expected delivery cost".into(),
+        supporting_review_id: Some(row.12),
+        approval_id: Some(row.11),
+    });
+    bindings.push(CoordinatedBidBaselineBinding {
+        category: CoordinatedBidBaselineCategory::Commercial,
+        kind: CoordinatedBidBaselineBindingKind::ApprovedTenderPrice,
+        reference_id: row.0,
+        version: row.1,
+        manifest_sha256: row.4,
+        source: "approved_tender_price".into(),
+        summary: "Exact selected and EITL-approved Final Price".into(),
+        supporting_review_id: None,
+        approval_id: Some(row.3),
+    });
+    bindings.push(CoordinatedBidBaselineBinding {
+        category: CoordinatedBidBaselineCategory::Commercial,
+        kind: CoordinatedBidBaselineBindingKind::CalculationManifest,
+        reference_id: row.5,
+        version: 1,
+        manifest_sha256: row.6,
+        source: "pricing_calculation".into(),
+        summary: "Controlled Final Price Calculation Manifest".into(),
+        supporting_review_id: None,
+        approval_id: None,
+    });
+    let strategy: Value = parse_canonical(&row.14)?;
+    let strategy_review_id = strategy
+        .get("input_review_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
+        .to_owned();
+    let commercial_appetite = strategy
+        .get("commercial_appetite")
+        .and_then(Value::as_str)
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let appetite_subject = ProductionCoordinationObservationSubject::CommercialAppetite;
+    let appetite_value = canonical_coordination_observation_value(
+        appetite_subject,
+        &ProductionCoordinationObservationValue::Text {
+            text: commercial_appetite.to_owned(),
+        },
+    )
+    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    observations.push(FieldObservation {
+        subject: appetite_subject,
+        scope: "global".into(),
+        value: appetite_value,
+        reference: row.13.clone(),
+        keyed: false,
+    });
+    for (field, category) in [
+        (
+            "qualifications",
+            CoordinatedBidBaselineCategory::Qualification,
+        ),
+        ("exclusions", CoordinatedBidBaselineCategory::Exclusion),
+    ] {
+        let values = strategy
+            .get(field)
+            .and_then(Value::as_array)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
-            .to_owned();
-        let commercial_appetite = strategy
-            .get("commercial_appetite")
-            .and_then(Value::as_str)
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let appetite_subject = ProductionCoordinationObservationSubject::CommercialAppetite;
-        let appetite_value = canonical_coordination_observation_value(
-            appetite_subject,
-            &ProductionCoordinationObservationValue::Text {
-                text: commercial_appetite.to_owned(),
-            },
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let subject = if field == "qualifications" {
+            ProductionCoordinationObservationSubject::ScopeQualification
+        } else {
+            ProductionCoordinationObservationSubject::ScopeExclusion
+        };
+        let value = canonical_coordination_observation_value(
+            subject,
+            &ProductionCoordinationObservationValue::TextSet { values },
         )
         .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
         observations.push(FieldObservation {
-            subject: appetite_subject,
+            subject,
             scope: "global".into(),
-            value: appetite_value,
+            value,
             reference: row.13.clone(),
             keyed: false,
         });
-        for (field, category) in [
-            (
-                "qualifications",
-                CoordinatedBidBaselineCategory::Qualification,
-            ),
-            ("exclusions", CoordinatedBidBaselineCategory::Exclusion),
-        ] {
-            let values = strategy
-                .get(field)
-                .and_then(Value::as_array)
-                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
-                .iter()
-                .map(|value| {
-                    value
-                        .as_str()
-                        .map(str::to_owned)
-                        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let subject = if field == "qualifications" {
-                ProductionCoordinationObservationSubject::ScopeQualification
-            } else {
-                ProductionCoordinationObservationSubject::ScopeExclusion
-            };
-            let value = canonical_coordination_observation_value(
-                subject,
-                &ProductionCoordinationObservationValue::TextSet { values },
-            )
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-            observations.push(FieldObservation {
-                subject,
-                scope: "global".into(),
-                value,
-                reference: row.13.clone(),
-                keyed: false,
-            });
-            bindings.push(CoordinatedBidBaselineBinding {
-                category,
-                kind: CoordinatedBidBaselineBindingKind::CommercialStrategy,
-                reference_id: row.13.clone(),
-                version: 1,
-                manifest_sha256: sha256_hex(row.14.as_bytes()),
-                source: "commercial_strategy".into(),
-                summary: format!("Approved commercial {field}"),
-                supporting_review_id: Some(strategy_review_id.clone()),
-                approval_id: Some(row.15.clone()),
-            });
-        }
-        let reconciled: bool = self
-            .connection
-            .query_row(
-                "SELECT EXISTS(
+        bindings.push(CoordinatedBidBaselineBinding {
+            category,
+            kind: CoordinatedBidBaselineBindingKind::CommercialStrategy,
+            reference_id: row.13.clone(),
+            version: 1,
+            manifest_sha256: sha256_hex(row.14.as_bytes()),
+            source: "commercial_strategy".into(),
+            summary: format!("Approved commercial {field}"),
+            supporting_review_id: Some(strategy_review_id.clone()),
+            approval_id: Some(row.15.clone()),
+        });
+    }
+    let reconciled: bool = connection
+        .query_row(
+            "SELECT EXISTS(
                    SELECT 1 FROM basis_of_estimate_heads AS heads
                    JOIN basis_of_estimate_versions AS versions
                      ON versions.basis_id = heads.basis_id
@@ -2021,54 +2206,62 @@ impl TenderStore {
                     AND approvals.basis_version = versions.version
                    WHERE versions.complete = 1 AND versions.reconciled = 1
                  )",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(sql_error)?;
-        if !reconciled {
-            blockers.push(CoordinatedBidBaselineBlocker {
-                code: CoordinatedBidBaselineBlockerCode::UnreconciledCalculation,
-                summary: "The current Basis of Estimate is not completely reconciled.".into(),
-                references: Vec::new(),
-            });
-        }
-        Ok(())
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if !reconciled {
+        blockers.push(CoordinatedBidBaselineBlocker {
+            code: CoordinatedBidBaselineBlockerCode::UnreconciledCalculation,
+            summary: "The current Basis of Estimate is not completely reconciled.".into(),
+            references: Vec::new(),
+        });
     }
+    Ok(())
+}
 
-    fn collect_capability_gap_blockers(
-        &self,
-        plan_id: &str,
-        plan_version: u32,
-        blockers: &mut Vec<CoordinatedBidBaselineBlocker>,
-    ) -> Result<(), TenderCommandError> {
-        let gaps_json: String = self
-            .connection
-            .query_row(
-                "SELECT capability_gaps_json FROM work_plan_versions
+fn collect_capability_gap_blockers_in_connection(
+    connection: &Connection,
+    plan_id: &str,
+    plan_version: u32,
+    blockers: &mut Vec<CoordinatedBidBaselineBlocker>,
+) -> Result<(), TenderCommandError> {
+    let gaps_json: String = connection
+        .query_row(
+            "SELECT capability_gaps_json FROM work_plan_versions
                  WHERE plan_id = ?1 AND version = ?2",
-                params![plan_id, plan_version],
-                |row| row.get(0),
-            )
-            .map_err(sql_error)?;
-        let gaps: Vec<Value> = parse_canonical(&gaps_json)?;
-        if gaps.len() > 32 {
-            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-        }
-        for gap in gaps {
-            let capability = gap
-                .get("capability")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown_capability");
-            blockers.push(CoordinatedBidBaselineBlocker {
-                code: CoordinatedBidBaselineBlockerCode::CapabilityGap,
-                summary: format!("Capability Gap remains open for {capability}."),
-                references: vec![capability.to_owned()],
-            });
-        }
-        Ok(())
+            params![plan_id, plan_version],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    let gaps: Vec<Value> = parse_canonical(&gaps_json)?;
+    if gaps.len() > 32 {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    for gap in gaps {
+        let capability = gap
+            .get("capability")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown_capability");
+        blockers.push(CoordinatedBidBaselineBlocker {
+            code: CoordinatedBidBaselineBlockerCode::CapabilityGap,
+            summary: format!("Capability Gap remains open for {capability}."),
+            references: vec![capability.to_owned()],
+        });
+    }
+    Ok(())
+}
+
+impl TenderStore {
+    pub(crate) fn coordinated_baseline_manifests_are_valid_with_check(
+        &self,
+        check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
+    ) -> Result<bool, TenderCommandError> {
+        check()?;
+        self.coordinated_baseline_lifecycle_is_valid_with_check(check)
     }
 
-    pub(crate) fn coordinated_baseline_manifests_are_valid_with_check(
+    fn coordinated_baseline_lifecycle_is_valid_with_check(
         &self,
         check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
     ) -> Result<bool, TenderCommandError> {
@@ -2335,7 +2528,21 @@ impl TenderStore {
                     {
                         return Ok(false);
                     }
-                    TenderLifecyclePhase::PackageProduction
+                    let stored_lifecycle = TenderLifecyclePhase::parse(
+                        &self
+                            .connection
+                            .query_row(
+                                "SELECT lifecycle_phase FROM tender WHERE singleton = 1",
+                                [],
+                                |row| row.get::<_, String>(0),
+                            )
+                            .map_err(sql_error)?,
+                    )?;
+                    if stored_lifecycle == TenderLifecyclePhase::FinalReview {
+                        stored_lifecycle
+                    } else {
+                        TenderLifecyclePhase::PackageProduction
+                    }
                 }
                 Some(CoordinatedBidBaselineDecision::Return)
                 | Some(CoordinatedBidBaselineDecision::Reject) => {

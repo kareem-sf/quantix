@@ -168,6 +168,11 @@ import type { InspectPackageProductionCommand } from "./bindings/InspectPackageP
 import type { InspectSubmissionArtifactContentCommand } from "./bindings/InspectSubmissionArtifactContentCommand";
 import type { PackageProductionGeneration } from "./bindings/PackageProductionGeneration";
 import type { SubmissionArtifactContent } from "./bindings/SubmissionArtifactContent";
+import type { AssembleSubmissionPackageCommand } from "./bindings/AssembleSubmissionPackageCommand";
+import type { InspectSubmissionPackageCommand } from "./bindings/InspectSubmissionPackageCommand";
+import type { InspectSubmissionPackageItemContentCommand } from "./bindings/InspectSubmissionPackageItemContentCommand";
+import type { SubmissionItemContent } from "./bindings/SubmissionItemContent";
+import type { SubmissionPackageVersion } from "./bindings/SubmissionPackageVersion";
 
 export function ensureQuantixSetup(): Promise<SetupOutcome> {
   return invoke<SetupOutcome>("ensure_quantix_setup");
@@ -993,6 +998,51 @@ export function inspectSubmissionArtifactContent(
   };
   return invoke<SubmissionArtifactContent>(
     "inspect_submission_artifact_content",
+    { command },
+  );
+}
+
+export function assembleSubmissionPackage(
+  tenderId: string,
+  generationId: string,
+  generationManifestSha256: string,
+): Promise<SubmissionPackageVersion> {
+  const command: AssembleSubmissionPackageCommand = {
+    tender_id: tenderId,
+    generation_id: generationId,
+    generation_manifest_sha256: generationManifestSha256,
+  };
+  return invoke<SubmissionPackageVersion>("assemble_submission_package", {
+    command,
+  });
+}
+
+export function inspectCurrentSubmissionPackage(
+  tenderId: string,
+): Promise<SubmissionPackageVersion | null> {
+  const command: InspectSubmissionPackageCommand = { tender_id: tenderId };
+  return invoke<SubmissionPackageVersion | null>(
+    "inspect_current_submission_package",
+    { command },
+  );
+}
+
+export function inspectSubmissionPackageItemContent(
+  tenderId: string,
+  packageId: string,
+  version: number,
+  manifestSha256: string,
+  itemId: string,
+): Promise<SubmissionItemContent> {
+  const command: InspectSubmissionPackageItemContentCommand = {
+    tender_id: tenderId,
+    package_id: packageId,
+    version,
+    manifest_sha256: manifestSha256,
+    item_id: itemId,
+  };
+  return invoke<SubmissionItemContent>(
+    "inspect_submission_package_item_content",
     { command },
   );
 }

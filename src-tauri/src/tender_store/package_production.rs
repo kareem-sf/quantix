@@ -124,14 +124,43 @@ pub struct GenerationRequirement {
     pub envelope_key: String,
     pub language: String,
     pub authoring_mode: GenerationAuthoringMode,
+    pub availability: GenerationRequirementAvailability,
     pub generated_artifact: Option<SubmissionGeneratedArtifactReference>,
     pub unchanged_source_artifact: Option<SubmissionSourceArtifactReference>,
-    pub content_sha256: String,
-    pub size_bytes: u64,
+    pub content_sha256: Option<String>,
+    pub size_bytes: Option<u64>,
     pub calculation_references: Vec<String>,
     pub review_references: Vec<String>,
     pub decision_references: Vec<String>,
     pub manifest_sha256: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum GenerationRequirementAvailability {
+    Available,
+    Missing,
+    Unsupported,
+}
+
+impl GenerationRequirementAvailability {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Missing => "missing",
+            Self::Unsupported => "unsupported",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, TenderCommandError> {
+        match value {
+            "available" => Ok(Self::Available),
+            "missing" => Ok(Self::Missing),
+            "unsupported" => Ok(Self::Unsupported),
+            _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -216,10 +245,11 @@ struct RequirementManifest {
     envelope_key: String,
     language: String,
     authoring_mode: GenerationAuthoringMode,
+    availability: GenerationRequirementAvailability,
     generated_artifact: Option<SubmissionGeneratedArtifactReference>,
     unchanged_source_artifact: Option<SubmissionSourceArtifactReference>,
-    content_sha256: String,
-    size_bytes: u64,
+    content_sha256: Option<String>,
+    size_bytes: Option<u64>,
     calculation_references: Vec<String>,
     review_references: Vec<String>,
     decision_references: Vec<String>,
@@ -339,12 +369,13 @@ struct StoredRequirementRow {
     envelope_key: String,
     language: String,
     authoring_mode: String,
+    availability: String,
     generated_artifact_id: Option<String>,
     generated_artifact_version: Option<u32>,
     source_artifact_id: Option<String>,
     source_artifact_version: Option<u32>,
-    content_sha256: String,
-    size_bytes: i64,
+    content_sha256: Option<String>,
+    size_bytes: Option<i64>,
     calculation_references_json: String,
     review_references_json: String,
     decision_references_json: String,
@@ -419,6 +450,64 @@ impl QuantixHost {
 }
 
 impl TenderStore {
+    pub(crate) fn load_exact_current_package_production_generation_in_transaction(
+        transaction: &Transaction<'_>,
+        generation: &PackageProductionGeneration,
+    ) -> Result<(), TenderCommandError> {
+        let row: (u32, String, u32, String, String, String, String) = transaction
+            .query_row(
+                "SELECT generation_sequence, baseline_id, baseline_version,
+                        baseline_manifest_sha256, artifact_versions_json, requirements_json,
+                        manifest_json
+                 FROM submission_generations
+                 WHERE generation_id = ?1 AND manifest_sha256 = ?2
+                   AND generation_sequence = (SELECT MAX(generation_sequence) FROM submission_generations)",
+                params![generation.generation_id, generation.manifest_sha256],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+            )
+            .optional()
+            .map_err(sql_error)?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let manifest: GenerationManifest = parse_canonical(&row.6)?;
+        if row.0 != generation.sequence
+            || row.1 != generation.baseline_id
+            || row.2 != generation.baseline_version
+            || row.3 != generation.baseline_manifest_sha256
+            || parse_canonical::<Vec<SubmissionArtifactVersion>>(&row.4)?
+                != generation.artifact_versions
+            || parse_canonical::<Vec<GenerationRequirement>>(&row.5)? != generation.requirements
+            || manifest.generation_id != generation.generation_id
+            || manifest.sequence != generation.sequence
+            || manifest.artifact_versions != generation.artifact_versions
+            || manifest.requirements != generation.requirements
+            || sha256_hex(row.6.as_bytes()) != generation.manifest_sha256
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn load_exact_current_package_production_generation(
+        &self,
+        generation_id: &str,
+        manifest_sha256: &str,
+        budget: BidPackageOperationBudget,
+    ) -> Result<PackageProductionGeneration, TenderCommandError> {
+        budget.check()?;
+        if !self.package_production_manifests_are_valid_with_check(&mut || budget.check())? {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let generation = self
+            .inspect_package_production(budget)?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if generation.generation_id != generation_id
+            || generation.manifest_sha256 != manifest_sha256
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        Ok(generation)
+    }
+
     fn generate_submission_sections(
         &mut self,
         tender_id: &TenderId,
@@ -753,14 +842,17 @@ impl TenderStore {
             let manifest_json = canonical_json(&manifest)?;
             let ordinal = u32::try_from(index + 1)
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-            let size_bytes = i64::try_from(requirement.size_bytes)
+            let size_bytes = requirement
+                .size_bytes
+                .map(i64::try_from)
+                .transpose()
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
             transaction
                 .execute(
                     "INSERT INTO generation_requirements (
                        requirement_id, generation_id, ordinal, kind, record_id, record_version,
                        record_manifest_sha256, evidence_json, mandatory, section_key, package_path,
-                       envelope_key, language, authoring_mode, generated_artifact_id,
+                       envelope_key, language, authoring_mode, availability, generated_artifact_id,
                        generated_artifact_version,
                        source_artifact_id, source_artifact_version, content_sha256, size_bytes,
                        calculation_references_json, review_references_json,
@@ -768,7 +860,7 @@ impl TenderStore {
                        manifest_json, manifest_sha256, created_at
                      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
                                ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
-                               ?24, ?25, ?26, ?27)",
+                               ?24, ?25, ?26, ?27, ?28)",
                     params![
                         requirement.requirement_id,
                         generation_id,
@@ -784,6 +876,7 @@ impl TenderStore {
                         requirement.envelope_key,
                         requirement.language,
                         requirement.authoring_mode.as_str(),
+                        requirement.availability.as_str(),
                         requirement
                             .generated_artifact
                             .as_ref()
@@ -832,7 +925,7 @@ impl TenderStore {
         budget: BidPackageOperationBudget,
     ) -> Result<Option<PackageProductionGeneration>, TenderCommandError> {
         budget.check()?;
-        let row: Option<(
+        type StoredGenerationRow = (
             u32,
             String,
             String,
@@ -842,7 +935,8 @@ impl TenderStore {
             String,
             String,
             String,
-        )> = self
+        );
+        let row: Option<StoredGenerationRow> = self
             .connection
             .query_row(
                 "SELECT generation_sequence, generation_id, baseline_id, baseline_version,
@@ -1212,6 +1306,7 @@ impl TenderStore {
                                 requirements.mandatory, requirements.section_key,
                                 requirements.package_path, requirements.envelope_key,
                                 requirements.language, requirements.authoring_mode,
+                                requirements.availability,
                                 requirements.generated_artifact_id,
                                 requirements.generated_artifact_version,
                                 requirements.source_artifact_id,
@@ -1245,19 +1340,20 @@ impl TenderStore {
                                 envelope_key: row.get(11)?,
                                 language: row.get(12)?,
                                 authoring_mode: row.get(13)?,
-                                generated_artifact_id: row.get(14)?,
-                                generated_artifact_version: row.get(15)?,
-                                source_artifact_id: row.get(16)?,
-                                source_artifact_version: row.get(17)?,
-                                content_sha256: row.get(18)?,
-                                size_bytes: row.get(19)?,
-                                calculation_references_json: row.get(20)?,
-                                review_references_json: row.get(21)?,
-                                decision_references_json: row.get(22)?,
-                                authored_fields_json: row.get(23)?,
-                                manifest_json: row.get(24)?,
-                                manifest_sha256: row.get(25)?,
-                                created_at: row.get(26)?,
+                                availability: row.get(14)?,
+                                generated_artifact_id: row.get(15)?,
+                                generated_artifact_version: row.get(16)?,
+                                source_artifact_id: row.get(17)?,
+                                source_artifact_version: row.get(18)?,
+                                content_sha256: row.get(19)?,
+                                size_bytes: row.get(20)?,
+                                calculation_references_json: row.get(21)?,
+                                review_references_json: row.get(22)?,
+                                decision_references_json: row.get(23)?,
+                                authored_fields_json: row.get(24)?,
+                                manifest_json: row.get(25)?,
+                                manifest_sha256: row.get(26)?,
+                                created_at: row.get(27)?,
                             })
                         },
                     )
@@ -1270,6 +1366,11 @@ impl TenderStore {
                     return Ok(false);
                 };
                 let Ok(authoring_mode) = GenerationAuthoringMode::parse(&stored.authoring_mode)
+                else {
+                    return Ok(false);
+                };
+                let Ok(availability) =
+                    GenerationRequirementAvailability::parse(&stored.availability)
                 else {
                     return Ok(false);
                 };
@@ -1309,6 +1410,7 @@ impl TenderStore {
                     envelope_key: stored.envelope_key,
                     language: stored.language,
                     authoring_mode,
+                    availability,
                     generated_artifact: match (
                         stored.generated_artifact_id,
                         stored.generated_artifact_version,
@@ -1340,11 +1442,9 @@ impl TenderStore {
                         }
                     },
                     content_sha256: stored.content_sha256,
-                    size_bytes: match u64::try_from(stored.size_bytes) {
+                    size_bytes: match stored.size_bytes.map(u64::try_from).transpose() {
                         Ok(size_bytes) => size_bytes,
-                        Err(_) => {
-                            return Ok(false);
-                        }
+                        Err(_) => return Ok(false),
                     },
                     calculation_references,
                     review_references,
@@ -1516,9 +1616,6 @@ fn load_generation_requirement_drafts(
             requested_authoring_format: _,
             evidence,
         } = instruction;
-        if authoring_mode == GenerationAuthoringMode::Unsupported {
-            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
-        }
         validate_package_path(&package_path)?;
         if section_key.len() > 200 || envelope_key.len() > 200 || language.len() > 100 {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
@@ -1598,7 +1695,10 @@ fn build_artifact_candidates(
         Vec<&RecordRequirementDraft>,
     > = BTreeMap::new();
     for draft in drafts {
-        if draft.authoring_mode != GenerationAuthoringMode::UnchangedSource {
+        if matches!(
+            draft.authoring_mode,
+            GenerationAuthoringMode::Docx | GenerationAuthoringMode::Xlsx
+        ) {
             groups
                 .entry((
                     draft.section_key.clone(),
@@ -1610,13 +1710,6 @@ fn build_artifact_candidates(
                 .or_default()
                 .push(draft);
         }
-    }
-    if groups.is_empty()
-        && !drafts
-            .iter()
-            .any(|draft| draft.authoring_mode == GenerationAuthoringMode::UnchangedSource)
-    {
-        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
     }
     validate_unique_package_paths(connection, drafts)?;
     let approved_price = load_exact_bound_approved_price(connection, bindings)?;
@@ -1637,7 +1730,7 @@ fn build_artifact_candidates(
                 render_xlsx(&requirements, approved_price.as_ref(), budget)?
             }
             GenerationAuthoringMode::UnchangedSource => unreachable!(),
-            GenerationAuthoringMode::Unsupported => unreachable!(),
+            GenerationAuthoringMode::Unsupported => continue,
         };
         let staged_path = staging.join(sha256_hex(package_path.as_bytes()));
         fs::write(&staged_path, &bytes).map_err(store_unavailable)?;
@@ -1653,7 +1746,7 @@ fn build_artifact_candidates(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             }
             GenerationAuthoringMode::UnchangedSource => unreachable!(),
-            GenerationAuthoringMode::Unsupported => unreachable!(),
+            GenerationAuthoringMode::Unsupported => continue,
         };
         let mut exact_inputs = bindings
             .iter()
@@ -1799,6 +1892,9 @@ fn validate_unique_package_paths(
         );
     }
     for draft in drafts {
+        if draft.authoring_mode == GenerationAuthoringMode::Unsupported {
+            continue;
+        }
         let expected_extension = match draft.authoring_mode {
             GenerationAuthoringMode::Docx => Some("docx"),
             GenerationAuthoringMode::Xlsx => Some("xlsx"),
@@ -1849,10 +1945,21 @@ fn build_requirements(
 ) -> Result<Vec<GenerationRequirement>, TenderCommandError> {
     let mut requirements = Vec::new();
     for draft in drafts {
-        let (generated_artifact, unchanged_source_artifact, content_sha256, size_bytes) = if draft
-            .authoring_mode
-            == GenerationAuthoringMode::UnchangedSource
-        {
+        let (
+            availability,
+            generated_artifact,
+            unchanged_source_artifact,
+            content_sha256,
+            size_bytes,
+        ) = if draft.authoring_mode == GenerationAuthoringMode::Unsupported {
+            (
+                GenerationRequirementAvailability::Unsupported,
+                None,
+                None,
+                None,
+                None,
+            )
+        } else if draft.authoring_mode == GenerationAuthoringMode::UnchangedSource {
             let source_references = draft
                 .evidence
                 .iter()
@@ -1864,43 +1971,55 @@ fn build_requirements(
                 })
                 .collect::<BTreeSet<_>>();
             if source_references.len() != 1 {
-                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+                (
+                    GenerationRequirementAvailability::Missing,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            } else {
+                let (source_artifact_id, source_artifact_version) = source_references
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+                let source: (String, i64) = transaction
+                        .query_row(
+                            "SELECT sha256, size_bytes FROM source_artifact_versions
+                             WHERE artifact_id = ?1 AND version = ?2 AND registration_state = 'registered'",
+                            params![source_artifact_id, source_artifact_version],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
+                        )
+                        .map_err(sql_error)?;
+                (
+                    GenerationRequirementAvailability::Available,
+                    None,
+                    Some(SubmissionSourceArtifactReference {
+                        artifact_id: source_artifact_id,
+                        version: source_artifact_version,
+                    }),
+                    Some(source.0),
+                    Some(
+                        u64::try_from(source.1).map_err(|_| {
+                            TenderCommandError::new(TenderErrorCode::IntegrityFailed)
+                        })?,
+                    ),
+                )
             }
-            let (source_artifact_id, source_artifact_version) = source_references
-                .into_iter()
-                .next()
-                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-            let source: (String, i64) = transaction
-                    .query_row(
-                        "SELECT sha256, size_bytes FROM source_artifact_versions
-                         WHERE artifact_id = ?1 AND version = ?2 AND registration_state = 'registered'",
-                        params![source_artifact_id, source_artifact_version],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    )
-                    .map_err(sql_error)?;
-            (
-                None,
-                Some(SubmissionSourceArtifactReference {
-                    artifact_id: source_artifact_id,
-                    version: source_artifact_version,
-                }),
-                source.0,
-                u64::try_from(source.1)
-                    .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
-            )
         } else {
             let artifact = artifacts
                 .iter()
                 .find(|artifact| artifact.package_path == draft.package_path)
                 .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
             (
+                GenerationRequirementAvailability::Available,
                 Some(SubmissionGeneratedArtifactReference {
                     artifact_id: artifact.artifact_id.clone(),
                     version: artifact.version,
                 }),
                 None,
-                artifact.content_sha256.clone(),
-                artifact.size_bytes,
+                Some(artifact.content_sha256.clone()),
+                Some(artifact.size_bytes),
             )
         };
         let requirement_id = sha256_hex(
@@ -1925,6 +2044,7 @@ fn build_requirements(
             envelope_key: draft.envelope_key.clone(),
             language: draft.language.clone(),
             authoring_mode: draft.authoring_mode,
+            availability,
             generated_artifact: generated_artifact.clone(),
             unchanged_source_artifact: unchanged_source_artifact.clone(),
             content_sha256: content_sha256.clone(),
@@ -1945,6 +2065,7 @@ fn build_requirements(
             envelope_key: draft.envelope_key.clone(),
             language: draft.language.clone(),
             authoring_mode: draft.authoring_mode,
+            availability,
             generated_artifact,
             unchanged_source_artifact,
             content_sha256,
@@ -2252,6 +2373,7 @@ fn requirement_manifest_from_view(requirement: &GenerationRequirement) -> Requir
         envelope_key: requirement.envelope_key.clone(),
         language: requirement.language.clone(),
         authoring_mode: requirement.authoring_mode,
+        availability: requirement.availability,
         generated_artifact: requirement.generated_artifact.clone(),
         unchanged_source_artifact: requirement.unchanged_source_artifact.clone(),
         content_sha256: requirement.content_sha256.clone(),

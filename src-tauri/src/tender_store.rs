@@ -44,9 +44,12 @@ mod external_rfis;
 mod package_production;
 mod pricing;
 mod production_scheduler;
+mod submission_packages;
 mod team_composer;
 mod tender_queries;
 mod tender_records;
+
+pub(crate) use coordinated_baselines::exact_approved_coordinated_baseline_is_current_in_connection;
 
 pub use backups::{
     CreateTenderBackupCommand, PrepareTenderRecoveryCommand, ResolveTenderRecoveryCommand,
@@ -130,10 +133,11 @@ pub use external_rfis::{
     ReviseExternalRfiDraftCommand, RunExternalRfiReviewCommand,
 };
 pub use package_production::{
-    GenerateSubmissionSectionsCommand, GenerationRequirement, GenerationRequirementRecordReference,
-    InspectPackageProductionCommand, InspectSubmissionArtifactContentCommand,
-    PackageProductionGeneration, SubmissionArtifactContent, SubmissionArtifactVersion,
-    SubmissionGeneratedArtifactReference, SubmissionSourceArtifactReference,
+    GenerateSubmissionSectionsCommand, GenerationRequirement, GenerationRequirementAvailability,
+    GenerationRequirementRecordReference, InspectPackageProductionCommand,
+    InspectSubmissionArtifactContentCommand, PackageProductionGeneration,
+    SubmissionArtifactContent, SubmissionArtifactVersion, SubmissionGeneratedArtifactReference,
+    SubmissionSourceArtifactReference,
 };
 pub use pricing::{
     ApproveCommercialStrategyCommand, ApprovePricedCostBaselineCommand,
@@ -158,6 +162,18 @@ pub use production_scheduler::{
     ProductionReview, ProductionReviewFinding, ProductionReviewResult, ProductionTaskInspection,
     ProductionTaskReviewInspection, ProductionTaskRunResult, ProductionTaskState,
     RunProductionTaskCommand, TenderProductionInspection,
+};
+pub use submission_packages::{
+    AssembleSubmissionPackageCommand, InspectSubmissionPackageCommand,
+    InspectSubmissionPackageItemContentCommand, SubmissionAuthorshipProvenance,
+    SubmissionContributionKind, SubmissionCoverageBlocker, SubmissionCoverageBlockerCode,
+    SubmissionCoverageDisposition, SubmissionCoverageRow, SubmissionItemContent,
+    SubmissionItemSource, SubmissionPackageAssessment, SubmissionPackageCurrentnessCode,
+    SubmissionPackageCurrentnessFact, SubmissionPackageDependency, SubmissionPackageDependencyKind,
+    SubmissionPackageItem, SubmissionPackageSection, SubmissionPackageStatus,
+    SubmissionPackageVersion, SubmissionProfileVersionReference,
+    SubmissionSectionIndependenceContext, SubmissionSectionRiskContext,
+    SubmissionValidationContextInput, SubmissionWorkPlanContext,
 };
 pub use team_composer::{
     ComposeTenderOfficeCommand, DecideWorkPlanProposalCommand, MajorFindingPolicy,
@@ -190,7 +206,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 22;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 23;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -202,7 +218,7 @@ CREATE TABLE tender (
   current_revision INTEGER NOT NULL CHECK (current_revision > 0),
   lifecycle_phase TEXT NOT NULL CHECK (lifecycle_phase IN (
     'intake', 'bid_decision', 'tender_planning', 'active_production',
-    'integrated_review', 'change_assessment', 'package_production', 'declined'
+    'integrated_review', 'change_assessment', 'package_production', 'final_review', 'declined'
   )),
   created_at TEXT NOT NULL
 );
@@ -1065,7 +1081,7 @@ CREATE TABLE change_assessments (
   relationship_id TEXT NOT NULL UNIQUE,
   lifecycle_before TEXT NOT NULL CHECK (lifecycle_before IN (
     'intake', 'bid_decision', 'tender_planning', 'active_production',
-    'integrated_review', 'package_production'
+    'integrated_review', 'package_production', 'final_review'
   )),
   baseline_id TEXT,
   baseline_version INTEGER CHECK (baseline_version IS NULL OR baseline_version BETWEEN 1 AND 32),
@@ -1120,7 +1136,7 @@ CREATE TABLE change_assessment_decisions (
   acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
   lifecycle_after TEXT NOT NULL CHECK (lifecycle_after IN (
     'intake', 'bid_decision', 'tender_planning', 'active_production',
-    'integrated_review', 'package_production'
+    'integrated_review', 'package_production', 'final_review'
   )),
   manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
   manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
@@ -1629,7 +1645,8 @@ CREATE TABLE bid_decision_approval_invalidations (
   invalidated_by TEXT NOT NULL CHECK (invalidated_by = 'engineer_user'),
   acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
   lifecycle_before TEXT NOT NULL CHECK (lifecycle_before IN (
-    'tender_planning', 'active_production', 'integrated_review', 'package_production'
+    'tender_planning', 'active_production', 'integrated_review', 'package_production',
+    'final_review'
   )),
   lifecycle_after TEXT NOT NULL CHECK (lifecycle_after = 'bid_decision'),
   manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
@@ -2022,13 +2039,14 @@ CREATE TABLE generation_requirements (
   package_path TEXT NOT NULL CHECK (length(CAST(package_path AS BLOB)) BETWEEN 1 AND 1000),
   envelope_key TEXT NOT NULL CHECK (length(CAST(envelope_key AS BLOB)) BETWEEN 1 AND 200),
   language TEXT NOT NULL CHECK (length(CAST(language AS BLOB)) BETWEEN 1 AND 100),
-  authoring_mode TEXT NOT NULL CHECK (authoring_mode IN ('docx', 'xlsx', 'unchanged_source')),
+  authoring_mode TEXT NOT NULL CHECK (authoring_mode IN ('docx', 'xlsx', 'unchanged_source', 'unsupported')),
+  availability TEXT NOT NULL CHECK (availability IN ('available', 'missing', 'unsupported')),
   generated_artifact_id TEXT,
   generated_artifact_version INTEGER,
   source_artifact_id TEXT,
   source_artifact_version INTEGER,
-  content_sha256 TEXT NOT NULL CHECK (length(content_sha256) = 64),
-  size_bytes INTEGER NOT NULL CHECK (size_bytes BETWEEN 1 AND 16777216),
+  content_sha256 TEXT CHECK (content_sha256 IS NULL OR length(content_sha256) = 64),
+  size_bytes INTEGER CHECK (size_bytes IS NULL OR size_bytes BETWEEN 1 AND 16777216),
   calculation_references_json TEXT NOT NULL CHECK (json_valid(calculation_references_json)),
   review_references_json TEXT NOT NULL CHECK (json_valid(review_references_json)),
   decision_references_json TEXT NOT NULL CHECK (json_valid(decision_references_json)),
@@ -2045,12 +2063,130 @@ CREATE TABLE generation_requirements (
   FOREIGN KEY (source_artifact_id, source_artifact_version)
     REFERENCES source_artifact_versions(artifact_id, version),
   CHECK (
-    (generated_artifact_id IS NOT NULL AND generated_artifact_version IS NOT NULL
+    (availability = 'available' AND content_sha256 IS NOT NULL AND size_bytes IS NOT NULL
+      AND generated_artifact_id IS NOT NULL AND generated_artifact_version IS NOT NULL
       AND source_artifact_id IS NULL AND source_artifact_version IS NULL)
     OR
-    (generated_artifact_id IS NULL AND generated_artifact_version IS NULL
+    (availability = 'available' AND content_sha256 IS NOT NULL AND size_bytes IS NOT NULL
+      AND generated_artifact_id IS NULL AND generated_artifact_version IS NULL
       AND source_artifact_id IS NOT NULL AND source_artifact_version IS NOT NULL)
+    OR
+    (availability IN ('missing', 'unsupported') AND content_sha256 IS NULL AND size_bytes IS NULL
+      AND generated_artifact_id IS NULL AND generated_artifact_version IS NULL
+      AND source_artifact_id IS NULL AND source_artifact_version IS NULL)
   )
+);
+CREATE TABLE submission_packages (
+  singleton INTEGER NOT NULL UNIQUE CHECK (singleton = 1),
+  package_id TEXT PRIMARY KEY CHECK (length(package_id) = 32),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE submission_package_versions (
+  package_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 32),
+  status TEXT NOT NULL CHECK (status = 'proposed'),
+  assessment TEXT NOT NULL CHECK (assessment IN ('complete', 'blocked')),
+  tender_revision INTEGER NOT NULL CHECK (tender_revision > 0),
+  generation_id TEXT NOT NULL,
+  generation_sequence INTEGER NOT NULL CHECK (generation_sequence BETWEEN 1 AND 32),
+  generation_manifest_sha256 TEXT NOT NULL CHECK (length(generation_manifest_sha256) = 64),
+  baseline_id TEXT NOT NULL,
+  baseline_version INTEGER NOT NULL CHECK (baseline_version BETWEEN 1 AND 32),
+  baseline_manifest_sha256 TEXT NOT NULL CHECK (length(baseline_manifest_sha256) = 64),
+  baseline_approval_id TEXT NOT NULL CHECK (length(baseline_approval_id) = 32),
+  work_plan_json TEXT NOT NULL CHECK (json_valid(work_plan_json)),
+  calculation_references_json TEXT NOT NULL CHECK (json_valid(calculation_references_json)),
+  decision_references_json TEXT NOT NULL CHECK (json_valid(decision_references_json)),
+  deadline_json TEXT CHECK (deadline_json IS NULL OR json_valid(deadline_json)),
+  validation_context_inputs_json TEXT NOT NULL CHECK (json_valid(validation_context_inputs_json)),
+  validation_context_sha256 TEXT NOT NULL CHECK (length(validation_context_sha256) = 64),
+  dependency_currentness_sha256 TEXT NOT NULL CHECK (length(dependency_currentness_sha256) = 64),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (
+    json_valid(manifest_json) AND length(CAST(manifest_json AS BLOB)) <= 8388608
+  ),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (package_id, version),
+  FOREIGN KEY (package_id) REFERENCES submission_packages(package_id),
+  FOREIGN KEY (generation_id) REFERENCES submission_generations(generation_id),
+  FOREIGN KEY (baseline_id, baseline_version)
+    REFERENCES coordinated_bid_baseline_versions(baseline_id, version),
+  FOREIGN KEY (baseline_approval_id) REFERENCES coordinated_bid_baseline_approvals(approval_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE submission_package_items (
+  package_id TEXT NOT NULL,
+  package_version INTEGER NOT NULL CHECK (package_version BETWEEN 1 AND 32),
+  ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 4096),
+  item_id TEXT NOT NULL CHECK (length(item_id) = 64),
+  package_path TEXT NOT NULL CHECK (length(CAST(package_path AS BLOB)) BETWEEN 1 AND 1000),
+  section_key TEXT NOT NULL CHECK (length(CAST(section_key AS BLOB)) BETWEEN 1 AND 200),
+  envelope_key TEXT NOT NULL CHECK (length(CAST(envelope_key AS BLOB)) BETWEEN 1 AND 200),
+  language TEXT NOT NULL CHECK (length(CAST(language AS BLOB)) BETWEEN 1 AND 100),
+  media_type TEXT NOT NULL CHECK (length(CAST(media_type AS BLOB)) BETWEEN 1 AND 200),
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('generated', 'unchanged_source')),
+  source_id TEXT NOT NULL CHECK (length(source_id) = 32),
+  source_version INTEGER NOT NULL CHECK (source_version > 0),
+  source_manifest_sha256 TEXT,
+  content_sha256 TEXT NOT NULL CHECK (length(content_sha256) = 64),
+  size_bytes INTEGER NOT NULL CHECK (size_bytes BETWEEN 1 AND 16777216),
+  content_integrity TEXT NOT NULL CHECK (length(CAST(content_integrity AS BLOB)) BETWEEN 1 AND 1000),
+  item_json TEXT NOT NULL CHECK (json_valid(item_json)),
+  PRIMARY KEY (package_id, package_version, item_id),
+  UNIQUE (package_id, package_version, ordinal),
+  UNIQUE (package_id, package_version, package_path),
+  FOREIGN KEY (package_id, package_version)
+    REFERENCES submission_package_versions(package_id, version)
+);
+CREATE TABLE submission_package_coverage (
+  package_id TEXT NOT NULL,
+  package_version INTEGER NOT NULL CHECK (package_version BETWEEN 1 AND 32),
+  ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 4096),
+  requirement_id TEXT NOT NULL CHECK (length(requirement_id) = 64),
+  disposition TEXT NOT NULL CHECK (disposition IN ('covered', 'missing', 'unsupported')),
+  item_id TEXT,
+  coverage_json TEXT NOT NULL CHECK (json_valid(coverage_json)),
+  PRIMARY KEY (package_id, package_version, requirement_id),
+  UNIQUE (package_id, package_version, ordinal),
+  FOREIGN KEY (package_id, package_version)
+    REFERENCES submission_package_versions(package_id, version),
+  FOREIGN KEY (package_id, package_version, item_id)
+    REFERENCES submission_package_items(package_id, package_version, item_id)
+);
+CREATE TABLE submission_package_sections (
+  package_id TEXT NOT NULL,
+  package_version INTEGER NOT NULL CHECK (package_version BETWEEN 1 AND 32),
+  ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 512),
+  section_key TEXT NOT NULL CHECK (length(CAST(section_key AS BLOB)) BETWEEN 1 AND 200),
+  envelope_key TEXT NOT NULL CHECK (length(CAST(envelope_key AS BLOB)) BETWEEN 1 AND 200),
+  language TEXT NOT NULL CHECK (length(CAST(language AS BLOB)) BETWEEN 1 AND 100),
+  section_json TEXT NOT NULL CHECK (json_valid(section_json)),
+  PRIMARY KEY (package_id, package_version, section_key, envelope_key, language),
+  UNIQUE (package_id, package_version, ordinal),
+  FOREIGN KEY (package_id, package_version)
+    REFERENCES submission_package_versions(package_id, version)
+);
+CREATE TABLE submission_package_uncovered_requirements (
+  package_id TEXT NOT NULL,
+  package_version INTEGER NOT NULL CHECK (package_version BETWEEN 1 AND 32),
+  ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 4096),
+  requirement_id TEXT NOT NULL CHECK (length(requirement_id) = 64),
+  section_key TEXT NOT NULL CHECK (length(CAST(section_key AS BLOB)) BETWEEN 1 AND 200),
+  envelope_key TEXT NOT NULL CHECK (length(CAST(envelope_key AS BLOB)) BETWEEN 1 AND 200),
+  language TEXT NOT NULL CHECK (length(CAST(language AS BLOB)) BETWEEN 1 AND 100),
+  requirement_json TEXT NOT NULL CHECK (json_valid(requirement_json)),
+  PRIMARY KEY (package_id, package_version, requirement_id),
+  UNIQUE (package_id, package_version, ordinal),
+  FOREIGN KEY (package_id, package_version)
+    REFERENCES submission_package_versions(package_id, version)
+);
+CREATE TABLE submission_package_head (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  package_id TEXT NOT NULL,
+  current_version INTEGER NOT NULL CHECK (current_version BETWEEN 1 AND 32),
+  FOREIGN KEY (package_id, current_version)
+    REFERENCES submission_package_versions(package_id, version)
 );
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
@@ -2488,6 +2624,20 @@ CREATE TRIGGER submission_artifact_heads_identity_immutable BEFORE UPDATE ON sub
 CREATE TRIGGER submission_artifact_heads_no_delete BEFORE DELETE ON submission_artifact_heads BEGIN SELECT RAISE(ABORT, 'Submission Artifact heads cannot be deleted'); END;
 CREATE TRIGGER generation_requirements_no_update BEFORE UPDATE ON generation_requirements BEGIN SELECT RAISE(ABORT, 'Generation Requirements are immutable'); END;
 CREATE TRIGGER generation_requirements_no_delete BEFORE DELETE ON generation_requirements BEGIN SELECT RAISE(ABORT, 'Generation Requirements are immutable'); END;
+CREATE TRIGGER submission_packages_no_update BEFORE UPDATE ON submission_packages BEGIN SELECT RAISE(ABORT, 'Submission Package identities are immutable'); END;
+CREATE TRIGGER submission_packages_no_delete BEFORE DELETE ON submission_packages BEGIN SELECT RAISE(ABORT, 'Submission Package identities are immutable'); END;
+CREATE TRIGGER submission_package_versions_no_update BEFORE UPDATE ON submission_package_versions BEGIN SELECT RAISE(ABORT, 'Submission Package Versions are immutable'); END;
+CREATE TRIGGER submission_package_versions_no_delete BEFORE DELETE ON submission_package_versions BEGIN SELECT RAISE(ABORT, 'Submission Package Versions are immutable'); END;
+CREATE TRIGGER submission_package_items_no_update BEFORE UPDATE ON submission_package_items BEGIN SELECT RAISE(ABORT, 'Submission Package Items are immutable'); END;
+CREATE TRIGGER submission_package_items_no_delete BEFORE DELETE ON submission_package_items BEGIN SELECT RAISE(ABORT, 'Submission Package Items are immutable'); END;
+CREATE TRIGGER submission_package_coverage_no_update BEFORE UPDATE ON submission_package_coverage BEGIN SELECT RAISE(ABORT, 'Submission Package Coverage is immutable'); END;
+CREATE TRIGGER submission_package_coverage_no_delete BEFORE DELETE ON submission_package_coverage BEGIN SELECT RAISE(ABORT, 'Submission Package Coverage is immutable'); END;
+CREATE TRIGGER submission_package_sections_no_update BEFORE UPDATE ON submission_package_sections BEGIN SELECT RAISE(ABORT, 'Submission Package Sections are immutable'); END;
+CREATE TRIGGER submission_package_sections_no_delete BEFORE DELETE ON submission_package_sections BEGIN SELECT RAISE(ABORT, 'Submission Package Sections are immutable'); END;
+CREATE TRIGGER submission_package_uncovered_requirements_no_update BEFORE UPDATE ON submission_package_uncovered_requirements BEGIN SELECT RAISE(ABORT, 'Submission Package Uncovered Requirements are immutable'); END;
+CREATE TRIGGER submission_package_uncovered_requirements_no_delete BEFORE DELETE ON submission_package_uncovered_requirements BEGIN SELECT RAISE(ABORT, 'Submission Package Uncovered Requirements are immutable'); END;
+CREATE TRIGGER submission_package_head_identity_immutable BEFORE UPDATE ON submission_package_head WHEN NEW.singleton != OLD.singleton OR NEW.package_id != OLD.package_id BEGIN SELECT RAISE(ABORT, 'Submission Package head identity is immutable'); END;
+CREATE TRIGGER submission_package_head_no_delete BEFORE DELETE ON submission_package_head BEGIN SELECT RAISE(ABORT, 'Submission Package head cannot be deleted'); END;
 CREATE TRIGGER source_artifacts_no_update
 BEFORE UPDATE ON source_artifacts
 BEGIN
@@ -3109,6 +3259,7 @@ pub enum TenderLifecyclePhase {
     IntegratedReview,
     ChangeAssessment,
     PackageProduction,
+    FinalReview,
     Declined,
 }
 
@@ -3122,6 +3273,7 @@ impl TenderLifecyclePhase {
             Self::IntegratedReview => "integrated_review",
             Self::ChangeAssessment => "change_assessment",
             Self::PackageProduction => "package_production",
+            Self::FinalReview => "final_review",
             Self::Declined => "declined",
         }
     }
@@ -3135,6 +3287,7 @@ impl TenderLifecyclePhase {
             "integrated_review" => Ok(Self::IntegratedReview),
             "change_assessment" => Ok(Self::ChangeAssessment),
             "package_production" => Ok(Self::PackageProduction),
+            "final_review" => Ok(Self::FinalReview),
             "declined" => Ok(Self::Declined),
             _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
         }
@@ -3858,6 +4011,9 @@ impl TenderStore {
         if !self.package_production_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
+        if !self.submission_package_manifests_are_valid_with_check(check)? {
+            return Ok(false);
+        }
         let mut statement = self
             .connection
             .prepare(
@@ -4030,6 +4186,7 @@ impl TenderStore {
                 | TenderLifecyclePhase::ActiveProduction
                 | TenderLifecyclePhase::IntegratedReview
                 | TenderLifecyclePhase::PackageProduction
+                | TenderLifecyclePhase::FinalReview
         ) {
             Some("lifecycle_closed")
         } else {

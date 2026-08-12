@@ -57,7 +57,7 @@ pub(crate) fn candidate(
             "The Tendering Manager signature is required.",
             "forms",
             "forms_submission",
-            "03-Forms/Signature-Form.docx",
+            "03-Forms/\u{0646}\u{0645}\u{0648}\u{0630}\u{062c}-Signature.docx",
             "English",
             "docx",
         ),
@@ -134,11 +134,28 @@ pub(crate) fn candidate(
         records[0]["generation_instruction"]["requested_authoring_format"] =
             serde_json::json!("fillable_pdf");
     }
+    if scenario == "record-extraction-submission-generation-all-unsupported" {
+        for record in &mut records {
+            record["generation_instruction"]["authoring_mode"] = serde_json::json!("unsupported");
+            record["generation_instruction"]["requested_authoring_format"] =
+                serde_json::json!("external_portal_template");
+        }
+    }
     if scenario == "record-extraction-submission-generation-path-collision" {
         records[0]["generation_instruction"]["package_path"] =
             serde_json::json!("01-Technical/Ｍaße.docx");
         records[1]["generation_instruction"]["package_path"] =
             serde_json::json!("01-technical/masse.docx");
+    }
+    if scenario == "record-extraction-submission-generation-missing" {
+        let exact_sources = data_view
+            .get("evidence")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("Submission Generation Evidence inventory")?
+            .iter()
+            .filter_map(|entry| entry.get("reference").cloned())
+            .collect::<Vec<_>>();
+        records[6]["generation_instruction"]["evidence"] = serde_json::Value::Array(exact_sources);
     }
     if scenario == "record-extraction-submission-generation-empty-material" {
         records[0]["fields"][0]["value"] = serde_json::Value::Null;

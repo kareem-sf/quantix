@@ -1981,7 +1981,7 @@ impl RecordDecisionCurrent for TenderRecordInspection {
 }
 
 fn validate_and_sort_decisions(
-    decisions: &mut Vec<PendingDecision>,
+    decisions: &mut [PendingDecision],
 ) -> Result<(), TenderCommandError> {
     if decisions.len() > MAX_COCKPIT_DECISIONS {
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
@@ -2015,6 +2015,9 @@ fn decision_status_from_gate(ready: bool, current: bool, awaiting_review: bool) 
     }
 }
 
+// Keeping the complete immutable decision snapshot explicit at each call site is
+// clearer than hiding its independent domain fields behind a positional builder.
+#[allow(clippy::too_many_arguments)]
 fn pending(
     kind: DecisionKind,
     title: String,

@@ -2093,22 +2093,32 @@ impl TenderStore {
         record_id: &str,
         version: u32,
     ) -> Result<TenderRecordInspection, TenderCommandError> {
-        self.inspect_tender_records_where(
-            "tender_record_versions.record_id = ?1 AND tender_record_versions.version = ?2",
-            params![record_id, version],
-        )?
-        .into_iter()
-        .next()
-        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::NotFound))
+        inspect_tender_record_version_in_connection(&self.connection, record_id, version)
     }
+}
 
-    fn inspect_tender_records_where<P: rusqlite::Params>(
-        &self,
-        predicate: &str,
-        params: P,
-    ) -> Result<Vec<TenderRecordInspection>, TenderCommandError> {
-        let sql = format!(
-            "SELECT tender_record_versions.record_id, tender_records.stable_key,
+pub(crate) fn inspect_tender_record_version_in_connection(
+    connection: &rusqlite::Connection,
+    record_id: &str,
+    version: u32,
+) -> Result<TenderRecordInspection, TenderCommandError> {
+    inspect_tender_records_where_in_connection(
+        connection,
+        "tender_record_versions.record_id = ?1 AND tender_record_versions.version = ?2",
+        params![record_id, version],
+    )?
+    .into_iter()
+    .next()
+    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::NotFound))
+}
+
+fn inspect_tender_records_where_in_connection<P: rusqlite::Params>(
+    connection: &rusqlite::Connection,
+    predicate: &str,
+    params: P,
+) -> Result<Vec<TenderRecordInspection>, TenderCommandError> {
+    let sql = format!(
+        "SELECT tender_record_versions.record_id, tender_records.stable_key,
                     tender_record_versions.version, tender_record_versions.kind,
                     tender_record_versions.title,
                     tender_record_versions.generation_instruction_json,
@@ -2121,266 +2131,258 @@ impl TenderStore {
              JOIN agent_runs ON agent_runs.run_id = tender_record_versions.author_run_id
              WHERE {predicate}
              ORDER BY tender_records.stable_key, tender_record_versions.version"
-        );
-        let mut statement = self.connection.prepare(&sql).map_err(sql_error)?;
-        let rows = statement
-            .query_map(params, |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, u32>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, String>(8)?,
-                    row.get::<_, String>(9)?,
-                    row.get::<_, String>(10)?,
-                ))
-            })
-            .map_err(sql_error)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(sql_error)?;
-        rows.into_iter()
-            .map(
-                |(
+    );
+    let mut statement = connection.prepare(&sql).map_err(sql_error)?;
+    let rows = statement
+        .query_map(params, |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u32>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, String>(10)?,
+            ))
+        })
+        .map_err(sql_error)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(sql_error)?;
+    rows.into_iter()
+        .map(
+            |(
+                record_id,
+                stable_key,
+                version,
+                kind,
+                title,
+                generation_instruction_json,
+                fields_json,
+                contradictions_json,
+                author_run_id,
+                author_profile_id,
+                created_at,
+            )| {
+                let kind = TenderRecordKind::parse(&kind)?;
+                let generation_instruction_candidate = generation_instruction_json
+                    .as_deref()
+                    .map(parse_canonical_json::<TenderRecordGenerationInstructionCandidate>)
+                    .transpose()?;
+                let field_candidates: Vec<TenderRecordFieldCandidate> =
+                    parse_canonical_json(&fields_json)?;
+                let contradiction_candidates: Vec<TenderRecordContradictionCandidate> =
+                    parse_canonical_json(&contradictions_json)?;
+                let references = field_candidates
+                    .iter()
+                    .flat_map(|field| field.evidence.iter().cloned())
+                    .chain(
+                        contradiction_candidates
+                            .iter()
+                            .flat_map(|contradiction| contradiction.evidence.iter().cloned()),
+                    )
+                    .chain(
+                        generation_instruction_candidate
+                            .iter()
+                            .flat_map(|instruction| instruction.evidence.iter().cloned()),
+                    )
+                    .collect::<HashSet<_>>();
+                let generation_instruction = generation_instruction_candidate
+                    .map(|instruction| {
+                        resolve_generation_instruction_in_connection(connection, instruction)
+                    })
+                    .transpose()?;
+                let fields = field_candidates
+                    .into_iter()
+                    .map(|field| resolve_record_field_in_connection(connection, field))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let contradictions = contradiction_candidates
+                    .into_iter()
+                    .map(|contradiction| {
+                        resolve_contradiction_in_connection(connection, contradiction)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let reviews = load_record_reviews(connection, &record_id, version)?;
+                let effective_review = reviews
+                    .iter()
+                    .rev()
+                    .find(|review| review.reviewer_kind == "engineer_user")
+                    .or_else(|| reviews.last());
+                let current_version: u32 = connection
+                    .query_row(
+                        "SELECT current_version FROM tender_record_heads WHERE record_id = ?1",
+                        [&record_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(sql_error)?;
+                let source_relationships = load_source_relationships(connection, &references)?;
+                let base_trust_class = if matches!(
+                    kind,
+                    TenderRecordKind::Assumption | TenderRecordKind::TenderQuery
+                ) {
+                    TenderRecordTrustClass::UnresolvedGap
+                } else if record_is_deterministic_fact(&fields, &contradictions) {
+                    TenderRecordTrustClass::DeterministicFact
+                } else {
+                    TenderRecordTrustClass::AiProposal
+                };
+                let source_invalidated = source_relationships.iter().any(|relationship| {
+                    references.iter().any(|reference| {
+                        reference.artifact_id == relationship.prior_artifact_id
+                            && reference.version == relationship.prior_version
+                    }) && !references.iter().any(|reference| {
+                        reference.artifact_id == relationship.replacement_artifact_id
+                            && reference.version == relationship.replacement_version
+                    })
+                });
+                let (verification_status, trust_class) = if version < current_version {
+                    (
+                        VerificationStatus::Superseded,
+                        if reviews.is_empty() {
+                            base_trust_class
+                        } else {
+                            TenderRecordTrustClass::PriorDecision
+                        },
+                    )
+                } else if source_invalidated {
+                    (
+                        VerificationStatus::Stale,
+                        if reviews.is_empty() {
+                            base_trust_class
+                        } else {
+                            TenderRecordTrustClass::PriorDecision
+                        },
+                    )
+                } else {
+                    match effective_review {
+                        Some(review) if review.outcome == TenderRecordReviewOutcome::Verified => (
+                            VerificationStatus::Verified,
+                            if review.reviewer_kind == "engineer_user" {
+                                TenderRecordTrustClass::EngineerVerified
+                            } else {
+                                TenderRecordTrustClass::Verified
+                            },
+                        ),
+                        Some(review) if review.outcome == TenderRecordReviewOutcome::Rejected => {
+                            (VerificationStatus::Rejected, base_trust_class)
+                        }
+                        Some(review)
+                            if review.outcome == TenderRecordReviewOutcome::ApprovedAssumption =>
+                        {
+                            (
+                                VerificationStatus::Verified,
+                                TenderRecordTrustClass::ApprovedAssumption,
+                            )
+                        }
+                        Some(_) => {
+                            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+                        }
+                        None => (VerificationStatus::Proposed, base_trust_class),
+                    }
+                };
+                Ok(TenderRecordInspection {
                     record_id,
                     stable_key,
                     version,
                     kind,
                     title,
-                    generation_instruction_json,
-                    fields_json,
-                    contradictions_json,
+                    verification_status,
+                    trust_class,
+                    fields,
+                    generation_instruction,
+                    contradictions,
+                    source_relationships,
+                    reviews,
                     author_run_id,
                     author_profile_id,
                     created_at,
-                )| {
-                    let kind = TenderRecordKind::parse(&kind)?;
-                    let generation_instruction_candidate = generation_instruction_json
-                        .as_deref()
-                        .map(parse_canonical_json::<TenderRecordGenerationInstructionCandidate>)
-                        .transpose()?;
-                    let field_candidates: Vec<TenderRecordFieldCandidate> =
-                        parse_canonical_json(&fields_json)?;
-                    let contradiction_candidates: Vec<TenderRecordContradictionCandidate> =
-                        parse_canonical_json(&contradictions_json)?;
-                    let references = field_candidates
-                        .iter()
-                        .flat_map(|field| field.evidence.iter().cloned())
-                        .chain(
-                            contradiction_candidates
-                                .iter()
-                                .flat_map(|contradiction| contradiction.evidence.iter().cloned()),
-                        )
-                        .chain(
-                            generation_instruction_candidate
-                                .iter()
-                                .flat_map(|instruction| instruction.evidence.iter().cloned()),
-                        )
-                        .collect::<HashSet<_>>();
-                    let generation_instruction = generation_instruction_candidate
-                        .map(|instruction| self.resolve_generation_instruction(instruction))
-                        .transpose()?;
-                    let fields = field_candidates
-                        .into_iter()
-                        .map(|field| self.resolve_record_field(field))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let contradictions = contradiction_candidates
-                        .into_iter()
-                        .map(|contradiction| self.resolve_contradiction(contradiction))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let reviews = load_record_reviews(&self.connection, &record_id, version)?;
-                    let effective_review = reviews
-                        .iter()
-                        .rev()
-                        .find(|review| review.reviewer_kind == "engineer_user")
-                        .or_else(|| reviews.last());
-                    let current_version: u32 = self
-                        .connection
-                        .query_row(
-                            "SELECT current_version FROM tender_record_heads WHERE record_id = ?1",
-                            [&record_id],
-                            |row| row.get(0),
-                        )
-                        .map_err(sql_error)?;
-                    let source_relationships =
-                        load_source_relationships(&self.connection, &references)?;
-                    let base_trust_class = if matches!(
-                        kind,
-                        TenderRecordKind::Assumption | TenderRecordKind::TenderQuery
-                    ) {
-                        TenderRecordTrustClass::UnresolvedGap
-                    } else if record_is_deterministic_fact(&fields, &contradictions) {
-                        TenderRecordTrustClass::DeterministicFact
-                    } else {
-                        TenderRecordTrustClass::AiProposal
-                    };
-                    let source_invalidated = source_relationships.iter().any(|relationship| {
-                        references.iter().any(|reference| {
-                            reference.artifact_id == relationship.prior_artifact_id
-                                && reference.version == relationship.prior_version
-                        }) && !references.iter().any(|reference| {
-                            reference.artifact_id == relationship.replacement_artifact_id
-                                && reference.version == relationship.replacement_version
-                        })
-                    });
-                    let (verification_status, trust_class) = if version < current_version {
-                        (
-                            VerificationStatus::Superseded,
-                            if reviews.is_empty() {
-                                base_trust_class
-                            } else {
-                                TenderRecordTrustClass::PriorDecision
-                            },
-                        )
-                    } else if source_invalidated {
-                        (
-                            VerificationStatus::Stale,
-                            if reviews.is_empty() {
-                                base_trust_class
-                            } else {
-                                TenderRecordTrustClass::PriorDecision
-                            },
-                        )
-                    } else {
-                        match effective_review {
-                            Some(review)
-                                if review.outcome == TenderRecordReviewOutcome::Verified =>
-                            {
-                                (
-                                    VerificationStatus::Verified,
-                                    if review.reviewer_kind == "engineer_user" {
-                                        TenderRecordTrustClass::EngineerVerified
-                                    } else {
-                                        TenderRecordTrustClass::Verified
-                                    },
-                                )
-                            }
-                            Some(review)
-                                if review.outcome == TenderRecordReviewOutcome::Rejected =>
-                            {
-                                (VerificationStatus::Rejected, base_trust_class)
-                            }
-                            Some(review)
-                                if review.outcome
-                                    == TenderRecordReviewOutcome::ApprovedAssumption =>
-                            {
-                                (
-                                    VerificationStatus::Verified,
-                                    TenderRecordTrustClass::ApprovedAssumption,
-                                )
-                            }
-                            Some(_) => {
-                                return Err(TenderCommandError::new(
-                                    TenderErrorCode::IntegrityFailed,
-                                ));
-                            }
-                            None => (VerificationStatus::Proposed, base_trust_class),
-                        }
-                    };
-                    Ok(TenderRecordInspection {
-                        record_id,
-                        stable_key,
-                        version,
-                        kind,
-                        title,
-                        verification_status,
-                        trust_class,
-                        fields,
-                        generation_instruction,
-                        contradictions,
-                        source_relationships,
-                        reviews,
-                        author_run_id,
-                        author_profile_id,
-                        created_at,
-                    })
-                },
-            )
-            .collect()
-    }
+                })
+            },
+        )
+        .collect()
+}
 
-    fn resolve_generation_instruction(
-        &self,
-        instruction: TenderRecordGenerationInstructionCandidate,
-    ) -> Result<TenderRecordGenerationInstruction, TenderCommandError> {
-        Ok(TenderRecordGenerationInstruction {
-            kind: instruction.kind,
-            mandatory: instruction.mandatory,
-            section_key: instruction.section_key,
-            package_path: instruction.package_path,
-            envelope_key: instruction.envelope_key,
-            language: instruction.language,
-            authoring_mode: instruction.authoring_mode,
-            requested_authoring_format: instruction.requested_authoring_format,
-            evidence: instruction
-                .evidence
-                .into_iter()
-                .map(|reference| self.resolve_record_evidence(reference))
-                .collect::<Result<Vec<_>, _>>()?,
-        })
-    }
+fn resolve_generation_instruction_in_connection(
+    connection: &rusqlite::Connection,
+    instruction: TenderRecordGenerationInstructionCandidate,
+) -> Result<TenderRecordGenerationInstruction, TenderCommandError> {
+    Ok(TenderRecordGenerationInstruction {
+        kind: instruction.kind,
+        mandatory: instruction.mandatory,
+        section_key: instruction.section_key,
+        package_path: instruction.package_path,
+        envelope_key: instruction.envelope_key,
+        language: instruction.language,
+        authoring_mode: instruction.authoring_mode,
+        requested_authoring_format: instruction.requested_authoring_format,
+        evidence: instruction
+            .evidence
+            .into_iter()
+            .map(|reference| resolve_record_evidence_in_connection(connection, reference))
+            .collect::<Result<Vec<_>, _>>()?,
+    })
+}
 
-    fn resolve_record_field(
-        &self,
-        field: TenderRecordFieldCandidate,
-    ) -> Result<TenderRecordField, TenderCommandError> {
-        let basis_authority = match field.basis_kind {
-            TenderRecordBasisKind::EngineerEntry | TenderRecordBasisKind::CalculationRun => {
-                Some(load_record_authority(
-                    &self.connection,
-                    field
-                        .basis_reference
-                        .as_deref()
-                        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
-                )?)
-            }
-            _ => None,
-        };
-        Ok(TenderRecordField {
-            name: field.name,
-            value: field.value,
-            basis_kind: field.basis_kind,
-            basis_reference: field.basis_reference,
-            basis_description: field.basis_description,
-            basis_authority,
-            original_expression: field.original_expression,
-            normalized_value: field.normalized_value,
-            timezone: field.timezone,
-            uncertainty: field.uncertainty,
-            evidence: field
-                .evidence
-                .into_iter()
-                .map(|reference| self.resolve_record_evidence(reference))
-                .collect::<Result<Vec<_>, _>>()?,
-        })
-    }
+fn resolve_record_field_in_connection(
+    connection: &rusqlite::Connection,
+    field: TenderRecordFieldCandidate,
+) -> Result<TenderRecordField, TenderCommandError> {
+    let basis_authority = match field.basis_kind {
+        TenderRecordBasisKind::EngineerEntry | TenderRecordBasisKind::CalculationRun => {
+            Some(load_record_authority(
+                connection,
+                field
+                    .basis_reference
+                    .as_deref()
+                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            )?)
+        }
+        _ => None,
+    };
+    Ok(TenderRecordField {
+        name: field.name,
+        value: field.value,
+        basis_kind: field.basis_kind,
+        basis_reference: field.basis_reference,
+        basis_description: field.basis_description,
+        basis_authority,
+        original_expression: field.original_expression,
+        normalized_value: field.normalized_value,
+        timezone: field.timezone,
+        uncertainty: field.uncertainty,
+        evidence: field
+            .evidence
+            .into_iter()
+            .map(|reference| resolve_record_evidence_in_connection(connection, reference))
+            .collect::<Result<Vec<_>, _>>()?,
+    })
+}
 
-    fn resolve_contradiction(
-        &self,
-        contradiction: TenderRecordContradictionCandidate,
-    ) -> Result<TenderRecordContradiction, TenderCommandError> {
-        Ok(TenderRecordContradiction {
-            field_name: contradiction.field_name,
-            summary: contradiction.summary,
-            evidence: contradiction
-                .evidence
-                .into_iter()
-                .map(|reference| self.resolve_record_evidence(reference))
-                .collect::<Result<Vec<_>, _>>()?,
-        })
-    }
+fn resolve_contradiction_in_connection(
+    connection: &rusqlite::Connection,
+    contradiction: TenderRecordContradictionCandidate,
+) -> Result<TenderRecordContradiction, TenderCommandError> {
+    Ok(TenderRecordContradiction {
+        field_name: contradiction.field_name,
+        summary: contradiction.summary,
+        evidence: contradiction
+            .evidence
+            .into_iter()
+            .map(|reference| resolve_record_evidence_in_connection(connection, reference))
+            .collect::<Result<Vec<_>, _>>()?,
+    })
+}
 
-    fn resolve_record_evidence(
-        &self,
-        reference: TenderEvidenceReference,
-    ) -> Result<TenderRecordEvidence, TenderCommandError> {
-        let (package_path, location): (String, RawEvidenceLocation) = self
-            .connection
-            .query_row(
-                "SELECT source_artifacts.package_path,
+fn resolve_record_evidence_in_connection(
+    connection: &rusqlite::Connection,
+    reference: TenderEvidenceReference,
+) -> Result<TenderRecordEvidence, TenderCommandError> {
+    let (package_path, location): (String, RawEvidenceLocation) = connection
+        .query_row(
+            "SELECT source_artifacts.package_path,
                         evidence_locations.ordinal, evidence_locations.kind,
                         evidence_locations.structural_path, evidence_locations.provenance_json,
                         evidence_locations.section, evidence_locations.paragraph_number,
@@ -2393,18 +2395,17 @@ impl TenderStore {
                  WHERE evidence_locations.artifact_id = ?1
                    AND evidence_locations.version = ?2
                    AND evidence_locations.ordinal = ?3",
-                params![reference.artifact_id, reference.version, reference.ordinal],
-                |row| Ok((row.get(0)?, RawEvidenceLocation::read(row, 1)?)),
-            )
-            .optional()
-            .map_err(sql_error)?
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        Ok(TenderRecordEvidence {
-            reference,
-            package_path,
-            location: location.into_domain()?,
-        })
-    }
+            params![reference.artifact_id, reference.version, reference.ordinal],
+            |row| Ok((row.get(0)?, RawEvidenceLocation::read(row, 1)?)),
+        )
+        .optional()
+        .map_err(sql_error)?
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    Ok(TenderRecordEvidence {
+        reference,
+        package_path,
+        location: location.into_domain()?,
+    })
 }
 
 fn expanded_record_candidate_bytes(

@@ -11,10 +11,11 @@ use quantix_lib::{
     ApproveControlledBoqCalculationRunCommand, ApproveExternalRfiForIssueCommand,
     ApprovePricedCostBaselineCommand, ApprovePricingAdjustmentCommand,
     ApproveProductionFindingExceptionCommand, ApproveTenderPriceCommand,
-    AssembleCoordinatedBidBaselineCommand, BasisOfEstimateReviewOutcome, BasisOfEstimateVersion,
-    BidDecisionApprovalDecision, BidDecisionPackageInspection, BidDecisionPackageReviewOutcome,
-    BidRecommendationOutcome, BoqRowDisposition, CalculationDecimalInput, CalculationInputState,
-    CalculationRoundingMode, CalculationRuleReviewOutcome, ChangeAssessmentClassification,
+    AssembleCoordinatedBidBaselineCommand, AssembleSubmissionPackageCommand,
+    BasisOfEstimateReviewOutcome, BasisOfEstimateVersion, BidDecisionApprovalDecision,
+    BidDecisionPackageInspection, BidDecisionPackageReviewOutcome, BidRecommendationOutcome,
+    BoqRowDisposition, CalculationDecimalInput, CalculationInputState, CalculationRoundingMode,
+    CalculationRuleReviewOutcome, ChangeAssessmentClassification,
     ChangeAssessmentImpactConsequence, ChangeAssessmentImpactKind, ChangeAssessmentObjectKind,
     ChangeAssessmentStatus, ComplianceDisposition, ComplianceDispositionUpdate,
     ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand, ControlledBoqCalculationStatus,
@@ -29,13 +30,14 @@ use quantix_lib::{
     DecisionAction, DecisionFactKind, DecisionKind, DecisionStatus, DecisionTargetKind,
     DesignateBoqTableCommand, DeviceProtection, ExchangeRateType, ExportApprovedExternalRfiCommand,
     ExternalRfiQueryReference, ExternalRfiRecipient, GenerateSubmissionSectionsCommand,
-    GenerationAuthoringMode, GenerationRequirementKind, ImportTenderPackageCommand,
-    InspectBidDecisionApprovalHistoryCommand, InspectCalculationWorkspaceCommand,
-    InspectChangeAssessmentsCommand, InspectCoordinatedBidBaselinesCommand,
-    InspectDecisionCockpitCommand, InspectEstimateWorkspaceCommand,
-    InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
-    InspectPackageProductionCommand, InspectProductionTaskReviewCommand,
-    InspectSubmissionArtifactContentCommand, InspectTenderQueriesCommand,
+    GenerationAuthoringMode, GenerationRequirementAvailability, GenerationRequirementKind,
+    ImportTenderPackageCommand, InspectBidDecisionApprovalHistoryCommand,
+    InspectCalculationWorkspaceCommand, InspectChangeAssessmentsCommand,
+    InspectCoordinatedBidBaselinesCommand, InspectDecisionCockpitCommand,
+    InspectEstimateWorkspaceCommand, InspectExternalRfiResponseCandidatesCommand,
+    InspectExternalRfisCommand, InspectPackageProductionCommand,
+    InspectProductionTaskReviewCommand, InspectSubmissionArtifactContentCommand,
+    InspectSubmissionPackageItemContentCommand, InspectTenderQueriesCommand,
     InterpretExternalRfiResponseCommand, InvalidateBidDecisionApprovalCommand, MajorFindingPolicy,
     ManagerCapabilityDemandInput, ParseSourceArtifactCommand, PrepareTenderRecoveryCommand,
     PricedCostBaselineReviewOutcome, PricingAdjustmentDirection, PricingAdjustmentKind,
@@ -49,9 +51,11 @@ use quantix_lib::{
     RunPricedCostBaselineReviewCommand, RunPricingAdjustmentReviewCommand,
     RunProductionTaskCommand, RunTenderRecordExtractionCommand, RuntimeLayout,
     SelectPricingScenarioCommand, SetupPlatform, SetupState, SourceRelationshipKind,
-    StoragePermissions, TenderErrorCode, TenderEvidenceReference, TenderIntegrityState,
-    TenderLifecyclePhase, TenderQuery, TenderQueryTreatment, TenderQueryTreatmentProposalInput,
-    TenderQueryType, TenderRecordEngineerDecisionKind, TenderRecordInspection, TenderRecordKind,
+    StoragePermissions, SubmissionCoverageDisposition, SubmissionItemSource,
+    SubmissionPackageAssessment, SubmissionPackageCurrentnessCode, SubmissionPackageStatus,
+    TenderErrorCode, TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase,
+    TenderQuery, TenderQueryTreatment, TenderQueryTreatmentProposalInput, TenderQueryType,
+    TenderRecordEngineerDecisionKind, TenderRecordInspection, TenderRecordKind,
     TenderRecordVersionReference, VerificationStatus, WorkPlanDecision, WorkPlanRevisionAction,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
@@ -550,7 +554,7 @@ async fn package_production_publishes_typed_requirements_and_deterministic_offic
     assert!(form_xml.contains("Legal entity name"));
     assert!(form_xml.contains("اسم الكيان القانوني"));
     let signature = &first_bytes
-        .get("03-Forms/Signature-Form.docx")
+        .get("03-Forms/\u{0646}\u{0645}\u{0648}\u{0630}\u{062c}-Signature.docx")
         .expect("Tender-shaped signature form")
         .4;
     assert!(zip_part(signature, "word/document.xml").contains("signature is required"));
@@ -880,6 +884,570 @@ async fn package_production_publishes_typed_requirements_and_deterministic_offic
 }
 
 #[tokio::test]
+async fn submission_package_assembles_complete_coverage_into_one_canonical_version() {
+    let harness = Harness::new("record-extraction-submission-generation");
+    let baseline = approved_package_production(&harness).await;
+    let generation = harness
+        .host
+        .generate_submission_sections(GenerateSubmissionSectionsCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id.clone(),
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256.clone(),
+        })
+        .expect("generate the exact typed Package Production inventory");
+
+    let package = harness
+        .host
+        .assemble_submission_package(AssembleSubmissionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            generation_id: generation.generation_id.clone(),
+            generation_manifest_sha256: generation.manifest_sha256.clone(),
+        })
+        .expect("assemble one immutable Submission Package Version");
+
+    assert_eq!(package.version, 1);
+    assert_eq!(package.tender_revision, baseline.tender_revision);
+    assert_eq!(package.status, SubmissionPackageStatus::Proposed);
+    assert_eq!(package.assessment, SubmissionPackageAssessment::Complete);
+    assert!(package.current);
+    assert_eq!(package.generation_id, generation.generation_id);
+    assert_eq!(
+        package.generation_manifest_sha256,
+        generation.manifest_sha256
+    );
+    assert_eq!(package.baseline_id, baseline.baseline_id);
+    assert_eq!(package.baseline_version, baseline.version);
+    assert_eq!(package.baseline_manifest_sha256, baseline.manifest_sha256);
+    let manifest_text = std::str::from_utf8(&package.manifest_bytes)
+        .expect("canonical package manifest remains valid UTF-8");
+    assert!(manifest_text.contains("العربية"));
+    let manifest_value: serde_json::Value =
+        serde_json::from_slice(&package.manifest_bytes).expect("parse canonical package manifest");
+    assert!(
+        manifest_value.get("manifest_sha256").is_none(),
+        "the canonical manifest cannot contain its own digest"
+    );
+    assert_eq!(
+        serde_json_canonicalizer::to_string(&manifest_value)
+            .expect("independently canonicalize the package manifest")
+            .as_bytes(),
+        package.manifest_bytes,
+        "persist the exact RFC 8785 canonical UTF-8 bytes"
+    );
+    assert_eq!(
+        Sha256::digest(&package.manifest_bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
+        package.manifest_sha256
+    );
+    assert_eq!(package.coverage.len(), 7);
+    assert!(package.coverage.iter().all(|coverage| {
+        coverage.disposition == SubmissionCoverageDisposition::Covered
+            && coverage.item_id.is_some()
+            && coverage.blockers.is_empty()
+            && !coverage.requirement.evidence.is_empty()
+    }));
+    assert_eq!(
+        package
+            .coverage
+            .iter()
+            .map(|coverage| coverage.requirement.kind)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            GenerationRequirementKind::MandatoryRequirement,
+            GenerationRequirementKind::Deliverable,
+            GenerationRequirementKind::AddendumInstruction,
+            GenerationRequirementKind::Signature,
+            GenerationRequirementKind::FormField,
+            GenerationRequirementKind::ExecutionRequirement,
+            GenerationRequirementKind::RequiredFile,
+        ])
+    );
+    assert!(package.items.len() < package.coverage.len());
+    assert!(package.items.iter().all(|item| {
+        !item.requirement_ids.is_empty()
+            && !item.content_sha256.is_empty()
+            && item.size_bytes > 0
+            && !item.authorship.is_empty()
+            && !item.validation_context_sha256.is_empty()
+            && !item.validation_context_inputs.is_empty()
+    }));
+    assert_eq!(
+        package
+            .items
+            .iter()
+            .map(|item| item.package_path.as_str())
+            .collect::<BTreeSet<_>>(),
+        generation
+            .requirements
+            .iter()
+            .map(|requirement| requirement.package_path.as_str())
+            .collect::<BTreeSet<_>>()
+    );
+    assert!(package.items.iter().any(|item| {
+        item.package_path == "03-Forms/\u{0646}\u{0645}\u{0648}\u{0630}\u{062c}-Signature.docx"
+    }));
+    assert_eq!(
+        package
+            .sections
+            .iter()
+            .map(|section| section.envelope_key.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "commercial_submission",
+            "forms_submission",
+            "technical_submission",
+        ])
+    );
+    assert!(package.sections.iter().all(|section| {
+        !section.required_capabilities.is_empty()
+            && !section.risk_context.baseline_manifest_sha256.is_empty()
+            && !section
+                .independence_context
+                .author_profile_versions
+                .is_empty()
+            && !section
+                .independence_context
+                .authorized_profile_versions
+                .is_empty()
+    }));
+    assert!(!package.baseline_approval_id.is_empty());
+    assert!(!package.work_plan.plan_id.is_empty());
+    assert!(!package.work_plan.activation_id.is_empty());
+    assert!(!package.work_plan.authorized_profile_versions.is_empty());
+    assert!(!package.calculation_manifest_references.is_empty());
+    assert!(!package.current_decision_references.is_empty());
+    assert!(package.current_decision_references.iter().all(|reference| {
+        package.coverage.iter().any(|coverage| {
+            coverage
+                .requirement
+                .review_references
+                .contains(&reference.decision_id)
+                || coverage
+                    .requirement
+                    .decision_references
+                    .contains(&reference.decision_id)
+        })
+    }));
+    assert!(package.submission_deadline.is_some());
+    assert!(!package.validation_context_sha256.is_empty());
+    assert!(!package.manifest_sha256.is_empty());
+    assert_eq!(
+        Sha256::digest(&package.manifest_bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
+        package.manifest_sha256
+    );
+    for item in &package.items {
+        let content = harness
+            .host
+            .inspect_submission_package_item_content(InspectSubmissionPackageItemContentCommand {
+                tender_id: harness.tender_id.clone(),
+                package_id: package.package_id.clone(),
+                version: package.version,
+                manifest_sha256: package.manifest_sha256.clone(),
+                item_id: item.item_id.clone(),
+            })
+            .expect("inspect exact generated or unchanged-source package bytes");
+        assert_eq!(content.content_sha256, item.content_sha256);
+        assert_eq!(content.bytes.len() as u64, item.size_bytes);
+        assert_eq!(
+            Sha256::digest(&content.bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+            item.content_sha256
+        );
+    }
+    assert_eq!(
+        harness
+            .host
+            .assemble_submission_package(AssembleSubmissionPackageCommand {
+                tender_id: harness.tender_id.clone(),
+                generation_id: generation.generation_id.clone(),
+                generation_manifest_sha256: generation.manifest_sha256.clone(),
+            })
+            .expect("same exact inventory is idempotent after Final Review"),
+        package
+    );
+    assert_eq!(
+        harness
+            .host
+            .inspect_current_submission_package(&harness.tender_id)
+            .expect("inspect current Submission Package")
+            .expect("assembled package"),
+        package
+    );
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender(&harness.tender_id)
+            .expect("inspect Final Review transition")
+            .summary
+            .lifecycle_phase,
+        TenderLifecyclePhase::FinalReview
+    );
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close the assembled Final Review Tender");
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold-reconstruct the exact Submission Package in Final Review")
+            .state,
+        TenderIntegrityState::Ready
+    );
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let corruption = rusqlite::Connection::open(database)
+        .expect("open exact Submission Package corruption fixture");
+    corruption
+        .execute_batch("DROP TRIGGER submission_package_coverage_no_update")
+        .expect("disable coverage immutability only for the corruption probe");
+    corruption
+        .execute(
+            "UPDATE submission_package_coverage
+             SET coverage_json = json_set(coverage_json, '$.manual_validation_required', 1)
+             WHERE package_id = ?1 AND package_version = ?2 AND item_id IS NOT NULL",
+            rusqlite::params![package.package_id, package.version],
+        )
+        .expect("forge manual validation for a generated exact item");
+    drop(corruption);
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("reject forged coverage semantics after cold reconstruction")
+            .state,
+        TenderIntegrityState::RecoveryRequired
+    );
+}
+
+#[tokio::test]
+async fn submission_package_persists_unsupported_requirement_as_blocked_proposed_coverage() {
+    let harness = Harness::new("record-extraction-submission-generation-unsupported");
+    let baseline = approved_package_production(&harness).await;
+    let generation = harness
+        .host
+        .generate_submission_sections(GenerateSubmissionSectionsCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id,
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256,
+        })
+        .expect("publish a valid typed unsupported requirement without inventing content");
+    let package = harness
+        .host
+        .assemble_submission_package(AssembleSubmissionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            generation_id: generation.generation_id,
+            generation_manifest_sha256: generation.manifest_sha256,
+        })
+        .expect("persist the blocked Proposed package rather than losing coverage");
+    assert_eq!(package.status, SubmissionPackageStatus::Proposed);
+    assert_eq!(package.assessment, SubmissionPackageAssessment::Blocked);
+    assert!(package.coverage.iter().any(|row| {
+        row.disposition == SubmissionCoverageDisposition::Unsupported && !row.blockers.is_empty()
+    }));
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender(&harness.tender_id)
+            .expect("blocked package does not advance lifecycle")
+            .summary
+            .lifecycle_phase,
+        TenderLifecyclePhase::PackageProduction
+    );
+}
+
+#[tokio::test]
+async fn submission_package_persists_missing_requirement_as_blocked_proposed_coverage() {
+    let harness = Harness::new("record-extraction-submission-generation-missing");
+    let baseline = approved_package_production(&harness).await;
+    let generation = harness
+        .host
+        .generate_submission_sections(GenerateSubmissionSectionsCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id,
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256,
+        })
+        .expect("publish a valid typed missing requirement without inventing an item");
+    assert!(generation.requirements.iter().any(|requirement| {
+        requirement.availability == GenerationRequirementAvailability::Missing
+            && requirement.generated_artifact.is_none()
+            && requirement.unchanged_source_artifact.is_none()
+    }));
+    let package = harness
+        .host
+        .assemble_submission_package(AssembleSubmissionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            generation_id: generation.generation_id,
+            generation_manifest_sha256: generation.manifest_sha256,
+        })
+        .expect("persist a complete coverage matrix with the Missing row");
+    assert_eq!(package.assessment, SubmissionPackageAssessment::Blocked);
+    assert!(package.coverage.iter().any(|row| {
+        row.disposition == SubmissionCoverageDisposition::Missing
+            && row.item_id.is_none()
+            && row.blockers.len() == 1
+    }));
+}
+
+#[tokio::test]
+async fn submission_package_persists_all_unavailable_requirements_without_invented_items() {
+    let harness = Harness::new("record-extraction-submission-generation-all-unsupported");
+    let baseline = approved_package_production(&harness).await;
+    let generation = harness
+        .host
+        .generate_submission_sections(GenerateSubmissionSectionsCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id,
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256,
+        })
+        .expect("publish all unavailable requirements as typed inventory");
+    let package = harness
+        .host
+        .assemble_submission_package(AssembleSubmissionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            generation_id: generation.generation_id,
+            generation_manifest_sha256: generation.manifest_sha256,
+        })
+        .expect("persist coverage-only Proposed package");
+    assert!(package.items.is_empty());
+    assert_eq!(package.coverage.len(), generation.requirements.len());
+    assert_eq!(package.assessment, SubmissionPackageAssessment::Blocked);
+    assert!(package
+        .coverage
+        .iter()
+        .all(|row| row.disposition == SubmissionCoverageDisposition::Unsupported));
+}
+
+#[tokio::test]
+async fn stale_submission_package_keeps_exact_historical_item_bytes_inspectable() {
+    let harness = Harness::new("record-extraction-submission-generation");
+    let baseline = approved_package_production(&harness).await;
+    let generation = harness
+        .host
+        .generate_submission_sections(GenerateSubmissionSectionsCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id,
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256,
+        })
+        .expect("generate exact inventory before source replacement");
+    let package = harness
+        .host
+        .assemble_submission_package(AssembleSubmissionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            generation_id: generation.generation_id,
+            generation_manifest_sha256: generation.manifest_sha256,
+        })
+        .expect("assemble immutable package before source replacement");
+    let (item_id, prior_artifact_id, prior_version) = package
+        .items
+        .iter()
+        .find_map(|item| match &item.source {
+            SubmissionItemSource::UnchangedSource {
+                artifact_id,
+                version,
+                ..
+            } => Some((item.item_id.clone(), artifact_id.clone(), *version)),
+            SubmissionItemSource::Generated { .. } => None,
+        })
+        .expect("fixture includes an unchanged approved source item");
+    let original = harness
+        .host
+        .inspect_submission_package_item_content(InspectSubmissionPackageItemContentCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id.clone(),
+            version: package.version,
+            manifest_sha256: package.manifest_sha256.clone(),
+            item_id: item_id.clone(),
+        })
+        .expect("read exact immutable source bytes before replacement");
+
+    let irrelevant_root = harness._root.path().join("package-irrelevant-change");
+    fs::create_dir(&irrelevant_root).expect("irrelevant source directory");
+    fs::write(
+        irrelevant_root.join("prior-note.pdf"),
+        b"%PDF-1.7\nUNREFERENCED PRIOR NOTE\n%%EOF\n",
+    )
+    .expect("irrelevant prior fixture");
+    fs::write(
+        irrelevant_root.join("addendum-note.pdf"),
+        b"%PDF-1.7\nUNREFERENCED ADDENDUM NOTE\n%%EOF\n",
+    )
+    .expect("irrelevant addendum fixture");
+    let mut irrelevant = harness
+        .host
+        .import_tender_package(ImportTenderPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            source_path: irrelevant_root.to_string_lossy().into_owned(),
+        })
+        .expect("register irrelevant sources")
+        .documents;
+    irrelevant.sort_by(|left, right| left.package_path.cmp(&right.package_path));
+    for document in &irrelevant {
+        harness
+            .host
+            .parse_source_artifact(ParseSourceArtifactCommand {
+                tender_id: harness.tender_id.clone(),
+                artifact_id: document.artifact_id.clone(),
+                version: document.version,
+            })
+            .await
+            .expect("parse irrelevant source");
+    }
+    harness
+        .host
+        .confirm_source_relationship(ConfirmSourceRelationshipCommand {
+            tender_id: harness.tender_id.clone(),
+            prior_artifact_id: irrelevant[1].artifact_id.clone(),
+            prior_version: irrelevant[1].version,
+            replacement_artifact_id: irrelevant[0].artifact_id.clone(),
+            replacement_version: irrelevant[0].version,
+            relationship_kind: SourceRelationshipKind::Addendum,
+        })
+        .expect("open irrelevant assessment");
+    let irrelevant_assessment = harness
+        .host
+        .inspect_change_assessments(InspectChangeAssessmentsCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 4,
+        })
+        .expect("inspect irrelevant assessment")
+        .active
+        .expect("pending irrelevant assessment");
+    assert!(irrelevant_assessment.impacts.is_empty());
+    harness
+        .host
+        .decide_change_assessment(DecideChangeAssessmentCommand {
+            tender_id: harness.tender_id.clone(),
+            assessment_id: irrelevant_assessment.assessment_id,
+            assessment_manifest_sha256: irrelevant_assessment.manifest_sha256,
+            classification: ChangeAssessmentClassification::Irrelevant,
+            rationale: "The note has no typed dependency on the exact Submission Package.".into(),
+        })
+        .expect("resolve irrelevant assessment");
+    assert!(
+        harness
+            .host
+            .inspect_current_submission_package(&harness.tender_id)
+            .expect("inspect package after irrelevant assessment")
+            .expect("package remains visible")
+            .current
+    );
+
+    let replacement_root = harness._root.path().join("package-source-replacement");
+    fs::create_dir(&replacement_root).expect("replacement source directory");
+    fs::write(
+        replacement_root.join("conditions-replacement.pdf"),
+        b"%PDF-1.7\nTENDER_RECORD_GOLDEN\nMATERIAL REPLACEMENT\n%%EOF\n",
+    )
+    .expect("replacement PDF fixture");
+    let replacement = harness
+        .host
+        .import_tender_package(ImportTenderPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            source_path: replacement_root.to_string_lossy().into_owned(),
+        })
+        .expect("register replacement source")
+        .documents
+        .into_iter()
+        .next()
+        .expect("replacement source document");
+    harness
+        .host
+        .parse_source_artifact(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: replacement.artifact_id.clone(),
+            version: replacement.version,
+        })
+        .await
+        .expect("parse replacement source");
+    harness
+        .host
+        .confirm_source_relationship(ConfirmSourceRelationshipCommand {
+            tender_id: harness.tender_id.clone(),
+            prior_artifact_id,
+            prior_version,
+            replacement_artifact_id: replacement.artifact_id,
+            replacement_version: replacement.version,
+            relationship_kind: SourceRelationshipKind::Replacement,
+        })
+        .expect("open source replacement assessment");
+    let pending_stale = harness
+        .host
+        .inspect_current_submission_package(&harness.tender_id)
+        .expect("inspect package while the source replacement assessment is pending")
+        .expect("historical package remains visible during assessment");
+    assert!(!pending_stale.current);
+    assert!(pending_stale.currentness_facts.iter().any(|fact| {
+        fact.code == SubmissionPackageCurrentnessCode::ChangePending && !fact.current
+    }));
+    assert!(pending_stale.currentness_facts.iter().any(|fact| {
+        fact.code == SubmissionPackageCurrentnessCode::SourceChanged && !fact.current
+    }));
+    let assessment = harness
+        .host
+        .inspect_change_assessments(InspectChangeAssessmentsCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 4,
+        })
+        .expect("inspect package source assessment")
+        .active
+        .expect("pending package source assessment");
+    let decided =
+        harness
+            .host
+            .decide_change_assessment(DecideChangeAssessmentCommand {
+                tender_id: harness.tender_id.clone(),
+                assessment_id: assessment.assessment_id,
+                assessment_manifest_sha256: assessment.manifest_sha256,
+                classification: ChangeAssessmentClassification::Material,
+                rationale:
+                    "The replacement changes exact evidence bound through the approved baseline."
+                        .into(),
+            })
+            .expect("classify package source replacement as material");
+    assert!(decided
+        .impacts
+        .iter()
+        .any(|impact| impact.kind == ChangeAssessmentImpactKind::CoordinatedBaseline));
+
+    let stale = harness
+        .host
+        .inspect_current_submission_package(&harness.tender_id)
+        .expect("inspect stale immutable package")
+        .expect("package head remains reviewable");
+    assert!(!stale.current);
+    let historical = harness
+        .host
+        .inspect_submission_package_item_content(InspectSubmissionPackageItemContentCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id,
+            version: package.version,
+            manifest_sha256: package.manifest_sha256,
+            item_id,
+        })
+        .expect("historical item inspection remains currentness-independent");
+    assert_eq!(historical.bytes, original.bytes);
+    assert_eq!(historical.content_sha256, original.content_sha256);
+}
+
+#[tokio::test]
 async fn submission_instruction_rejects_evidence_without_authored_meaning() {
     let harness = Harness::new("record-extraction-submission-generation-empty-material");
     let evidence = harness.import_evidence().await;
@@ -954,34 +1522,41 @@ fn zip_part(bytes: &[u8], name: &str) -> String {
 }
 
 #[tokio::test]
-async fn package_production_refuses_unsupported_authoring_and_path_collisions() {
-    for scenario in [
-        "record-extraction-submission-generation-unsupported",
-        "record-extraction-submission-generation-path-collision",
-    ] {
-        let harness = Harness::new(scenario);
-        let baseline = approved_package_production(&harness).await;
-        assert_eq!(
-            harness
-                .host
-                .generate_submission_sections(GenerateSubmissionSectionsCommand {
-                    tender_id: harness.tender_id.clone(),
-                    baseline_id: baseline.baseline_id,
-                    baseline_version: baseline.version,
-                    baseline_manifest_sha256: baseline.manifest_sha256,
-                })
-                .expect_err("invalid authoring instruction publishes nothing")
-                .code,
-            TenderErrorCode::InvalidCommand
-        );
-        assert!(harness
+async fn package_production_preserves_unsupported_authoring_and_refuses_path_collisions() {
+    let unsupported = Harness::new("record-extraction-submission-generation-unsupported");
+    let baseline = approved_package_production(&unsupported).await;
+    let generation = unsupported
+        .host
+        .generate_submission_sections(GenerateSubmissionSectionsCommand {
+            tender_id: unsupported.tender_id.clone(),
+            baseline_id: baseline.baseline_id,
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256,
+        })
+        .expect("unsupported requirement remains visible without invented bytes");
+    assert!(generation.requirements.iter().any(|requirement| {
+        requirement.availability == GenerationRequirementAvailability::Unsupported
+            && requirement.generated_artifact.is_none()
+            && requirement.unchanged_source_artifact.is_none()
+            && requirement.content_sha256.is_none()
+            && requirement.size_bytes.is_none()
+    }));
+
+    let collision = Harness::new("record-extraction-submission-generation-path-collision");
+    let baseline = approved_package_production(&collision).await;
+    assert_eq!(
+        collision
             .host
-            .inspect_package_production(InspectPackageProductionCommand {
-                tender_id: harness.tender_id.clone(),
+            .generate_submission_sections(GenerateSubmissionSectionsCommand {
+                tender_id: collision.tender_id.clone(),
+                baseline_id: baseline.baseline_id,
+                baseline_version: baseline.version,
+                baseline_manifest_sha256: baseline.manifest_sha256,
             })
-            .expect("inspect unpublished Package Production")
-            .is_none());
-    }
+            .expect_err("conflicting normalized package paths publish nothing")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
 }
 
 struct ReadySetupPlatform;
@@ -1010,6 +1585,7 @@ struct Harness {
     codex: std::path::PathBuf,
     host: QuantixHost,
     tender_id: String,
+    agent_scenario: String,
 }
 
 impl Harness {
@@ -1037,6 +1613,7 @@ impl Harness {
             codex,
             host,
             tender_id: tender.tender_id,
+            agent_scenario: agent_scenario.into(),
         }
     }
 
@@ -1053,6 +1630,13 @@ impl Harness {
             b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
         )
         .expect("PDF fixture");
+        if self.agent_scenario == "record-extraction-submission-generation-missing" {
+            fs::write(
+                source.join("appendix.pdf"),
+                b"%PDF-1.7\nTENDER_RECORD_GOLDEN\nSECOND_SOURCE\n%%EOF\n",
+            )
+            .expect("second PDF fixture");
+        }
         let imported = self
             .host
             .import_tender_package(ImportTenderPackageCommand {
@@ -1060,30 +1644,40 @@ impl Harness {
                 source_path: source.to_string_lossy().into_owned(),
             })
             .expect("import package");
-        let document = imported.documents.first().expect("registered source");
-        self.host
-            .parse_source_artifact(ParseSourceArtifactCommand {
-                tender_id: self.tender_id.clone(),
-                artifact_id: document.artifact_id.clone(),
-                version: document.version,
-            })
-            .await
-            .expect("parse source");
-        self.host
-            .inspect_evidence(ParseSourceArtifactCommand {
-                tender_id: self.tender_id.clone(),
-                artifact_id: document.artifact_id.clone(),
-                version: document.version,
-            })
-            .expect("inspect Evidence")
-            .locations
-            .into_iter()
-            .map(|location| TenderEvidenceReference {
-                artifact_id: document.artifact_id.clone(),
-                version: document.version,
-                ordinal: location.ordinal,
-            })
-            .collect()
+        let documents = if self.agent_scenario == "record-extraction-submission-generation-missing"
+        {
+            imported.documents.as_slice()
+        } else {
+            &imported.documents[..1]
+        };
+        let mut evidence = Vec::new();
+        for document in documents {
+            self.host
+                .parse_source_artifact(ParseSourceArtifactCommand {
+                    tender_id: self.tender_id.clone(),
+                    artifact_id: document.artifact_id.clone(),
+                    version: document.version,
+                })
+                .await
+                .expect("parse source");
+            evidence.extend(
+                self.host
+                    .inspect_evidence(ParseSourceArtifactCommand {
+                        tender_id: self.tender_id.clone(),
+                        artifact_id: document.artifact_id.clone(),
+                        version: document.version,
+                    })
+                    .expect("inspect Evidence")
+                    .locations
+                    .into_iter()
+                    .map(|location| TenderEvidenceReference {
+                        artifact_id: document.artifact_id.clone(),
+                        version: document.version,
+                        ordinal: location.ordinal,
+                    }),
+            );
+        }
+        evidence
     }
 
     async fn extract_records(&self) -> Vec<TenderRecordInspection> {

@@ -2,11 +2,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { CoordinatedBidBaseline } from "./bindings/CoordinatedBidBaseline";
 import type { PackageProductionGeneration } from "./bindings/PackageProductionGeneration";
+import type { SubmissionDecisionReference } from "./bindings/SubmissionDecisionReference";
+import type { SubmissionPackageVersion } from "./bindings/SubmissionPackageVersion";
+import type { TenderLifecyclePhase } from "./bindings/TenderLifecyclePhase";
 import {
+  assembleSubmissionPackage,
   generateSubmissionSections,
   inspectCoordinatedBidBaselines,
+  inspectCurrentSubmissionPackage,
   inspectPackageProduction,
   inspectSubmissionArtifactContent,
+  inspectSubmissionPackageItemContent,
 } from "./quantixHost";
 
 interface PackageProductionPanelProps {
@@ -37,8 +43,13 @@ export function PackageProductionPanel({
   const [baseline, setBaseline] = useState<CoordinatedBidBaseline>();
   const [generation, setGeneration] =
     useState<PackageProductionGeneration | null>(null);
+  const [submissionPackage, setSubmissionPackage] =
+    useState<SubmissionPackageVersion | null>(null);
+  const [lifecyclePhase, setLifecyclePhase] = useState<TenderLifecyclePhase>();
+  const [selectedRequirementId, setSelectedRequirementId] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [assembling, setAssembling] = useState(false);
   const [loadedContent, setLoadedContent] = useState<
     Record<string, number | "loading" | "failed">
   >({});
@@ -49,19 +60,27 @@ export function PackageProductionPanel({
     const request = ++requestGeneration.current;
     setLoading(true);
     try {
-      const [baselines, production] = await Promise.all([
+      const [baselines, production, assembled] = await Promise.all([
         inspectCoordinatedBidBaselines(tenderId, null, 1),
         inspectPackageProduction(tenderId),
+        inspectCurrentSubmissionPackage(tenderId),
       ]);
       if (request !== requestGeneration.current) return;
       const exactApproved = baselines.items.find(
         (item) =>
           item.current &&
           item.approval?.decision === "approve" &&
-          baselines.lifecycle_phase === "package_production",
+          ["package_production", "final_review"].includes(
+            baselines.lifecycle_phase,
+          ),
       );
       setBaseline(exactApproved);
+      setLifecyclePhase(baselines.lifecycle_phase);
       setGeneration(production);
+      setSubmissionPackage(assembled);
+      setSelectedRequirementId(
+        assembled?.coverage[0]?.requirement.requirement_id,
+      );
     } catch {
       if (request === requestGeneration.current) reportCommandFailure();
     } finally {
@@ -89,6 +108,8 @@ export function PackageProductionPanel({
         baseline.manifest_sha256,
       );
       setGeneration(next);
+      setSubmissionPackage(null);
+      setSelectedRequirementId(undefined);
       onTenderStateChange();
     } catch {
       reportCommandFailure();
@@ -98,31 +119,121 @@ export function PackageProductionPanel({
     }
   }
 
-  const busy = loading || generating;
+  const busy = loading || generating || assembling;
 
-  async function loadExactBytes(
-    artifactId: string,
-    version: number,
-    manifestSha256: string,
-  ) {
-    const key = `${artifactId}:${version}`;
+  async function assemble() {
+    if (!generation || actionActive.current) return;
+    actionActive.current = true;
+    setAssembling(true);
+    try {
+      const next = await assembleSubmissionPackage(
+        tenderId,
+        generation.generation_id,
+        generation.manifest_sha256,
+      );
+      setSubmissionPackage(next);
+      setLifecyclePhase(
+        next.assessment === "complete" ? "final_review" : "package_production",
+      );
+      setSelectedRequirementId(next.coverage[0]?.requirement.requirement_id);
+      requestAnimationFrame(() =>
+        document.getElementById("submission-package-detail")?.focus(),
+      );
+      onTenderStateChange();
+    } catch {
+      reportCommandFailure();
+    } finally {
+      actionActive.current = false;
+      setAssembling(false);
+    }
+  }
+
+  async function loadContent(key: string, loader: () => Promise<number>) {
     setLoadedContent((current) => ({ ...current, [key]: "loading" }));
     try {
-      const content = await inspectSubmissionArtifactContent(
-        tenderId,
-        artifactId,
-        version,
-        manifestSha256,
-      );
+      const byteLength = await loader();
       setLoadedContent((current) => ({
         ...current,
-        [key]: content.bytes.length,
+        [key]: byteLength,
       }));
     } catch {
       reportCommandFailure();
       setLoadedContent((current) => ({ ...current, [key]: "failed" }));
     }
   }
+
+  async function loadExactBytes(
+    artifactId: string,
+    version: number,
+    manifestSha256: string,
+  ) {
+    await loadContent(`${artifactId}:${version}`, async () => {
+      const content = await inspectSubmissionArtifactContent(
+        tenderId,
+        artifactId,
+        version,
+        manifestSha256,
+      );
+      return content.bytes.length;
+    });
+  }
+
+  async function loadPackageItemBytes(itemId: string) {
+    if (!submissionPackage) return;
+    await loadContent(`package:${itemId}`, async () => {
+      const content = await inspectSubmissionPackageItemContent(
+        tenderId,
+        submissionPackage.package_id,
+        submissionPackage.version,
+        submissionPackage.manifest_sha256,
+        itemId,
+      );
+      return content.bytes.length;
+    });
+  }
+
+  function selectCoverage(requirementId: string) {
+    setSelectedRequirementId(requirementId);
+    requestAnimationFrame(() =>
+      document.getElementById("submission-package-detail")?.focus(),
+    );
+  }
+
+  function navigateDependency(referenceId: string) {
+    const target = submissionPackage?.coverage.find((coverage) => {
+      const requirement = coverage.requirement;
+      return [
+        ...requirement.calculation_references,
+        ...requirement.review_references,
+        ...requirement.decision_references,
+      ].some(
+        (reference) =>
+          reference === referenceId || reference.startsWith(`${referenceId}:`),
+      );
+    });
+    if (target) selectCoverage(target.requirement.requirement_id);
+  }
+
+  function exactDecisionSubject(
+    reference: SubmissionDecisionReference,
+  ): string | null {
+    const exactSubject = submissionPackage?.coverage.find(
+      ({ requirement }) =>
+        reference.subject_kind === "tender_record_version" &&
+        requirement.record.record_id === reference.subject_reference_id &&
+        requirement.record.version === reference.subject_version &&
+        requirement.record.manifest_sha256 ===
+          reference.subject_manifest_sha256,
+    );
+    return exactSubject?.requirement.requirement_id ?? null;
+  }
+
+  const selectedCoverage = submissionPackage?.coverage.find(
+    (coverage) => coverage.requirement.requirement_id === selectedRequirementId,
+  );
+  const selectedItem = submissionPackage?.items.find(
+    (item) => item.item_id === selectedCoverage?.item_id,
+  );
 
   return (
     <section
@@ -136,7 +247,12 @@ export function PackageProductionPanel({
         </div>
         <button
           type="button"
-          disabled={!runtimeReady || !baseline || busy}
+          disabled={
+            !runtimeReady ||
+            !baseline ||
+            lifecyclePhase !== "package_production" ||
+            busy
+          }
           onClick={() => void generate()}
         >
           {generating ? "Generating…" : "Generate exact sections"}
@@ -173,6 +289,15 @@ export function PackageProductionPanel({
           <p>
             Generation manifest <code>{generation.manifest_sha256}</code>
           </p>
+          <button
+            type="button"
+            disabled={
+              !runtimeReady || lifecyclePhase !== "package_production" || busy
+            }
+            onClick={() => void assemble()}
+          >
+            {assembling ? "Assembling…" : "Assemble exact package"}
+          </button>
           <div className="record-list">
             {generation.artifact_versions.map((artifact) => (
               <article
@@ -275,8 +400,14 @@ export function PackageProductionPanel({
                     <code>{requirement.record.manifest_sha256}</code>
                   </p>
                   <p>
-                    Content <code>{requirement.content_sha256}</code> /{" "}
-                    {requirement.size_bytes.toString()} bytes
+                    {requirement.availability === "available" ? (
+                      <>
+                        Content <code>{requirement.content_sha256}</code> /{" "}
+                        {requirement.size_bytes?.toString()} bytes
+                      </>
+                    ) : (
+                      `${humanize(requirement.availability)} — no package bytes were invented`
+                    )}
                   </p>
                   <p>
                     Requirement manifest{" "}
@@ -285,7 +416,9 @@ export function PackageProductionPanel({
                   <p>
                     {requirement.generated_artifact
                       ? `Generated Artifact ${requirement.generated_artifact.artifact_id} v${requirement.generated_artifact.version}`
-                      : `Unchanged Source Artifact ${requirement.unchanged_source_artifact?.artifact_id} v${requirement.unchanged_source_artifact?.version}`}
+                      : requirement.unchanged_source_artifact
+                        ? `Unchanged Source Artifact ${requirement.unchanged_source_artifact.artifact_id} v${requirement.unchanged_source_artifact.version}`
+                        : `${humanize(requirement.availability)} — no immutable source item`}
                   </p>
                   <dl>
                     {requirement.authored_fields.map((field) => (
@@ -369,6 +502,250 @@ export function PackageProductionPanel({
             : "No Submission Sections have been published."}
         </p>
       )}
+
+      {submissionPackage ? (
+        <article
+          className="record-card"
+          aria-labelledby="submission-package-title"
+        >
+          <p className="eyebrow">
+            {humanize(submissionPackage.status)} /{" "}
+            {humanize(submissionPackage.assessment)} Submission Package v
+            {submissionPackage.version}
+          </p>
+          <h3 id="submission-package-title">Canonical coverage manifest</h3>
+          <p>
+            Package <code>{submissionPackage.package_id}</code> / root{" "}
+            <code>{submissionPackage.manifest_sha256}</code>
+          </p>
+          <p>
+            Exact Generation {submissionPackage.generation_id} / approved
+            baseline {submissionPackage.baseline_id} v
+            {submissionPackage.baseline_version} / Work Plan{" "}
+            {submissionPackage.work_plan.plan_id} v
+            {submissionPackage.work_plan.plan_version}
+          </p>
+          <p role="status">
+            {submissionPackage.current
+              ? "This exact package is current."
+              : "This immutable package is stale and remains available for review."}
+          </p>
+          {!submissionPackage.current ? (
+            <ul aria-label="Submission package currentness">
+              {submissionPackage.currentness_facts
+                .filter((fact) => !fact.current)
+                .map((fact) => (
+                  <li key={`${fact.code}-${fact.reference_id}`}>
+                    {humanize(fact.code)}: {fact.reference_id} / expected{" "}
+                    <code>{fact.expected_value}</code>
+                  </li>
+                ))}
+            </ul>
+          ) : null}
+          <nav aria-label="Exact package dependencies">
+            {submissionPackage.calculation_manifest_references.map(
+              (reference) => (
+                <button
+                  key={`${reference.kind}-${reference.reference_id}-${reference.version}`}
+                  type="button"
+                  onClick={() => navigateDependency(reference.reference_id)}
+                >
+                  {humanize(reference.kind)} {reference.reference_id} v
+                  {reference.version} / <code>{reference.manifest_sha256}</code>
+                </button>
+              ),
+            )}
+            {submissionPackage.current_decision_references.map((reference) => {
+              const targetRequirementId = exactDecisionSubject(reference);
+              const key = `${reference.kind}-${reference.decision_id}-${reference.subject_kind}-${reference.subject_reference_id}-${reference.subject_version}`;
+              const label = (
+                <>
+                  {humanize(reference.kind)} {reference.decision_id} / subject{" "}
+                  {humanize(reference.subject_kind)}{" "}
+                  {reference.subject_reference_id} v{reference.subject_version}{" "}
+                  / <code>{reference.subject_manifest_sha256}</code>
+                </>
+              );
+              return targetRequirementId ? (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => selectCoverage(targetRequirementId)}
+                >
+                  {label}
+                </button>
+              ) : (
+                <span key={key}>{label}</span>
+              );
+            })}
+          </nav>
+          <div className="decision-cockpit-layout">
+            <nav aria-label="Submission requirement coverage">
+              <ul className="record-list">
+                {submissionPackage.coverage.map((coverage) => (
+                  <li key={coverage.requirement.requirement_id}>
+                    <button
+                      type="button"
+                      aria-current={
+                        selectedRequirementId ===
+                        coverage.requirement.requirement_id
+                          ? "true"
+                          : undefined
+                      }
+                      onClick={() =>
+                        selectCoverage(coverage.requirement.requirement_id)
+                      }
+                    >
+                      {humanize(coverage.requirement.kind)} —{" "}
+                      {humanize(coverage.disposition)}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+            {selectedCoverage ? (
+              <section
+                id="submission-package-detail"
+                tabIndex={-1}
+                aria-labelledby="submission-package-detail-title"
+              >
+                <h4 id="submission-package-detail-title">
+                  {selectedCoverage.requirement.record.title}
+                </h4>
+                <p>
+                  Verified requirement{" "}
+                  <code>{selectedCoverage.requirement.requirement_id}</code> /
+                  record {selectedCoverage.requirement.record.record_id} v
+                  {selectedCoverage.requirement.record.version}
+                </p>
+                <p>
+                  Disposition: {humanize(selectedCoverage.disposition)} / path{" "}
+                  {selectedCoverage.requirement.package_path}
+                </p>
+                {selectedCoverage.blockers.map((blocker) => (
+                  <p
+                    className="notice notice-warning"
+                    key={`${blocker.code}-${blocker.detail}`}
+                  >
+                    {humanize(blocker.code)}: {blocker.detail}
+                  </p>
+                ))}
+                {selectedItem ? (
+                  <article className="notice">
+                    <strong>Exact package item</strong>
+                    <p>
+                      <code>{selectedItem.item_id}</code> /{" "}
+                      {selectedItem.media_type} /{" "}
+                      {selectedItem.size_bytes.toString()} bytes
+                    </p>
+                    <p>
+                      Content <code>{selectedItem.content_sha256}</code> /
+                      validation{" "}
+                      <code>{selectedItem.validation_context_sha256}</code>
+                    </p>
+                    <details>
+                      <summary>Exact source and provenance</summary>
+                      <p>
+                        {humanize(selectedItem.source.kind)} artifact{" "}
+                        {selectedItem.source.artifact_id} v
+                        {selectedItem.source.version} /{" "}
+                        {selectedItem.source.size_bytes.toString()} bytes /
+                        content{" "}
+                        <code>{selectedItem.source.content_sha256}</code>
+                      </p>
+                      {selectedItem.source.kind === "generated" ? (
+                        <p>
+                          Artifact manifest{" "}
+                          <code>{selectedItem.source.manifest_sha256}</code>
+                        </p>
+                      ) : null}
+                      <ul>
+                        {selectedItem.provenance.map((reference) => (
+                          <li key={reference}>{reference}</li>
+                        ))}
+                      </ul>
+                    </details>
+                    <details>
+                      <summary>Evidence</summary>
+                      {selectedItem.evidence.map((evidence) => (
+                        <article
+                          key={`${evidence.reference.artifact_id}-${evidence.reference.version}-${evidence.reference.ordinal}`}
+                        >
+                          <p>
+                            {evidence.package_path} /{" "}
+                            {evidence.reference.artifact_id} v
+                            {evidence.reference.version} / location{" "}
+                            {evidence.reference.ordinal}
+                          </p>
+                          <blockquote
+                            dir={evidenceDirection(evidence.location.direction)}
+                          >
+                            {evidence.location.original_text}
+                          </blockquote>
+                          {evidence.location.translated_text ? (
+                            <div>
+                              <p>Derived translation — non-authoritative</p>
+                              <blockquote dir="auto">
+                                {evidence.location.translated_text}
+                              </blockquote>
+                            </div>
+                          ) : null}
+                        </article>
+                      ))}
+                    </details>
+                    <details>
+                      <summary>Calculations, reviews, and decisions</summary>
+                      <p>
+                        Calculations:{" "}
+                        {selectedItem.calculation_references.join(" · ") ||
+                          "None"}
+                      </p>
+                      <p>
+                        Reviews:{" "}
+                        {selectedItem.review_references.join(" · ") || "None"}
+                      </p>
+                      <p>
+                        Decisions:{" "}
+                        {selectedItem.decision_references.join(" · ") || "None"}
+                      </p>
+                    </details>
+                    <button
+                      type="button"
+                      disabled={
+                        loadedContent[`package:${selectedItem.item_id}`] ===
+                        "loading"
+                      }
+                      onClick={() =>
+                        void loadPackageItemBytes(selectedItem.item_id)
+                      }
+                    >
+                      Load and verify exact item bytes
+                    </button>
+                    {typeof loadedContent[`package:${selectedItem.item_id}`] ===
+                    "number" ? (
+                      <p role="status">
+                        {loadedContent[`package:${selectedItem.item_id}`]} exact
+                        bytes loaded.
+                      </p>
+                    ) : null}
+                    {loadedContent[`package:${selectedItem.item_id}`] ===
+                    "failed" ? (
+                      <p role="alert">
+                        Exact immutable item bytes are unavailable. Retry the
+                        exact item load.
+                      </p>
+                    ) : null}
+                  </article>
+                ) : null}
+              </section>
+            ) : null}
+          </div>
+        </article>
+      ) : generation ? (
+        <p role="status">
+          No immutable Submission Package Version has been assembled.
+        </p>
+      ) : null}
     </section>
   );
 }

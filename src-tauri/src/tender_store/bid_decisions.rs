@@ -963,6 +963,19 @@ pub(crate) struct BidPackageOperationBudget {
 }
 
 impl BidPackageOperationBudget {
+    pub(crate) fn from_connection(
+        connection: &rusqlite::Connection,
+    ) -> Result<Self, TenderCommandError> {
+        let tender_id: String = connection
+            .query_row(
+                "SELECT tender_id FROM tender WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        Ok(Self::for_tender(&TenderId::parse(&tender_id)?))
+    }
+
     pub(crate) fn for_tender(tender_id: &TenderId) -> Self {
         #[cfg(feature = "runtime-fixture")]
         if std::env::var("QUANTIX_BID_PACKAGE_OPERATION_TIMEOUT")
@@ -3129,6 +3142,7 @@ fn load_approval_invalidation(
                 | TenderLifecyclePhase::ActiveProduction
                 | TenderLifecyclePhase::IntegratedReview
                 | TenderLifecyclePhase::PackageProduction
+                | TenderLifecyclePhase::FinalReview
         )
         || lifecycle_after != TenderLifecyclePhase::BidDecision
         || material_change_summary.trim() != material_change_summary
@@ -5405,7 +5419,8 @@ impl TenderStore {
         {
             expected_lifecycle = match lifecycle_phase {
                 TenderLifecyclePhase::IntegratedReview
-                | TenderLifecyclePhase::PackageProduction => lifecycle_phase,
+                | TenderLifecyclePhase::PackageProduction
+                | TenderLifecyclePhase::FinalReview => lifecycle_phase,
                 _ => TenderLifecyclePhase::ActiveProduction,
             };
         }

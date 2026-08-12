@@ -597,6 +597,61 @@ impl TenderStore {
             .transpose()
     }
 
+    pub(crate) fn load_exact_approved_active_work_plan_for_submission(
+        &self,
+        plan_id: &str,
+        version: u32,
+        manifest_sha256: &str,
+        activation_id: &str,
+        budget: BidPackageOperationBudget,
+    ) -> Result<WorkPlanProposalInspection, TenderCommandError> {
+        budget.check()?;
+        if !self.work_plan_manifests_are_valid_with_check(&mut || budget.check())? {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let mut plan = self.inspect_work_plan_version(plan_id, version, budget)?;
+        let exact_active_authority: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM work_plan_heads AS heads
+                   JOIN work_plan_versions AS versions
+                     ON versions.plan_id = heads.plan_id
+                    AND versions.version = heads.current_version
+                   JOIN work_plan_approvals AS approvals
+                     ON approvals.plan_id = versions.plan_id
+                    AND approvals.plan_version = versions.version
+                   JOIN production_activations AS activations
+                     ON activations.plan_id = versions.plan_id
+                    AND activations.plan_version = versions.version
+                   WHERE heads.plan_id = ?1 AND heads.current_version = ?2
+                     AND versions.manifest_sha256 = ?3
+                     AND approvals.decision = 'approve'
+                     AND approvals.plan_manifest_sha256 = ?3
+                     AND activations.activation_id = ?4
+                     AND activations.status = 'active'
+                 )",
+                params![plan_id, version, manifest_sha256, activation_id],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if !exact_active_authority
+            || plan.plan_id != plan_id
+            || plan.version != version
+            || plan.manifest_sha256 != manifest_sha256
+            || plan.approval.as_ref().is_none_or(|approval| {
+                approval.decision != WorkPlanDecision::Approve
+                    || approval.plan_manifest_sha256 != manifest_sha256
+            })
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        for binding in &mut plan.profiles {
+            binding.status = AgentProfileStatus::Proposed;
+        }
+        Ok(plan)
+    }
+
     pub(crate) fn revise_work_plan_proposal(
         &mut self,
         tender_id: &TenderId,

@@ -136,7 +136,7 @@ fn application_only_update() -> UpdateCandidate {
         },
         compatibility: UpdateCompatibilityManifest {
             installation_schema_version: 8,
-            tender_schema_version: 22,
+            tender_schema_version: 23,
             codex_version: "0.147.0".into(),
             docling_version: "2.118.0".into(),
             runtime_manifest_schema_version: 2,

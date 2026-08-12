@@ -758,7 +758,8 @@ impl TenderStore {
                            JOIN tender ON tender.singleton = 1
                            WHERE plan_id = ?1 AND current_version = ?2
                               AND tender.lifecycle_phase IN (
-                                'active_production', 'integrated_review', 'package_production'
+                                'active_production', 'integrated_review', 'package_production',
+                                'final_review'
                               )
                          )",
                         params![activation.1, activation.2],
