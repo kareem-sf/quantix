@@ -1147,7 +1147,7 @@ impl TenderStore {
         self.load_tender_query(&command.query_id, command.query_version, true, budget)
     }
 
-    fn inspect_tender_queries(
+    pub(crate) fn inspect_tender_queries(
         &self,
         command: &InspectTenderQueriesCommand,
         budget: BidPackageOperationBudget,

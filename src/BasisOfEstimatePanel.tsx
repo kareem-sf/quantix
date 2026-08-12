@@ -213,7 +213,9 @@ export function BasisOfEstimatePanel({
       <div className="section-heading">
         <div>
           <p className="eyebrow">Controlled commercial basis</p>
-          <h2>BOQ account and Basis of Estimate</h2>
+          <h2 id="basis-of-estimate-title">
+            BOQ account and Basis of Estimate
+          </h2>
         </div>
         <button
           className="button-secondary"

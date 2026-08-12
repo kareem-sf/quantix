@@ -429,7 +429,7 @@ export function ExternalRfiPanel({
       <div className="section-heading">
         <div>
           <p className="eyebrow">Controlled external clarification</p>
-          <h2>External RFI Register</h2>
+          <h2 id="external-rfi-title">External RFI Register</h2>
         </div>
         <button
           type="button"

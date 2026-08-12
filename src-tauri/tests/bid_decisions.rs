@@ -17,25 +17,27 @@ use quantix_lib::{
     ChangeAssessmentImpactConsequence, ChangeAssessmentImpactKind, ChangeAssessmentObjectKind,
     ChangeAssessmentStatus, ComplianceDisposition, ComplianceDispositionUpdate,
     ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand, ControlledBoqCalculationStatus,
-    CoordinatedBidBaseline, CoordinatedBidBaselineBlockerCode, CoordinatedBidBaselineDecision,
-    CreateBidDecisionPackageCommand, CreateCalculationScenarioCommand,
-    CreateCommercialStrategyCommand, CreateExternalRfiDraftCommand,
-    CreatePricedCostBaselineCommand, CreatePricingAdjustmentCommand, CreatePricingScenarioCommand,
-    CreateTenderCommand, CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
-    DecideBidDecisionPackageCommand, DecideChangeAssessmentCommand,
-    DecideCoordinatedBidBaselineCommand, DecideTenderQueryTreatmentCommand,
-    DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DesignateBoqTableCommand,
-    DeviceProtection, ExchangeRateType, ExportApprovedExternalRfiCommand,
+    CoordinatedBidBaseline, CoordinatedBidBaselineBindingKind, CoordinatedBidBaselineBlockerCode,
+    CoordinatedBidBaselineDecision, CreateBidDecisionPackageCommand,
+    CreateCalculationScenarioCommand, CreateCommercialStrategyCommand,
+    CreateExternalRfiDraftCommand, CreatePricedCostBaselineCommand, CreatePricingAdjustmentCommand,
+    CreatePricingScenarioCommand, CreateTenderBackupCommand, CreateTenderCommand,
+    CreateTenderEngineerEntryCommand, CreateTenderQueryCommand, DecideBidDecisionPackageCommand,
+    DecideChangeAssessmentCommand, DecideCoordinatedBidBaselineCommand,
+    DecideTenderQueryTreatmentCommand, DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
+    DecisionAction, DecisionFactKind, DecisionKind, DecisionStatus, DecisionTargetKind,
+    DesignateBoqTableCommand, DeviceProtection, ExchangeRateType, ExportApprovedExternalRfiCommand,
     ExternalRfiQueryReference, ExternalRfiRecipient, ImportTenderPackageCommand,
     InspectBidDecisionApprovalHistoryCommand, InspectCalculationWorkspaceCommand,
     InspectChangeAssessmentsCommand, InspectCoordinatedBidBaselinesCommand,
-    InspectEstimateWorkspaceCommand, InspectExternalRfiResponseCandidatesCommand,
-    InspectExternalRfisCommand, InspectProductionTaskReviewCommand, InspectTenderQueriesCommand,
+    InspectDecisionCockpitCommand, InspectEstimateWorkspaceCommand,
+    InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
+    InspectProductionTaskReviewCommand, InspectTenderQueriesCommand,
     InterpretExternalRfiResponseCommand, InvalidateBidDecisionApprovalCommand, MajorFindingPolicy,
-    ManagerCapabilityDemandInput, ParseSourceArtifactCommand, PricedCostBaselineReviewOutcome,
-    PricingAdjustmentDirection, PricingAdjustmentKind, PricingAdjustmentReference,
-    ProductionFindingDispositionKind, ProductionFindingSeverity, ProductionTaskState,
-    ProposeBoqCalculationRuleCommand, ProviderFailureCategory, QuantixHost,
+    ManagerCapabilityDemandInput, ParseSourceArtifactCommand, PrepareTenderRecoveryCommand,
+    PricedCostBaselineReviewOutcome, PricingAdjustmentDirection, PricingAdjustmentKind,
+    PricingAdjustmentReference, ProductionFindingDispositionKind, ProductionFindingSeverity,
+    ProductionTaskState, ProposeBoqCalculationRuleCommand, ProviderFailureCategory, QuantixHost,
     RegisterExternalRfiResponseCommand, ResolveBidDecisionReturnReworkCommand,
     ResolveIndeterminateAgentRunCommand, ReviseExternalRfiDraftCommand, ReviseTenderCommand,
     ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand, RunBasisOfEstimateReviewCommand,
@@ -50,6 +52,224 @@ use quantix_lib::{
     TenderRecordVersionReference, VerificationStatus, WorkPlanDecision, WorkPlanRevisionAction,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
+
+#[tokio::test]
+async fn decision_cockpit_projects_the_exact_reviewed_bid_decision_gate() {
+    let harness = Harness::new("record-extraction");
+    let records = harness.extract_records().await;
+    assert!(
+        records.len() > 4,
+        "fixture must cross the canonical record page boundary"
+    );
+    let cockpit = harness
+        .host
+        .inspect_decision_cockpit(InspectDecisionCockpitCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect every proposed Tender Record across pages");
+    let pending_record_ids = cockpit
+        .pending_decisions
+        .iter()
+        .filter(|decision| decision.kind == DecisionKind::TenderRecord)
+        .map(|decision| decision.target.object_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(pending_record_ids.len(), records.len());
+    assert!(records
+        .iter()
+        .all(|record| pending_record_ids.contains(record.record_id.as_str())));
+
+    harness.verify_records(&records, false);
+    let package = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+            disposition_updates: complete_dispositions(&records),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("create complete decision package");
+    harness.set_agent_scenario("bid-package-review");
+    let package = harness
+        .host
+        .run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id,
+            version: package.version,
+        })
+        .await
+        .expect("review complete decision package")
+        .package;
+
+    let cockpit = harness
+        .host
+        .inspect_decision_cockpit(InspectDecisionCockpitCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect the Tendering Manager decision cockpit");
+    let decision = cockpit
+        .pending_decisions
+        .iter()
+        .find(|decision| decision.kind == DecisionKind::BidDecision)
+        .expect("reviewed package is a pending formal decision");
+
+    assert_eq!(decision.target.object_id, package.package_id);
+    assert_eq!(decision.target.version, package.version);
+    assert_eq!(
+        decision.target.manifest_sha256.as_deref(),
+        Some(package.manifest_sha256.as_str())
+    );
+    assert_eq!(decision.responsible.label, "Tendering Manager");
+    assert!(decision.ready);
+    assert_eq!(
+        decision.allowed_actions,
+        vec![
+            DecisionAction::Accept,
+            DecisionAction::Return,
+            DecisionAction::Reject,
+        ]
+    );
+    assert!(decision.facts.iter().any(|fact| {
+        fact.kind == DecisionFactKind::AgentRecommendation && fact.value.contains(": ")
+    }));
+    assert!(decision.independent_review.is_some());
+    assert_eq!(
+        decision.group_members.len() as u32,
+        package.project_fingerprint_count
+            + package.risk_count
+            + package.opportunity_count
+            + package.assumption_count
+            + package.unresolved_query_count
+    );
+    assert!(decision
+        .group_members
+        .iter()
+        .all(|member| member.target.kind == DecisionTargetKind::TenderRecord));
+    assert!(!decision.evidence.is_empty());
+
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact package");
+    let plan = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose exact Work Plan");
+    let cockpit = harness
+        .host
+        .inspect_decision_cockpit(InspectDecisionCockpitCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect the Work Plan decision inventory");
+    let decision = cockpit
+        .pending_decisions
+        .iter()
+        .find(|decision| decision.kind == DecisionKind::WorkPlanApproval)
+        .expect("Work Plan is a pending formal decision");
+    assert_eq!(decision.target.object_id, plan.plan_id);
+    assert_eq!(
+        decision.group_members.len(),
+        plan.profiles.len() + plan.workstreams.len() + plan.tasks.len() + plan.query_bindings.len()
+    );
+    assert!(decision
+        .group_members
+        .iter()
+        .any(|member| member.target.kind == DecisionTargetKind::AgentProfile));
+    assert!(decision
+        .group_members
+        .iter()
+        .any(|member| member.target.kind == DecisionTargetKind::WorkPlanTask));
+
+    let assessment = confirm_addendum_for_record(
+        &harness,
+        records
+            .first()
+            .expect("an exact record can establish the Work Plan change gate"),
+        "pending-work-plan-addendum",
+    )
+    .await;
+    let cockpit = harness
+        .host
+        .inspect_decision_cockpit(InspectDecisionCockpitCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect a pending Work Plan outside Tender Planning");
+    let work_plan = cockpit
+        .pending_decisions
+        .iter()
+        .find(|decision| decision.kind == DecisionKind::WorkPlanApproval)
+        .expect("the pending Work Plan remains visible during Change Assessment");
+    assert!(work_plan.allowed_actions.is_empty());
+    assert_eq!(work_plan.status, DecisionStatus::Stale);
+    assert!(work_plan
+        .blocking_consequences
+        .iter()
+        .any(|consequence| consequence.contains("lifecycle phase")));
+    assert!(cockpit.pending_decisions.iter().any(|decision| {
+        decision.kind == DecisionKind::ChangeAssessment
+            && decision.target.object_id == assessment.assessment_id
+    }));
+}
+
+#[test]
+fn decision_cockpit_projects_the_exact_awaiting_tender_recovery_gate() {
+    let harness = Harness::new("record-extraction");
+    let backup = harness
+        .host
+        .create_tender_backup(CreateTenderBackupCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("create a verified replacement source");
+    let recovery = harness
+        .host
+        .prepare_tender_recovery(PrepareTenderRecoveryCommand {
+            tender_id: harness.tender_id.clone(),
+            backup_id: backup.backup_id.clone(),
+        })
+        .expect("prepare an exact verified recovery proposal");
+
+    let cockpit = harness
+        .host
+        .inspect_decision_cockpit(InspectDecisionCockpitCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect the exact awaiting recovery decision");
+    let decision = cockpit
+        .pending_decisions
+        .iter()
+        .find(|decision| decision.kind == DecisionKind::TenderRecovery)
+        .expect("awaiting recovery is a pending formal decision");
+
+    assert_eq!(decision.target.kind, DecisionTargetKind::TenderRecovery);
+    assert_eq!(decision.target.object_id, recovery.recovery_id);
+    assert_eq!(
+        decision.target.version,
+        recovery
+            .backup_source
+            .as_ref()
+            .expect("verified backup source")
+            .revision
+    );
+    assert_eq!(
+        decision.target.manifest_sha256.as_deref(),
+        backup.manifest_sha256.as_deref()
+    );
+    assert_eq!(decision.status, DecisionStatus::Ready);
+    assert_eq!(
+        decision.allowed_actions,
+        vec![DecisionAction::ApproveReplacement, DecisionAction::Reject]
+    );
+    assert!(decision.dependencies.iter().any(|dependency| {
+        dependency.target.kind == DecisionTargetKind::TenderBackup
+            && dependency.target.object_id == backup.backup_id
+            && dependency.target.manifest_sha256 == backup.manifest_sha256
+    }));
+}
 
 struct ReadySetupPlatform;
 
@@ -290,6 +510,21 @@ async fn coordinated_baseline_exposes_incomplete_integration_and_denies_approval
             .lifecycle_phase,
         TenderLifecyclePhase::ActiveProduction
     );
+    let cockpit = harness
+        .host
+        .inspect_decision_cockpit(InspectDecisionCockpitCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect the blocked Baseline outside its decision lifecycle");
+    let blocked_decision = cockpit
+        .pending_decisions
+        .iter()
+        .find(|decision| {
+            decision.kind == DecisionKind::CoordinatedBidBaselineApproval
+                && decision.target.object_id == proposed.baseline_id
+        })
+        .expect("the blocked Baseline remains visible for coordination");
+    assert!(blocked_decision.allowed_actions.is_empty());
     assert_eq!(
         harness
             .host
@@ -536,6 +771,53 @@ async fn coordinated_baseline_binds_every_current_control_and_approves_only_the_
             .lifecycle_phase,
         TenderLifecyclePhase::IntegratedReview
     );
+    let cockpit = harness
+        .host
+        .inspect_decision_cockpit(InspectDecisionCockpitCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect the Integrated Review decision inventory");
+    let decision = cockpit
+        .pending_decisions
+        .iter()
+        .find(|decision| decision.kind == DecisionKind::CoordinatedBidBaselineApproval)
+        .expect("the current Baseline is a pending formal decision");
+    assert_eq!(decision.group_members.len(), first.bindings.len());
+    for binding in &first.bindings {
+        let expected_kind = match binding.kind {
+            CoordinatedBidBaselineBindingKind::ProductionArtifactVersion => {
+                DecisionTargetKind::ProductionArtifact
+            }
+            CoordinatedBidBaselineBindingKind::TenderRecordVersion => {
+                DecisionTargetKind::TenderRecord
+            }
+            CoordinatedBidBaselineBindingKind::TenderQueryVersion => {
+                DecisionTargetKind::TenderQuery
+            }
+            CoordinatedBidBaselineBindingKind::ExternalRfiVersion => {
+                DecisionTargetKind::ExternalRfi
+            }
+            CoordinatedBidBaselineBindingKind::PricedCostBaseline => {
+                DecisionTargetKind::PricedCostBaseline
+            }
+            CoordinatedBidBaselineBindingKind::ApprovedTenderPrice => {
+                DecisionTargetKind::ApprovedTenderPrice
+            }
+            CoordinatedBidBaselineBindingKind::CalculationManifest => {
+                DecisionTargetKind::CalculationManifest
+            }
+            CoordinatedBidBaselineBindingKind::CommercialStrategy => {
+                DecisionTargetKind::CommercialStrategy
+            }
+        };
+        assert!(decision.group_members.iter().any(|member| {
+            member.target.kind == expected_kind
+                && member.target.object_id == binding.reference_id
+                && member.target.version == binding.version
+                && member.target.manifest_sha256.as_deref()
+                    == Some(binding.manifest_sha256.as_str())
+        }));
+    }
 
     let successor = harness
         .host
@@ -1264,6 +1546,28 @@ async fn unrelated_running_production_does_not_block_targeted_change_classificat
         "unrelated-running-addendum",
     )
     .await;
+    let cockpit = harness
+        .host
+        .inspect_decision_cockpit(InspectDecisionCockpitCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect an unrelated active execution through the cockpit");
+    let change_decision = cockpit
+        .pending_decisions
+        .iter()
+        .find(|decision| {
+            decision.kind == DecisionKind::ChangeAssessment
+                && decision.target.object_id == assessment.assessment_id
+        })
+        .expect("pending Change Assessment decision");
+    assert_eq!(
+        change_decision.allowed_actions,
+        vec![
+            DecisionAction::ClassifyIrrelevant,
+            DecisionAction::ClassifyMaterial,
+        ],
+        "an unrelated run must not remove the exact legal material action"
+    );
     let decision = harness
         .host
         .decide_change_assessment(DecideChangeAssessmentCommand {
@@ -1359,11 +1663,30 @@ async fn affected_running_production_blocks_change_classification_until_interrup
     .await;
     let command = DecideChangeAssessmentCommand {
         tender_id: harness.tender_id.clone(),
-        assessment_id: assessment.assessment_id,
-        assessment_manifest_sha256: assessment.manifest_sha256,
+        assessment_id: assessment.assessment_id.clone(),
+        assessment_manifest_sha256: assessment.manifest_sha256.clone(),
         classification: ChangeAssessmentClassification::Material,
         rationale: "The affected running task must reach a terminal state first.".into(),
     };
+    let cockpit = harness
+        .host
+        .inspect_decision_cockpit(InspectDecisionCockpitCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect an affected active execution through the cockpit");
+    let change_decision = cockpit
+        .pending_decisions
+        .iter()
+        .find(|decision| {
+            decision.kind == DecisionKind::ChangeAssessment
+                && decision.target.object_id == assessment.assessment_id
+        })
+        .expect("pending affected Change Assessment decision");
+    assert_eq!(
+        change_decision.allowed_actions,
+        vec![DecisionAction::ClassifyIrrelevant],
+        "the cockpit must share the affected-execution gate with the domain command"
+    );
     assert_eq!(
         harness
             .host
@@ -1443,11 +1766,33 @@ async fn affected_unapproved_package_review_can_be_interrupted_before_material_r
     .await;
     let command = DecideChangeAssessmentCommand {
         tender_id: harness.tender_id.clone(),
-        assessment_id: assessment.assessment_id,
-        assessment_manifest_sha256: assessment.manifest_sha256,
+        assessment_id: assessment.assessment_id.clone(),
+        assessment_manifest_sha256: assessment.manifest_sha256.clone(),
         classification: ChangeAssessmentClassification::Material,
         rationale: "Stop the affected review and rework the unapproved package.".into(),
     };
+    let cockpit = harness
+        .host
+        .inspect_decision_cockpit(InspectDecisionCockpitCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect legal classifications while affected review is running");
+    let change_decision = cockpit
+        .pending_decisions
+        .iter()
+        .find(|decision| {
+            decision.kind == DecisionKind::ChangeAssessment
+                && decision.target.object_id == assessment.assessment_id
+        })
+        .expect("pending Change Assessment decision");
+    assert_eq!(
+        change_decision.allowed_actions,
+        vec![DecisionAction::ClassifyIrrelevant]
+    );
+    assert!(change_decision
+        .blocking_consequences
+        .iter()
+        .any(|consequence| consequence.contains("affected execution")));
     assert_eq!(
         harness
             .host
@@ -6504,6 +6849,24 @@ async fn indeterminate_production_requires_an_engineer_disposition_before_linked
         .expect("terminalize the unknown production outcome");
     assert_eq!(indeterminate.run.state, AgentRunState::Indeterminate);
     assert_eq!(indeterminate.task.state, ProductionTaskState::Indeterminate);
+    let cockpit = harness
+        .host
+        .inspect_decision_cockpit(InspectDecisionCockpitCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect the indeterminate-run recovery decision");
+    let recovery = cockpit
+        .pending_decisions
+        .iter()
+        .find(|decision| {
+            decision.kind == DecisionKind::AgentRunRecovery
+                && decision.target.object_id == indeterminate.run.run_id
+        })
+        .expect("indeterminate Agent Run is a pending formal decision");
+    assert_eq!(
+        recovery.allowed_actions,
+        vec![DecisionAction::RetryTask, DecisionAction::CloseTask]
+    );
 
     let changed_profile = approved
         .profiles
@@ -6759,6 +7122,25 @@ async fn stale_production_recovery_can_close_but_cannot_authorize_a_retry() {
             affected_areas: vec!["project_characteristics".into()],
         })
         .expect("invalidate the stale basis before resolving the unknown production outcome");
+    let cockpit = harness
+        .host
+        .inspect_decision_cockpit(InspectDecisionCockpitCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect stale recovery through the canonical cockpit gate");
+    let recovery = cockpit
+        .pending_decisions
+        .iter()
+        .find(|decision| {
+            decision.kind == DecisionKind::AgentRunRecovery
+                && decision.target.object_id == indeterminate.run.run_id
+        })
+        .expect("stale indeterminate Agent Run remains a pending decision");
+    assert_eq!(
+        recovery.allowed_actions,
+        vec![DecisionAction::CloseTask],
+        "stale Work Plan dependencies must remove only the illegal retry action"
+    );
     assert_eq!(
         harness
             .host
@@ -8488,6 +8870,36 @@ async fn pricing_scenarios_use_reviewed_adjustments_ordered_eitl_decisions_and_r
         changed_rate_comparison.calculation.final_amount, scenario.calculation.final_amount,
         "an exact changed Exchange Rate produces a distinct immutable result"
     );
+    let cockpit = harness
+        .host
+        .inspect_decision_cockpit(InspectDecisionCockpitCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect exact calculated pricing alternatives");
+    for candidate in [&scenario, &comparison, &changed_rate_comparison] {
+        let decision = cockpit
+            .pending_decisions
+            .iter()
+            .find(|decision| {
+                decision.kind == DecisionKind::PricingScenarioSelection
+                    && decision.target.object_id == candidate.pricing_scenario_id
+            })
+            .expect("each immutable pricing alternative is independently selectable");
+        assert!(decision.ready);
+        assert_eq!(decision.allowed_actions, vec![DecisionAction::Select]);
+        assert!(decision.dependencies.iter().any(|dependency| {
+            dependency.target.kind == DecisionTargetKind::CommercialStrategy
+                && dependency.target.object_id == candidate.strategy_id
+                && dependency.target.manifest_sha256.as_deref()
+                    == Some(candidate.strategy_manifest_sha256.as_str())
+        }));
+        assert!(decision.dependencies.iter().any(|dependency| {
+            dependency.target.kind == DecisionTargetKind::CalculationManifest
+                && dependency.target.object_id == candidate.calculation.pricing_calculation_run_id
+                && dependency.target.manifest_sha256.as_deref()
+                    == Some(candidate.calculation.manifest_sha256.as_str())
+        }));
+    }
     assert_eq!(
         harness
             .host
@@ -9153,6 +9565,23 @@ async fn controlled_boq_calculation_is_reviewed_exact_replayable_and_tamper_evid
     assert!(older_runs.recent_runs.iter().any(|run| {
         run.calculation_run_id == exact.calculation_run_id && run.approval.is_some()
     }));
+    let cockpit = harness
+        .host
+        .inspect_decision_cockpit(InspectDecisionCockpitCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect every pending Calculation Run across pages");
+    let zero_decision = cockpit
+        .pending_decisions
+        .iter()
+        .find(|decision| {
+            decision.kind == DecisionKind::CalculationRunApproval
+                && decision.target.object_id == zero.calculation_run_id
+                && decision.target.manifest_sha256.as_deref() == Some(zero.manifest_sha256.as_str())
+        })
+        .expect("older page preserves the exact pending Calculation Run decision");
+    assert!(zero_decision.ready);
+    assert_eq!(zero_decision.allowed_actions, vec![DecisionAction::Approve]);
     let older_scenarios = harness
         .host
         .inspect_calculation_workspace(InspectCalculationWorkspaceCommand {
@@ -13458,6 +13887,36 @@ async fn external_rfi_is_versioned_reviewed_approved_exported_and_reconciled_thr
         TenderErrorCode::InvalidCommand
     );
     let response = first_response.expect("External RFI response link");
+    let cockpit = harness
+        .host
+        .inspect_decision_cockpit(InspectDecisionCockpitCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect response interpretation against the current Query head");
+    let response_decision = cockpit
+        .pending_decisions
+        .iter()
+        .find(|decision| {
+            decision.kind == DecisionKind::ExternalRfiResponseInterpretation
+                && decision.target.object_id
+                    == format!("{}:{}", response.response_link_id, query.query_id)
+        })
+        .expect("registered response is a pending exact interpretation decision");
+    assert_eq!(response_decision.target.version, advanced_query.version);
+    assert!(response_decision.ready);
+    assert_eq!(
+        response_decision.allowed_actions,
+        vec![DecisionAction::ApplyTreatment]
+    );
+    assert!(response_decision.dependencies.iter().any(|dependency| {
+        dependency.target.object_id == query.query_id && dependency.target.version == query.version
+    }));
+    assert!(response_decision.dependencies.iter().any(|dependency| {
+        dependency.target.object_id == advanced_query.query_id
+            && dependency.target.version == advanced_query.version
+            && dependency.target.manifest_sha256.as_deref()
+                == Some(advanced_query.manifest_sha256.as_str())
+    }));
     let interpretation_command = InterpretExternalRfiResponseCommand {
         tender_id: harness.tender_id.clone(),
         response_link_id: response.response_link_id.clone(),

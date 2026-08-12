@@ -6,7 +6,7 @@ use std::{
 };
 
 use garde::Validate;
-use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -53,6 +53,36 @@ const MAX_APPROVAL_HISTORY_PAGE_ITEMS: u32 = 10;
 const MAX_APPROVAL_RECORDS: usize = 64;
 const MAX_MATERIAL_CHANGE_RECORDS: usize = MAX_COMPLIANCE_ROWS * 2;
 const ZERO_APPROVAL_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+pub(crate) fn bid_decision_has_active_execution(
+    connection: &Connection,
+) -> Result<bool, TenderCommandError> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE status = 'running')
+                    OR EXISTS(SELECT 1 FROM parse_attempts WHERE status = 'running')
+                    OR EXISTS(
+                      SELECT 1 FROM production_tasks AS tasks
+                      JOIN production_task_attempts AS attempts
+                        ON attempts.production_task_id = tasks.production_task_id
+                       AND attempts.task_id = tasks.task_id
+                      JOIN agent_runs AS runs ON runs.task_id = attempts.task_id
+                      WHERE tasks.status = 'indeterminate'
+                        AND NOT EXISTS (
+                          SELECT 1 FROM agent_run_recovery_dispositions AS dispositions
+                          WHERE dispositions.run_id = runs.run_id
+                            AND dispositions.disposition = 'close_task'
+                        )
+                    )",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)
+}
+
+pub(crate) fn bid_decision_lifecycle_is_open(lifecycle: TenderLifecyclePhase) -> bool {
+    lifecycle == TenderLifecyclePhase::BidDecision
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS, Validate)]
 #[serde(deny_unknown_fields)]
@@ -1584,28 +1614,7 @@ impl TenderStore {
             }
             Err(error) => return Err(error),
         };
-        let active_execution: bool = self
-            .connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE status = 'running')
-                        OR EXISTS(SELECT 1 FROM parse_attempts WHERE status = 'running')
-                        OR EXISTS(
-                          SELECT 1 FROM production_tasks AS tasks
-                          JOIN production_task_attempts AS attempts
-                            ON attempts.production_task_id = tasks.production_task_id
-                           AND attempts.task_id = tasks.task_id
-                          JOIN agent_runs AS runs ON runs.task_id = attempts.task_id
-                          WHERE tasks.status = 'indeterminate'
-                            AND NOT EXISTS (
-                              SELECT 1 FROM agent_run_recovery_dispositions AS dispositions
-                              WHERE dispositions.run_id = runs.run_id
-                                AND dispositions.disposition = 'close_task'
-                            )
-                        )",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(sql_error)?;
+        let active_execution = bid_decision_has_active_execution(&self.connection)?;
         let approval_count: u32 = self
             .connection
             .query_row(
@@ -1618,7 +1627,7 @@ impl TenderStore {
             Some("manifest_changed")
         } else if !package.current {
             Some("package_stale")
-        } else if package.lifecycle_phase != TenderLifecyclePhase::BidDecision {
+        } else if !bid_decision_lifecycle_is_open(package.lifecycle_phase) {
             Some("lifecycle_closed")
         } else if package.approval.is_some() {
             Some("decision_already_recorded")
@@ -1699,39 +1708,18 @@ impl TenderStore {
         else {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         };
+        let lifecycle_before = TenderLifecyclePhase::parse(&lifecycle_before)?;
         let gate_required = matches!(
             command.decision,
             BidDecisionApprovalDecision::Accept | BidDecisionApprovalDecision::Reject
         );
-        let active_execution: bool = transaction
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE status = 'running')
-                        OR EXISTS(SELECT 1 FROM parse_attempts WHERE status = 'running')
-                        OR EXISTS(
-                          SELECT 1 FROM production_tasks AS tasks
-                          JOIN production_task_attempts AS attempts
-                            ON attempts.production_task_id = tasks.production_task_id
-                           AND attempts.task_id = tasks.task_id
-                          JOIN agent_runs AS runs ON runs.task_id = attempts.task_id
-                          JOIN agent_run_recovery_dispositions AS dispositions
-                            ON dispositions.run_id = runs.run_id
-                           AND dispositions.disposition = 'retry_task'
-                          WHERE tasks.status = 'indeterminate'
-                            AND NOT EXISTS(
-                              SELECT 1 FROM agent_runs AS retries
-                              WHERE retries.retry_of_run_id = runs.run_id
-                            )
-                        )",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(sql_error)?;
+        let active_execution = bid_decision_has_active_execution(&transaction)?;
         let exact_denial = if tender_revision != package.tender_revision
             || manifest_sha256 != command.manifest_sha256
             || current_version != command.version
         {
             Some("package_changed_before_commit")
-        } else if lifecycle_before != TenderLifecyclePhase::BidDecision.as_str() {
+        } else if !bid_decision_lifecycle_is_open(lifecycle_before) {
             Some("lifecycle_closed_before_commit")
         } else if active_execution {
             Some("active_execution_before_commit")

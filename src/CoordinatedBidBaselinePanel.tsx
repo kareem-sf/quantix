@@ -273,7 +273,7 @@ export function CoordinatedBidBaselinePanel({
       <div className="section-heading">
         <div>
           <p className="eyebrow">Integrated Review</p>
-          <h2>Coordinated Bid Baseline</h2>
+          <h2 id="coordinated-baseline-title">Coordinated Bid Baseline</h2>
           <p>
             The Coordinator assembles exact reviewed work without changing its
             meaning. Only the Tendering Manager can approve the bound baseline

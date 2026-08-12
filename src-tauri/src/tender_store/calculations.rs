@@ -3109,7 +3109,7 @@ impl TenderStore {
         self.load_calculation_run_by_id(&command.calculation_run_id)
     }
 
-    fn inspect_calculation_workspace(
+    pub(crate) fn inspect_calculation_workspace(
         &self,
         scenario_offset: u32,
         run_offset: u32,

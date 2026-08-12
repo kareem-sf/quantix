@@ -25,6 +25,8 @@ import type { CalculationWorkspaceInspection } from "./bindings/CalculationWorks
 import type { ChangeAssessment } from "./bindings/ChangeAssessment";
 import type { ChangeAssessmentClassification } from "./bindings/ChangeAssessmentClassification";
 import type { ChangeAssessmentPage } from "./bindings/ChangeAssessmentPage";
+import type { DecisionCockpit } from "./bindings/DecisionCockpit";
+import type { InspectDecisionCockpitCommand } from "./bindings/InspectDecisionCockpitCommand";
 import type { ControlledBoqCalculationRun } from "./bindings/ControlledBoqCalculationRun";
 import type { InspectCalculationWorkspaceCommand } from "./bindings/InspectCalculationWorkspaceCommand";
 import type { InspectChangeAssessmentsCommand } from "./bindings/InspectChangeAssessmentsCommand";
@@ -716,6 +718,13 @@ export function inspectEvidence(
   return invoke<EvidenceDocument>("inspect_evidence", {
     command: parseTarget(tenderId, artifactId, version),
   });
+}
+
+export function inspectDecisionCockpit(
+  tenderId: string,
+): Promise<DecisionCockpit> {
+  const command: InspectDecisionCockpitCommand = { tender_id: tenderId };
+  return invoke<DecisionCockpit>("inspect_decision_cockpit", { command });
 }
 
 export function searchEvidence(

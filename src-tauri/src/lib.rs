@@ -87,10 +87,14 @@ pub use tender_store::{
     CreateTenderEngineerEntryCommand, CreateTenderQueryCommand, DecideBidDecisionPackageCommand,
     DecideChangeAssessmentCommand, DecideCoordinatedBidBaselineCommand,
     DecideTenderQueryTreatmentCommand, DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
-    DesignateBoqTableCommand, EstimateAggregateCalculationInput, EstimateAggregateCalculationRun,
-    EstimateAllowance, EstimateMaterialAssumption, EstimateQueryObservation,
-    EstimateQueryReference, EstimateQuotation, EstimateQuotationKind, EstimateWorkspaceInspection,
-    ExchangeRateType, ExportApprovedExternalRfiCommand, ExternalRfiApproval, ExternalRfiDraft,
+    DecisionAction, DecisionCockpit, DecisionDependency, DecisionDependencyStatus,
+    DecisionEvidence, DecisionFact, DecisionFactKind, DecisionGroupMember, DecisionKind,
+    DecisionLifecycleGate, DecisionResponsible, DecisionResponsibleKind, DecisionStatus,
+    DecisionTarget, DecisionTargetKind, DecisionUrgency, DesignateBoqTableCommand,
+    EstimateAggregateCalculationInput, EstimateAggregateCalculationRun, EstimateAllowance,
+    EstimateMaterialAssumption, EstimateQueryObservation, EstimateQueryReference,
+    EstimateQuotation, EstimateQuotationKind, EstimateWorkspaceInspection, ExchangeRateType,
+    ExportApprovedExternalRfiCommand, ExternalRfiApproval, ExternalRfiDraft,
     ExternalRfiEligibleQuery, ExternalRfiEligibleQueryPage, ExternalRfiExportRecord,
     ExternalRfiFindingSeverity, ExternalRfiPage, ExternalRfiQueryReference, ExternalRfiQuestion,
     ExternalRfiRecipient, ExternalRfiResponseCandidatePage, ExternalRfiResponseInterpretation,
@@ -98,12 +102,13 @@ pub use tender_store::{
     ExternalRfiReviewResult, InspectBidDecisionApprovalHistoryCommand,
     InspectBidDecisionPackageRecordsCommand, InspectCalculationWorkspaceCommand,
     InspectChangeAssessmentsCommand, InspectComplianceMatrixCommand,
-    InspectCoordinatedBidBaselinesCommand, InspectEstimateWorkspaceCommand,
-    InspectExternalRfiEligibleQueriesCommand, InspectExternalRfiResponseCandidatesCommand,
-    InspectExternalRfisCommand, InspectPricingWorkspaceCommand, InspectProductionTaskReviewCommand,
+    InspectCoordinatedBidBaselinesCommand, InspectDecisionCockpitCommand,
+    InspectEstimateWorkspaceCommand, InspectExternalRfiEligibleQueriesCommand,
+    InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
+    InspectPricingWorkspaceCommand, InspectProductionTaskReviewCommand,
     InspectTenderQueriesCommand, InspectTenderRecordsCommand, InterpretExternalRfiResponseCommand,
     InvalidateBidDecisionApprovalCommand, MajorFindingPolicy, ManagerCapabilityDemandInput,
-    OpenTenderCommand, PrepareTenderRecoveryCommand, PricedCostBaselineApproval,
+    OpenTenderCommand, PendingDecision, PrepareTenderRecoveryCommand, PricedCostBaselineApproval,
     PricedCostBaselineReview, PricedCostBaselineReviewFinding, PricedCostBaselineReviewOutcome,
     PricedCostBaselineReviewResult, PricedCostBaselineVersion, PricingAdjustmentApproval,
     PricingAdjustmentDirection, PricingAdjustmentKind, PricingAdjustmentReference,
@@ -186,15 +191,16 @@ mod tauri_commands {
         CreateTenderCommand, CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
         DecideBidDecisionPackageCommand, DecideChangeAssessmentCommand,
         DecideCoordinatedBidBaselineCommand, DecideTenderQueryTreatmentCommand,
-        DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DesignateBoqTableCommand,
-        DocumentParseResult, DocumentRegister, EstimateWorkspaceInspection, EvidenceDocument,
-        EvidenceSearchResult, ExportApprovedExternalRfiCommand, ExternalRfiDraft,
-        ExternalRfiEligibleQueryPage, ExternalRfiExportRecord, ExternalRfiPage,
-        ExternalRfiResponseCandidatePage, ExternalRfiReviewResult, ImportTenderPackageCommand,
-        InspectAgentRunCommand, InspectAgentRunHistoryCommand,
-        InspectBidDecisionApprovalHistoryCommand, InspectBidDecisionPackageRecordsCommand,
-        InspectCalculationWorkspaceCommand, InspectChangeAssessmentsCommand,
-        InspectComplianceMatrixCommand, InspectCoordinatedBidBaselinesCommand,
+        DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DecisionCockpit,
+        DesignateBoqTableCommand, DocumentParseResult, DocumentRegister,
+        EstimateWorkspaceInspection, EvidenceDocument, EvidenceSearchResult,
+        ExportApprovedExternalRfiCommand, ExternalRfiDraft, ExternalRfiEligibleQueryPage,
+        ExternalRfiExportRecord, ExternalRfiPage, ExternalRfiResponseCandidatePage,
+        ExternalRfiReviewResult, ImportTenderPackageCommand, InspectAgentRunCommand,
+        InspectAgentRunHistoryCommand, InspectBidDecisionApprovalHistoryCommand,
+        InspectBidDecisionPackageRecordsCommand, InspectCalculationWorkspaceCommand,
+        InspectChangeAssessmentsCommand, InspectComplianceMatrixCommand,
+        InspectCoordinatedBidBaselinesCommand, InspectDecisionCockpitCommand,
         InspectEstimateWorkspaceCommand, InspectExternalRfiEligibleQueriesCommand,
         InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
         InspectPricingWorkspaceCommand, InspectProductionTaskReviewCommand,
@@ -1690,6 +1696,19 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn inspect_decision_cockpit(
+        host: tauri::State<'_, QuantixHost>,
+        command: InspectDecisionCockpitCommand,
+    ) -> Result<DecisionCockpit, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.inspect_decision_cockpit(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
     pub(super) async fn request_agent_access(
         host: tauri::State<'_, QuantixHost>,
         command: RequestAgentAccessCommand,
@@ -1860,6 +1879,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::inspect_agent_run_history,
             tauri_commands::inspect_agent_run,
             tauri_commands::inspect_agent_run_activity,
+            tauri_commands::inspect_decision_cockpit,
             tauri_commands::request_agent_access,
             tauri_commands::approve_agent_access,
             tauri_commands::resolve_agent_access,

@@ -1673,7 +1673,7 @@ impl TenderStore {
         self.load_external_rfi(&command.rfi_id, version, budget)
     }
 
-    fn inspect_external_rfis(
+    pub(crate) fn inspect_external_rfis(
         &self,
         command: &InspectExternalRfisCommand,
         budget: BidPackageOperationBudget,

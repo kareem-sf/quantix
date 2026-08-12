@@ -169,8 +169,8 @@ fn change_assessment_has_active_affected_agent_run(
         .map_err(sql_error)
 }
 
-fn change_assessment_has_active_affected_execution(
-    transaction: &Transaction<'_>,
+pub(crate) fn change_assessment_has_active_affected_execution(
+    transaction: &Connection,
     assessment_id: &str,
 ) -> Result<bool, TenderCommandError> {
     if change_assessment_has_active_affected_agent_run(transaction, assessment_id, None)? {
@@ -1626,7 +1626,7 @@ impl TenderStore {
         self.load_change_assessment(&command.assessment_id, budget)
     }
 
-    fn inspect_change_assessments(
+    pub(crate) fn inspect_change_assessments(
         &self,
         before_sequence: Option<u32>,
         limit: u32,

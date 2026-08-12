@@ -338,7 +338,7 @@ export function ChangeAssessmentPanel({
       <div className="section-heading">
         <div>
           <p className="eyebrow">Evidence-led change control</p>
-          <h2>Change Assessment</h2>
+          <h2 id="change-assessment-title">Change Assessment</h2>
           <p>
             A confirmed Addendum or Replacement freezes affected work until the
             Tendering Manager classifies its exact typed dependency impact.

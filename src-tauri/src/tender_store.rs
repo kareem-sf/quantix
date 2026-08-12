@@ -38,6 +38,7 @@ mod bid_decisions;
 mod calculations;
 mod change_assessments;
 mod coordinated_baselines;
+mod decision_cockpit;
 mod estimates;
 mod external_rfis;
 mod pricing;
@@ -97,6 +98,13 @@ pub use coordinated_baselines::{
     CoordinatedBidBaselineContradictionCategory, CoordinatedBidBaselineDecision,
     CoordinatedBidBaselinePage, DecideCoordinatedBidBaselineCommand,
     InspectCoordinatedBidBaselinesCommand,
+};
+pub use decision_cockpit::{
+    DecisionAction, DecisionCockpit, DecisionDependency, DecisionDependencyStatus,
+    DecisionEvidence, DecisionFact, DecisionFactKind, DecisionGroupMember, DecisionKind,
+    DecisionLifecycleGate, DecisionResponsible, DecisionResponsibleKind, DecisionStatus,
+    DecisionTarget, DecisionTargetKind, DecisionUrgency, InspectDecisionCockpitCommand,
+    PendingDecision,
 };
 pub use estimates::{
     ApproveBasisOfEstimateCommand, BasisOfEstimateReview, BasisOfEstimateReviewFinding,
@@ -3799,8 +3807,9 @@ impl TenderStore {
         }
     }
 
-    fn require_change_intake_writable(&mut self) -> Result<(), TenderCommandError> {
-        self.require_storage_writable()?;
+    fn change_intake_denial_reason(
+        &self,
+    ) -> Result<(TenderLifecyclePhase, Option<&'static str>), TenderCommandError> {
         let lifecycle_phase = TenderLifecyclePhase::parse(
             &self
                 .connection
@@ -3862,7 +3871,13 @@ impl TenderStore {
                 |row| row.get(0),
             )
             .map_err(sql_error)?;
-        if matches!(
+        let denial_reason = if unresolved_change_assessment {
+            Some("change_assessment_pending")
+        } else if recovery_retry_pending {
+            Some("production_recovery_retry_pending")
+        } else if successor_pending {
+            Some("material_change_successor_pending")
+        } else if !matches!(
             lifecycle_phase,
             TenderLifecyclePhase::Intake
                 | TenderLifecyclePhase::BidDecision
@@ -3870,12 +3885,24 @@ impl TenderStore {
                 | TenderLifecyclePhase::ActiveProduction
                 | TenderLifecyclePhase::IntegratedReview
                 | TenderLifecyclePhase::PackageProduction
-        ) && !successor_pending
-            && !recovery_retry_pending
-            && !unresolved_change_assessment
-        {
+        ) {
+            Some("lifecycle_closed")
+        } else {
+            None
+        };
+        Ok((lifecycle_phase, denial_reason))
+    }
+
+    pub(crate) fn change_intake_is_writable(&self) -> Result<bool, TenderCommandError> {
+        Ok(self.change_intake_denial_reason()?.1.is_none())
+    }
+
+    fn require_change_intake_writable(&mut self) -> Result<(), TenderCommandError> {
+        self.require_storage_writable()?;
+        let (lifecycle_phase, denial_reason) = self.change_intake_denial_reason()?;
+        let Some(denial_reason) = denial_reason else {
             return Ok(());
-        }
+        };
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -3896,15 +3923,7 @@ impl TenderStore {
             json!({
                 "command": "material_change_intake",
                 "lifecycle_phase": lifecycle_phase,
-                "reason": if unresolved_change_assessment {
-                    "change_assessment_pending"
-                } else if recovery_retry_pending {
-                    "production_recovery_retry_pending"
-                } else if successor_pending {
-                    "material_change_successor_pending"
-                } else {
-                    "lifecycle_closed"
-                },
+                "reason": denial_reason,
             }),
             &created_at,
         )?;

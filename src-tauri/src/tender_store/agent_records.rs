@@ -2432,20 +2432,17 @@ impl TenderStore {
         transaction.commit().map_err(sql_error)
     }
 
-    pub(crate) fn resolve_indeterminate_agent_run(
-        &mut self,
-        tender_id: &TenderId,
-        command: ResolveIndeterminateAgentRunCommand,
-    ) -> Result<AgentRunRecoveryDecision, TenderCommandError> {
-        self.require_storage_writable()?;
-        let rationale = command.rationale.trim().to_owned();
-        if command.disposition == AgentRunRecoveryDisposition::RetryTask
-            && production_task_for_run(&self.connection, &command.run_id)?.is_some()
-        {
-            let plan_basis: Option<(String, u32)> = self
-                .connection
-                .query_row(
-                    "SELECT activations.plan_id, activations.plan_version
+    pub(crate) fn indeterminate_run_retry_is_eligible(
+        &self,
+        run_id: &str,
+    ) -> Result<bool, TenderCommandError> {
+        if production_task_for_run(&self.connection, run_id)?.is_none() {
+            return Ok(true);
+        }
+        let plan_basis: Option<(String, u32)> = self
+            .connection
+            .query_row(
+                "SELECT activations.plan_id, activations.plan_version
                      FROM production_task_attempts AS attempts
                      JOIN production_activations AS activations
                        ON activations.activation_id = (
@@ -2454,16 +2451,27 @@ impl TenderStore {
                        )
                      JOIN agent_runs AS runs ON runs.task_id = attempts.task_id
                      WHERE runs.run_id = ?1",
-                    [&command.run_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()
-                .map_err(sql_error)?;
-            let (plan_id, plan_version) = plan_basis
-                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-            if !work_plan_package_dependencies_are_current(self, &plan_id, plan_version)? {
-                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
-            }
+                [run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let (plan_id, plan_version) =
+            plan_basis.ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        work_plan_package_dependencies_are_current(self, &plan_id, plan_version)
+    }
+
+    pub(crate) fn resolve_indeterminate_agent_run(
+        &mut self,
+        tender_id: &TenderId,
+        command: ResolveIndeterminateAgentRunCommand,
+    ) -> Result<AgentRunRecoveryDecision, TenderCommandError> {
+        self.require_storage_writable()?;
+        let rationale = command.rationale.trim().to_owned();
+        if command.disposition == AgentRunRecoveryDisposition::RetryTask
+            && !self.indeterminate_run_retry_is_eligible(&command.run_id)?
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
         let transaction = self
             .connection

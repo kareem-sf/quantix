@@ -256,7 +256,7 @@ export function ControlledBoqCalculationPanel({
       <div className="section-heading">
         <div>
           <p className="eyebrow">Deterministic commercial control</p>
-          <h2>Controlled BOQ calculation</h2>
+          <h2 id="controlled-boq-title">Controlled BOQ calculation</h2>
           <p>
             The Cost Estimator proposes evidence-backed inputs. Quantix alone
             performs the arithmetic and renders the immutable canonical run.

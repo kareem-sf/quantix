@@ -19,13 +19,13 @@ interface EvidenceReviewProps {
 
 const readableState = (value: string) => value.replace(/_/g, " ");
 
-const textDirection = (location: EvidenceLocation) => {
+export const evidenceTextDirection = (location: EvidenceLocation) => {
   if (location.direction === "right_to_left") return "rtl";
   if (location.direction === "left_to_right") return "ltr";
   return "auto";
 };
 
-const locationLabel = (location: EvidenceLocation) => {
+export const evidenceLocationLabel = (location: EvidenceLocation) => {
   const pages = Array.from(
     new Set(location.provenance.map((region) => region.page_number)),
   );
@@ -44,6 +44,65 @@ const locationLabel = (location: EvidenceLocation) => {
     .filter(Boolean)
     .join(" · ");
 };
+
+export function EvidenceLocationDetails({
+  location,
+  includeHeading = true,
+}: {
+  location: EvidenceLocation;
+  includeHeading?: boolean;
+}) {
+  return (
+    <>
+      {includeHeading ? (
+        <div className="evidence-location__heading">
+          <strong>
+            {readableState(location.kind)} {location.ordinal}
+          </strong>
+          <span>
+            {evidenceLocationLabel(location) || location.structural_path}
+          </span>
+        </div>
+      ) : null}
+      <p className="evidence-authority">
+        Authoritative source text · {location.language} ·{" "}
+        {readableState(location.direction)}
+      </p>
+      <blockquote dir={evidenceTextDirection(location)}>
+        {location.original_text}
+      </blockquote>
+      {location.translated_text ? (
+        <div className="evidence-translation">
+          <p>Derived translation — non-authoritative</p>
+          <blockquote dir="auto">{location.translated_text}</blockquote>
+        </div>
+      ) : null}
+      <details>
+        <summary>Exact provenance</summary>
+        <dl>
+          <div>
+            <dt>Structural path</dt>
+            <dd>{location.structural_path}</dd>
+          </div>
+          {location.provenance.map((region, index) => (
+            <div key={`${region.page_number}-${index}`}>
+              <dt>Region {index + 1}</dt>
+              <dd>
+                Page {region.page_number}
+                {region.char_start !== null
+                  ? ` · characters ${region.char_start}–${region.char_end}`
+                  : ""}
+                {region.bounding_box
+                  ? ` · box ${region.bounding_box.left},${region.bounding_box.top} → ${region.bounding_box.right},${region.bounding_box.bottom} · ${region.bounding_box.coordinate_origin}`
+                  : ""}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </details>
+    </>
+  );
+}
 
 export function EvidenceReview({
   tenderId,
@@ -150,10 +209,10 @@ export function EvidenceReview({
                   >
                     <strong>{match.package_path}</strong>
                     <span>
-                      {locationLabel(match.location) ||
+                      {evidenceLocationLabel(match.location) ||
                         match.location.structural_path}
                     </span>
-                    <q dir={textDirection(match.location)}>
+                    <q dir={evidenceTextDirection(match.location)}>
                       {match.location.original_text}
                     </q>
                   </button>
@@ -194,50 +253,7 @@ export function EvidenceReview({
                     : "evidence-location"
                 }
               >
-                <div className="evidence-location__heading">
-                  <strong>
-                    {readableState(location.kind)} {location.ordinal}
-                  </strong>
-                  <span>
-                    {locationLabel(location) || location.structural_path}
-                  </span>
-                </div>
-                <p className="evidence-authority">
-                  Authoritative source text · {location.language} ·{" "}
-                  {readableState(location.direction)}
-                </p>
-                <blockquote dir={textDirection(location)}>
-                  {location.original_text}
-                </blockquote>
-                {location.translated_text ? (
-                  <div className="evidence-translation">
-                    <p>Derived translation — non-authoritative</p>
-                    <blockquote>{location.translated_text}</blockquote>
-                  </div>
-                ) : null}
-                <details>
-                  <summary>Exact provenance</summary>
-                  <dl>
-                    <div>
-                      <dt>Structural path</dt>
-                      <dd>{location.structural_path}</dd>
-                    </div>
-                    {location.provenance.map((region, index) => (
-                      <div key={`${region.page_number}-${index}`}>
-                        <dt>Region {index + 1}</dt>
-                        <dd>
-                          Page {region.page_number}
-                          {region.char_start !== null
-                            ? ` · characters ${region.char_start}–${region.char_end}`
-                            : ""}
-                          {region.bounding_box
-                            ? ` · box ${region.bounding_box.left},${region.bounding_box.top} → ${region.bounding_box.right},${region.bounding_box.bottom} · ${region.bounding_box.coordinate_origin}`
-                            : ""}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                </details>
+                <EvidenceLocationDetails location={location} />
               </li>
             ))}
           </ol>

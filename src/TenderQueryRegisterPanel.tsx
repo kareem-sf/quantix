@@ -169,7 +169,7 @@ export function TenderQueryRegisterPanel({
   if (page && !page.query_register_open) {
     return (
       <section className="office-card">
-        <h2>Query Register</h2>
+        <h2 id="query-register-title">Query Register</h2>
         <p>
           Import and verify the Tender package to open the controlled register.
         </p>
@@ -182,7 +182,7 @@ export function TenderQueryRegisterPanel({
       <div className="section-heading">
         <div>
           <p className="eyebrow">Controlled Tender Queries</p>
-          <h2>Query Register</h2>
+          <h2 id="query-register-title">Query Register</h2>
         </div>
         <button
           type="button"

@@ -19,6 +19,7 @@ import { ExternalRfiPanel } from "./ExternalRfiPanel";
 import { PricingDecisionPanel } from "./PricingDecisionPanel";
 import { CoordinatedBidBaselinePanel } from "./CoordinatedBidBaselinePanel";
 import { ChangeAssessmentPanel } from "./ChangeAssessmentPanel";
+import { DecisionCockpitPanel } from "./DecisionCockpitPanel";
 import { TenderBackupPanel } from "./TenderBackupPanel";
 import { TenderRecoveryPanel } from "./TenderRecoveryPanel";
 import { TenderRecordsPanel } from "./TenderRecordsPanel";
@@ -675,6 +676,13 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                   </form>
                 ) : null}
               </section>
+              <DecisionCockpitPanel
+                key={`decision-cockpit-${selected.tender_id}`}
+                tenderId={selected.tender_id}
+                refreshToken={tenderStateVersion}
+                reportCommandFailure={reportCommandFailure}
+                onTenderStateChange={reportTenderStateChange}
+              />
               <ChangeAssessmentPanel
                 key={"change-assessment-" + selected.tender_id}
                 tenderId={selected.tender_id}

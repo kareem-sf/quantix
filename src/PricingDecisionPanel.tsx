@@ -307,7 +307,9 @@ export function PricingDecisionPanel({
       <div className="section-heading">
         <div>
           <p className="eyebrow">Commercial pricing</p>
-          <h2>Pricing scenarios and Approved Tender Price</h2>
+          <h2 id="pricing-decision-title">
+            Pricing scenarios and Approved Tender Price
+          </h2>
           <p>
             Cost remains separate from sell price. All amounts come from exact
             approved Calculation Runs; agents review and recommend but cannot

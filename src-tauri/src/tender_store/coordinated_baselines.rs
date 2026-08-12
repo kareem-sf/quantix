@@ -795,7 +795,7 @@ impl TenderStore {
         self.load_coordinated_bid_baseline(&command.baseline_id, command.version, budget)
     }
 
-    fn inspect_coordinated_bid_baselines(
+    pub(crate) fn inspect_coordinated_bid_baselines(
         &self,
         before_version: Option<u32>,
         limit: u32,

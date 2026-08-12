@@ -1,6 +1,6 @@
 use garde::Validate;
 use jiff::Timestamp;
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use ts_rs::TS;
@@ -38,6 +38,26 @@ const MAX_TASKS_PER_PROFILE: usize = 5;
 const MAX_PLAN_VERSIONS: usize = 256;
 const MAX_PLAN_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STORED_AGENT_PROFILES: usize = MAX_PLAN_VERSIONS * MAX_PLAN_PROFILES + 64;
+
+pub(crate) fn work_plan_has_active_execution(
+    connection: &Connection,
+) -> Result<bool, TenderCommandError> {
+    connection
+        .query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM agent_runs WHERE status = 'running'
+               UNION ALL
+               SELECT 1 FROM parse_attempts WHERE status = 'running'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)
+}
+
+pub(crate) fn work_plan_decision_lifecycle_is_open(lifecycle: TenderLifecyclePhase) -> bool {
+    lifecycle == TenderLifecyclePhase::TenderPlanning
+}
 
 type StoredWorkPlanVersionRow = (
     String,
@@ -1043,9 +1063,10 @@ impl TenderStore {
                 |row| row.get(0),
             )
             .map_err(sql_error)?;
+        let lifecycle = TenderLifecyclePhase::parse(&lifecycle)?;
         if !exact
             || !package_dependencies_current
-            || lifecycle != TenderLifecyclePhase::TenderPlanning.as_str()
+            || !work_plan_decision_lifecycle_is_open(lifecycle)
         {
             append_audit_event(
                 &transaction,
@@ -1067,17 +1088,7 @@ impl TenderStore {
             transaction.commit().map_err(sql_error)?;
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        let active_work: bool = transaction
-            .query_row(
-                "SELECT EXISTS(
-                   SELECT 1 FROM agent_runs WHERE status = 'running'
-                   UNION ALL
-                   SELECT 1 FROM parse_attempts WHERE status = 'running'
-                 )",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(sql_error)?;
+        let active_work = work_plan_has_active_execution(&transaction)?;
         let approval_blocked = command.decision == WorkPlanDecision::Approve
             && (!proposal.blocker_codes.is_empty()
                 || !proposal.capability_gaps.is_empty()
