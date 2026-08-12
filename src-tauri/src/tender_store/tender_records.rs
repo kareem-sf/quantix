@@ -123,6 +123,77 @@ pub enum TenderRecordReviewOutcome {
     ApprovedAssumption,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum GenerationRequirementKind {
+    MandatoryRequirement,
+    Deliverable,
+    AddendumInstruction,
+    Signature,
+    FormField,
+    ExecutionRequirement,
+    RequiredFile,
+}
+
+impl GenerationRequirementKind {
+    pub(super) fn parse(value: &str) -> Result<Self, TenderCommandError> {
+        match value {
+            "mandatory_requirement" => Ok(Self::MandatoryRequirement),
+            "deliverable" => Ok(Self::Deliverable),
+            "addendum_instruction" => Ok(Self::AddendumInstruction),
+            "signature" => Ok(Self::Signature),
+            "form_field" => Ok(Self::FormField),
+            "execution_requirement" => Ok(Self::ExecutionRequirement),
+            "required_file" => Ok(Self::RequiredFile),
+            _ => Err(TenderCommandError::new(TenderErrorCode::InvalidCommand)),
+        }
+    }
+
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::MandatoryRequirement => "mandatory_requirement",
+            Self::Deliverable => "deliverable",
+            Self::AddendumInstruction => "addendum_instruction",
+            Self::Signature => "signature",
+            Self::FormField => "form_field",
+            Self::ExecutionRequirement => "execution_requirement",
+            Self::RequiredFile => "required_file",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum GenerationAuthoringMode {
+    Docx,
+    Xlsx,
+    UnchangedSource,
+    Unsupported,
+}
+
+impl GenerationAuthoringMode {
+    pub(super) fn parse(value: &str) -> Result<Self, TenderCommandError> {
+        match value {
+            "docx" => Ok(Self::Docx),
+            "xlsx" => Ok(Self::Xlsx),
+            "unchanged_source" => Ok(Self::UnchangedSource),
+            "unsupported" => Ok(Self::Unsupported),
+            _ => Err(TenderCommandError::new(TenderErrorCode::InvalidCommand)),
+        }
+    }
+
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Docx => "docx",
+            Self::Xlsx => "xlsx",
+            Self::UnchangedSource => "unchanged_source",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
 impl TenderRecordReviewOutcome {
     fn as_str(self) -> &'static str {
         match self {
@@ -329,6 +400,20 @@ pub struct TenderRecordField {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
+pub struct TenderRecordGenerationInstruction {
+    pub kind: GenerationRequirementKind,
+    pub mandatory: bool,
+    pub section_key: String,
+    pub package_path: String,
+    pub envelope_key: String,
+    pub language: String,
+    pub authoring_mode: GenerationAuthoringMode,
+    pub requested_authoring_format: Option<String>,
+    pub evidence: Vec<TenderRecordEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct TenderRecordContradiction {
     pub field_name: String,
     pub summary: String,
@@ -346,6 +431,7 @@ pub struct TenderRecordInspection {
     pub verification_status: VerificationStatus,
     pub trust_class: TenderRecordTrustClass,
     pub fields: Vec<TenderRecordField>,
+    pub generation_instruction: Option<TenderRecordGenerationInstruction>,
     pub contradictions: Vec<TenderRecordContradiction>,
     pub source_relationships: Vec<TenderRecordSourceRelationship>,
     pub reviews: Vec<TenderRecordReview>,
@@ -394,8 +480,23 @@ pub(crate) struct TenderRecordCandidate {
     pub stable_key: String,
     pub kind: TenderRecordKind,
     pub title: String,
+    pub generation_instruction: Option<TenderRecordGenerationInstructionCandidate>,
     pub fields: Vec<TenderRecordFieldCandidate>,
     pub contradictions: Vec<TenderRecordContradictionCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TenderRecordGenerationInstructionCandidate {
+    pub kind: GenerationRequirementKind,
+    pub mandatory: bool,
+    pub section_key: String,
+    pub package_path: String,
+    pub envelope_key: String,
+    pub language: String,
+    pub authoring_mode: GenerationAuthoringMode,
+    pub requested_authoring_format: Option<String>,
+    pub evidence: Vec<TenderEvidenceReference>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -431,16 +532,16 @@ pub(crate) struct TenderRecordReviewCandidate {
 pub(crate) fn record_extraction_profile(profile_id: String) -> AgentProfileVersionView {
     AgentProfileVersionView {
         profile_id,
-        version: 2,
+        version: 3,
         identity: "Tender Analyst".into(),
         profession: "Tender Engineer".into(),
         seniority: "Senior".into(),
         capabilities: vec![RECORD_EXTRACTION_CAPABILITY.into()],
-        objective: "Extract structured Tender Records from exact Evidence without filling gaps.".into(),
+        objective: "Extract structured Tender Records and any Tender-specific submission instruction from exact Evidence without filling gaps.".into(),
         behavior: "Separate source wording, interpretation, contradictions, uncertainty, and missing information.".into(),
         skepticism: "Treat every material claim as unsupported until exact provenance is supplied.".into(),
         risk_tolerance: "Low tolerance for invented or weakly attributed Tender facts.".into(),
-        instructions: "Extract only structured pre-bid Tender records supported by the supplied exact Evidence. Preserve original-language authority, label translations as derived, represent absence as an Assumption or Tender Query, surface contradictions, and make no approval decision.".into(),
+        instructions: "Extract only structured pre-bid Tender records supported by the supplied exact Evidence. When the Evidence explicitly controls submission generation, publish one typed generation_instruction containing its requirement kind, mandatory status, section, exact package path, envelope, language, supported authoring mode, and exact Evidence; otherwise omit it. Preserve original-language authority, label translations as derived, represent absence as an Assumption or Tender Query, surface contradictions, and make no approval decision.".into(),
         output_contract_json: record_extraction_output_contract(),
         review_policy: "Every proposed record requires independent review or exact Engineer User verification. Missing provenance blocks verification.".into(),
         permissions: record_extraction_permissions(),
@@ -452,7 +553,7 @@ pub(crate) fn record_extraction_profile(profile_id: String) -> AgentProfileVersi
 pub(crate) fn record_review_profile(profile_id: String) -> AgentProfileVersionView {
     AgentProfileVersionView {
         profile_id,
-        version: 2,
+        version: 3,
         identity: "Independent Reviewer".into(),
         profession: "Tender Assurance Engineer".into(),
         seniority: "Senior".into(),
@@ -461,7 +562,7 @@ pub(crate) fn record_review_profile(profile_id: String) -> AgentProfileVersionVi
         behavior: "Review without editing the target and report only attributable findings.".into(),
         skepticism: "Challenge provenance, contradictions, assumptions, and unsupported certainty.".into(),
         risk_tolerance: "Very low tolerance for unverified material Tender facts.".into(),
-        instructions: "Review the supplied immutable Tender Record version against its exact authoritative Evidence. Return only an attributable verification or rejection outcome. Do not rewrite the author target and never fill missing provenance with plausible content.".into(),
+        instructions: "Review the supplied immutable Tender Record version, including any typed submission generation instruction, against its exact authoritative Evidence. Return only an attributable verification or rejection outcome. Do not rewrite the author target and never fill missing provenance with plausible content.".into(),
         output_contract_json: record_review_output_contract(),
         review_policy: "Verification is allowed only when every material field has an eligible exact provenance basis. Assumptions and unresolved Tender Queries require an Engineer decision, not independent verification.".into(),
         permissions: record_review_permissions(),
@@ -651,11 +752,32 @@ fn record_extraction_output_contract() -> String {
                             "minItems": 1,
                             "type": "array"
                         },
+                        "generation_instruction": {
+                            "oneOf": [
+                                { "type": "null" },
+                                {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "authoring_mode": { "enum": ["docx", "xlsx", "unchanged_source", "unsupported"] },
+                                        "envelope_key": { "maxLength": 200, "minLength": 1, "type": "string" },
+                                        "evidence": { "$ref": "#/$defs/evidence_list" },
+                                        "kind": { "enum": ["mandatory_requirement", "deliverable", "addendum_instruction", "signature", "form_field", "execution_requirement", "required_file"] },
+                                        "language": { "maxLength": 100, "minLength": 1, "type": "string" },
+                                        "mandatory": { "type": "boolean" },
+                                        "package_path": { "maxLength": 1000, "minLength": 1, "type": "string" },
+                                        "requested_authoring_format": { "type": ["string", "null"], "maxLength": 200 },
+                                        "section_key": { "maxLength": 200, "minLength": 1, "type": "string" }
+                                    },
+                                    "required": ["kind", "mandatory", "section_key", "package_path", "envelope_key", "language", "authoring_mode", "requested_authoring_format", "evidence"],
+                                    "type": "object"
+                                }
+                            ]
+                        },
                         "kind": { "enum": ["requirement", "evaluation_criterion", "deliverable", "deadline", "form", "clause", "risk", "assumption", "tender_query", "project_characteristic"] },
                         "stable_key": { "maxLength": 100, "minLength": 1, "pattern": "^[a-z0-9][a-z0-9_-]*$", "type": "string" },
                         "title": { "maxLength": 500, "minLength": 1, "type": "string" }
                     },
-                    "required": ["stable_key", "kind", "title", "fields", "contradictions"],
+                    "required": ["stable_key", "kind", "title", "generation_instruction", "fields", "contradictions"],
                     "type": "object"
                 },
                 "maxItems": MAX_RECORDS_PER_RESULT,
@@ -1281,6 +1403,35 @@ impl TenderStore {
             {
                 return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
             }
+            if let Some(instruction) = &record.generation_instruction {
+                let unique_instruction_evidence =
+                    instruction.evidence.iter().collect::<HashSet<_>>();
+                if instruction.section_key.trim().is_empty()
+                    || instruction.section_key.len() > 200
+                    || instruction.package_path.trim().is_empty()
+                    || instruction.package_path.len() > 1_000
+                    || instruction.envelope_key.trim().is_empty()
+                    || instruction.envelope_key.len() > 200
+                    || instruction.language.trim().is_empty()
+                    || instruction.language.len() > 100
+                    || match instruction.authoring_mode {
+                        GenerationAuthoringMode::Unsupported => instruction
+                            .requested_authoring_format
+                            .as_deref()
+                            .is_none_or(|format| format.trim().is_empty() || format.len() > 200),
+                        _ => instruction.requested_authoring_format.is_some(),
+                    }
+                    || instruction.evidence.is_empty()
+                    || instruction.evidence.len() > 32
+                    || unique_instruction_evidence.len() != instruction.evidence.len()
+                    || instruction
+                        .evidence
+                        .iter()
+                        .any(|reference| !allowed_evidence.contains(reference))
+                {
+                    return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+                }
+            }
             let mut field_names = HashSet::new();
             for field in &record.fields {
                 let unique_field_evidence = field.evidence.iter().collect::<HashSet<_>>();
@@ -1316,6 +1467,10 @@ impl TenderStore {
                         .evidence
                         .iter()
                         .any(|reference| !allowed_evidence.contains(reference))
+                    || (record.generation_instruction.is_some()
+                        && field.basis_kind == TenderRecordBasisKind::Evidence
+                        && field.value.is_none()
+                        && field.normalized_value.is_none())
                 {
                     return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
                 }
@@ -1733,7 +1888,8 @@ impl TenderStore {
             let mut version_statement = self
                 .connection
                 .prepare(
-                    "SELECT version, kind, title, fields_json, contradictions_json,
+                    "SELECT version, kind, title, generation_instruction_json,
+                            fields_json, contradictions_json,
                             agent_runs.task_id
                      FROM tender_record_versions
                      JOIN agent_runs ON agent_runs.run_id = tender_record_versions.author_run_id
@@ -1755,9 +1911,11 @@ impl TenderStore {
                 let kind =
                     TenderRecordKind::parse(&version_row.get::<_, String>(1).map_err(sql_error)?)?;
                 let title = version_row.get::<_, String>(2).map_err(sql_error)?;
-                let fields_json = version_row.get::<_, String>(3).map_err(sql_error)?;
-                let contradictions_json = version_row.get::<_, String>(4).map_err(sql_error)?;
-                let task_id = version_row.get::<_, String>(5).map_err(sql_error)?;
+                let generation_instruction_json =
+                    version_row.get::<_, Option<String>>(3).map_err(sql_error)?;
+                let fields_json = version_row.get::<_, String>(4).map_err(sql_error)?;
+                let contradictions_json = version_row.get::<_, String>(5).map_err(sql_error)?;
+                let task_id = version_row.get::<_, String>(6).map_err(sql_error)?;
                 if version != expected_version {
                     return Ok(false);
                 }
@@ -1769,6 +1927,10 @@ impl TenderStore {
                         stable_key: stable_key.clone(),
                         kind,
                         title,
+                        generation_instruction: generation_instruction_json
+                            .as_deref()
+                            .map(parse_canonical_json)
+                            .transpose()?,
                         fields: fields.clone(),
                         contradictions,
                     }],
@@ -1948,8 +2110,9 @@ impl TenderStore {
         let sql = format!(
             "SELECT tender_record_versions.record_id, tender_records.stable_key,
                     tender_record_versions.version, tender_record_versions.kind,
-                    tender_record_versions.title, tender_record_versions.fields_json,
-                    tender_record_versions.contradictions_json,
+                    tender_record_versions.title,
+                    tender_record_versions.generation_instruction_json,
+                    tender_record_versions.fields_json, tender_record_versions.contradictions_json,
                     tender_record_versions.author_run_id, agent_runs.profile_id,
                     tender_record_versions.created_at
              FROM tender_record_versions
@@ -1968,11 +2131,12 @@ impl TenderStore {
                     row.get::<_, u32>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(5)?,
                     row.get::<_, String>(6)?,
                     row.get::<_, String>(7)?,
                     row.get::<_, String>(8)?,
                     row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
                 ))
             })
             .map_err(sql_error)?
@@ -1986,6 +2150,7 @@ impl TenderStore {
                     version,
                     kind,
                     title,
+                    generation_instruction_json,
                     fields_json,
                     contradictions_json,
                     author_run_id,
@@ -1993,6 +2158,10 @@ impl TenderStore {
                     created_at,
                 )| {
                     let kind = TenderRecordKind::parse(&kind)?;
+                    let generation_instruction_candidate = generation_instruction_json
+                        .as_deref()
+                        .map(parse_canonical_json::<TenderRecordGenerationInstructionCandidate>)
+                        .transpose()?;
                     let field_candidates: Vec<TenderRecordFieldCandidate> =
                         parse_canonical_json(&fields_json)?;
                     let contradiction_candidates: Vec<TenderRecordContradictionCandidate> =
@@ -2005,7 +2174,15 @@ impl TenderStore {
                                 .iter()
                                 .flat_map(|contradiction| contradiction.evidence.iter().cloned()),
                         )
+                        .chain(
+                            generation_instruction_candidate
+                                .iter()
+                                .flat_map(|instruction| instruction.evidence.iter().cloned()),
+                        )
                         .collect::<HashSet<_>>();
+                    let generation_instruction = generation_instruction_candidate
+                        .map(|instruction| self.resolve_generation_instruction(instruction))
+                        .transpose()?;
                     let fields = field_candidates
                         .into_iter()
                         .map(|field| self.resolve_record_field(field))
@@ -2112,6 +2289,7 @@ impl TenderStore {
                         verification_status,
                         trust_class,
                         fields,
+                        generation_instruction,
                         contradictions,
                         source_relationships,
                         reviews,
@@ -2122,6 +2300,27 @@ impl TenderStore {
                 },
             )
             .collect()
+    }
+
+    fn resolve_generation_instruction(
+        &self,
+        instruction: TenderRecordGenerationInstructionCandidate,
+    ) -> Result<TenderRecordGenerationInstruction, TenderCommandError> {
+        Ok(TenderRecordGenerationInstruction {
+            kind: instruction.kind,
+            mandatory: instruction.mandatory,
+            section_key: instruction.section_key,
+            package_path: instruction.package_path,
+            envelope_key: instruction.envelope_key,
+            language: instruction.language,
+            authoring_mode: instruction.authoring_mode,
+            requested_authoring_format: instruction.requested_authoring_format,
+            evidence: instruction
+                .evidence
+                .into_iter()
+                .map(|reference| self.resolve_record_evidence(reference))
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 
     fn resolve_record_field(
@@ -2223,6 +2422,12 @@ fn expanded_record_candidate_bytes(
                 .contradictions
                 .iter()
                 .flat_map(|contradiction| contradiction.evidence.iter()),
+        )
+        .chain(
+            record
+                .generation_instruction
+                .iter()
+                .flat_map(|instruction| instruction.evidence.iter()),
         )
     {
         let expanded_bytes: i64 = connection
@@ -2754,14 +2959,19 @@ pub(super) fn publish_tender_record_candidates(
         transaction
             .execute(
                 "INSERT INTO tender_record_versions (
-                   record_id, version, kind, title, fields_json, contradictions_json,
-                   author_run_id, created_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                   record_id, version, kind, title, generation_instruction_json, fields_json,
+                   contradictions_json, author_run_id, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     record_id,
                     version,
                     record.kind.as_str(),
                     record.title,
+                    record
+                        .generation_instruction
+                        .as_ref()
+                        .map(canonical_json)
+                        .transpose()?,
                     canonical_json(&record.fields)?,
                     canonical_json(&record.contradictions)?,
                     run_id,
@@ -2894,18 +3104,28 @@ fn record_review_data_view(
     record_id: &str,
     version: u32,
 ) -> Result<Value, TenderCommandError> {
-    let (stable_key, kind, title, fields_json, contradictions_json, author_run_id): (
+    let (
+        stable_key,
+        kind,
+        title,
+        generation_instruction_json,
+        fields_json,
+        contradictions_json,
+        author_run_id,
+    ): (
         String,
         String,
         String,
+        Option<String>,
         String,
         String,
         String,
     ) = connection
         .query_row(
             "SELECT tender_records.stable_key, tender_record_versions.kind,
-                    tender_record_versions.title, tender_record_versions.fields_json,
-                    tender_record_versions.contradictions_json,
+                    tender_record_versions.title,
+                    tender_record_versions.generation_instruction_json,
+                    tender_record_versions.fields_json, tender_record_versions.contradictions_json,
                     tender_record_versions.author_run_id
              FROM tender_record_versions
              JOIN tender_records USING (record_id)
@@ -2920,11 +3140,16 @@ fn record_review_data_view(
                     row.get(3)?,
                     row.get(4)?,
                     row.get(5)?,
+                    row.get(6)?,
                 ))
             },
         )
         .map_err(sql_error)?;
     let fields: Vec<TenderRecordFieldCandidate> = parse_canonical_json(&fields_json)?;
+    let generation_instruction = generation_instruction_json
+        .as_deref()
+        .map(parse_canonical_json::<TenderRecordGenerationInstructionCandidate>)
+        .transpose()?;
     let contradictions: Vec<TenderRecordContradictionCandidate> =
         parse_canonical_json(&contradictions_json)?;
     let references = fields
@@ -2934,6 +3159,11 @@ fn record_review_data_view(
             contradictions
                 .iter()
                 .flat_map(|contradiction| contradiction.evidence.iter().cloned()),
+        )
+        .chain(
+            generation_instruction
+                .iter()
+                .flat_map(|instruction| instruction.evidence.iter().cloned()),
         )
         .collect::<HashSet<_>>();
     let mut evidence = Vec::with_capacity(references.len());
@@ -2979,7 +3209,14 @@ fn record_review_data_view(
                     .cmp(&right.pointer("/reference/ordinal").and_then(Value::as_u64))
             })
     });
-    let verification_eligible = record_fields_are_verifiable(connection, &fields)?;
+    let verification_eligible = record_fields_are_verifiable(connection, &fields)?
+        && generation_instruction.as_ref().is_none_or(|instruction| {
+            !instruction.evidence.is_empty()
+                && instruction
+                    .evidence
+                    .iter()
+                    .all(|reference| references.contains(reference))
+        });
     let source_relationships = load_source_relationships(connection, &references)?;
     Ok(json!({
         "data_classification": DataClassification::TenderInternal,
@@ -2989,6 +3226,7 @@ fn record_review_data_view(
             "author_run_id": author_run_id,
             "contradictions": contradictions,
             "fields": fields,
+            "generation_instruction": generation_instruction,
             "kind": kind,
             "record_id": record_id,
             "stable_key": stable_key,
@@ -3056,6 +3294,7 @@ mod tests {
             stable_key: stable_key.into(),
             kind: TenderRecordKind::Risk,
             title: stable_key.into(),
+            generation_instruction: None,
             fields: Vec::new(),
             contradictions: Vec::new(),
         }

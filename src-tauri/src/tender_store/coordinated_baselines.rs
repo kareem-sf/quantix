@@ -869,7 +869,7 @@ impl TenderStore {
         )
     }
 
-    fn load_coordinated_bid_baseline(
+    pub(super) fn load_coordinated_bid_baseline(
         &self,
         baseline_id: &str,
         version: u32,
@@ -1512,6 +1512,7 @@ impl TenderStore {
                 "version": record.version,
                 "kind": record.kind,
                 "title": record.title,
+                "generation_instruction": record.generation_instruction,
                 "fields": record.fields,
                 "contradictions": record.contradictions,
                 "author_run_id": record.author_run_id,
@@ -2473,6 +2474,7 @@ impl TenderStore {
                     "version": record.version,
                     "kind": record.kind,
                     "title": record.title,
+                    "generation_instruction": record.generation_instruction,
                     "fields": record.fields,
                     "contradictions": record.contradictions,
                     "author_run_id": record.author_run_id,

@@ -5,6 +5,8 @@ use std::{
     process,
 };
 
+mod submission_generation_fixture;
+
 fn main() {
     if let Err(error) = run() {
         if let Ok(executable) = env::current_exe() {
@@ -909,6 +911,10 @@ fn run_agent_turn(
             | "usage-stream"
             | "output-invalid"
             | "record-extraction"
+            | "record-extraction-submission-generation"
+            | "record-extraction-submission-generation-empty-material"
+            | "record-extraction-submission-generation-unsupported"
+            | "record-extraction-submission-generation-path-collision"
             | "record-extraction-coordinated"
             | "record-extraction-coordinated-split"
             | "record-extraction-coordinated-transitive-split"
@@ -1321,7 +1327,7 @@ fn run_agent_turn(
             return Err("timed out waiting to release production output".into());
         }
     }
-    let candidate = if scenario == "output-invalid" {
+    let mut candidate = if scenario == "output-invalid" {
         serde_json::json!({ "summary": "Missing the required next action." })
     } else if scenario == "record-extraction-delayed" {
         fs::write(
@@ -1522,6 +1528,8 @@ fn run_agent_turn(
             _ => None,
         };
         coordinated_record_extraction_candidate(provider_data_view, changed_branch)?
+    } else if scenario.starts_with("record-extraction-submission-generation") {
+        submission_generation_fixture::candidate(provider_data_view, scenario)?
     } else if scenario == "record-extraction" {
         record_extraction_candidate(provider_data_view)?
     } else if scenario == "record-extraction-invalid" {
@@ -2472,6 +2480,16 @@ fn run_agent_turn(
             "recommended_next_action": "Verify the imported package before detailed analysis."
         })
     };
+    if let Some(records) = candidate
+        .get_mut("records")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for record in records {
+            if record.get("generation_instruction").is_none() {
+                record["generation_instruction"] = serde_json::Value::Null;
+            }
+        }
+    }
     let final_item = serde_json::json!({
         "id": "message_fixture_1",
         "type": "agentMessage",

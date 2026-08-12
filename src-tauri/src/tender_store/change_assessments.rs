@@ -654,6 +654,7 @@ impl TenderStore {
         let mut statement = transaction
             .prepare(
                 "SELECT records.stable_key, versions.kind, versions.title,
+                        versions.generation_instruction_json,
                         versions.fields_json, versions.contradictions_json
                  FROM change_assessment_impacts AS impacts
                  JOIN tender_records AS records ON records.record_id = impacts.object_id
@@ -670,8 +671,9 @@ impl TenderStore {
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             })
             .map_err(sql_error)?;
@@ -681,13 +683,23 @@ impl TenderStore {
             if stable_keys.len() == 256 {
                 return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
             }
-            let (stable_key, kind, title, fields_json, contradictions_json) =
-                row.map_err(sql_error)?;
+            let (
+                stable_key,
+                kind,
+                title,
+                generation_instruction_json,
+                fields_json,
+                contradictions_json,
+            ) = row.map_err(sql_error)?;
             stable_keys.push(stable_key.clone());
             prior_records.push(json!({
                 "stable_key": stable_key,
                 "kind": kind,
                 "title": title,
+                "generation_instruction": generation_instruction_json
+                    .as_deref()
+                    .map(parse_canonical::<Value>)
+                    .transpose()?,
                 "fields": parse_canonical::<Value>(&fields_json)?,
                 "contradictions": parse_canonical::<Value>(&contradictions_json)?,
             }));
@@ -2606,6 +2618,7 @@ impl TenderStore {
         let mut record_statement = transaction
             .prepare(
                 "SELECT impacts.object_id, impacts.object_version, heads.current_version,
+                        versions.generation_instruction_json,
                         versions.fields_json, versions.contradictions_json
                  FROM change_assessment_impacts AS impacts
                  LEFT JOIN tender_record_heads AS heads ON heads.record_id = impacts.object_id
@@ -2623,6 +2636,7 @@ impl TenderStore {
                     row.get::<_, Option<u32>>(2)?,
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
                 ))
             })
             .map_err(sql_error)?;
@@ -2636,6 +2650,7 @@ impl TenderStore {
                 record_id,
                 prior_record_version,
                 current_version,
+                generation_instruction_json,
                 fields_json,
                 contradictions_json,
             ) = record.map_err(sql_error)?;
@@ -2644,7 +2659,7 @@ impl TenderStore {
             else {
                 return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
             };
-            let replacement_bound = fields_json
+            let replacement_bound = generation_instruction_json
                 .as_deref()
                 .map(|value| {
                     json_text_references_source(
@@ -2655,6 +2670,17 @@ impl TenderStore {
                 })
                 .transpose()?
                 .unwrap_or(false)
+                || fields_json
+                    .as_deref()
+                    .map(|value| {
+                        json_text_references_source(
+                            value,
+                            &replacement_artifact_id,
+                            replacement_version,
+                        )
+                    })
+                    .transpose()?
+                    .unwrap_or(false)
                 || contradictions_json
                     .as_deref()
                     .map(|value| {
@@ -2956,7 +2982,8 @@ fn derive_impacts(
     let mut statement = connection
         .prepare(
             "SELECT versions.record_id, versions.version, versions.kind, versions.title,
-                    versions.fields_json, versions.contradictions_json, versions.author_run_id
+                    versions.generation_instruction_json, versions.fields_json,
+                    versions.contradictions_json, versions.author_run_id
              FROM tender_record_heads AS heads
              JOIN tender_record_versions AS versions
                ON versions.record_id = heads.record_id AND versions.version = heads.current_version
@@ -2970,9 +2997,10 @@ fn derive_impacts(
                 row.get::<_, u32>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(4)?,
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
             ))
         })
         .map_err(sql_error)?;
@@ -2984,11 +3012,17 @@ fn derive_impacts(
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
         let row = row.map_err(sql_error)?;
-        if json_text_references_source(&row.4, artifact_id, version)?
+        if row
+            .4
+            .as_deref()
+            .map(|value| json_text_references_source(value, artifact_id, version))
+            .transpose()?
+            .unwrap_or(false)
             || json_text_references_source(&row.5, artifact_id, version)?
+            || json_text_references_source(&row.6, artifact_id, version)?
         {
             impacted_records.insert((row.0.clone(), row.1));
-            record_authors.insert(row.6);
+            record_authors.insert(row.7);
             add_impact(
                 &mut impacts,
                 ChangeAssessmentImpactKind::TenderRecord,

@@ -163,6 +163,11 @@ import type { InstallUpdateCommand } from "./bindings/InstallUpdateCommand";
 import type { UpdateActionCommand } from "./bindings/UpdateActionCommand";
 import type { UpdateDecision } from "./bindings/UpdateDecision";
 import type { UpdateStatus } from "./bindings/UpdateStatus";
+import type { GenerateSubmissionSectionsCommand } from "./bindings/GenerateSubmissionSectionsCommand";
+import type { InspectPackageProductionCommand } from "./bindings/InspectPackageProductionCommand";
+import type { InspectSubmissionArtifactContentCommand } from "./bindings/InspectSubmissionArtifactContentCommand";
+import type { PackageProductionGeneration } from "./bindings/PackageProductionGeneration";
+import type { SubmissionArtifactContent } from "./bindings/SubmissionArtifactContent";
 
 export function ensureQuantixSetup(): Promise<SetupOutcome> {
   return invoke<SetupOutcome>("ensure_quantix_setup");
@@ -944,6 +949,51 @@ export function inspectTenderProduction(
     {
       command,
     },
+  );
+}
+
+export function generateSubmissionSections(
+  tenderId: string,
+  baselineId: string,
+  baselineVersion: number,
+  baselineManifestSha256: string,
+): Promise<PackageProductionGeneration> {
+  const command: GenerateSubmissionSectionsCommand = {
+    tender_id: tenderId,
+    baseline_id: baselineId,
+    baseline_version: baselineVersion,
+    baseline_manifest_sha256: baselineManifestSha256,
+  };
+  return invoke<PackageProductionGeneration>("generate_submission_sections", {
+    command,
+  });
+}
+
+export function inspectPackageProduction(
+  tenderId: string,
+): Promise<PackageProductionGeneration | null> {
+  const command: InspectPackageProductionCommand = { tender_id: tenderId };
+  return invoke<PackageProductionGeneration | null>(
+    "inspect_package_production",
+    { command },
+  );
+}
+
+export function inspectSubmissionArtifactContent(
+  tenderId: string,
+  artifactId: string,
+  version: number,
+  manifestSha256: string,
+): Promise<SubmissionArtifactContent> {
+  const command: InspectSubmissionArtifactContentCommand = {
+    tender_id: tenderId,
+    artifact_id: artifactId,
+    version,
+    manifest_sha256: manifestSha256,
+  };
+  return invoke<SubmissionArtifactContent>(
+    "inspect_submission_artifact_content",
+    { command },
   );
 }
 

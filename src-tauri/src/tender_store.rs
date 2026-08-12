@@ -41,6 +41,7 @@ mod coordinated_baselines;
 mod decision_cockpit;
 mod estimates;
 mod external_rfis;
+mod package_production;
 mod pricing;
 mod production_scheduler;
 mod team_composer;
@@ -128,6 +129,12 @@ pub use external_rfis::{
     InterpretExternalRfiResponseCommand, RegisterExternalRfiResponseCommand,
     ReviseExternalRfiDraftCommand, RunExternalRfiReviewCommand,
 };
+pub use package_production::{
+    GenerateSubmissionSectionsCommand, GenerationRequirement, GenerationRequirementRecordReference,
+    InspectPackageProductionCommand, InspectSubmissionArtifactContentCommand,
+    PackageProductionGeneration, SubmissionArtifactContent, SubmissionArtifactVersion,
+    SubmissionGeneratedArtifactReference, SubmissionSourceArtifactReference,
+};
 pub use pricing::{
     ApproveCommercialStrategyCommand, ApprovePricedCostBaselineCommand,
     ApprovePricingAdjustmentCommand, ApproveTenderPriceCommand, ApprovedTenderPrice,
@@ -166,12 +173,13 @@ pub use tender_queries::{
     TenderQueryTreatmentProposalInput, TenderQueryType,
 };
 pub use tender_records::{
-    CreateTenderEngineerEntryCommand, DecideTenderRecordCommand, InspectTenderRecordsCommand,
-    RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, TenderEvidenceReference,
-    TenderRecordAuthority, TenderRecordAuthorityKind, TenderRecordAuthorityReference,
-    TenderRecordBasisKind, TenderRecordContradiction, TenderRecordDecisionResult,
-    TenderRecordEngineerDecisionKind, TenderRecordEvidence, TenderRecordExtractionResult,
-    TenderRecordField, TenderRecordInspection, TenderRecordKind, TenderRecordPage,
+    CreateTenderEngineerEntryCommand, DecideTenderRecordCommand, GenerationAuthoringMode,
+    GenerationRequirementKind, InspectTenderRecordsCommand, RunTenderRecordExtractionCommand,
+    RunTenderRecordReviewCommand, TenderEvidenceReference, TenderRecordAuthority,
+    TenderRecordAuthorityKind, TenderRecordAuthorityReference, TenderRecordBasisKind,
+    TenderRecordContradiction, TenderRecordDecisionResult, TenderRecordEngineerDecisionKind,
+    TenderRecordEvidence, TenderRecordExtractionResult, TenderRecordField,
+    TenderRecordGenerationInstruction, TenderRecordInspection, TenderRecordKind, TenderRecordPage,
     TenderRecordReview, TenderRecordReviewOutcome, TenderRecordReviewResult,
     TenderRecordSourceRelationship, TenderRecordTrustClass,
 };
@@ -182,7 +190,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 21;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 22;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -1442,6 +1450,12 @@ CREATE TABLE tender_record_versions (
     'clause', 'risk', 'assumption', 'tender_query', 'project_characteristic'
   )),
   title TEXT NOT NULL CHECK (length(CAST(title AS BLOB)) BETWEEN 1 AND 500),
+  generation_instruction_json TEXT CHECK (
+    generation_instruction_json IS NULL OR (
+      json_valid(generation_instruction_json)
+      AND length(CAST(generation_instruction_json AS BLOB)) <= 65536
+    )
+  ),
   fields_json TEXT NOT NULL CHECK (json_valid(fields_json)),
   contradictions_json TEXT NOT NULL CHECK (json_valid(contradictions_json)),
   author_run_id TEXT NOT NULL,
@@ -1919,6 +1933,125 @@ CREATE TABLE coordinated_bid_baseline_approvals (
     REFERENCES coordinated_bid_baseline_versions(baseline_id, version),
   FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
 );
+CREATE TABLE submission_generations (
+  generation_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  generation_id TEXT NOT NULL UNIQUE CHECK (length(generation_id) = 32),
+  baseline_id TEXT NOT NULL,
+  baseline_version INTEGER NOT NULL CHECK (baseline_version BETWEEN 1 AND 32),
+  baseline_manifest_sha256 TEXT NOT NULL CHECK (length(baseline_manifest_sha256) = 64),
+  artifact_versions_json TEXT NOT NULL CHECK (
+    json_valid(artifact_versions_json)
+    AND length(CAST(artifact_versions_json AS BLOB)) <= 4194304
+  ),
+  requirements_json TEXT NOT NULL CHECK (
+    json_valid(requirements_json)
+    AND length(CAST(requirements_json AS BLOB)) <= 4194304
+  ),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  manifest_json TEXT NOT NULL CHECK (
+    json_valid(manifest_json) AND length(CAST(manifest_json AS BLOB)) <= 8388608
+  ),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (baseline_id, baseline_version)
+    REFERENCES coordinated_bid_baseline_versions(baseline_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE submission_artifacts (
+  artifact_id TEXT PRIMARY KEY CHECK (length(artifact_id) = 32),
+  stable_key TEXT NOT NULL UNIQUE CHECK (
+    length(CAST(stable_key AS BLOB)) BETWEEN 1 AND 1000
+  ),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE submission_artifact_versions (
+  artifact_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 32),
+  generation_id TEXT NOT NULL,
+  baseline_id TEXT NOT NULL,
+  baseline_version INTEGER NOT NULL CHECK (baseline_version BETWEEN 1 AND 32),
+  baseline_manifest_sha256 TEXT NOT NULL CHECK (length(baseline_manifest_sha256) = 64),
+  section_key TEXT NOT NULL CHECK (length(CAST(section_key AS BLOB)) BETWEEN 1 AND 200),
+  package_path TEXT NOT NULL CHECK (length(CAST(package_path AS BLOB)) BETWEEN 1 AND 1000),
+  envelope_key TEXT NOT NULL CHECK (length(CAST(envelope_key AS BLOB)) BETWEEN 1 AND 200),
+  language TEXT NOT NULL CHECK (length(CAST(language AS BLOB)) BETWEEN 1 AND 100),
+  authoring_mode TEXT NOT NULL CHECK (authoring_mode IN ('docx', 'xlsx')),
+  media_type TEXT NOT NULL CHECK (length(CAST(media_type AS BLOB)) BETWEEN 1 AND 200),
+  classifications_json TEXT NOT NULL CHECK (json_valid(classifications_json)),
+  scope_record_ids_json TEXT NOT NULL CHECK (json_valid(scope_record_ids_json)),
+  content_sha256 TEXT NOT NULL CHECK (length(content_sha256) = 64),
+  size_bytes INTEGER NOT NULL CHECK (size_bytes BETWEEN 1 AND 16777216),
+  exact_inputs_json TEXT NOT NULL CHECK (json_valid(exact_inputs_json)),
+  generation_policy_id TEXT NOT NULL CHECK (
+    length(CAST(generation_policy_id AS BLOB)) BETWEEN 1 AND 200
+  ),
+  generation_policy_version INTEGER NOT NULL CHECK (generation_policy_version > 0),
+  generation_policy_sha256 TEXT NOT NULL CHECK (length(generation_policy_sha256) = 64),
+  provenance_json TEXT NOT NULL CHECK (json_valid(provenance_json)),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (artifact_id, version),
+  UNIQUE (generation_id, package_path),
+  FOREIGN KEY (artifact_id) REFERENCES submission_artifacts(artifact_id),
+  FOREIGN KEY (generation_id) REFERENCES submission_generations(generation_id),
+  FOREIGN KEY (baseline_id, baseline_version)
+    REFERENCES coordinated_bid_baseline_versions(baseline_id, version),
+  FOREIGN KEY (content_sha256) REFERENCES content_objects(sha256)
+);
+CREATE TABLE submission_artifact_heads (
+  artifact_id TEXT PRIMARY KEY,
+  current_version INTEGER NOT NULL CHECK (current_version BETWEEN 1 AND 32),
+  FOREIGN KEY (artifact_id, current_version)
+    REFERENCES submission_artifact_versions(artifact_id, version)
+);
+CREATE TABLE generation_requirements (
+  requirement_id TEXT PRIMARY KEY CHECK (length(requirement_id) = 64),
+  generation_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 4096),
+  kind TEXT NOT NULL CHECK (kind IN (
+    'mandatory_requirement', 'deliverable', 'addendum_instruction', 'signature',
+    'form_field', 'execution_requirement', 'required_file'
+  )),
+  record_id TEXT NOT NULL CHECK (length(record_id) = 32),
+  record_version INTEGER NOT NULL CHECK (record_version > 0),
+  record_manifest_sha256 TEXT NOT NULL CHECK (length(record_manifest_sha256) = 64),
+  evidence_json TEXT NOT NULL CHECK (json_valid(evidence_json)),
+  mandatory INTEGER NOT NULL CHECK (mandatory IN (0, 1)),
+  section_key TEXT NOT NULL CHECK (length(CAST(section_key AS BLOB)) BETWEEN 1 AND 200),
+  package_path TEXT NOT NULL CHECK (length(CAST(package_path AS BLOB)) BETWEEN 1 AND 1000),
+  envelope_key TEXT NOT NULL CHECK (length(CAST(envelope_key AS BLOB)) BETWEEN 1 AND 200),
+  language TEXT NOT NULL CHECK (length(CAST(language AS BLOB)) BETWEEN 1 AND 100),
+  authoring_mode TEXT NOT NULL CHECK (authoring_mode IN ('docx', 'xlsx', 'unchanged_source')),
+  generated_artifact_id TEXT,
+  generated_artifact_version INTEGER,
+  source_artifact_id TEXT,
+  source_artifact_version INTEGER,
+  content_sha256 TEXT NOT NULL CHECK (length(content_sha256) = 64),
+  size_bytes INTEGER NOT NULL CHECK (size_bytes BETWEEN 1 AND 16777216),
+  calculation_references_json TEXT NOT NULL CHECK (json_valid(calculation_references_json)),
+  review_references_json TEXT NOT NULL CHECK (json_valid(review_references_json)),
+  decision_references_json TEXT NOT NULL CHECK (json_valid(decision_references_json)),
+  authored_fields_json TEXT NOT NULL CHECK (json_valid(authored_fields_json)),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (generation_id, ordinal),
+  FOREIGN KEY (generation_id) REFERENCES submission_generations(generation_id),
+  FOREIGN KEY (record_id, record_version)
+    REFERENCES tender_record_versions(record_id, version),
+  FOREIGN KEY (generated_artifact_id, generated_artifact_version)
+    REFERENCES submission_artifact_versions(artifact_id, version),
+  FOREIGN KEY (source_artifact_id, source_artifact_version)
+    REFERENCES source_artifact_versions(artifact_id, version),
+  CHECK (
+    (generated_artifact_id IS NOT NULL AND generated_artifact_version IS NOT NULL
+      AND source_artifact_id IS NULL AND source_artifact_version IS NULL)
+    OR
+    (generated_artifact_id IS NULL AND generated_artifact_version IS NULL
+      AND source_artifact_id IS NOT NULL AND source_artifact_version IS NOT NULL)
+  )
+);
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
   event_type TEXT NOT NULL,
@@ -2345,6 +2478,16 @@ CREATE TRIGGER pricing_selection_head_identity_immutable BEFORE UPDATE ON pricin
 CREATE TRIGGER pricing_selection_head_no_delete BEFORE DELETE ON pricing_selection_head BEGIN SELECT RAISE(ABORT, 'Pricing Selection head cannot be deleted'); END;
 CREATE TRIGGER approved_tender_prices_no_update BEFORE UPDATE ON approved_tender_prices BEGIN SELECT RAISE(ABORT, 'Approved Tender Prices are immutable'); END;
 CREATE TRIGGER approved_tender_prices_no_delete BEFORE DELETE ON approved_tender_prices BEGIN SELECT RAISE(ABORT, 'Approved Tender Prices are immutable'); END;
+CREATE TRIGGER submission_generations_no_update BEFORE UPDATE ON submission_generations BEGIN SELECT RAISE(ABORT, 'Submission Generations are immutable'); END;
+CREATE TRIGGER submission_generations_no_delete BEFORE DELETE ON submission_generations BEGIN SELECT RAISE(ABORT, 'Submission Generations are immutable'); END;
+CREATE TRIGGER submission_artifacts_no_update BEFORE UPDATE ON submission_artifacts BEGIN SELECT RAISE(ABORT, 'Submission Artifacts are immutable'); END;
+CREATE TRIGGER submission_artifacts_no_delete BEFORE DELETE ON submission_artifacts BEGIN SELECT RAISE(ABORT, 'Submission Artifacts are immutable'); END;
+CREATE TRIGGER submission_artifact_versions_no_update BEFORE UPDATE ON submission_artifact_versions BEGIN SELECT RAISE(ABORT, 'Submission Artifact Versions are immutable'); END;
+CREATE TRIGGER submission_artifact_versions_no_delete BEFORE DELETE ON submission_artifact_versions BEGIN SELECT RAISE(ABORT, 'Submission Artifact Versions are immutable'); END;
+CREATE TRIGGER submission_artifact_heads_identity_immutable BEFORE UPDATE ON submission_artifact_heads WHEN NEW.artifact_id != OLD.artifact_id BEGIN SELECT RAISE(ABORT, 'Submission Artifact head identity is immutable'); END;
+CREATE TRIGGER submission_artifact_heads_no_delete BEFORE DELETE ON submission_artifact_heads BEGIN SELECT RAISE(ABORT, 'Submission Artifact heads cannot be deleted'); END;
+CREATE TRIGGER generation_requirements_no_update BEFORE UPDATE ON generation_requirements BEGIN SELECT RAISE(ABORT, 'Generation Requirements are immutable'); END;
+CREATE TRIGGER generation_requirements_no_delete BEFORE DELETE ON generation_requirements BEGIN SELECT RAISE(ABORT, 'Generation Requirements are immutable'); END;
 CREATE TRIGGER source_artifacts_no_update
 BEFORE UPDATE ON source_artifacts
 BEGIN
@@ -3370,7 +3513,7 @@ impl TenderStore {
         transaction.commit().map_err(sql_error)
     }
 
-    fn reconcile_uncommitted_parse_staging(&self) -> Result<(), TenderCommandError> {
+    fn reconcile_uncommitted_host_staging(&self) -> Result<(), TenderCommandError> {
         let staging_root = self.root.join("staging");
         for entry in fs::read_dir(&staging_root).map_err(store_unavailable)? {
             let entry = entry.map_err(store_unavailable)?;
@@ -3379,11 +3522,10 @@ impl TenderStore {
                 return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
             }
             let name = entry.file_name();
-            let Some(attempt_id) = name.to_str().and_then(|name| name.strip_prefix("parse-"))
-            else {
+            let Some(candidate_id) = name.to_str().and_then(host_staging_candidate_id) else {
                 continue;
             };
-            if !valid_identifier(attempt_id) {
+            if !valid_identifier(candidate_id) {
                 continue;
             }
             remove_verified_directory(&staging_root, &entry.path())?;
@@ -3428,7 +3570,7 @@ impl TenderStore {
             .reconcile_interrupted_parses(expected_tender_id)
             .map_err(recovery_required_if_integrity)?;
         store
-            .reconcile_uncommitted_parse_staging()
+            .reconcile_uncommitted_host_staging()
             .map_err(recovery_required_if_integrity)?;
         store
             .reconcile_interrupted_agent_runs(expected_tender_id)
@@ -3711,6 +3853,9 @@ impl TenderStore {
             return Ok(false);
         }
         if !self.change_assessment_manifests_are_valid_with_check(check)? {
+            return Ok(false);
+        }
+        if !self.package_production_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
         let mut statement = self
@@ -5711,6 +5856,12 @@ fn valid_identifier(value: &str) -> bool {
         && value
             .chars()
             .all(|character| character.is_ascii_digit() || matches!(character, 'a'..='f'))
+}
+
+fn host_staging_candidate_id(name: &str) -> Option<&str> {
+    ["parse-", "generation-"]
+        .into_iter()
+        .find_map(|prefix| name.strip_prefix(prefix))
 }
 
 fn storage_publication_failpoint(name: &str) {

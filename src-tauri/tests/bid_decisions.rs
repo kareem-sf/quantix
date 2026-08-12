@@ -1,5 +1,6 @@
-use std::{fs, io, path::Path, sync::Arc};
+use std::{collections::BTreeSet, fs, io, io::Read, path::Path, sync::Arc};
 
+use rust_decimal::Decimal;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -27,12 +28,14 @@ use quantix_lib::{
     DecideTenderQueryTreatmentCommand, DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
     DecisionAction, DecisionFactKind, DecisionKind, DecisionStatus, DecisionTargetKind,
     DesignateBoqTableCommand, DeviceProtection, ExchangeRateType, ExportApprovedExternalRfiCommand,
-    ExternalRfiQueryReference, ExternalRfiRecipient, ImportTenderPackageCommand,
+    ExternalRfiQueryReference, ExternalRfiRecipient, GenerateSubmissionSectionsCommand,
+    GenerationAuthoringMode, GenerationRequirementKind, ImportTenderPackageCommand,
     InspectBidDecisionApprovalHistoryCommand, InspectCalculationWorkspaceCommand,
     InspectChangeAssessmentsCommand, InspectCoordinatedBidBaselinesCommand,
     InspectDecisionCockpitCommand, InspectEstimateWorkspaceCommand,
     InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
-    InspectProductionTaskReviewCommand, InspectTenderQueriesCommand,
+    InspectPackageProductionCommand, InspectProductionTaskReviewCommand,
+    InspectSubmissionArtifactContentCommand, InspectTenderQueriesCommand,
     InterpretExternalRfiResponseCommand, InvalidateBidDecisionApprovalCommand, MajorFindingPolicy,
     ManagerCapabilityDemandInput, ParseSourceArtifactCommand, PrepareTenderRecoveryCommand,
     PricedCostBaselineReviewOutcome, PricingAdjustmentDirection, PricingAdjustmentKind,
@@ -269,6 +272,716 @@ fn decision_cockpit_projects_the_exact_awaiting_tender_recovery_gate() {
             && dependency.target.object_id == backup.backup_id
             && dependency.target.manifest_sha256 == backup.manifest_sha256
     }));
+}
+
+#[tokio::test]
+async fn package_production_without_verified_generation_instructions_remains_unpublished() {
+    let harness = Harness::new("record-extraction-coordinated");
+    let baseline = approved_package_production(&harness).await;
+
+    let error = harness
+        .host
+        .generate_submission_sections(GenerateSubmissionSectionsCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id.clone(),
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256.clone(),
+        })
+        .expect_err("generic baseline summaries are not authoring instructions");
+    assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+    assert!(harness
+        .host
+        .inspect_package_production(InspectPackageProductionCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect controlled Package Production")
+        .is_none());
+}
+
+#[test]
+fn restart_removes_only_exact_abandoned_host_generation_staging() {
+    let harness = Harness::new("record-extraction-submission-generation");
+    let application_home = harness.application_home.clone();
+    let tender_id = harness.tender_id.clone();
+    let staging = application_home
+        .join("tenders")
+        .join(&tender_id)
+        .join("staging");
+    let abandoned = staging.join(format!("generation-{}", "a".repeat(32)));
+    fs::create_dir(&abandoned).expect("abandoned generation staging directory");
+    fs::write(abandoned.join("section.docx"), b"interrupted staged bytes")
+        .expect("abandoned staged section");
+    let unrelated = staging.join("engineer-notes");
+    fs::create_dir(&unrelated).expect("unrelated staging directory");
+    fs::write(unrelated.join("keep.txt"), b"not Host staging").expect("unrelated staged data");
+    drop(harness.host);
+
+    let restarted = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(harness._root.path().join("resources")),
+    );
+    restarted.accept_runtime_fixture();
+    assert_eq!(ensure_quantix_setup(&restarted).state, SetupState::Ready);
+    restarted
+        .open_tender(&tender_id)
+        .expect("reconcile Tender Store staging before accepting work");
+    assert!(!abandoned.exists());
+    assert_eq!(
+        fs::read(unrelated.join("keep.txt")).expect("preserve unrelated directory"),
+        b"not Host staging"
+    );
+}
+
+#[tokio::test]
+async fn package_production_publishes_typed_requirements_and_deterministic_office_bytes() {
+    let harness = Harness::new("record-extraction-submission-generation");
+    let baseline = approved_package_production(&harness).await;
+    let generation_records = inspect_all_records(&harness.host, &harness.tender_id)
+        .into_iter()
+        .filter(|record| record.generation_instruction.is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(generation_records.len(), 7);
+    assert!(generation_records.iter().all(|record| {
+        let instruction = record
+            .generation_instruction
+            .as_ref()
+            .expect("typed submission instruction");
+        !instruction.evidence.is_empty()
+            && record.fields.iter().all(|field| {
+                !matches!(
+                    field.name.as_str(),
+                    "generation_requirement_kind"
+                        | "mandatory"
+                        | "submission_section"
+                        | "package_path"
+                        | "submission_envelope"
+                        | "language"
+                        | "authoring_mode"
+                )
+            })
+    }));
+    let command = GenerateSubmissionSectionsCommand {
+        tender_id: harness.tender_id.clone(),
+        baseline_id: baseline.baseline_id.clone(),
+        baseline_version: baseline.version,
+        baseline_manifest_sha256: baseline.manifest_sha256.clone(),
+    };
+
+    let stale_error = harness
+        .host
+        .generate_submission_sections(GenerateSubmissionSectionsCommand {
+            baseline_manifest_sha256: "0".repeat(64),
+            ..command.clone()
+        })
+        .expect_err("stale Baseline identity publishes nothing");
+    assert_eq!(stale_error.code, TenderErrorCode::InvalidCommand);
+    assert!(harness
+        .host
+        .inspect_package_production(InspectPackageProductionCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect absent Package Production")
+        .is_none());
+
+    let tender_root = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id);
+    let publication_fault = rusqlite::Connection::open(tender_root.join("tender.sqlite"))
+        .expect("open staged-publication fault store");
+    publication_fault
+        .execute_batch(
+            "CREATE TRIGGER package_generation_test_failure
+             BEFORE INSERT ON submission_generations
+             BEGIN SELECT RAISE(ABORT, 'staged publication failure'); END;",
+        )
+        .expect("install staged-publication fault");
+    assert_eq!(
+        harness
+            .host
+            .generate_submission_sections(command.clone())
+            .expect_err("staged failure publishes no canonical row")
+            .code,
+        TenderErrorCode::StoreUnavailable
+    );
+    publication_fault
+        .execute_batch("DROP TRIGGER package_generation_test_failure;")
+        .expect("remove staged-publication fault");
+    drop(publication_fault);
+    assert!(harness
+        .host
+        .inspect_package_production(InspectPackageProductionCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect after staged failure")
+        .is_none());
+    let unpublished = rusqlite::Connection::open(tender_root.join("tender.sqlite"))
+        .expect("inspect atomic publication tables");
+    for table in [
+        "submission_generations",
+        "submission_artifacts",
+        "submission_artifact_versions",
+        "generation_requirements",
+    ] {
+        let count: u32 = unpublished
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .expect("count canonical Package Production rows");
+        assert_eq!(count, 0, "{table} must remain unpublished");
+    }
+    drop(unpublished);
+    assert!(!fs::read_dir(tender_root.join("staging"))
+        .expect("inspect staging cleanup")
+        .filter_map(Result::ok)
+        .any(|entry| entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("generation-")));
+
+    let first = harness
+        .host
+        .generate_submission_sections(command.clone())
+        .expect("generate exact controlled Submission Sections");
+    assert_eq!(first.requirements.len(), 7);
+    assert_eq!(
+        first
+            .requirements
+            .iter()
+            .map(|requirement| requirement.kind)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            GenerationRequirementKind::MandatoryRequirement,
+            GenerationRequirementKind::Deliverable,
+            GenerationRequirementKind::AddendumInstruction,
+            GenerationRequirementKind::Signature,
+            GenerationRequirementKind::FormField,
+            GenerationRequirementKind::ExecutionRequirement,
+            GenerationRequirementKind::RequiredFile,
+        ])
+    );
+    assert!(first.requirements.iter().all(|requirement| {
+        requirement.mandatory
+            && !requirement.record.manifest_sha256.is_empty()
+            && !requirement.evidence.is_empty()
+            && !requirement.section_key.is_empty()
+            && !requirement.package_path.is_empty()
+            && !requirement.envelope_key.is_empty()
+            && !requirement.language.is_empty()
+            && (requirement.generated_artifact.is_some()
+                ^ requirement.unchanged_source_artifact.is_some())
+    }));
+    assert!(first.artifact_versions.iter().all(|artifact| {
+        !artifact.classifications.is_empty()
+            && !artifact.scope_record_ids.is_empty()
+            && !artifact.envelope_key.is_empty()
+            && artifact.baseline_manifest_sha256 == baseline.manifest_sha256
+    }));
+    assert_eq!(
+        first
+            .requirements
+            .iter()
+            .map(|requirement| requirement.envelope_key.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "commercial_submission",
+            "forms_submission",
+            "technical_submission",
+        ])
+    );
+    let unchanged = first
+        .requirements
+        .iter()
+        .find(|requirement| requirement.authoring_mode == GenerationAuthoringMode::UnchangedSource)
+        .expect("unchanged Source Artifact requirement");
+    assert!(unchanged.generated_artifact.is_none());
+    assert!(unchanged.unchanged_source_artifact.is_some());
+
+    let first_bytes = first
+        .artifact_versions
+        .iter()
+        .map(|artifact| {
+            (
+                artifact.package_path.clone(),
+                (
+                    artifact.artifact_id.clone(),
+                    artifact.version,
+                    artifact.content_sha256.clone(),
+                    artifact.size_bytes,
+                    read_submission_artifact_bytes(&harness, &artifact.content_sha256),
+                ),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let exact_content = harness
+        .host
+        .inspect_submission_artifact_content(InspectSubmissionArtifactContentCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: first.artifact_versions[0].artifact_id.clone(),
+            version: first.artifact_versions[0].version,
+            manifest_sha256: first.artifact_versions[0].manifest_sha256.clone(),
+        })
+        .expect("load exact immutable generated bytes for review");
+    assert_eq!(
+        Sha256::digest(&exact_content.bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
+        exact_content.content_sha256
+    );
+    let docx = first_bytes
+        .iter()
+        .find(|(path, _)| path.ends_with(".docx"))
+        .map(|(_, artifact)| &artifact.4)
+        .expect("generated DOCX");
+    let technical_xml = zip_part(docx, "word/document.xml");
+    assert!(technical_xml.contains("العطاء"));
+    assert!(technical_xml.contains("1 June 2026"));
+    assert!(technical_xml.contains("2 signed originals"));
+    assert!(technical_xml.contains("Mobilization and handover milestones"));
+    assert!(technical_xml.contains("Offer validity is 90 days"));
+    assert!(technical_xml.contains("No unverified alternative scope"));
+    let form = &first_bytes
+        .get("03-Forms/Bilingual-Form-Fields.docx")
+        .expect("Tender-shaped bilingual form")
+        .4;
+    let form_xml = zip_part(form, "word/document.xml");
+    assert!(form_xml.contains("Legal entity name"));
+    assert!(form_xml.contains("اسم الكيان القانوني"));
+    let signature = &first_bytes
+        .get("03-Forms/Signature-Form.docx")
+        .expect("Tender-shaped signature form")
+        .4;
+    assert!(zip_part(signature, "word/document.xml").contains("signature is required"));
+    let xlsx = first_bytes
+        .iter()
+        .find(|(path, _)| path.ends_with(".xlsx"))
+        .map(|(_, artifact)| &artifact.4)
+        .expect("generated XLSX");
+    let (approved_amount, calculation_run_id, calculation_manifest_sha256) =
+        approved_price_provenance(&harness);
+    let sheet = zip_part(xlsx, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains("rightToLeft=\"1\""));
+    assert!(sheet.contains(&format!(
+        "<v>{}</v>",
+        approved_amount
+            .parse::<Decimal>()
+            .expect("exact approved Decimal")
+            .normalize()
+    )));
+    let shared_strings = zip_part(xlsx, "xl/sharedStrings.xml");
+    assert!(shared_strings.contains(&approved_amount));
+    assert!(shared_strings.contains(&calculation_run_id));
+    assert!(shared_strings.contains(&calculation_manifest_sha256));
+    assert!(zip_part(xlsx, "docProps/core.xml").contains("1970-01-01T00:00:00Z"));
+
+    let second = harness
+        .host
+        .generate_submission_sections(command.clone())
+        .expect("regenerate immutable Artifact Versions");
+    for artifact in &second.artifact_versions {
+        let prior = first_bytes
+            .get(&artifact.package_path)
+            .expect("same logical generated Artifact");
+        assert_eq!(artifact.artifact_id, prior.0);
+        assert_eq!(artifact.version, prior.1 + 1);
+        assert_eq!(artifact.content_sha256, prior.2);
+        assert_eq!(artifact.size_bytes, prior.3);
+        assert_eq!(
+            read_submission_artifact_bytes(&harness, &artifact.content_sha256),
+            prior.4
+        );
+    }
+    let published_generation_id = harness
+        .host
+        .inspect_package_production(InspectPackageProductionCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("inspect controlled Package Production")
+        .expect("latest Package Production generation")
+        .generation_id;
+    assert_eq!(published_generation_id, second.generation_id);
+
+    let assert_stale_gate = || {
+        let query_page = harness
+            .host
+            .inspect_tender_queries(InspectTenderQueriesCommand {
+                tender_id: harness.tender_id.clone(),
+                cursor: None,
+                limit: 8,
+            })
+            .expect("inspect current Query Register");
+        let owner = query_page
+            .owner_profiles
+            .first()
+            .expect("approved Query owner");
+        let evidence = query_page
+            .items
+            .first()
+            .and_then(|query| query.evidence.first())
+            .cloned()
+            .expect("exact registered Query evidence");
+        harness
+            .host
+            .create_tender_query(CreateTenderQueryCommand {
+                tender_id: harness.tender_id.clone(),
+                query_type: TenderQueryType::Ambiguity,
+                question: "Which late package instruction now applies?".into(),
+                ambiguity_or_gap:
+                    "A Tender-specific package dependency was registered after baseline approval."
+                        .into(),
+                owner_profile_id: owner.profile_id.clone(),
+                owner_profile_version: owner.version,
+                evidence: vec![evidence],
+                affected_records: Vec::new(),
+                affected_task_keys: vec!["*".into()],
+                due_at: "2099-01-01T00:00:00.000Z".into(),
+                material: false,
+                release_blocking: false,
+                proposed_treatments: vec![TenderQueryTreatmentProposalInput {
+                    treatment: TenderQueryTreatment::Qualification,
+                    rationale: "Keep the late exact package dependency explicit.".into(),
+                }],
+            })
+            .expect("register a late exact package dependency");
+        let stale = harness
+            .host
+            .inspect_coordinated_bid_baselines(InspectCoordinatedBidBaselinesCommand {
+                tender_id: harness.tender_id.clone(),
+                before_version: None,
+                limit: 1,
+            })
+            .expect("inspect dynamically stale baseline")
+            .items
+            .into_iter()
+            .next()
+            .expect("approved baseline remains inspectable");
+        assert!(!stale.current);
+        assert_eq!(
+            harness
+                .host
+                .generate_submission_sections(command)
+                .expect_err("dynamically stale approved baseline publishes no new generation")
+                .code,
+            TenderErrorCode::InvalidCommand
+        );
+        assert_eq!(
+            harness
+                .host
+                .inspect_package_production(InspectPackageProductionCommand {
+                    tender_id: harness.tender_id.clone(),
+                })
+                .expect("inspect publication after stale baseline denial")
+                .expect("prior generation remains published")
+                .generation_id,
+            published_generation_id
+        );
+    };
+
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close generated Tender before relational corruption");
+    let database = tender_root.join("tender.sqlite");
+    let corruption =
+        rusqlite::Connection::open(&database).expect("open relational corruption fixture");
+    let (artifact_id, artifact_version, section_key, current_version): (String, u32, String, u32) =
+        corruption
+            .query_row(
+                "SELECT versions.artifact_id, versions.version, versions.section_key,
+                    heads.current_version
+             FROM submission_artifact_versions AS versions
+             JOIN submission_artifact_heads AS heads USING (artifact_id)
+             WHERE versions.version = 2 ORDER BY versions.artifact_id LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("load exact relational Artifact head");
+    let (generation_sequence, audit_sequence): (u32, i64) = corruption
+        .query_row(
+            "SELECT generation_sequence, audit_sequence FROM submission_generations
+             WHERE generation_id = ?1",
+            [&second.generation_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load exact Generation sequence and audit link");
+    drop(corruption);
+
+    let cold_integrity = || {
+        let cold_host = QuantixHost::with_setup_platform(
+            &harness.application_home,
+            Arc::new(ReadySetupPlatform),
+        );
+        assert_eq!(ensure_quantix_setup(&cold_host).state, SetupState::Ready);
+        cold_host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("reconstruct Package Production semantics after cold open")
+    };
+    let report = cold_integrity();
+    assert_eq!(report.state, TenderIntegrityState::Ready, "{report:?}");
+
+    let corruption = rusqlite::Connection::open(&database).expect("forge Artifact relation");
+    corruption
+        .execute_batch("DROP TRIGGER submission_artifact_versions_no_update;")
+        .expect("temporarily permit Artifact Version corruption");
+    corruption
+        .execute(
+            "UPDATE submission_artifact_versions SET section_key = ?1
+             WHERE artifact_id = ?2 AND version = ?3",
+            rusqlite::params!["forged-relational-section", artifact_id, artifact_version],
+        )
+        .expect("forge relational Artifact section only");
+    corruption
+        .execute_batch(
+            "CREATE TRIGGER submission_artifact_versions_no_update BEFORE UPDATE ON submission_artifact_versions BEGIN SELECT RAISE(ABORT, 'Submission Artifact Versions are immutable'); END;",
+        )
+        .expect("restore exact Artifact Version immutability trigger");
+    drop(corruption);
+    let report = cold_integrity();
+    assert_eq!(
+        report.state,
+        TenderIntegrityState::RecoveryRequired,
+        "{report:?}"
+    );
+    let corruption = rusqlite::Connection::open(&database).expect("restore Artifact relation");
+    corruption
+        .execute_batch("DROP TRIGGER submission_artifact_versions_no_update;")
+        .expect("temporarily permit Artifact Version restoration");
+    corruption
+        .execute(
+            "UPDATE submission_artifact_versions SET section_key = ?1
+             WHERE artifact_id = ?2 AND version = ?3",
+            rusqlite::params![section_key, artifact_id, artifact_version],
+        )
+        .expect("restore exact relational Artifact section");
+    corruption
+        .execute_batch(
+            "CREATE TRIGGER submission_artifact_versions_no_update BEFORE UPDATE ON submission_artifact_versions BEGIN SELECT RAISE(ABORT, 'Submission Artifact Versions are immutable'); END;",
+        )
+        .expect("restore exact Artifact Version immutability trigger");
+    drop(corruption);
+    let report = cold_integrity();
+    assert_eq!(report.state, TenderIntegrityState::Ready, "{report:?}");
+
+    let corruption = rusqlite::Connection::open(&database).expect("forge Artifact head");
+    corruption
+        .execute(
+            "UPDATE submission_artifact_heads SET current_version = 1 WHERE artifact_id = ?1",
+            [&artifact_id],
+        )
+        .expect("forge stale Artifact head only");
+    drop(corruption);
+    let report = cold_integrity();
+    assert_eq!(
+        report.state,
+        TenderIntegrityState::RecoveryRequired,
+        "{report:?}"
+    );
+    let corruption = rusqlite::Connection::open(&database).expect("restore Artifact head");
+    corruption
+        .execute(
+            "UPDATE submission_artifact_heads SET current_version = ?1 WHERE artifact_id = ?2",
+            rusqlite::params![current_version, artifact_id],
+        )
+        .expect("restore exact Artifact head");
+    drop(corruption);
+    let report = cold_integrity();
+    assert_eq!(report.state, TenderIntegrityState::Ready, "{report:?}");
+
+    let corruption = rusqlite::Connection::open(&database).expect("forge Generation sequence");
+    corruption
+        .execute_batch("DROP TRIGGER submission_generations_no_update;")
+        .expect("temporarily permit Generation corruption");
+    corruption
+        .execute(
+            "UPDATE submission_generations SET generation_sequence = 4
+             WHERE generation_id = ?1",
+            [&second.generation_id],
+        )
+        .expect("forge non-contiguous Generation sequence only");
+    corruption
+        .execute_batch(
+            "CREATE TRIGGER submission_generations_no_update BEFORE UPDATE ON submission_generations BEGIN SELECT RAISE(ABORT, 'Submission Generations are immutable'); END;",
+        )
+        .expect("restore exact Generation immutability trigger");
+    drop(corruption);
+    let report = cold_integrity();
+    assert_eq!(
+        report.state,
+        TenderIntegrityState::RecoveryRequired,
+        "{report:?}"
+    );
+    let corruption = rusqlite::Connection::open(&database).expect("restore Generation sequence");
+    corruption
+        .execute_batch("DROP TRIGGER submission_generations_no_update;")
+        .expect("temporarily permit Generation restoration");
+    corruption
+        .execute(
+            "UPDATE submission_generations SET generation_sequence = ?1
+             WHERE generation_id = ?2",
+            rusqlite::params![generation_sequence, second.generation_id],
+        )
+        .expect("restore exact Generation sequence");
+    corruption
+        .execute_batch(
+            "CREATE TRIGGER submission_generations_no_update BEFORE UPDATE ON submission_generations BEGIN SELECT RAISE(ABORT, 'Submission Generations are immutable'); END;",
+        )
+        .expect("restore exact Generation immutability trigger");
+    drop(corruption);
+    let report = cold_integrity();
+    assert_eq!(report.state, TenderIntegrityState::Ready, "{report:?}");
+
+    let corruption = rusqlite::Connection::open(&database).expect("forge Generation audit link");
+    corruption
+        .execute_batch("DROP TRIGGER submission_generations_no_update;")
+        .expect("temporarily permit Generation corruption");
+    corruption
+        .execute(
+            "UPDATE submission_generations SET audit_sequence = 1 WHERE generation_id = ?1",
+            [&second.generation_id],
+        )
+        .expect("forge wrong Generation audit link only");
+    corruption
+        .execute_batch(
+            "CREATE TRIGGER submission_generations_no_update BEFORE UPDATE ON submission_generations BEGIN SELECT RAISE(ABORT, 'Submission Generations are immutable'); END;",
+        )
+        .expect("restore exact Generation immutability trigger");
+    drop(corruption);
+    let report = cold_integrity();
+    assert_eq!(
+        report.state,
+        TenderIntegrityState::RecoveryRequired,
+        "{report:?}"
+    );
+    let corruption = rusqlite::Connection::open(&database).expect("restore Generation audit link");
+    corruption
+        .execute_batch("DROP TRIGGER submission_generations_no_update;")
+        .expect("temporarily permit Generation restoration");
+    corruption
+        .execute(
+            "UPDATE submission_generations SET audit_sequence = ?1 WHERE generation_id = ?2",
+            rusqlite::params![audit_sequence, second.generation_id],
+        )
+        .expect("restore exact Generation audit link");
+    corruption
+        .execute_batch(
+            "CREATE TRIGGER submission_generations_no_update BEFORE UPDATE ON submission_generations BEGIN SELECT RAISE(ABORT, 'Submission Generations are immutable'); END;",
+        )
+        .expect("restore exact Generation immutability trigger");
+    drop(corruption);
+    let report = cold_integrity();
+    assert_eq!(report.state, TenderIntegrityState::Ready, "{report:?}");
+    harness
+        .host
+        .open_tender(&harness.tender_id)
+        .expect("reopen pristine Tender after relational integrity probes");
+    assert_stale_gate();
+}
+
+#[tokio::test]
+async fn submission_instruction_rejects_evidence_without_authored_meaning() {
+    let harness = Harness::new("record-extraction-submission-generation-empty-material");
+    let evidence = harness.import_evidence().await;
+    let extraction = harness
+        .host
+        .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id: harness.tender_id.clone(),
+            evidence,
+            authorities: Vec::new(),
+        })
+        .await
+        .expect("invalid provider output is preserved as a failed Agent Run");
+    assert_eq!(extraction.run.state, AgentRunState::Failed);
+    assert_eq!(
+        extraction
+            .run
+            .failure
+            .as_ref()
+            .map(|failure| failure.category),
+        Some(ProviderFailureCategory::OutputInvalid)
+    );
+    assert_eq!(extraction.published_record_count, 0);
+    assert!(inspect_all_records(&harness.host, &harness.tender_id).is_empty());
+}
+
+fn approved_price_provenance(harness: &Harness) -> (String, String, String) {
+    let tender_root = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id);
+    rusqlite::Connection::open(tender_root.join("tender.sqlite"))
+        .expect("open approved price store")
+        .query_row(
+            "SELECT final_amount, pricing_calculation_run_id, calculation_manifest_sha256
+             FROM approved_tender_prices",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("exact approved price provenance")
+}
+
+fn read_submission_artifact_bytes(harness: &Harness, sha256: &str) -> Vec<u8> {
+    let tender_root = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id);
+    let connection =
+        rusqlite::Connection::open(tender_root.join("tender.sqlite")).expect("open Tender Store");
+    let integrity: String = connection
+        .query_row(
+            "SELECT integrity FROM content_objects WHERE sha256 = ?1",
+            [sha256],
+            |row| row.get(0),
+        )
+        .expect("generated content object");
+    let integrity = integrity
+        .parse::<cacache::Integrity>()
+        .expect("valid generated content integrity");
+    cacache::read_hash_sync(tender_root.join("content"), &integrity)
+        .expect("read generated content bytes")
+}
+
+fn zip_part(bytes: &[u8], name: &str) -> String {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("valid OOXML ZIP");
+    let mut part = String::new();
+    archive
+        .by_name(name)
+        .expect("required OOXML part")
+        .read_to_string(&mut part)
+        .expect("read OOXML part");
+    part
+}
+
+#[tokio::test]
+async fn package_production_refuses_unsupported_authoring_and_path_collisions() {
+    for scenario in [
+        "record-extraction-submission-generation-unsupported",
+        "record-extraction-submission-generation-path-collision",
+    ] {
+        let harness = Harness::new(scenario);
+        let baseline = approved_package_production(&harness).await;
+        assert_eq!(
+            harness
+                .host
+                .generate_submission_sections(GenerateSubmissionSectionsCommand {
+                    tender_id: harness.tender_id.clone(),
+                    baseline_id: baseline.baseline_id,
+                    baseline_version: baseline.version,
+                    baseline_manifest_sha256: baseline.manifest_sha256,
+                })
+                .expect_err("invalid authoring instruction publishes nothing")
+                .code,
+            TenderErrorCode::InvalidCommand
+        );
+        assert!(harness
+            .host
+            .inspect_package_production(InspectPackageProductionCommand {
+                tender_id: harness.tender_id.clone(),
+            })
+            .expect("inspect unpublished Package Production")
+            .is_none());
+    }
 }
 
 struct ReadySetupPlatform;
@@ -7602,7 +8315,11 @@ async fn approved_package_production(harness: &Harness) -> CoordinatedBidBaselin
             conditions: Vec::new(),
             exceptions: Vec::new(),
         })
-        .expect("approve exact pre-change Coordinated Bid Baseline")
+        .unwrap_or_else(|error| {
+            panic!(
+                "approve exact pre-change Coordinated Bid Baseline: {error:?}; baseline: {baseline:#?}"
+            )
+        })
 }
 
 async fn run_cost_estimator_fixture(
