@@ -35,6 +35,7 @@ mod agent_records;
 pub(crate) mod backups;
 mod bid_decisions;
 mod calculations;
+mod change_assessments;
 mod coordinated_baselines;
 mod estimates;
 mod external_rfis;
@@ -78,6 +79,14 @@ pub use calculations::{
     PricingAdjustmentDirection, PricingCalculationAdjustmentInput, PricingCalculationRun,
     ProposeBoqCalculationRuleCommand, RunCalculationRuleReviewCommand,
     RunCostEstimatorCalculationCommand,
+};
+pub use change_assessments::{
+    ChangeAssessment, ChangeAssessmentApprovalConsequence, ChangeAssessmentClassification,
+    ChangeAssessmentDecision, ChangeAssessmentDependencyKind, ChangeAssessmentDependencyReference,
+    ChangeAssessmentEvidenceExcerpt, ChangeAssessmentImpact, ChangeAssessmentImpactConsequence,
+    ChangeAssessmentImpactKind, ChangeAssessmentObjectKind, ChangeAssessmentPage,
+    ChangeAssessmentSource, ChangeAssessmentStatus, DecideChangeAssessmentCommand,
+    InspectChangeAssessmentsCommand,
 };
 pub use coordinated_baselines::{
     AssembleCoordinatedBidBaselineCommand, CoordinatedBidBaseline, CoordinatedBidBaselineApproval,
@@ -164,7 +173,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 19;
+const TENDER_SCHEMA_VERSION: i64 = 21;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -176,7 +185,7 @@ CREATE TABLE tender (
   current_revision INTEGER NOT NULL CHECK (current_revision > 0),
   lifecycle_phase TEXT NOT NULL CHECK (lifecycle_phase IN (
     'intake', 'bid_decision', 'tender_planning', 'active_production',
-    'integrated_review', 'package_production', 'declined'
+    'integrated_review', 'change_assessment', 'package_production', 'declined'
   )),
   created_at TEXT NOT NULL
 );
@@ -1033,6 +1042,100 @@ CREATE TABLE source_relationships (
   FOREIGN KEY (replacement_artifact_id, replacement_version)
     REFERENCES source_artifact_versions(artifact_id, version)
 );
+CREATE TABLE change_assessments (
+  assessment_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  assessment_id TEXT NOT NULL UNIQUE CHECK (length(assessment_id) = 32),
+  relationship_id TEXT NOT NULL UNIQUE,
+  lifecycle_before TEXT NOT NULL CHECK (lifecycle_before IN (
+    'intake', 'bid_decision', 'tender_planning', 'active_production',
+    'integrated_review', 'package_production'
+  )),
+  baseline_id TEXT,
+  baseline_version INTEGER CHECK (baseline_version IS NULL OR baseline_version BETWEEN 1 AND 32),
+  baseline_manifest_sha256 TEXT CHECK (
+    baseline_manifest_sha256 IS NULL OR length(baseline_manifest_sha256) = 64
+  ),
+  affected_commitments_json TEXT NOT NULL CHECK (json_valid(affected_commitments_json)),
+  proposed_rework_json TEXT NOT NULL CHECK (json_valid(proposed_rework_json)),
+  unchanged_scope_json TEXT NOT NULL CHECK (json_valid(unchanged_scope_json)),
+  deadline_effect TEXT NOT NULL CHECK (length(CAST(deadline_effect AS BLOB)) BETWEEN 1 AND 2000),
+  approval_consequences_json TEXT NOT NULL CHECK (json_valid(approval_consequences_json)),
+  manifest_json TEXT NOT NULL CHECK (
+    json_valid(manifest_json) AND length(CAST(manifest_json AS BLOB)) <= 4194304
+  ),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (relationship_id) REFERENCES source_relationships(relationship_id),
+  FOREIGN KEY (baseline_id, baseline_version)
+    REFERENCES coordinated_bid_baseline_versions(baseline_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence),
+  CHECK (
+    (baseline_id IS NULL AND baseline_version IS NULL AND baseline_manifest_sha256 IS NULL)
+    OR (baseline_id IS NOT NULL AND baseline_version IS NOT NULL
+        AND baseline_manifest_sha256 IS NOT NULL)
+  )
+);
+CREATE TABLE change_assessment_impacts (
+  assessment_id TEXT NOT NULL,
+  impact_sequence INTEGER NOT NULL CHECK (impact_sequence BETWEEN 1 AND 4096),
+  kind TEXT NOT NULL CHECK (kind IN (
+    'tender_record', 'work_plan', 'production_task', 'agent_run', 'production_artifact',
+    'tender_query', 'calculation_run', 'estimate', 'pricing_decision', 'review',
+    'coordinated_baseline', 'package', 'approval'
+  )),
+  object_id TEXT NOT NULL CHECK (length(CAST(object_id AS BLOB)) BETWEEN 1 AND 200),
+  object_version INTEGER NOT NULL CHECK (object_version >= 0),
+  dependencies_json TEXT NOT NULL CHECK (
+    json_valid(dependencies_json) AND length(CAST(dependencies_json AS BLOB)) <= 1048576
+  ),
+  consequence TEXT NOT NULL CHECK (consequence IN ('stale', 'reopen', 'revoke')),
+  summary TEXT NOT NULL CHECK (length(CAST(summary AS BLOB)) BETWEEN 1 AND 500),
+  PRIMARY KEY (assessment_id, impact_sequence),
+  UNIQUE (assessment_id, kind, object_id, object_version),
+  FOREIGN KEY (assessment_id) REFERENCES change_assessments(assessment_id)
+);
+CREATE TABLE change_assessment_decisions (
+  assessment_id TEXT PRIMARY KEY,
+  classification TEXT NOT NULL CHECK (classification IN ('irrelevant', 'material')),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  decided_by TEXT NOT NULL CHECK (decided_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+  lifecycle_after TEXT NOT NULL CHECK (lifecycle_after IN (
+    'intake', 'bid_decision', 'tender_planning', 'active_production',
+    'integrated_review', 'package_production'
+  )),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (assessment_id) REFERENCES change_assessments(assessment_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE change_assessment_resolutions (
+  assessment_id TEXT PRIMARY KEY,
+  resolution TEXT NOT NULL CHECK (
+    resolution IN ('irrelevant', 'source_precedence', 'successor_baseline')
+  ),
+  baseline_id TEXT,
+  baseline_version INTEGER CHECK (baseline_version IS NULL OR baseline_version BETWEEN 1 AND 32),
+  baseline_manifest_sha256 TEXT CHECK (
+    baseline_manifest_sha256 IS NULL OR length(baseline_manifest_sha256) = 64
+  ),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (assessment_id) REFERENCES change_assessments(assessment_id),
+  FOREIGN KEY (baseline_id, baseline_version)
+    REFERENCES coordinated_bid_baseline_versions(baseline_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence),
+  CHECK (
+    (resolution IN ('irrelevant', 'source_precedence')
+      AND baseline_id IS NULL AND baseline_version IS NULL
+      AND baseline_manifest_sha256 IS NULL)
+    OR (resolution = 'successor_baseline' AND baseline_id IS NOT NULL
+      AND baseline_version IS NOT NULL AND baseline_manifest_sha256 IS NOT NULL)
+  )
+);
 CREATE TABLE parse_attempts (
   attempt_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   attempt_id TEXT NOT NULL UNIQUE CHECK (length(attempt_id) = 32),
@@ -1503,7 +1606,7 @@ CREATE TABLE bid_decision_approval_invalidations (
   invalidated_by TEXT NOT NULL CHECK (invalidated_by = 'engineer_user'),
   acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
   lifecycle_before TEXT NOT NULL CHECK (lifecycle_before IN (
-    'tender_planning', 'active_production'
+    'tender_planning', 'active_production', 'integrated_review', 'package_production'
   )),
   lifecycle_after TEXT NOT NULL CHECK (lifecycle_after = 'bid_decision'),
   manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
@@ -1700,6 +1803,36 @@ CREATE TABLE production_integration_readiness (
   FOREIGN KEY (artifact_id, artifact_version)
     REFERENCES production_artifact_versions(artifact_id, version),
   FOREIGN KEY (review_id) REFERENCES production_reviews(review_id)
+);
+CREATE TABLE production_task_carry_forwards (
+  carry_forward_id TEXT PRIMARY KEY CHECK (length(carry_forward_id) = 32),
+  assessment_id TEXT NOT NULL,
+  source_production_task_id TEXT NOT NULL,
+  target_production_task_id TEXT NOT NULL UNIQUE,
+  source_readiness_id TEXT NOT NULL,
+  target_readiness_id TEXT NOT NULL UNIQUE,
+  source_artifact_id TEXT NOT NULL CHECK (length(source_artifact_id) = 32),
+  source_artifact_version INTEGER NOT NULL CHECK (source_artifact_version BETWEEN 1 AND 8),
+  source_review_id TEXT,
+  source_plan_manifest_sha256 TEXT NOT NULL CHECK (length(source_plan_manifest_sha256) = 64),
+  target_plan_manifest_sha256 TEXT NOT NULL CHECK (length(target_plan_manifest_sha256) = 64),
+  compatibility_sha256 TEXT NOT NULL CHECK (length(compatibility_sha256) = 64),
+  manifest_json TEXT NOT NULL CHECK (
+    json_valid(manifest_json) AND length(CAST(manifest_json AS BLOB)) <= 1048576
+  ),
+  manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  created_at TEXT NOT NULL,
+  UNIQUE (assessment_id, source_production_task_id),
+  FOREIGN KEY (assessment_id) REFERENCES change_assessments(assessment_id),
+  FOREIGN KEY (source_production_task_id) REFERENCES production_tasks(production_task_id),
+  FOREIGN KEY (target_production_task_id) REFERENCES production_tasks(production_task_id),
+  FOREIGN KEY (source_readiness_id) REFERENCES production_integration_readiness(readiness_id),
+  FOREIGN KEY (target_readiness_id) REFERENCES production_integration_readiness(readiness_id),
+  FOREIGN KEY (source_artifact_id, source_artifact_version)
+    REFERENCES production_artifact_versions(artifact_id, version),
+  FOREIGN KEY (source_review_id) REFERENCES production_reviews(review_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
 );
 CREATE TABLE coordinated_bid_baselines (
   baseline_id TEXT PRIMARY KEY CHECK (length(baseline_id) = 32),
@@ -2233,6 +2366,14 @@ BEFORE DELETE ON source_relationships
 BEGIN
   SELECT RAISE(ABORT, 'Source relationships are immutable');
 END;
+CREATE TRIGGER change_assessments_no_update BEFORE UPDATE ON change_assessments BEGIN SELECT RAISE(ABORT, 'Change Assessments are immutable'); END;
+CREATE TRIGGER change_assessments_no_delete BEFORE DELETE ON change_assessments BEGIN SELECT RAISE(ABORT, 'Change Assessments are immutable'); END;
+CREATE TRIGGER change_assessment_impacts_no_update BEFORE UPDATE ON change_assessment_impacts BEGIN SELECT RAISE(ABORT, 'Change Assessment impacts are immutable'); END;
+CREATE TRIGGER change_assessment_impacts_no_delete BEFORE DELETE ON change_assessment_impacts BEGIN SELECT RAISE(ABORT, 'Change Assessment impacts are immutable'); END;
+CREATE TRIGGER change_assessment_decisions_no_update BEFORE UPDATE ON change_assessment_decisions BEGIN SELECT RAISE(ABORT, 'Change Assessment decisions are immutable'); END;
+CREATE TRIGGER change_assessment_decisions_no_delete BEFORE DELETE ON change_assessment_decisions BEGIN SELECT RAISE(ABORT, 'Change Assessment decisions are immutable'); END;
+CREATE TRIGGER change_assessment_resolutions_no_update BEFORE UPDATE ON change_assessment_resolutions BEGIN SELECT RAISE(ABORT, 'Change Assessment resolutions are immutable'); END;
+CREATE TRIGGER change_assessment_resolutions_no_delete BEFORE DELETE ON change_assessment_resolutions BEGIN SELECT RAISE(ABORT, 'Change Assessment resolutions are immutable'); END;
 CREATE TRIGGER parse_attempts_terminal_facts_no_rewrite
 BEFORE UPDATE ON parse_attempts
 WHEN OLD.status != 'running'
@@ -2710,6 +2851,16 @@ BEFORE DELETE ON production_integration_readiness
 BEGIN
   SELECT RAISE(ABORT, 'Production Integration Readiness is immutable');
 END;
+CREATE TRIGGER production_task_carry_forwards_no_update
+BEFORE UPDATE ON production_task_carry_forwards
+BEGIN
+  SELECT RAISE(ABORT, 'Production Task carry-forwards are immutable');
+END;
+CREATE TRIGGER production_task_carry_forwards_no_delete
+BEFORE DELETE ON production_task_carry_forwards
+BEGIN
+  SELECT RAISE(ABORT, 'Production Task carry-forwards are immutable');
+END;
 CREATE TRIGGER coordinated_bid_baseline_versions_no_update
 BEFORE UPDATE ON coordinated_bid_baseline_versions
 BEGIN
@@ -2804,6 +2955,7 @@ pub enum TenderLifecyclePhase {
     TenderPlanning,
     ActiveProduction,
     IntegratedReview,
+    ChangeAssessment,
     PackageProduction,
     Declined,
 }
@@ -2816,6 +2968,7 @@ impl TenderLifecyclePhase {
             Self::TenderPlanning => "tender_planning",
             Self::ActiveProduction => "active_production",
             Self::IntegratedReview => "integrated_review",
+            Self::ChangeAssessment => "change_assessment",
             Self::PackageProduction => "package_production",
             Self::Declined => "declined",
         }
@@ -2828,6 +2981,7 @@ impl TenderLifecyclePhase {
             "tender_planning" => Ok(Self::TenderPlanning),
             "active_production" => Ok(Self::ActiveProduction),
             "integrated_review" => Ok(Self::IntegratedReview),
+            "change_assessment" => Ok(Self::ChangeAssessment),
             "package_production" => Ok(Self::PackageProduction),
             "declined" => Ok(Self::Declined),
             _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
@@ -3547,6 +3701,9 @@ impl TenderStore {
         if !self.coordinated_baseline_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
+        if !self.change_assessment_manifests_are_valid_with_check(check)? {
+            return Ok(false);
+        }
         let mut statement = self
             .connection
             .prepare(
@@ -3692,14 +3849,29 @@ impl TenderStore {
                 |row| row.get(0),
             )
             .map_err(sql_error)?;
+        let unresolved_change_assessment: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM change_assessments AS assessments
+                   LEFT JOIN change_assessment_resolutions AS resolutions USING (assessment_id)
+                   WHERE resolutions.assessment_id IS NULL
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
         if matches!(
             lifecycle_phase,
             TenderLifecyclePhase::Intake
                 | TenderLifecyclePhase::BidDecision
                 | TenderLifecyclePhase::TenderPlanning
                 | TenderLifecyclePhase::ActiveProduction
+                | TenderLifecyclePhase::IntegratedReview
+                | TenderLifecyclePhase::PackageProduction
         ) && !successor_pending
             && !recovery_retry_pending
+            && !unresolved_change_assessment
         {
             return Ok(());
         }
@@ -3723,7 +3895,9 @@ impl TenderStore {
             json!({
                 "command": "material_change_intake",
                 "lifecycle_phase": lifecycle_phase,
-                "reason": if recovery_retry_pending {
+                "reason": if unresolved_change_assessment {
+                    "change_assessment_pending"
+                } else if recovery_retry_pending {
                     "production_recovery_retry_pending"
                 } else if successor_pending {
                     "material_change_successor_pending"
@@ -4822,11 +4996,11 @@ impl TenderStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_error)?;
-        let (tender_id, tender_revision): (String, u32) = transaction
+        let (tender_id, tender_revision, lifecycle_phase): (String, u32, String) = transaction
             .query_row(
-                "SELECT tender_id, current_revision FROM tender WHERE singleton = 1",
+                "SELECT tender_id, current_revision, lifecycle_phase FROM tender WHERE singleton = 1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .map_err(sql_error)?;
         if tender_id != command.tender_id {
@@ -4839,18 +5013,26 @@ impl TenderStore {
                 command.replacement_version,
             ),
         ] {
-            let exists: bool = transaction
+            let has_completed_parsed_evidence: bool = transaction
                 .query_row(
                     "SELECT EXISTS(
-                       SELECT 1 FROM source_artifact_versions
-                       WHERE artifact_id = ?1 AND version = ?2
-                         AND registration_state = 'registered'
+                       SELECT 1
+                       FROM source_artifact_versions sav
+                       JOIN parsed_documents pd
+                         ON pd.artifact_id = sav.artifact_id AND pd.version = sav.version
+                       JOIN parse_attempts pa
+                         ON pa.attempt_id = pd.attempt_id
+                       WHERE sav.artifact_id = ?1 AND sav.version = ?2
+                         AND sav.registration_state = 'registered'
+                         AND pa.status = 'parsed'
+                         AND pa.completed_at IS NOT NULL
+                         AND pd.location_count > 0
                      )",
                     params![artifact_id, version],
                     |row| row.get(0),
                 )
                 .map_err(sql_error)?;
-            if !exists {
+            if !has_completed_parsed_evidence {
                 return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
             }
         }
@@ -4886,6 +5068,16 @@ impl TenderStore {
                 "replacement_version": command.replacement_version.to_string(),
             }),
             &created_at,
+        )?;
+        let parsed_tender_id = TenderId::parse(&tender_id)?;
+        TenderStore::open_change_assessment_in_transaction(
+            &transaction,
+            &parsed_tender_id,
+            tender_revision,
+            &relationship_id,
+            TenderLifecyclePhase::parse(&lifecycle_phase)?,
+            &created_at,
+            BidPackageOperationBudget::for_tender(&parsed_tender_id),
         )?;
         transaction.commit().map_err(sql_error)?;
         self.document_register()

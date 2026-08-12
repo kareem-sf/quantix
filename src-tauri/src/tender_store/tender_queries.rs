@@ -14,7 +14,8 @@ use crate::{
 use super::{
     agent_records::load_profile, append_audit_event, append_audit_event_with_sequence,
     lock_mutex_with_check, random_identifier, sha256_hex, sql_error, sqlite_timestamp,
-    valid_identifier, QuantixHost, TenderCommandError, TenderErrorCode, TenderId, TenderStore,
+    valid_identifier, ChangeAssessmentImpactKind, QuantixHost, TenderCommandError, TenderErrorCode,
+    TenderId, TenderStore,
 };
 
 const MAX_QUERY_VERSIONS: u32 = 32;
@@ -516,7 +517,9 @@ impl TenderStore {
         command: &CreateTenderQueryCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<TenderQuery, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_inputs(&command.evidence)? {
+            self.require_change_intake_writable()?;
+        }
         budget.check()?;
         let query_id = random_identifier(&self.connection)?;
         let transaction = self
@@ -699,12 +702,33 @@ impl TenderStore {
         command: &ReviseTenderQueryCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<TenderQuery, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        let change_recovery = self.active_change_allows_object(
+            ChangeAssessmentImpactKind::TenderQuery,
+            &command.query_id,
+        )?;
+        if !change_recovery {
+            self.require_change_intake_writable()?;
+        }
+        let mut recovery_evidence = command.evidence.clone();
+        recovery_evidence.extend(command.response_evidence.iter().cloned());
+        let recovery_is_bound = !change_recovery
+            || self.active_change_inputs_include_replacement(&recovery_evidence)?;
         budget.check()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_error)?;
+        if !recovery_is_bound {
+            append_query_denial(
+                &transaction,
+                tender_id,
+                "revise_tender_query",
+                Some(&command.query_id),
+                "change_recovery_evidence_not_replacement_bound",
+            )?;
+            transaction.commit().map_err(sql_error)?;
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
         if require_query_register_open(&transaction).is_err() {
             append_query_denial(
                 &transaction,
@@ -948,7 +972,12 @@ impl TenderStore {
         command: &DecideTenderQueryTreatmentCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<TenderQuery, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_object(
+            ChangeAssessmentImpactKind::TenderQuery,
+            &command.query_id,
+        )? {
+            self.require_change_intake_writable()?;
+        }
         budget.check()?;
         let transaction = self
             .connection

@@ -690,7 +690,9 @@ impl TenderStore {
         evidence: &[TenderEvidenceReference],
         authority_references: &[TenderRecordAuthorityReference],
     ) -> Result<PreparedAgentRun, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_record_extraction(evidence)? {
+            self.require_change_intake_writable()?;
+        }
         if evidence.is_empty() || evidence.len() > MAX_RECORD_EVIDENCE_INPUTS {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
@@ -799,7 +801,8 @@ impl TenderStore {
                     |row| row.get(0),
                 )
                 .map_err(sql_error)?;
-            let task = record_extraction_task(
+            let change_recovery = TenderStore::active_change_record_recovery_context(&transaction)?;
+            let mut task = record_extraction_task(
                 random_identifier(&transaction)?,
                 tender_id.as_str(),
                 tender_revision,
@@ -808,14 +811,29 @@ impl TenderStore {
                 deadline,
                 &profile,
             );
+            if let Some(change_recovery) = &change_recovery {
+                task.exact_inputs.push(AgentTaskInputReference {
+                    kind: "change_assessment".into(),
+                    reference: change_recovery.assessment_id.clone(),
+                    version: 1,
+                });
+            }
             insert_task(&transaction, &task, &created_at)?;
-            let payload = record_extraction_data_view(
+            let mut payload = record_extraction_data_view(
                 &transaction,
                 tender_id,
                 tender_revision,
                 evidence,
                 &authorities,
             )?;
+            if let Some(change_recovery) = &change_recovery {
+                payload["change_assessment"] = json!({
+                    "assessment_id": change_recovery.assessment_id,
+                    "allowed_stable_keys": change_recovery.allowed_stable_keys,
+                    "prior_records": change_recovery.prior_records,
+                    "instruction": "Publish successors only for these exact impacted stable keys using the supplied replacement Evidence.",
+                });
+            }
             let (permission_grant, materialized_workspace) =
                 derive_pre_bid_data_grant(PreBidDataGrantRequest {
                     run_id: &run_id,
@@ -957,7 +975,9 @@ impl TenderStore {
         record_id: &str,
         version: u32,
     ) -> Result<PreparedAgentRun, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_record_governance(record_id)? {
+            self.require_change_intake_writable()?;
+        }
         if !valid_identifier(record_id) || version == 0 {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
@@ -1430,7 +1450,9 @@ impl TenderStore {
         tender_id: &TenderId,
         command: &DecideTenderRecordCommand,
     ) -> Result<TenderRecordDecisionResult, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_record_governance(&command.record_id)? {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -2538,8 +2560,15 @@ fn load_source_relationships(
                 "SELECT relationship_id, prior_artifact_id, prior_version,
                         replacement_artifact_id, replacement_version, relationship_kind
                  FROM source_relationships
-                 WHERE (prior_artifact_id = ?1 AND prior_version = ?2)
-                    OR (replacement_artifact_id = ?1 AND replacement_version = ?2)
+                 WHERE ((prior_artifact_id = ?1 AND prior_version = ?2)
+                    OR (replacement_artifact_id = ?1 AND replacement_version = ?2))
+                   AND EXISTS(
+                     SELECT 1
+                     FROM change_assessments AS assessments
+                     JOIN change_assessment_decisions AS decisions USING (assessment_id)
+                     WHERE assessments.relationship_id = source_relationships.relationship_id
+                       AND decisions.classification = 'material'
+                   )
                  ORDER BY rowid",
             )
             .map_err(sql_error)?;
@@ -2665,6 +2694,14 @@ pub(super) fn publish_tender_record_candidates(
     candidate: &TenderRecordCandidateBatch,
     created_at: &str,
 ) -> Result<(), TenderCommandError> {
+    let stable_keys = candidate
+        .records
+        .iter()
+        .map(|record| record.stable_key.clone())
+        .collect::<Vec<_>>();
+    if !TenderStore::active_change_record_candidate_keys_are_allowed(transaction, &stable_keys)? {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
     if !tender_record_candidates_fit_decision_inventory(transaction, candidate)? {
         return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
     }
@@ -3040,6 +3077,16 @@ mod tests {
                  CREATE TABLE tender_record_heads (
                    record_id TEXT PRIMARY KEY,
                    current_version INTEGER NOT NULL
+                 );
+                 CREATE TABLE change_assessments (
+                   assessment_id TEXT PRIMARY KEY
+                 );
+                 CREATE TABLE change_assessment_decisions (
+                   assessment_id TEXT PRIMARY KEY,
+                   classification TEXT NOT NULL
+                 );
+                 CREATE TABLE change_assessment_resolutions (
+                   assessment_id TEXT PRIMARY KEY
                  );
                  INSERT INTO tender (singleton, lifecycle_phase)
                  VALUES (1, 'bid_decision');

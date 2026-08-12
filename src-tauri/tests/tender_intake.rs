@@ -6,10 +6,12 @@ use std::{
 };
 
 use quantix_lib::{
-    ensure_quantix_setup, ConfirmSourceRelationshipCommand, CreateTenderCommand, DeviceProtection,
-    ImportTenderPackageCommand, IntakeExceptionCode, QuantixHost, RegistrationState, SetupPlatform,
-    SetupState, SourceRelationshipKind, StoragePermissions, SupersessionState,
-    TenderPackageSourceKind, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    ensure_quantix_setup, ChangeAssessmentClassification, ConfirmSourceRelationshipCommand,
+    CreateTenderCommand, DecideChangeAssessmentCommand, DeviceProtection,
+    ImportTenderPackageCommand, InspectChangeAssessmentsCommand, IntakeExceptionCode,
+    ParseSourceArtifactCommand, ParseState, QuantixHost, RegistrationState, RuntimeLayout,
+    SetupPlatform, SetupState, SourceRelationshipKind, StoragePermissions, SupersessionState,
+    TenderErrorCode, TenderPackageSourceKind, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
@@ -44,9 +46,15 @@ impl Harness {
     fn new() -> Self {
         let root = tempfile::tempdir().expect("temporary intake harness");
         let application_home = root.path().join(".quantix");
-        let host =
-            QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+        let resources = root.path().join("resources");
+        let host = QuantixHost::with_setup_platform_and_runtime(
+            &application_home,
+            Arc::new(ReadySetupPlatform),
+            RuntimeLayout::bundled(resources),
+        );
+        host.accept_runtime_fixture();
         assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+        install_docling_fixture(&application_home);
         let tender = host
             .create_tender(CreateTenderCommand {
                 name: "Quantix intake golden Tender".into(),
@@ -78,10 +86,59 @@ impl Harness {
         )
         .expect("Tender database")
     }
+
+    async fn parse(&self, artifact_id: &str, version: u32) {
+        let parsed = self
+            .host
+            .parse_source_artifact(ParseSourceArtifactCommand {
+                tender_id: self.tender_id.clone(),
+                artifact_id: artifact_id.into(),
+                version,
+            })
+            .await
+            .expect("parse Source Artifact Version");
+        assert_eq!(parsed.state, ParseState::Parsed, "{parsed:#?}");
+        assert!(parsed.location_count > 0, "{parsed:#?}");
+    }
 }
 
 fn pdf(label: &str) -> Vec<u8> {
     format!("%PDF-1.7\n1 0 obj\n({label})\nendobj\n%%EOF\n").into_bytes()
+}
+
+fn install_docling_fixture(application_home: &Path) {
+    let executable = application_home
+        .join("runtimes")
+        .join("docling")
+        .join(if cfg!(windows) { "Scripts" } else { "bin" })
+        .join(executable_name("docling"));
+    fs::create_dir_all(executable.parent().expect("Docling executable parent"))
+        .expect("Docling executable directory");
+    fs::copy(
+        Path::new(env!("CARGO_BIN_EXE_quantix-runtime-fixture")),
+        &executable,
+    )
+    .expect("install Docling fixture");
+    let models = application_home.join("models").join("docling");
+    for profile in [
+        "layout",
+        "tableformer",
+        "code_formula",
+        "picture_classifier",
+        "rapidocr",
+    ] {
+        let model = models.join(profile).join("model.bin");
+        fs::create_dir_all(model.parent().expect("model parent")).expect("model directory");
+        fs::write(model, format!("{profile} fixture model")).expect("model fixture");
+    }
+}
+
+fn executable_name(name: &str) -> String {
+    if std::env::consts::EXE_EXTENSION.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{name}.{}", std::env::consts::EXE_EXTENSION)
+    }
 }
 
 #[test]
@@ -290,8 +347,59 @@ fn corrupt_archive_is_an_attributable_exception_and_does_not_partially_publish()
     assert_eq!(objects, 0);
 }
 
-#[test]
-fn confirmed_replacements_are_explicit_and_do_not_rewrite_history() {
+#[tokio::test]
+async fn unparsed_replacement_relationship_is_rejected_before_change_assessment() {
+    let harness = Harness::new();
+    let source = harness._root.path().join("unparsed-replacement");
+    fs::create_dir(&source).expect("source directory");
+    fs::write(source.join("original.pdf"), pdf("original")).expect("original");
+    fs::write(source.join("replacement.pdf"), pdf("replacement")).expect("replacement");
+    let imported = harness.import(&source);
+    let original = imported
+        .documents
+        .iter()
+        .find(|document| document.package_path == "original.pdf")
+        .expect("original row");
+    let replacement = imported
+        .documents
+        .iter()
+        .find(|document| document.package_path == "replacement.pdf")
+        .expect("replacement row");
+    harness.parse(&original.artifact_id, original.version).await;
+
+    let error = harness
+        .host
+        .confirm_source_relationship(ConfirmSourceRelationshipCommand {
+            tender_id: harness.tender_id.clone(),
+            prior_artifact_id: original.artifact_id.clone(),
+            prior_version: original.version,
+            replacement_artifact_id: replacement.artifact_id.clone(),
+            replacement_version: replacement.version,
+            relationship_kind: SourceRelationshipKind::Replacement,
+        })
+        .expect_err("unparsed replacement cannot open Change Assessment");
+    assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+    assert!(harness
+        .host
+        .inspect_change_assessments(InspectChangeAssessmentsCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 4,
+        })
+        .expect("inspect assessments after rejected relationship")
+        .active
+        .is_none());
+    let relationships: i64 = harness
+        .database()
+        .query_row("SELECT COUNT(*) FROM source_relationships", [], |row| {
+            row.get(0)
+        })
+        .expect("relationship count");
+    assert_eq!(relationships, 0);
+}
+
+#[tokio::test]
+async fn confirmed_replacements_are_explicit_and_do_not_rewrite_history() {
     let harness = Harness::new();
     let source = harness._root.path().join("addenda");
     fs::create_dir(&source).expect("addenda directory");
@@ -314,6 +422,11 @@ fn confirmed_replacements_are_explicit_and_do_not_rewrite_history() {
         .iter()
         .find(|document| document.package_path == "replacement.pdf")
         .expect("replacement row");
+    harness.parse(&original.artifact_id, original.version).await;
+    harness.parse(&addendum.artifact_id, addendum.version).await;
+    harness
+        .parse(&replacement.artifact_id, replacement.version)
+        .await;
 
     let addendum_register = harness
         .host
@@ -334,6 +447,26 @@ fn confirmed_replacements_are_explicit_and_do_not_rewrite_history() {
             .map(|document| document.supersession_state),
         Some(SupersessionState::Current)
     );
+    let addendum_assessment = harness
+        .host
+        .inspect_change_assessments(InspectChangeAssessmentsCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 4,
+        })
+        .expect("inspect addendum assessment")
+        .active
+        .expect("pending addendum assessment");
+    harness
+        .host
+        .decide_change_assessment(DecideChangeAssessmentCommand {
+            tender_id: harness.tender_id.clone(),
+            assessment_id: addendum_assessment.assessment_id,
+            assessment_manifest_sha256: addendum_assessment.manifest_sha256,
+            classification: ChangeAssessmentClassification::Irrelevant,
+            rationale: "The addendum has no typed dependency on current Tender work.".into(),
+        })
+        .expect("classify unrelated addendum");
 
     let register = harness
         .host

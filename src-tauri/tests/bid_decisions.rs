@@ -13,21 +13,24 @@ use quantix_lib::{
     AssembleCoordinatedBidBaselineCommand, BasisOfEstimateReviewOutcome, BasisOfEstimateVersion,
     BidDecisionApprovalDecision, BidDecisionPackageInspection, BidDecisionPackageReviewOutcome,
     BidRecommendationOutcome, BoqRowDisposition, CalculationDecimalInput, CalculationInputState,
-    CalculationRoundingMode, CalculationRuleReviewOutcome, ComplianceDisposition,
-    ComplianceDispositionUpdate, ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand,
-    ControlledBoqCalculationStatus, CoordinatedBidBaselineBlockerCode,
-    CoordinatedBidBaselineDecision, CreateBidDecisionPackageCommand,
-    CreateCalculationScenarioCommand, CreateCommercialStrategyCommand,
-    CreateExternalRfiDraftCommand, CreatePricedCostBaselineCommand, CreatePricingAdjustmentCommand,
-    CreatePricingScenarioCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
-    CreateTenderQueryCommand, DecideBidDecisionPackageCommand, DecideCoordinatedBidBaselineCommand,
-    DecideTenderQueryTreatmentCommand, DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
-    DesignateBoqTableCommand, DeviceProtection, ExchangeRateType, ExportApprovedExternalRfiCommand,
+    CalculationRoundingMode, CalculationRuleReviewOutcome, ChangeAssessmentClassification,
+    ChangeAssessmentImpactConsequence, ChangeAssessmentImpactKind, ChangeAssessmentObjectKind,
+    ChangeAssessmentStatus, ComplianceDisposition, ComplianceDispositionUpdate,
+    ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand, ControlledBoqCalculationStatus,
+    CoordinatedBidBaseline, CoordinatedBidBaselineBlockerCode, CoordinatedBidBaselineDecision,
+    CreateBidDecisionPackageCommand, CreateCalculationScenarioCommand,
+    CreateCommercialStrategyCommand, CreateExternalRfiDraftCommand,
+    CreatePricedCostBaselineCommand, CreatePricingAdjustmentCommand, CreatePricingScenarioCommand,
+    CreateTenderCommand, CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
+    DecideBidDecisionPackageCommand, DecideChangeAssessmentCommand,
+    DecideCoordinatedBidBaselineCommand, DecideTenderQueryTreatmentCommand,
+    DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DesignateBoqTableCommand,
+    DeviceProtection, ExchangeRateType, ExportApprovedExternalRfiCommand,
     ExternalRfiQueryReference, ExternalRfiRecipient, ImportTenderPackageCommand,
     InspectBidDecisionApprovalHistoryCommand, InspectCalculationWorkspaceCommand,
-    InspectCoordinatedBidBaselinesCommand, InspectEstimateWorkspaceCommand,
-    InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
-    InspectProductionTaskReviewCommand, InspectTenderQueriesCommand,
+    InspectChangeAssessmentsCommand, InspectCoordinatedBidBaselinesCommand,
+    InspectEstimateWorkspaceCommand, InspectExternalRfiResponseCandidatesCommand,
+    InspectExternalRfisCommand, InspectProductionTaskReviewCommand, InspectTenderQueriesCommand,
     InterpretExternalRfiResponseCommand, InvalidateBidDecisionApprovalCommand, MajorFindingPolicy,
     ManagerCapabilityDemandInput, ParseSourceArtifactCommand, PricedCostBaselineReviewOutcome,
     PricingAdjustmentDirection, PricingAdjustmentKind, PricingAdjustmentReference,
@@ -44,7 +47,7 @@ use quantix_lib::{
     StoragePermissions, TenderErrorCode, TenderEvidenceReference, TenderIntegrityState,
     TenderLifecyclePhase, TenderQuery, TenderQueryTreatment, TenderQueryTreatmentProposalInput,
     TenderQueryType, TenderRecordEngineerDecisionKind, TenderRecordInspection, TenderRecordKind,
-    TenderRecordVersionReference, WorkPlanDecision, WorkPlanRevisionAction,
+    TenderRecordVersionReference, VerificationStatus, WorkPlanDecision, WorkPlanRevisionAction,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
@@ -161,6 +164,80 @@ impl Harness {
             })
             .await
             .expect("extract Tender Records");
+        assert_eq!(extraction.run.state, AgentRunState::Completed);
+        inspect_all_records(&self.host, &self.tender_id)
+    }
+
+    async fn extract_split_source_records(&self) -> Vec<TenderRecordInspection> {
+        self.extract_split_source_records_with_scenario("record-extraction-coordinated-split")
+            .await
+    }
+
+    async fn extract_transitive_split_source_records(&self) -> Vec<TenderRecordInspection> {
+        self.extract_split_source_records_with_scenario(
+            "record-extraction-coordinated-transitive-split",
+        )
+        .await
+    }
+
+    async fn extract_split_source_records_with_scenario(
+        &self,
+        scenario: &str,
+    ) -> Vec<TenderRecordInspection> {
+        let source = self._root.path().join("split-decision-source");
+        fs::create_dir(&source).expect("split source directory");
+        for filename in ["a-general.pdf", "z-deadlines.pdf"] {
+            fs::write(
+                source.join(filename),
+                b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
+            )
+            .expect("split-source PDF fixture");
+        }
+        let imported = self
+            .host
+            .import_tender_package(ImportTenderPackageCommand {
+                tender_id: self.tender_id.clone(),
+                source_path: source.to_string_lossy().into_owned(),
+            })
+            .expect("import two exact source branches");
+        assert_eq!(imported.documents.len(), 2);
+        let mut evidence = Vec::new();
+        for document in &imported.documents {
+            self.host
+                .parse_source_artifact(ParseSourceArtifactCommand {
+                    tender_id: self.tender_id.clone(),
+                    artifact_id: document.artifact_id.clone(),
+                    version: document.version,
+                })
+                .await
+                .expect("parse exact split Source Artifact");
+            evidence.extend(
+                self.host
+                    .inspect_evidence(ParseSourceArtifactCommand {
+                        tender_id: self.tender_id.clone(),
+                        artifact_id: document.artifact_id.clone(),
+                        version: document.version,
+                    })
+                    .expect("inspect split-source Evidence")
+                    .locations
+                    .into_iter()
+                    .map(|location| TenderEvidenceReference {
+                        artifact_id: document.artifact_id.clone(),
+                        version: document.version,
+                        ordinal: location.ordinal,
+                    }),
+            );
+        }
+        self.set_agent_scenario(scenario);
+        let extraction = self
+            .host
+            .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+                tender_id: self.tender_id.clone(),
+                evidence,
+                authorities: Vec::new(),
+            })
+            .await
+            .expect("extract exact split-source Tender Records");
         assert_eq!(extraction.run.state, AgentRunState::Completed);
         inspect_all_records(&self.host, &self.tender_id)
     }
@@ -1013,6 +1090,1765 @@ async fn coordinated_baseline_marks_exact_dependencies_stale_and_denies_approval
             .state,
         TenderIntegrityState::Ready
     );
+}
+
+#[tokio::test]
+async fn transitive_change_impacts_name_the_exact_affected_prerequisite() {
+    let harness = Harness::new("record-extraction-coordinated");
+    let records = harness.extract_transitive_split_source_records().await;
+    harness.verify_records(&records, false);
+    let package = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+            disposition_updates: complete_dispositions(&records),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("create transitive-dependency package");
+    harness.set_agent_scenario("bid-package-review");
+    let package = harness
+        .host
+        .run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id,
+            version: package.version,
+        })
+        .await
+        .expect("review transitive-dependency package")
+        .package;
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept transitive-dependency package");
+    let plan = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose transitive-dependency Work Plan");
+    let plan = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: plan.plan_id,
+            version: plan.version,
+            decision: WorkPlanDecision::Approve,
+            rationale: "Approve the exact transitive-dependency Work Plan.".into(),
+        })
+        .expect("approve transitive-dependency Work Plan");
+    harness
+        .host
+        .activate_tender_production(ActivateTenderProductionCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: plan.plan_id,
+            plan_version: plan.version,
+            plan_manifest_sha256: plan.manifest_sha256,
+        })
+        .expect("activate transitive-dependency production");
+
+    let changed = records
+        .iter()
+        .find(|record| record.stable_key == "project_delivery_context")
+        .expect("technical record bound only to the changed branch");
+    let prior = changed
+        .fields
+        .iter()
+        .flat_map(|field| field.evidence.iter())
+        .next()
+        .expect("technical record Evidence")
+        .reference
+        .clone();
+    let source = harness._root.path().join("transitive-addendum");
+    fs::create_dir(&source).expect("transitive addendum directory");
+    fs::write(
+        source.join("addendum.pdf"),
+        b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
+    )
+    .expect("transitive addendum fixture");
+    let imported = harness
+        .host
+        .import_tender_package(ImportTenderPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            source_path: source.to_string_lossy().into_owned(),
+        })
+        .expect("import transitive addendum");
+    let replacement = imported.documents.first().expect("transitive addendum");
+    harness
+        .host
+        .parse_source_artifact(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: replacement.artifact_id.clone(),
+            version: replacement.version,
+        })
+        .await
+        .expect("parse transitive addendum");
+    harness
+        .host
+        .confirm_source_relationship(ConfirmSourceRelationshipCommand {
+            tender_id: harness.tender_id.clone(),
+            prior_artifact_id: prior.artifact_id,
+            prior_version: prior.version,
+            replacement_artifact_id: replacement.artifact_id.clone(),
+            replacement_version: replacement.version,
+            relationship_kind: SourceRelationshipKind::Addendum,
+        })
+        .expect("confirm transitive addendum relationship");
+
+    let assessment = harness
+        .host
+        .inspect_change_assessments(InspectChangeAssessmentsCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 4,
+        })
+        .expect("inspect transitive Change Assessment")
+        .active
+        .expect("active transitive Change Assessment");
+    assert!(assessment.impacts.iter().any(|impact| {
+        impact.kind == ChangeAssessmentImpactKind::ProductionTask
+            && impact.dependencies.iter().any(|dependency| {
+                dependency.kind == ChangeAssessmentObjectKind::TenderRecord
+                    && dependency.object_id == changed.record_id
+            })
+    }));
+    assert!(
+        assessment.impacts.iter().any(|impact| {
+            impact.kind == ChangeAssessmentImpactKind::ProductionTask
+                && impact.dependencies.iter().any(|dependency| {
+                    dependency.kind == ChangeAssessmentObjectKind::ProductionTask
+                        && dependency.object_id != impact.object_id
+                })
+        }),
+        "a transitive-only production task must name its affected prerequisite"
+    );
+}
+
+#[tokio::test]
+async fn unrelated_running_production_does_not_block_targeted_change_classification() {
+    let harness = Harness::new("record-extraction-coordinated");
+    let records = harness.extract_split_source_records().await;
+    let production = active_production_from_records(&harness, &records).await;
+    let unrelated = production
+        .tasks
+        .iter()
+        .find(|task| task.task.task_key == "document_control_production")
+        .expect("ready unrelated Document Control task")
+        .clone();
+    assert_eq!(unrelated.state, ProductionTaskState::Ready);
+
+    harness.set_agent_scenario("production-task-delayed-a");
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let production_task_id = unrelated.production_task_id;
+    let running = tokio::spawn(async move {
+        host.run_production_task(RunProductionTaskCommand {
+            tender_id,
+            production_task_id,
+        })
+        .await
+    });
+    let waiting = harness.codex.with_extension("production-a-waiting");
+    wait_for_fixture_path(&waiting).await;
+
+    let assessment = confirm_addendum_for_record(
+        &harness,
+        records
+            .iter()
+            .find(|record| record.stable_key == "programme_pressure")
+            .expect("risk record on the isolated changed branch"),
+        "unrelated-running-addendum",
+    )
+    .await;
+    let decision = harness
+        .host
+        .decide_change_assessment(DecideChangeAssessmentCommand {
+            tender_id: harness.tender_id.clone(),
+            assessment_id: assessment.assessment_id,
+            assessment_manifest_sha256: assessment.manifest_sha256,
+            classification: ChangeAssessmentClassification::Material,
+            rationale: "Only the affected assurance branch must stop.".into(),
+        });
+    fs::write(
+        harness.codex.with_extension("production-a-release"),
+        b"release",
+    )
+    .expect("release unrelated production");
+    let completed = running
+        .await
+        .expect("join unrelated production")
+        .expect("complete unrelated production after targeted classification");
+    assert_eq!(completed.run.state, AgentRunState::Completed);
+    assert_eq!(completed.task.state, ProductionTaskState::ReviewReady);
+    let current = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect unaffected production after targeted classification")
+        .expect("unaffected production remains inspectable");
+    assert!(current.tasks.iter().any(|task| {
+        task.production_task_id == completed.task.production_task_id
+            && task.state == ProductionTaskState::ReviewReady
+    }));
+    decision.expect("unrelated active production must not block targeted classification");
+}
+
+#[tokio::test]
+async fn affected_running_production_blocks_change_classification_until_interrupted() {
+    let harness = Harness::new("record-extraction-coordinated");
+    let records = harness.extract_transitive_split_source_records().await;
+    let mut production = active_production_from_records(&harness, &records).await;
+    let document_control = production
+        .tasks
+        .iter()
+        .find(|task| task.task.task_key == "document_control_production")
+        .expect("Document Control prerequisite")
+        .production_task_id
+        .clone();
+    harness.set_agent_scenario("production-task");
+    for _ in 0..2 {
+        let completed = harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: document_control.clone(),
+            })
+            .await
+            .expect("advance Document Control prerequisite");
+        if completed.task.state == ProductionTaskState::ReadyForIntegration {
+            break;
+        }
+    }
+    production = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect affected production frontier")
+        .expect("active affected production");
+    let affected = production
+        .tasks
+        .iter()
+        .find(|task| task.task.task_key == "tender_analysis_production")
+        .expect("ready affected Tender Analysis task")
+        .clone();
+    assert_eq!(affected.state, ProductionTaskState::Ready);
+
+    harness.set_agent_scenario("production-task-delayed-b");
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let production_task_id = affected.production_task_id.clone();
+    let running = tokio::spawn(async move {
+        host.run_production_task(RunProductionTaskCommand {
+            tender_id,
+            production_task_id,
+        })
+        .await
+    });
+    wait_for_fixture_path(&harness.codex.with_extension("production-b-waiting")).await;
+
+    let assessment = confirm_addendum_for_record(
+        &harness,
+        records
+            .iter()
+            .find(|record| record.stable_key == "project_delivery_context")
+            .expect("technical record on the changed branch"),
+        "affected-running-addendum",
+    )
+    .await;
+    let command = DecideChangeAssessmentCommand {
+        tender_id: harness.tender_id.clone(),
+        assessment_id: assessment.assessment_id,
+        assessment_manifest_sha256: assessment.manifest_sha256,
+        classification: ChangeAssessmentClassification::Material,
+        rationale: "The affected running task must reach a terminal state first.".into(),
+    };
+    assert_eq!(
+        harness
+            .host
+            .decide_change_assessment(command.clone())
+            .expect_err("affected active production must block classification")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let running_view = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect affected running production")
+        .expect("active affected production");
+    let run_id = running_view
+        .tasks
+        .iter()
+        .find(|task| task.production_task_id == affected.production_task_id)
+        .and_then(|task| task.run_ids.last())
+        .expect("affected running Agent Run")
+        .clone();
+    assert!(harness
+        .host
+        .interrupt_agent_run(quantix_lib::InterruptAgentRunCommand {
+            tender_id: harness.tender_id.clone(),
+            run_id,
+        })
+        .expect("interrupt affected production"));
+    let interrupted = running
+        .await
+        .expect("join affected production")
+        .expect("terminalize affected production");
+    assert_eq!(interrupted.run.state, AgentRunState::Interrupted);
+    harness
+        .host
+        .decide_change_assessment(command)
+        .expect("classification proceeds after affected execution is interrupted");
+}
+
+#[tokio::test]
+async fn affected_unapproved_package_review_can_be_interrupted_before_material_rework() {
+    let harness = Harness::new("record-extraction-coordinated");
+    let records = harness.extract_transitive_split_source_records().await;
+    harness.verify_records(&records, false);
+    let package = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+            disposition_updates: complete_dispositions(&records),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("create affected unapproved package");
+
+    harness.set_agent_scenario("bid-package-review-delayed");
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let package_id = package.package_id.clone();
+    let package_version = package.version;
+    let reviewing = tokio::spawn(async move {
+        host.run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id,
+            package_id,
+            version: package_version,
+        })
+        .await
+    });
+    wait_for_fixture_path(&harness.codex.with_extension("bid-package-review-waiting")).await;
+
+    let assessment = confirm_addendum_for_record(
+        &harness,
+        records
+            .iter()
+            .find(|record| record.stable_key == "programme_pressure")
+            .expect("programme record bound to the unapproved package"),
+        "unapproved-package-review-addendum",
+    )
+    .await;
+    let command = DecideChangeAssessmentCommand {
+        tender_id: harness.tender_id.clone(),
+        assessment_id: assessment.assessment_id,
+        assessment_manifest_sha256: assessment.manifest_sha256,
+        classification: ChangeAssessmentClassification::Material,
+        rationale: "Stop the affected review and rework the unapproved package.".into(),
+    };
+    assert_eq!(
+        harness
+            .host
+            .decide_change_assessment(command.clone())
+            .expect_err("affected review must block classification while running")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let run_id = harness
+        .host
+        .inspect_agent_runs(&harness.tender_id)
+        .expect("inspect affected package review")
+        .into_iter()
+        .find(|run| run.state == AgentRunState::Running)
+        .expect("running affected package review")
+        .run_id;
+    assert!(harness
+        .host
+        .interrupt_agent_run(quantix_lib::InterruptAgentRunCommand {
+            tender_id: harness.tender_id.clone(),
+            run_id,
+        })
+        .expect("interrupt affected unapproved package review"));
+    let interrupted = reviewing
+        .await
+        .expect("join affected package review")
+        .expect("terminalize affected package review");
+    assert_eq!(interrupted.run.state, AgentRunState::Interrupted);
+    assert!(interrupted.package.review.is_none());
+
+    let decided = harness
+        .host
+        .decide_change_assessment(command)
+        .expect("classify material change against an unapproved package");
+    assert_eq!(decided.status, ChangeAssessmentStatus::ReworkRequired);
+    assert!(decided.approval_consequences.is_empty());
+    assert!(harness
+        .host
+        .inspect_current_bid_decision_package(&harness.tender_id)
+        .expect("inspect stale unapproved package")
+        .is_some_and(|package| package.approval.is_none()));
+
+    let replacement_evidence = harness
+        .host
+        .inspect_evidence(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: decided.replacement_source.artifact_id.clone(),
+            version: decided.replacement_source.version,
+        })
+        .expect("inspect replacement Evidence")
+        .locations
+        .into_iter()
+        .map(|location| TenderEvidenceReference {
+            artifact_id: decided.replacement_source.artifact_id.clone(),
+            version: decided.replacement_source.version,
+            ordinal: location.ordinal,
+        })
+        .collect();
+    harness.set_agent_scenario("record-extraction-change-assessment");
+    let extraction = harness
+        .host
+        .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id: harness.tender_id.clone(),
+            evidence: replacement_evidence,
+            authorities: Vec::new(),
+        })
+        .await
+        .expect("publish replacement-bound record successors");
+    assert_eq!(
+        extraction.run.state,
+        AgentRunState::Completed,
+        "replacement extraction: {extraction:#?}"
+    );
+    let all_records = inspect_all_records(&harness.host, &harness.tender_id);
+    let current_records = all_records
+        .iter()
+        .filter(|record| {
+            !all_records.iter().any(|candidate| {
+                candidate.record_id == record.record_id && candidate.version > record.version
+            })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for impact in decided
+        .impacts
+        .iter()
+        .filter(|impact| impact.kind == ChangeAssessmentImpactKind::TenderRecord)
+    {
+        let record = current_records
+            .iter()
+            .find(|record| {
+                record.record_id == impact.object_id && record.version > impact.object_version
+            })
+            .expect("replacement-bound impacted record successor");
+        harness
+            .host
+            .decide_tender_record(DecideTenderRecordCommand {
+                tender_id: harness.tender_id.clone(),
+                record_id: record.record_id.clone(),
+                version: record.version,
+                decision: if record.kind == TenderRecordKind::Assumption {
+                    TenderRecordEngineerDecisionKind::ApproveAssumption
+                } else {
+                    TenderRecordEngineerDecisionKind::Verify
+                },
+                rationale: "Admit the exact replacement-bound record successor.".into(),
+            })
+            .expect("admit replacement-bound record successor");
+    }
+    let successor = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: Some(package.version),
+            disposition_updates: current_records
+                .iter()
+                .filter(|record| is_compliance_kind(record.kind))
+                .map(|record| ComplianceDispositionUpdate {
+                    record: TenderRecordVersionReference {
+                        record_id: record.record_id.clone(),
+                        version: record.version,
+                    },
+                    disposition: ComplianceDisposition::Comply,
+                    responsibility: "Tender Office Coordinator".into(),
+                    planned_treatment:
+                        "Carry the exact replacement-bound obligation into planning.".into(),
+                    affected_work: vec!["tender_planning".into()],
+                    uncertainty: record
+                        .fields
+                        .iter()
+                        .find_map(|field| field.uncertainty.clone()),
+                    related_records: Vec::new(),
+                })
+                .collect(),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("create unapproved-package material-change successor");
+    assert!(successor.material_change_basis.is_none());
+    harness.set_agent_scenario("bid-package-review-change-assessment");
+    let successor = harness
+        .host
+        .run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: successor.package_id,
+            version: successor.version,
+        })
+        .await
+        .expect("review successor through its exact Change Assessment input")
+        .package;
+    assert!(successor.decision_gate_ready, "{successor:#?}");
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &successor,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact successor after unapproved-package rework");
+}
+
+#[tokio::test]
+async fn affected_review_completion_after_change_assessment_is_terminal_without_publication() {
+    let harness = Harness::new("record-extraction-coordinated");
+    let records = harness.extract_transitive_split_source_records().await;
+    harness.verify_records(&records, false);
+    let package = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+            disposition_updates: complete_dispositions(&records),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("create affected package");
+    harness.set_agent_scenario("bid-package-review-delayed");
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let package_id = package.package_id.clone();
+    let package_version = package.version;
+    let reviewing = tokio::spawn(async move {
+        host.run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id,
+            package_id,
+            version: package_version,
+        })
+        .await
+    });
+    wait_for_fixture_path(&harness.codex.with_extension("bid-package-review-waiting")).await;
+    let assessment = confirm_addendum_for_record(
+        &harness,
+        records
+            .iter()
+            .find(|record| record.stable_key == "project_delivery_context")
+            .expect("affected review record"),
+        "review-completion-race-addendum",
+    )
+    .await;
+    fs::write(
+        harness.codex.with_extension("bid-package-review-release"),
+        b"release",
+    )
+    .expect("release affected review provider outcome");
+    let terminal = reviewing
+        .await
+        .expect("join affected review")
+        .expect("terminalize stale affected review");
+    assert_eq!(terminal.run.state, AgentRunState::Failed);
+    assert!(terminal.package.review.is_none());
+    harness
+        .host
+        .decide_change_assessment(DecideChangeAssessmentCommand {
+            tender_id: harness.tender_id.clone(),
+            assessment_id: assessment.assessment_id,
+            assessment_manifest_sha256: assessment.manifest_sha256,
+            classification: ChangeAssessmentClassification::Material,
+            rationale: "Classify after the stale provider outcome terminalizes.".into(),
+        })
+        .expect("classify after affected review terminalization");
+}
+
+#[tokio::test]
+async fn material_addendum_opens_a_typed_change_assessment_and_reopens_only_dependencies() {
+    let harness = Harness::new("record-extraction-coordinated");
+    let records = harness.extract_split_source_records().await;
+    harness.verify_records(&records, false);
+    let package = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+            disposition_updates: complete_dispositions(&records),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("create split-source decision package");
+    harness.set_agent_scenario("bid-package-review");
+    let package = harness
+        .host
+        .run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id,
+            version: package.version,
+        })
+        .await
+        .expect("review split-source decision package")
+        .package;
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept split-source decision package");
+    let plan = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose split-source Work Plan");
+    let plan = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: plan.plan_id,
+            version: plan.version,
+            decision: WorkPlanDecision::Approve,
+            rationale: "Approve the exact split-source production plan.".into(),
+        })
+        .expect("approve split-source Work Plan");
+    harness
+        .host
+        .activate_tender_production(ActivateTenderProductionCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: plan.plan_id,
+            plan_version: plan.version,
+            plan_manifest_sha256: plan.manifest_sha256,
+        })
+        .expect("activate split-source production");
+    approve_exact_final_price_for_integration(&harness).await;
+    complete_all_production_for_integration(&harness).await;
+    let baseline = harness
+        .host
+        .assemble_coordinated_bid_baseline(AssembleCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+        })
+        .expect("assemble split-source pre-change baseline");
+    let approved = harness
+        .host
+        .decide_coordinated_bid_baseline(DecideCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id,
+            version: baseline.version,
+            manifest_sha256: baseline.manifest_sha256,
+            decision: CoordinatedBidBaselineDecision::Approve,
+            rationale: "Approve the exact split-source baseline before Change Assessment.".into(),
+            conditions: Vec::new(),
+            exceptions: Vec::new(),
+        })
+        .expect("approve split-source pre-change baseline");
+    let prior_package = harness
+        .host
+        .inspect_current_bid_decision_package(&harness.tender_id)
+        .expect("inspect exact pre-change package")
+        .expect("accepted pre-change package");
+    let prior_plan = harness
+        .host
+        .inspect_current_work_plan(&harness.tender_id)
+        .expect("inspect exact pre-change Work Plan")
+        .expect("approved pre-change Work Plan");
+    let prior_production = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect exact pre-change production")
+        .expect("active pre-change production");
+    let baseline_approval_id = approved
+        .approval
+        .as_ref()
+        .expect("baseline approval")
+        .approval_id
+        .clone();
+
+    let current_records_before_change = inspect_all_records(&harness.host, &harness.tender_id);
+    let prior = current_records_before_change
+        .iter()
+        .find(|record| record.stable_key == "programme_pressure")
+        .expect("risk record bound only to the changed source branch")
+        .fields
+        .iter()
+        .flat_map(|field| field.evidence.iter())
+        .next()
+        .expect("changed Source Evidence used by the approved baseline")
+        .reference
+        .clone();
+    let source = harness._root.path().join("material-addendum");
+    fs::create_dir(&source).expect("addendum source directory");
+    fs::write(
+        source.join("addendum-01.pdf"),
+        b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
+    )
+    .expect("addendum fixture");
+    let imported = harness
+        .host
+        .import_tender_package(ImportTenderPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            source_path: source.to_string_lossy().into_owned(),
+        })
+        .expect("register immutable addendum Source Artifact Version");
+    let replacement = imported.documents.first().expect("registered addendum");
+    harness
+        .host
+        .parse_source_artifact(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: replacement.artifact_id.clone(),
+            version: replacement.version,
+        })
+        .await
+        .expect("parse the exact addendum before Change Assessment");
+    let replacement_evidence = harness
+        .host
+        .inspect_evidence(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: replacement.artifact_id.clone(),
+            version: replacement.version,
+        })
+        .expect("inspect exact replacement Evidence")
+        .locations
+        .into_iter()
+        .map(|location| TenderEvidenceReference {
+            artifact_id: replacement.artifact_id.clone(),
+            version: replacement.version,
+            ordinal: location.ordinal,
+        })
+        .collect::<Vec<_>>();
+    harness
+        .host
+        .confirm_source_relationship(ConfirmSourceRelationshipCommand {
+            tender_id: harness.tender_id.clone(),
+            prior_artifact_id: prior.artifact_id,
+            prior_version: prior.version,
+            replacement_artifact_id: replacement.artifact_id.clone(),
+            replacement_version: replacement.version,
+            relationship_kind: SourceRelationshipKind::Addendum,
+        })
+        .expect("confirm immutable addendum relationship");
+
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect Change Assessment lifecycle")
+            .lifecycle_phase,
+        TenderLifecyclePhase::ChangeAssessment
+    );
+    let pending = harness
+        .host
+        .inspect_change_assessments(InspectChangeAssessmentsCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 4,
+        })
+        .expect("inspect the bounded Change Assessment workspace")
+        .active
+        .expect("active assessment");
+    assert_eq!(pending.status, ChangeAssessmentStatus::Pending);
+    for kind in [
+        ChangeAssessmentImpactKind::TenderRecord,
+        ChangeAssessmentImpactKind::WorkPlan,
+        ChangeAssessmentImpactKind::ProductionTask,
+        ChangeAssessmentImpactKind::AgentRun,
+        ChangeAssessmentImpactKind::ProductionArtifact,
+        ChangeAssessmentImpactKind::Review,
+        ChangeAssessmentImpactKind::CoordinatedBaseline,
+        ChangeAssessmentImpactKind::Package,
+        ChangeAssessmentImpactKind::Approval,
+    ] {
+        assert!(
+            pending.impacts.iter().any(|impact| impact.kind == kind),
+            "missing typed {kind:?} impact"
+        );
+    }
+    assert!(pending
+        .approval_consequences
+        .iter()
+        .any(|consequence| consequence.reference == baseline_approval_id));
+
+    let decided = harness
+        .host
+        .decide_change_assessment(DecideChangeAssessmentCommand {
+            tender_id: harness.tender_id.clone(),
+            assessment_id: pending.assessment_id.clone(),
+            assessment_manifest_sha256: pending.manifest_sha256.clone(),
+            classification: ChangeAssessmentClassification::Material,
+            rationale: "The addendum changes evidence used by the approved production baseline."
+                .into(),
+        })
+        .expect("apply the exact material Change Assessment");
+    assert_eq!(decided.status, ChangeAssessmentStatus::ReworkRequired);
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect targeted rework lifecycle")
+            .lifecycle_phase,
+        TenderLifecyclePhase::BidDecision
+    );
+    let production = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect suspended production recovery basis")
+        .expect("historical production activation remains available");
+    assert!(!production.active);
+    assert!(production
+        .tasks
+        .iter()
+        .any(|task| task.state == ProductionTaskState::Suspended));
+    assert_eq!(
+        harness
+            .host
+            .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+                tender_id: harness.tender_id.clone(),
+                evidence: replacement_evidence.clone(),
+                authorities: Vec::new(),
+            })
+            .await
+            .expect_err("targeted repair cannot race ahead of the immutable package snapshot")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close the changed Tender before cold verification");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify immutable Change Assessment history");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "integrity issues: {:#?}",
+        integrity.issues
+    );
+
+    let captured_successor = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: Some(prior_package.version),
+            disposition_updates: Vec::new(),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("capture the exact immutable pre-rework package diff");
+    assert!(captured_successor.material_change_basis.is_some());
+    assert!(captured_successor
+        .material_change_basis
+        .as_ref()
+        .expect("captured material-change basis")
+        .affected_areas
+        .contains(&format!("change_assessment:{}", decided.assessment_id)));
+
+    harness.set_agent_scenario("record-extraction-change-assessment");
+    let extraction = harness
+        .host
+        .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id: harness.tender_id.clone(),
+            evidence: replacement_evidence,
+            authorities: Vec::new(),
+        })
+        .await
+        .expect("publish only replacement-bound Tender Record successors");
+    assert_eq!(extraction.run.state, AgentRunState::Completed);
+    let proposed_payload: Value = serde_json::from_str(
+        &extraction
+            .run
+            .proposed_result
+            .as_ref()
+            .expect("replacement-bound proposed result")
+            .payload_json,
+    )
+    .expect("parse replacement-bound proposed result");
+    let proposed_keys = proposed_payload["records"]
+        .as_array()
+        .expect("replacement-bound record candidates")
+        .iter()
+        .filter_map(|record| record["stable_key"].as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let impacted_keys = decided
+        .impacts
+        .iter()
+        .filter(|impact| impact.kind == ChangeAssessmentImpactKind::TenderRecord)
+        .filter_map(|impact| {
+            current_records_before_change
+                .iter()
+                .find(|record| record.record_id == impact.object_id)
+                .map(|record| record.stable_key.as_str())
+        })
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(proposed_keys, impacted_keys);
+    assert_eq!(
+        extraction.published_record_count as usize,
+        decided
+            .impacts
+            .iter()
+            .filter(|impact| impact.kind == ChangeAssessmentImpactKind::TenderRecord)
+            .count(),
+        "every exact impacted Tender Record needs one replacement-bound successor"
+    );
+    let all_records = inspect_all_records(&harness.host, &harness.tender_id);
+    let current_records = all_records
+        .iter()
+        .filter(|record| {
+            !all_records.iter().any(|candidate| {
+                candidate.record_id == record.record_id && candidate.version > record.version
+            })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for impact in decided
+        .impacts
+        .iter()
+        .filter(|impact| impact.kind == ChangeAssessmentImpactKind::TenderRecord)
+    {
+        let record = current_records
+            .iter()
+            .find(|record| record.record_id == impact.object_id)
+            .expect("impacted Tender Record successor");
+        assert!(
+            record.version > impact.object_version,
+            "impacted record {} ({:?}) remained at {} from impact {}",
+            record.record_id,
+            record.kind,
+            record.version,
+            impact.object_version
+        );
+        harness
+            .host
+            .decide_tender_record(DecideTenderRecordCommand {
+                tender_id: harness.tender_id.clone(),
+                record_id: record.record_id.clone(),
+                version: record.version,
+                decision: if record.kind == TenderRecordKind::Assumption {
+                    TenderRecordEngineerDecisionKind::ApproveAssumption
+                } else {
+                    TenderRecordEngineerDecisionKind::Verify
+                },
+                rationale: "Admit the exact addendum-bound successor before re-Proceed.".into(),
+            })
+            .expect("admit exact replacement-bound Tender Record successor");
+    }
+    let all_records = inspect_all_records(&harness.host, &harness.tender_id);
+    let current_records = all_records
+        .iter()
+        .filter(|record| {
+            !all_records.iter().any(|candidate| {
+                candidate.record_id == record.record_id && candidate.version > record.version
+            })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let successor = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: Some(captured_successor.version),
+            disposition_updates: current_records
+                .iter()
+                .filter(|record| is_compliance_kind(record.kind))
+                .map(|record| ComplianceDispositionUpdate {
+                    record: TenderRecordVersionReference {
+                        record_id: record.record_id.clone(),
+                        version: record.version,
+                    },
+                    disposition: ComplianceDisposition::Comply,
+                    responsibility: "Tender Coordinator".into(),
+                    planned_treatment: "Deliver against the admitted exact requirement.".into(),
+                    affected_work: vec!["submission".into()],
+                    uncertainty: record
+                        .fields
+                        .iter()
+                        .find_map(|field| field.uncertainty.clone()),
+                    related_records: Vec::new(),
+                })
+                .collect(),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("publish the exact fully dispositioned successor package");
+    assert!(successor.current, "{successor:#?}");
+    assert!(
+        successor
+            .material_change_basis
+            .as_ref()
+            .is_some_and(|basis| basis
+                .affected_areas
+                .contains(&format!("change_assessment:{}", decided.assessment_id))),
+        "every current successor must retain the unresolved material-change basis"
+    );
+    assert_eq!(successor.compliance_blocker_count, 0, "{successor:#?}");
+    harness.set_agent_scenario("bid-package-review");
+    let successor = match harness
+        .host
+        .run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: successor.package_id,
+            version: successor.version,
+        })
+        .await
+    {
+        Ok(result) => result.package,
+        Err(error) => panic!(
+            "independently review the exact successor package: {error:?}; runs={:#?}",
+            harness
+                .host
+                .inspect_agent_runs(&harness.tender_id)
+                .expect("inspect failed review run")
+        ),
+    };
+    assert!(successor.decision_gate_ready, "{successor:#?}");
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &successor,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact successor package");
+
+    let rebased_plan = harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: prior_plan.plan_id.clone(),
+            base_version: prior_plan.version,
+            actions: vec![WorkPlanRevisionAction::RebasePackageBasis],
+        })
+        .expect("rebase the immutable Work Plan onto the accepted successor package");
+    let rebased_plan = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: rebased_plan.plan_id.clone(),
+            version: rebased_plan.version,
+            decision: WorkPlanDecision::Approve,
+            rationale: "Approve the exact Change Assessment recovery plan.".into(),
+        })
+        .expect("approve exact rebased recovery Work Plan");
+    harness
+        .host
+        .activate_tender_production(ActivateTenderProductionCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: rebased_plan.plan_id,
+            plan_version: rebased_plan.version,
+            plan_manifest_sha256: rebased_plan.manifest_sha256,
+        })
+        .expect("activate exact partial-rework production successor");
+    let recovery_production = harness
+        .host
+        .inspect_tender_production(&harness.tender_id)
+        .expect("inspect partial-rework production successor")
+        .expect("active recovery production");
+    assert!(recovery_production.active);
+    let impacted_task_keys = decided
+        .impacts
+        .iter()
+        .filter(|impact| impact.kind == ChangeAssessmentImpactKind::ProductionTask)
+        .filter_map(|impact| {
+            prior_production
+                .tasks
+                .iter()
+                .find(|task| task.production_task_id == impact.object_id)
+                .map(|task| task.task.task_key.clone())
+        })
+        .collect::<std::collections::HashSet<_>>();
+    let carried = recovery_production
+        .tasks
+        .iter()
+        .filter(|task| {
+            !impacted_task_keys.contains(&task.task.task_key)
+                && task.state == ProductionTaskState::ReadyForIntegration
+                && task.run_ids.is_empty()
+        })
+        .count();
+    assert!(
+        carried > 0,
+        "at least one unaffected exact output must be carried forward"
+    );
+    assert!(recovery_production.tasks.iter().any(|task| {
+        impacted_task_keys.contains(&task.task.task_key)
+            && task.state != ProductionTaskState::ReadyForIntegration
+    }));
+
+    complete_all_production_for_integration(&harness).await;
+    let successor_baseline = harness
+        .host
+        .assemble_coordinated_bid_baseline(AssembleCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: Some(approved.version),
+        })
+        .expect("assemble immutable successor Coordinated Bid Baseline");
+    assert!(successor_baseline.current, "{successor_baseline:#?}");
+    assert!(
+        successor_baseline.blockers.is_empty(),
+        "{successor_baseline:#?}"
+    );
+    assert!(
+        successor_baseline.contradictions.is_empty(),
+        "{successor_baseline:#?}"
+    );
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close successor baseline before its exact decision");
+    let pending_decision_integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify unresolved recovery in Integrated Review");
+    assert_eq!(
+        pending_decision_integrity.state,
+        TenderIntegrityState::Ready,
+        "{pending_decision_integrity:#?}"
+    );
+    let successor_baseline = harness
+        .host
+        .decide_coordinated_bid_baseline(DecideCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: successor_baseline.baseline_id,
+            version: successor_baseline.version,
+            manifest_sha256: successor_baseline.manifest_sha256,
+            decision: CoordinatedBidBaselineDecision::Approve,
+            rationale: "Approve only the exact reconciled successor baseline.".into(),
+            conditions: Vec::new(),
+            exceptions: Vec::new(),
+        })
+        .expect("approve and resolve the exact successor baseline");
+    assert_eq!(successor_baseline.version, approved.version + 1);
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect resolved lifecycle")
+            .lifecycle_phase,
+        TenderLifecyclePhase::PackageProduction
+    );
+    let assessment = harness
+        .host
+        .inspect_change_assessments(InspectChangeAssessmentsCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 4,
+        })
+        .expect("inspect immutable resolved Change Assessment")
+        .items
+        .into_iter()
+        .find(|assessment| assessment.assessment_id == decided.assessment_id)
+        .expect("resolved assessment history");
+    assert_eq!(assessment.status, ChangeAssessmentStatus::Resolved);
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close fully recovered Tender");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify exact Change Assessment recovery");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+    assert_eq!(
+        harness
+            .host
+            .inspect_change_assessments(InspectChangeAssessmentsCommand {
+                tender_id: harness.tender_id.clone(),
+                before_sequence: None,
+                limit: 5,
+            })
+            .expect_err("Change Assessment IPC page is non-overridably bounded")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open assessment store");
+    connection
+        .execute_batch("DROP TRIGGER change_assessment_decisions_no_update")
+        .expect("disable decision immutability only for corruption probe");
+    connection
+        .execute(
+            "UPDATE change_assessment_decisions SET manifest_sha256 = ?1
+             WHERE assessment_id = ?2",
+            rusqlite::params!["0".repeat(64), assessment.assessment_id],
+        )
+        .expect("corrupt exact assessment decision hash");
+    drop(connection);
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("detect Change Assessment decision corruption")
+            .state,
+        TenderIntegrityState::RecoveryRequired
+    );
+}
+
+#[tokio::test]
+async fn irrelevant_addendum_preserves_approved_work_and_change_decision_is_single_winner() {
+    let harness = Harness::new("record-extraction-coordinated");
+    let approved = approved_package_production(&harness).await;
+    let source = harness._root.path().join("irrelevant-addendum-prior");
+    fs::create_dir(&source).expect("irrelevant prior source directory");
+    fs::write(
+        source.join("unreferenced-note.pdf"),
+        b"%PDF-1.7\nUNREFERENCED PRIOR NOTE\n%%EOF\n",
+    )
+    .expect("irrelevant prior fixture");
+    let prior_import = harness
+        .host
+        .import_tender_package(ImportTenderPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            source_path: source.to_string_lossy().into_owned(),
+        })
+        .expect("register unreferenced prior source");
+    let prior = prior_import.documents.first().expect("unreferenced prior");
+    harness
+        .host
+        .parse_source_artifact(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: prior.artifact_id.clone(),
+            version: prior.version,
+        })
+        .await
+        .expect("parse unreferenced prior before Change Assessment");
+
+    let source = harness._root.path().join("irrelevant-addendum-new");
+    fs::create_dir(&source).expect("irrelevant new source directory");
+    fs::write(
+        source.join("unreferenced-addendum.pdf"),
+        b"%PDF-1.7\nUNREFERENCED ADDENDUM\n%%EOF\n",
+    )
+    .expect("irrelevant addendum fixture");
+    let replacement_import = harness
+        .host
+        .import_tender_package(ImportTenderPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            source_path: source.to_string_lossy().into_owned(),
+        })
+        .expect("register unreferenced addendum source");
+    let replacement = replacement_import
+        .documents
+        .first()
+        .expect("unreferenced addendum");
+    harness
+        .host
+        .parse_source_artifact(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: replacement.artifact_id.clone(),
+            version: replacement.version,
+        })
+        .await
+        .expect("parse unreferenced addendum before Change Assessment");
+    harness
+        .host
+        .confirm_source_relationship(ConfirmSourceRelationshipCommand {
+            tender_id: harness.tender_id.clone(),
+            prior_artifact_id: prior.artifact_id.clone(),
+            prior_version: prior.version,
+            replacement_artifact_id: replacement.artifact_id.clone(),
+            replacement_version: replacement.version,
+            relationship_kind: SourceRelationshipKind::Addendum,
+        })
+        .expect("open exact irrelevant Change Assessment");
+    let pending = harness
+        .host
+        .inspect_change_assessments(InspectChangeAssessmentsCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 4,
+        })
+        .expect("inspect irrelevant assessment")
+        .active
+        .expect("pending irrelevant assessment");
+    assert!(pending.impacts.is_empty());
+    let command = DecideChangeAssessmentCommand {
+        tender_id: harness.tender_id.clone(),
+        assessment_id: pending.assessment_id.clone(),
+        assessment_manifest_sha256: pending.manifest_sha256.clone(),
+        classification: ChangeAssessmentClassification::Irrelevant,
+        rationale:
+            "The new immutable note has no typed dependency on the approved Tender baseline.".into(),
+    };
+    let decisions = std::thread::scope(|scope| {
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let left_barrier = Arc::clone(&barrier);
+        let right_barrier = Arc::clone(&barrier);
+        let left_command = command.clone();
+        let right_command = command.clone();
+        let left_host = &harness.host;
+        let right_host = &harness.host;
+        let left = scope.spawn(move || {
+            left_barrier.wait();
+            left_host.decide_change_assessment(left_command)
+        });
+        let right = scope.spawn(move || {
+            right_barrier.wait();
+            right_host.decide_change_assessment(right_command)
+        });
+        barrier.wait();
+        vec![
+            left.join().expect("left classification caller"),
+            right.join().expect("right classification caller"),
+        ]
+    });
+    assert_eq!(decisions.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        decisions
+            .iter()
+            .filter_map(|result| result.as_ref().err())
+            .filter(|error| error.code == TenderErrorCode::InvalidCommand)
+            .count(),
+        1
+    );
+    let resolved = decisions
+        .into_iter()
+        .find_map(Result::ok)
+        .expect("one exact classification");
+    assert_eq!(resolved.status, ChangeAssessmentStatus::Resolved);
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect preserved Package Production lifecycle")
+            .lifecycle_phase,
+        TenderLifecyclePhase::PackageProduction
+    );
+    let baseline = harness
+        .host
+        .inspect_coordinated_bid_baselines(InspectCoordinatedBidBaselinesCommand {
+            tender_id: harness.tender_id.clone(),
+            before_version: None,
+            limit: 4,
+        })
+        .expect("inspect preserved approved baseline")
+        .items
+        .into_iter()
+        .next()
+        .expect("approved baseline remains visible");
+    assert!(baseline.current);
+    assert_eq!(baseline.manifest_sha256, approved.manifest_sha256);
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close irrelevant assessment Tender");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify irrelevant assessment history");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+}
+
+#[tokio::test]
+async fn material_change_traces_query_treatment_calculation_and_source_precedence() {
+    let harness = Harness::new("record-extraction-coordinated");
+    let (plan, production) = active_production(&harness).await;
+    let unaffected_plan_approval_id = plan
+        .approval
+        .as_ref()
+        .expect("approved Work Plan")
+        .approval_id
+        .clone();
+    let query_source = harness._root.path().join("query-calculation-original");
+    fs::create_dir(&query_source).expect("query/calculation source directory");
+    fs::write(
+        query_source.join("query-source.pdf"),
+        b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
+    )
+    .expect("query/calculation source fixture");
+    let source = harness
+        .host
+        .import_tender_package(ImportTenderPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            source_path: query_source.to_string_lossy().into_owned(),
+        })
+        .expect("register independent query/calculation source")
+        .documents
+        .into_iter()
+        .next()
+        .expect("registered pre-change source");
+    harness
+        .host
+        .parse_source_artifact(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: source.artifact_id.clone(),
+            version: source.version,
+        })
+        .await
+        .expect("parse independent query/calculation source");
+    let location = harness
+        .host
+        .inspect_evidence(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: source.artifact_id.clone(),
+            version: source.version,
+        })
+        .expect("inspect pre-change source Evidence")
+        .locations
+        .into_iter()
+        .next()
+        .expect("pre-change Evidence location");
+    let source_reference = AgentTaskInputReference {
+        kind: "source_evidence".into(),
+        reference: format!("{}#{}", source.artifact_id, location.ordinal),
+        version: source.version,
+    };
+
+    let query_page = harness
+        .host
+        .inspect_tender_queries(InspectTenderQueriesCommand {
+            tender_id: harness.tender_id.clone(),
+            cursor: None,
+            limit: 8,
+        })
+        .expect("inspect Query owners");
+    let owner = query_page
+        .owner_profiles
+        .first()
+        .expect("Query owner profile");
+    let cost_task = production
+        .tasks
+        .iter()
+        .find(|task| task.task.task_key == "cost_estimation_production")
+        .expect("exact cost task");
+    let query = harness
+        .host
+        .create_tender_query(CreateTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_type: TenderQueryType::Ambiguity,
+            question: "Which source-backed rate qualification governs the estimate?".into(),
+            ambiguity_or_gap: "The controlled calculation needs an attributable rate basis.".into(),
+            owner_profile_id: owner.profile_id.clone(),
+            owner_profile_version: owner.version,
+            evidence: vec![source_reference.clone()],
+            affected_records: Vec::new(),
+            affected_task_keys: vec![cost_task.task.task_key.clone()],
+            due_at: "2099-01-01T00:00:00.000Z".into(),
+            material: false,
+            release_blocking: false,
+            proposed_treatments: vec![TenderQueryTreatmentProposalInput {
+                treatment: TenderQueryTreatment::Qualification,
+                rationale: "Carry only the exact source-backed rate qualification.".into(),
+            }],
+        })
+        .expect("register exact source-backed Query");
+    let query = harness
+        .host
+        .decide_tender_query_treatment(DecideTenderQueryTreatmentCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: query.query_id,
+            query_version: query.version,
+            treatment: TenderQueryTreatment::Qualification,
+            rationale: "Approve the exact rate qualification for controlled calculation.".into(),
+            treatment_details: "Use only the cited immutable source rate basis.".into(),
+            closes_query: true,
+        })
+        .expect("approve exact Query treatment");
+    let query_decision_id = query
+        .approved_treatment
+        .as_ref()
+        .expect("approved Query treatment")
+        .decision_id
+        .clone();
+
+    let rule = harness
+        .host
+        .propose_boq_calculation_rule(ProposeBoqCalculationRuleCommand {
+            tender_id: harness.tender_id.clone(),
+            supported_rounding: vec![CalculationRoundingMode::MidpointAwayFromZero],
+            change_rationale: "Establish the exact controlled calculation rule.".into(),
+        })
+        .expect("propose exact calculation rule");
+    harness.set_agent_scenario("calculation-rule-review");
+    harness
+        .host
+        .run_calculation_rule_review(RunCalculationRuleReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            rule_id: rule.rule_id.clone(),
+            version: rule.version,
+        })
+        .await
+        .expect("independently review exact calculation rule");
+    harness
+        .host
+        .approve_calculation_rule(ApproveCalculationRuleCommand {
+            tender_id: harness.tender_id.clone(),
+            rule_id: rule.rule_id,
+            version: rule.version,
+            manifest_sha256: rule.manifest_sha256,
+            rationale: "Activate only the exact reviewed deterministic rule.".into(),
+        })
+        .expect("activate exact calculation rule");
+    let scenario = harness
+        .host
+        .create_calculation_scenario(CreateCalculationScenarioCommand {
+            tender_id: harness.tender_id.clone(),
+            name: "Change-sensitive source rate".into(),
+            quantity_unit: "m".into(),
+            rate_basis_unit: "m".into(),
+            rate_currency: "USD".into(),
+            exchange_rate: CalculationDecimalInput {
+                state: CalculationInputState::Provided,
+                value: Some("50".into()),
+                evidence: vec![source_reference.clone()],
+            },
+            exchange_rate_effective_date: Some("2026-08-01".into()),
+            pricing_date: "2026-08-10".into(),
+            exchange_rate_type: Some(ExchangeRateType::Spot),
+            output_currency: "EGP".into(),
+            precision: 2,
+            rounding_mode: CalculationRoundingMode::MidpointAwayFromZero,
+            rationale: "Bind exact source Evidence, FX, units and rounding.".into(),
+        })
+        .expect("create exact change-sensitive scenario");
+    let calculated = run_cost_estimator_fixture(
+        &harness,
+        "cost-estimator-calculation",
+        scenario.scenario_id,
+        scenario.version,
+        "Change-sensitive controlled value",
+        &source_reference,
+    )
+    .await;
+    let calculated = harness
+        .host
+        .approve_controlled_boq_calculation_run(ApproveControlledBoqCalculationRunCommand {
+            tender_id: harness.tender_id.clone(),
+            calculation_run_id: calculated.calculation_run_id,
+            manifest_sha256: calculated.manifest_sha256,
+            rationale: "Approve only this exact source-backed calculated value.".into(),
+        })
+        .expect("approve exact source-backed Calculation Run");
+    let calculation_approval_id = calculated
+        .approval
+        .as_ref()
+        .expect("Calculation Run approval")
+        .approval_id
+        .clone();
+
+    let replacement_source = harness._root.path().join("query-calculation-addendum");
+    fs::create_dir(&replacement_source).expect("query/calculation addendum directory");
+    fs::write(
+        replacement_source.join("addendum.pdf"),
+        b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
+    )
+    .expect("query/calculation addendum fixture");
+    let replacement = harness
+        .host
+        .import_tender_package(ImportTenderPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            source_path: replacement_source.to_string_lossy().into_owned(),
+        })
+        .expect("register query/calculation addendum")
+        .documents
+        .into_iter()
+        .next()
+        .expect("registered addendum");
+    harness
+        .host
+        .parse_source_artifact(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: replacement.artifact_id.clone(),
+            version: replacement.version,
+        })
+        .await
+        .expect("parse query/calculation addendum");
+    let replacement_reference = harness
+        .host
+        .inspect_evidence(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: replacement.artifact_id.clone(),
+            version: replacement.version,
+        })
+        .expect("inspect query/calculation addendum Evidence")
+        .locations
+        .into_iter()
+        .next()
+        .map(|location| AgentTaskInputReference {
+            kind: "source_evidence".into(),
+            reference: format!("{}#{}", replacement.artifact_id, location.ordinal),
+            version: replacement.version,
+        })
+        .expect("replacement Evidence location");
+    harness
+        .host
+        .confirm_source_relationship(ConfirmSourceRelationshipCommand {
+            tender_id: harness.tender_id.clone(),
+            prior_artifact_id: source.artifact_id.clone(),
+            prior_version: source.version,
+            replacement_artifact_id: replacement.artifact_id.clone(),
+            replacement_version: replacement.version,
+            relationship_kind: SourceRelationshipKind::Addendum,
+        })
+        .expect("open query/calculation Change Assessment");
+    let pending = harness
+        .host
+        .inspect_change_assessments(InspectChangeAssessmentsCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 4,
+        })
+        .expect("inspect exact query/calculation impacts")
+        .active
+        .expect("pending query/calculation assessment");
+    let blocked_task = production
+        .tasks
+        .iter()
+        .find(|task| task.state == ProductionTaskState::Ready)
+        .expect("ready work cannot bypass Change Assessment");
+    assert_eq!(
+        harness
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: harness.tender_id.clone(),
+                production_task_id: blocked_task.production_task_id.clone(),
+            })
+            .await
+            .expect_err("production is frozen until exact classification")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    assert!(pending.impacts.iter().any(|impact| {
+        impact.kind == ChangeAssessmentImpactKind::TenderQuery
+            && impact.object_id == query.query_id
+            && impact.object_version == query.version
+    }));
+    assert!(pending.impacts.iter().any(|impact| {
+        impact.kind == ChangeAssessmentImpactKind::CalculationRun
+            && impact.object_id == calculated.calculation_run_id
+    }));
+    for approval_id in [query_decision_id, calculation_approval_id] {
+        assert!(pending.impacts.iter().any(|impact| {
+            impact.kind == ChangeAssessmentImpactKind::Approval
+                && impact.object_id == approval_id
+                && impact.consequence == ChangeAssessmentImpactConsequence::Revoke
+        }));
+    }
+    assert!(pending.impacts.iter().all(|impact| {
+        impact.kind != ChangeAssessmentImpactKind::Approval
+            || impact.object_id != unaffected_plan_approval_id
+    }));
+    let before_decision = inspect_all_records(&harness.host, &harness.tender_id);
+    assert!(before_decision
+        .iter()
+        .filter(|record| record.version == 1)
+        .all(|record| record.verification_status != VerificationStatus::Stale));
+    harness
+        .host
+        .decide_change_assessment(DecideChangeAssessmentCommand {
+            tender_id: harness.tender_id.clone(),
+            assessment_id: pending.assessment_id,
+            assessment_manifest_sha256: pending.manifest_sha256,
+            classification: ChangeAssessmentClassification::Material,
+            rationale: "The addendum replaces exact Query and Calculation inputs.".into(),
+        })
+        .expect("apply exact material source precedence");
+    let revise_query = |evidence| ReviseTenderQueryCommand {
+        tender_id: harness.tender_id.clone(),
+        query_id: query.query_id.clone(),
+        base_version: query.version,
+        query_type: query.query_type,
+        question: query.question.clone(),
+        ambiguity_or_gap: query.ambiguity_or_gap.clone(),
+        owner_profile_id: query.owner_profile_id.clone(),
+        owner_profile_version: query.owner_profile_version,
+        evidence,
+        affected_records: query.affected_records.clone(),
+        affected_task_keys: query.affected_task_keys.clone(),
+        due_at: query.due_at.clone(),
+        material: query.material,
+        release_blocking: query.release_blocking,
+        proposed_treatments: query
+            .proposed_treatments
+            .iter()
+            .map(|proposal| TenderQueryTreatmentProposalInput {
+                treatment: proposal.treatment,
+                rationale: proposal.rationale.clone(),
+            })
+            .collect(),
+        response: None,
+        response_evidence: Vec::new(),
+    };
+    assert_eq!(
+        harness
+            .host
+            .revise_tender_query(revise_query(vec![source_reference]))
+            .expect_err("superseded Query Evidence cannot discharge exact change impact")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let query_successor = match harness
+        .host
+        .revise_tender_query(revise_query(vec![replacement_reference]))
+    {
+        Ok(query) => query,
+        Err(error) => {
+            let database = harness
+                .application_home
+                .join("tenders")
+                .join(&harness.tender_id)
+                .join("tender.sqlite");
+            let connection = rusqlite::Connection::open(database).expect("open Tender Store");
+            let denial: String = connection
+                .query_row(
+                    "SELECT payload_json FROM audit_events
+                     WHERE event_type = 'tender_query_command_denied'
+                     ORDER BY sequence DESC LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("inspect Query recovery denial");
+            panic!("publish replacement-bound Query successor: {error:?}; denial={denial}");
+        }
+    };
+    assert_eq!(query_successor.version, query.version + 1);
+    assert!(query_successor.approved_treatment.is_none());
+    let query_successor = harness
+        .host
+        .decide_tender_query_treatment(DecideTenderQueryTreatmentCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: query_successor.query_id.clone(),
+            query_version: query_successor.version,
+            treatment: TenderQueryTreatment::Qualification,
+            rationale: "Re-decide the exact addendum-bound Query treatment.".into(),
+            treatment_details: "Use only the replacement Source Evidence.".into(),
+            closes_query: true,
+        })
+        .expect("approve exact replacement-bound Query treatment");
+    assert!(query_successor.approved_treatment.is_some());
+    let preserved_plan = harness
+        .host
+        .inspect_current_work_plan(&harness.tender_id)
+        .expect("inspect unaffected Work Plan")
+        .expect("current Work Plan remains available");
+    assert_eq!(
+        preserved_plan
+            .approval
+            .as_ref()
+            .expect("unaffected Work Plan approval remains valid")
+            .approval_id,
+        unaffected_plan_approval_id
+    );
+    assert!(inspect_all_records(&harness.host, &harness.tender_id)
+        .iter()
+        .filter(|record| record.version == 1)
+        .all(|record| record.verification_status != VerificationStatus::Stale));
 }
 
 #[tokio::test]
@@ -5200,6 +7036,126 @@ async fn active_production(
     (approved, production)
 }
 
+async fn active_production_from_records(
+    harness: &Harness,
+    records: &[TenderRecordInspection],
+) -> quantix_lib::TenderProductionInspection {
+    harness.verify_records(records, false);
+    let package = harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+            disposition_updates: complete_dispositions(records),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("create split-source package");
+    harness.set_agent_scenario("bid-package-review");
+    let package = harness
+        .host
+        .run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id,
+            version: package.version,
+        })
+        .await
+        .expect("review split-source package")
+        .package;
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept split-source package");
+    let plan = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose split-source Work Plan");
+    let plan = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: plan.plan_id,
+            version: plan.version,
+            decision: WorkPlanDecision::Approve,
+            rationale: "Approve the exact split-source production plan.".into(),
+        })
+        .expect("approve split-source Work Plan");
+    harness
+        .host
+        .activate_tender_production(ActivateTenderProductionCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: plan.plan_id,
+            plan_version: plan.version,
+            plan_manifest_sha256: plan.manifest_sha256,
+        })
+        .expect("activate split-source production")
+}
+
+async fn confirm_addendum_for_record(
+    harness: &Harness,
+    record: &TenderRecordInspection,
+    directory_name: &str,
+) -> quantix_lib::ChangeAssessment {
+    let prior = record
+        .fields
+        .iter()
+        .flat_map(|field| field.evidence.iter())
+        .next()
+        .expect("changed record Evidence")
+        .reference
+        .clone();
+    let source = harness._root.path().join(directory_name);
+    fs::create_dir(&source).expect("addendum directory");
+    fs::write(
+        source.join("addendum.pdf"),
+        b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
+    )
+    .expect("addendum fixture");
+    let imported = harness
+        .host
+        .import_tender_package(ImportTenderPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            source_path: source.to_string_lossy().into_owned(),
+        })
+        .expect("import addendum");
+    let replacement = imported.documents.first().expect("imported addendum");
+    harness
+        .host
+        .parse_source_artifact(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: replacement.artifact_id.clone(),
+            version: replacement.version,
+        })
+        .await
+        .expect("parse addendum");
+    harness
+        .host
+        .confirm_source_relationship(ConfirmSourceRelationshipCommand {
+            tender_id: harness.tender_id.clone(),
+            prior_artifact_id: prior.artifact_id,
+            prior_version: prior.version,
+            replacement_artifact_id: replacement.artifact_id.clone(),
+            replacement_version: replacement.version,
+            relationship_kind: SourceRelationshipKind::Addendum,
+        })
+        .expect("confirm addendum relationship");
+    harness
+        .host
+        .inspect_change_assessments(InspectChangeAssessmentsCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 4,
+        })
+        .expect("inspect active Change Assessment")
+        .active
+        .expect("active Change Assessment")
+}
+
 async fn complete_all_production_for_integration(harness: &Harness) {
     harness.set_agent_scenario("production-task");
     for _ in 0..64 {
@@ -5237,6 +7193,32 @@ async fn complete_all_production_for_integration(harness: &Harness) {
             .expect("advance exact integration production task");
     }
     panic!("production did not complete within its bounded attempt frontier");
+}
+
+async fn approved_package_production(harness: &Harness) -> CoordinatedBidBaseline {
+    active_production(harness).await;
+    approve_exact_final_price_for_integration(harness).await;
+    complete_all_production_for_integration(harness).await;
+    let baseline = harness
+        .host
+        .assemble_coordinated_bid_baseline(AssembleCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+        })
+        .expect("assemble exact pre-change Coordinated Bid Baseline");
+    harness
+        .host
+        .decide_coordinated_bid_baseline(DecideCoordinatedBidBaselineCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id.clone(),
+            version: baseline.version,
+            manifest_sha256: baseline.manifest_sha256.clone(),
+            decision: CoordinatedBidBaselineDecision::Approve,
+            rationale: "Approve the exact baseline before Change Assessment.".into(),
+            conditions: Vec::new(),
+            exceptions: Vec::new(),
+        })
+        .expect("approve exact pre-change Coordinated Bid Baseline")
 }
 
 async fn run_cost_estimator_fixture(
@@ -8347,14 +10329,54 @@ async fn stale_unreviewed_basis_can_be_superseded_with_exact_source_lineage() {
         })
         .expect("confirm exact BOQ replacement");
 
-    harness.set_agent_scenario("cost-estimator-basis");
-    let stale_calculation_attempt = harness
+    assert_eq!(
+        harness
+            .host
+            .run_cost_estimator_basis(command())
+            .await
+            .expect_err("an unresolved Change Assessment blocks estimate publication")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
+    let assessment = harness
         .host
-        .run_cost_estimator_basis(command())
-        .await
-        .expect("stale Calculation Runs terminalize without corrupting the Tender");
-    assert_eq!(stale_calculation_attempt.run.state, AgentRunState::Failed);
-    assert!(stale_calculation_attempt.basis.is_none());
+        .inspect_change_assessments(InspectChangeAssessmentsCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 4,
+        })
+        .expect("inspect the exact BOQ replacement assessment")
+        .active
+        .expect("pending BOQ replacement assessment");
+    let decided = harness
+        .host
+        .decide_change_assessment(DecideChangeAssessmentCommand {
+            tender_id: harness.tender_id.clone(),
+            assessment_id: assessment.assessment_id,
+            assessment_manifest_sha256: assessment.manifest_sha256,
+            classification: ChangeAssessmentClassification::Material,
+            rationale: "The replacement changes the exact BOQ evidence and dependent arithmetic."
+                .into(),
+        })
+        .expect("classify the exact BOQ replacement as material");
+    assert!(
+        !decided
+            .impacts
+            .iter()
+            .any(|impact| impact.kind == ChangeAssessmentImpactKind::Package),
+        "a post-package BOQ source must not invent a package dependency: {decided:#?}"
+    );
+
+    harness.set_agent_scenario("cost-estimator-basis");
+    assert_eq!(
+        harness
+            .host
+            .run_cost_estimator_basis(command())
+            .await
+            .expect_err("stale Calculation Runs are rejected before provider dispatch")
+            .code,
+        TenderErrorCode::InvalidCommand
+    );
 
     let replacement_calculation_evidence = replacement
         .iter()

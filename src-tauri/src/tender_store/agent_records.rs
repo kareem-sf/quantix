@@ -470,7 +470,39 @@ impl TenderStore {
     ) -> Result<(), TenderCommandError> {
         let operation_budget = BidPackageOperationBudget::for_tender(tender_id);
         operation_budget.check()?;
-        self.require_change_intake_writable()?;
+        let pending_affected_run = self.pending_change_has_active_affected_run(&prepared.run_id)?;
+        if pending_affected_run && execution.state == AgentRunState::Completed {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Start a new Agent Run only after the material change is classified.",
+                Some(
+                    "The provider completed after a pending Change Assessment made the exact task inputs stale.",
+                ),
+            ));
+            execution.candidate_payload_json = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary =
+                    "Provider outcome discarded after its exact inputs entered Change Assessment"
+                        .into();
+            }
+        }
+        let pending_affected_terminalization =
+            execution.state != AgentRunState::Completed && pending_affected_run;
+        let unaffected_continuation =
+            self.unresolved_change_allows_unaffected_run(&prepared.run_id)?;
+        if !self.active_change_allows_agent_task(&prepared.task)?
+            && !pending_affected_terminalization
+            && !unaffected_continuation
+        {
+            self.require_change_intake_writable()?;
+        }
         if execution.state == AgentRunState::Running
             || (execution.state == AgentRunState::Completed
                 && (execution.failure.is_some() || execution.candidate_payload_json.is_none()))
@@ -1579,7 +1611,11 @@ impl TenderStore {
         thread_ref: &str,
         resumed: bool,
     ) -> Result<(), TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_agent_task(&prepared.task)?
+            && !self.unresolved_change_allows_unaffected_run(&prepared.run_id)?
+        {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1663,7 +1699,11 @@ impl TenderStore {
         prepared: &PreparedAgentRun,
         thread_ref: &str,
     ) -> Result<(), TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_agent_task(&prepared.task)?
+            && !self.unresolved_change_allows_unaffected_run(&prepared.run_id)?
+        {
+            self.require_change_intake_writable()?;
+        }
         if prepared.provider_thread_to_archive.as_deref() != Some(thread_ref)
             || prepared.provider_thread_ref.is_some()
         {
@@ -1719,7 +1759,11 @@ impl TenderStore {
         run_id: &str,
         turn_ref: &str,
     ) -> Result<(), TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_run(run_id)?
+            && !self.unresolved_change_allows_unaffected_run(run_id)?
+        {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1758,7 +1802,11 @@ impl TenderStore {
         &mut self,
         run_id: &str,
     ) -> Result<(), TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_run(run_id)?
+            && !self.unresolved_change_allows_unaffected_run(run_id)?
+        {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1802,7 +1850,11 @@ impl TenderStore {
         event: &PendingProviderEvent,
         usage: &ProviderUsage,
     ) -> Result<(), TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_run(run_id)?
+            && !self.unresolved_change_allows_unaffected_run(run_id)?
+        {
+            self.require_change_intake_writable()?;
+        }
         if !matches!(
             event.kind,
             ProviderEventKind::UsageObserved
@@ -1839,7 +1891,11 @@ impl TenderStore {
         run_id: &str,
         event: &PendingProviderEvent,
     ) -> Result<(), TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_run(run_id)?
+            && !self.unresolved_change_allows_unaffected_run(run_id)?
+        {
+            self.require_change_intake_writable()?;
+        }
         if event.kind != ProviderEventKind::ControlRequestDenied {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
@@ -1910,7 +1966,11 @@ impl TenderStore {
         tender_id: &TenderId,
         command: RequestAgentAccessCommand,
     ) -> Result<AgentAccessRequestView, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_run(&command.run_id)?
+            && !self.unresolved_change_allows_unaffected_run(&command.run_id)?
+        {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1991,7 +2051,11 @@ impl TenderStore {
         command: ApproveAgentAccessCommand,
         run_is_active: bool,
     ) -> Result<AgentAccessRequestView, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_run(&command.run_id)?
+            && !self.unresolved_change_allows_unaffected_run(&command.run_id)?
+        {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -2124,7 +2188,11 @@ impl TenderStore {
         correlation_id: &str,
         tool_name: &str,
     ) -> Result<bool, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_run(run_id)?
+            && !self.unresolved_change_allows_unaffected_run(run_id)?
+        {
+            self.require_change_intake_writable()?;
+        }
         let Some(definition) = bootstrap_tool_catalogue()
             .into_iter()
             .find(|tool| tool.name == tool_name)
@@ -2279,7 +2347,11 @@ impl TenderStore {
         tool_name: &str,
         succeeded: bool,
     ) -> Result<(), TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_run(run_id)?
+            && !self.unresolved_change_allows_unaffected_run(run_id)?
+        {
+            self.require_change_intake_writable()?;
+        }
         let definition = bootstrap_tool_catalogue()
             .into_iter()
             .find(|tool| tool.name == tool_name)
@@ -2474,7 +2546,11 @@ impl TenderStore {
         tender_id: &TenderId,
         command: ResolveAgentAccessCommand,
     ) -> Result<AgentAccessRequestView, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_run(&command.run_id)?
+            && !self.unresolved_change_allows_unaffected_run(&command.run_id)?
+        {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -2589,7 +2665,11 @@ impl TenderStore {
         tender_id: &TenderId,
         run_id: &str,
     ) -> Result<bool, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_run(run_id)?
+            && !self.pending_change_has_active_affected_run(run_id)?
+        {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)

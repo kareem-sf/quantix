@@ -31,8 +31,9 @@ use super::{
     },
     append_audit_event, append_audit_event_with_sequence, lock_mutex_with_check, random_identifier,
     require_setup, sha256_hex, sql_error, sqlite_timestamp, BidPackageOperationBudget,
-    MajorFindingPolicy, TenderCommandError, TenderErrorCode, TenderId, TenderRecordKind,
-    TenderStore, WorkPlanDecision, WorkPlanProfileBinding, WorkPlanTask,
+    ChangeAssessmentStatus, MajorFindingPolicy, TenderCommandError, TenderErrorCode, TenderId,
+    TenderRecordKind, TenderStore, WorkPlanDecision, WorkPlanProfileBinding,
+    WorkPlanRevisionAction, WorkPlanTask,
 };
 
 const MAX_PRODUCTION_TASKS: usize = 256;
@@ -58,6 +59,46 @@ type PreparedProductionTaskRow = (
 );
 type LatestProductionAttempt = (u32, String, String, Option<String>, Option<String>, String);
 type StoredProductionReviewTarget = (String, u32, String, String, String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ProductionTaskCarryForwardManifest {
+    schema_version: u32,
+    carry_forward_id: String,
+    assessment_id: String,
+    source_production_task_id: String,
+    source_task_definition_sha256: String,
+    source_readiness_id: String,
+    source_artifact_id: String,
+    source_artifact_version: u32,
+    source_payload_sha256: String,
+    source_review_id: Option<String>,
+    source_finding_dispositions_sha256: String,
+    source_plan_manifest_sha256: String,
+    target_production_task_id: String,
+    target_task_definition_sha256: String,
+    target_readiness_id: String,
+    target_plan_manifest_sha256: String,
+    compatibility_sha256: String,
+    carried_forward_by: String,
+    acting_role: String,
+    created_at: String,
+}
+
+#[derive(Debug, Clone)]
+struct ProductionRecoveryContext {
+    assessment_id: String,
+    source_activation_id: String,
+    source_plan_manifest_sha256: String,
+}
+
+struct ProductionCarryForwardTarget<'a> {
+    production_task_id: &'a str,
+    definition: &'a WorkPlanTask,
+    definition_sha256: &'a str,
+    plan_manifest_sha256: &'a str,
+    tender_revision: u32,
+    created_at: &'a str,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
 #[serde(deny_unknown_fields)]
@@ -592,7 +633,8 @@ impl TenderStore {
             finding_count,
             disposition_count,
             readiness_count,
-        ): (u32, u32, u32, u32, u32, u32, u32, u32) = self
+            carry_forward_count,
+        ): (u32, u32, u32, u32, u32, u32, u32, u32, u32) = self
             .connection
             .query_row(
                 "SELECT (SELECT COUNT(*) FROM production_activations),
@@ -602,7 +644,8 @@ impl TenderStore {
                     (SELECT COUNT(*) FROM production_reviews),
                     (SELECT COUNT(*) FROM production_review_findings),
                     (SELECT COUNT(*) FROM production_finding_dispositions),
-                    (SELECT COUNT(*) FROM production_integration_readiness)",
+                    (SELECT COUNT(*) FROM production_integration_readiness),
+                    (SELECT COUNT(*) FROM production_task_carry_forwards)",
                 [],
                 |row| {
                     Ok((
@@ -614,6 +657,7 @@ impl TenderStore {
                         row.get(5)?,
                         row.get(6)?,
                         row.get(7)?,
+                        row.get(8)?,
                     ))
                 },
             )
@@ -626,6 +670,7 @@ impl TenderStore {
             || finding_count > review_count.saturating_mul(MAX_PRODUCTION_FINDINGS as u32)
             || disposition_count > finding_count
             || readiness_count > task_count.saturating_mul(MAX_PRODUCTION_TASK_ATTEMPTS)
+            || carry_forward_count > task_count
         {
             return Ok(false);
         }
@@ -789,34 +834,48 @@ impl TenderStore {
                 if production_coordination_contract(&self.connection, &definition).is_err() {
                     return Ok(false);
                 }
-                let stored: Option<(String, String, String, Option<String>)> = self
+                let stored: Option<(String, String, String, String, Option<String>)> = self
                     .connection
                     .query_row(
-                        "SELECT production_task_id, task_definition_json, status, task_id
+                        "SELECT production_task_id, task_definition_json,
+                                task_definition_sha256, status, task_id
                          FROM production_tasks WHERE activation_id = ?1 AND task_key = ?2",
                         params![activation.0, definition.task_key],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                        |row| {
+                            Ok((
+                                row.get(0)?,
+                                row.get(1)?,
+                                row.get(2)?,
+                                row.get(3)?,
+                                row.get(4)?,
+                            ))
+                        },
                     )
                     .optional()
                     .map_err(sql_error)?;
-                let Some((production_task_id, task_json, status, task_id)) = stored else {
+                let Some((production_task_id, task_json, task_definition_sha256, status, task_id)) =
+                    stored
+                else {
                     return Ok(false);
                 };
                 if parse_canonical_json::<WorkPlanTask>(&task_json)? != definition
-                    || sha256_hex(task_json.as_bytes())
-                        != self
-                            .connection
-                            .query_row(
-                                "SELECT task_definition_sha256 FROM production_tasks
-                                 WHERE production_task_id = ?1",
-                                [&production_task_id],
-                                |row| row.get::<_, String>(0),
-                            )
-                            .map_err(sql_error)?
+                    || sha256_hex(task_json.as_bytes()) != task_definition_sha256
                 {
                     return Ok(false);
                 }
                 let state = ProductionTaskState::parse(&status)?;
+                let carried_forward = match production_task_carry_forward_is_valid(
+                    &self.connection,
+                    &production_task_id,
+                    &definition,
+                    &task_definition_sha256,
+                    &activation.3,
+                )? {
+                    Some(valid) if !valid => return Ok(false),
+                    Some(true) => true,
+                    None => false,
+                    Some(false) => unreachable!(),
+                };
                 let profile = load_profile(
                     &self.connection,
                     (definition.profile_id.clone(), definition.profile_version),
@@ -912,7 +971,8 @@ impl TenderStore {
                                 | ProductionTaskState::Ready
                                 | ProductionTaskState::QueryBlocked
                                 | ProductionTaskState::Suspended
-                        ))
+                        )
+                        && !(carried_forward && state == ProductionTaskState::ReadyForIntegration))
                     || (!attempts.is_empty()
                         && matches!(
                             state,
@@ -999,6 +1059,7 @@ impl TenderStore {
                                         "production_review_finding"
                                             | "approved_query_treatment"
                                             | "tender_query_version"
+                                            | "change_assessment"
                                     )
                                 }))
                         };
@@ -1152,7 +1213,16 @@ impl TenderStore {
                                 attempt_kind == "review" && run_status == "running"
                             }
                             ProductionTaskState::RemediationReady => {
-                                if attempt_kind == "query_control" && run_status == "failed" {
+                                if TenderStore::task_has_active_change_rework(
+                                    &self.connection,
+                                    &production_task_id,
+                                )? {
+                                    matches!(
+                                        (attempt_kind.as_str(), run_status.as_str()),
+                                        ("author" | "remediation" | "review", "completed")
+                                    )
+                                } else if attempt_kind == "query_control" && run_status == "failed"
+                                {
                                     production_task_state_after_query_release(
                                         &self.connection,
                                         &production_task_id,
@@ -1282,13 +1352,15 @@ impl TenderStore {
                     prior_run_id = Some(run_id.clone());
                     prior_attempt_kind = Some(attempt_kind.clone());
                 }
-                if !production_task_records_are_valid(
-                    &self.connection,
-                    &production_task_id,
-                    &definition,
-                    state,
-                    check,
-                )? {
+                if !carried_forward
+                    && !production_task_records_are_valid(
+                        &self.connection,
+                        &production_task_id,
+                        &definition,
+                        state,
+                        check,
+                    )?
+                {
                     return Ok(false);
                 }
             }
@@ -1393,6 +1465,18 @@ impl TenderStore {
         subscription_capacity_exhausted: bool,
     ) -> Result<PreparedAgentRun, TenderCommandError> {
         self.require_storage_writable()?;
+        if self
+            .unresolved_change_assessment()?
+            .is_some_and(|(_, status)| status == ChangeAssessmentStatus::Pending)
+        {
+            self.record_production_denial(
+                tender_id,
+                "run_production_task",
+                Some(production_task_id),
+                "change_assessment_pending",
+            )?;
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
         let plan_basis: Option<(String, u32)> = self
             .connection
             .query_row(
@@ -1407,7 +1491,11 @@ impl TenderStore {
             .optional()
             .map_err(sql_error)?;
         if let Some((plan_id, plan_version)) = plan_basis.as_ref() {
-            if !work_plan_package_dependencies_are_current(self, plan_id, *plan_version)? {
+            let targeted_change_rework =
+                TenderStore::task_has_active_change_rework(&self.connection, production_task_id)?;
+            if !targeted_change_rework
+                && !work_plan_package_dependencies_are_current(self, plan_id, *plan_version)?
+            {
                 self.record_production_denial(
                     tender_id,
                     "run_production_task",
@@ -1549,6 +1637,8 @@ impl TenderStore {
                         &transaction,
                         production_task_id,
                     )?;
+            let change_rework_ready =
+                TenderStore::task_has_active_change_rework(&transaction, production_task_id)?;
             let attempt_kind = match task_status.as_str() {
                 "review_ready" => "review",
                 "remediation_ready" => "remediation",
@@ -1587,7 +1677,8 @@ impl TenderStore {
                 }
                 ("remediation_ready", Some((_, _, prior_status, _, _, prior_kind))) => {
                     expected_retry_of_run_id.is_none()
-                        && ((prior_status == "completed"
+                        && (change_rework_ready
+                            || (prior_status == "completed"
                             && (prior_kind == "review" || query_remediation_ready))
                             || (prior_status == "failed"
                                 && prior_kind == "query_control"
@@ -1808,6 +1899,12 @@ impl TenderStore {
                     version: decision.query_version,
                 });
             }
+            let (change_assessment_inputs, change_assessment) =
+                TenderStore::active_change_assessment_inputs_for_task(
+                    &transaction,
+                    production_task_id,
+                )?;
+            exact_inputs.extend(change_assessment_inputs);
             let mut dependency_outputs = Vec::new();
             if matches!(attempt_kind, "author" | "remediation") {
                 for dependency in &definition.dependencies {
@@ -2106,6 +2203,7 @@ impl TenderStore {
                 .transpose()?;
             let payload = json!({
                 "coordination_contract": coordination_contract,
+                "change_assessment": change_assessment,
                 "data_classification": task.permissions.data_classifications
                     .iter()
                     .max()
@@ -2291,6 +2389,326 @@ impl TenderStore {
         prepared
     }
 
+    fn production_recovery_context(
+        transaction: &Transaction<'_>,
+        plan_id: &str,
+        plan_version: u32,
+    ) -> Result<Option<ProductionRecoveryContext>, TenderCommandError> {
+        let revision_actions_json: String = transaction
+            .query_row(
+                "SELECT revision_actions_json FROM work_plan_versions
+                 WHERE plan_id = ?1 AND version = ?2",
+                params![plan_id, plan_version],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        let revision_actions: Vec<WorkPlanRevisionAction> =
+            parse_canonical_json(&revision_actions_json)?;
+        if !matches!(
+            revision_actions.as_slice(),
+            [WorkPlanRevisionAction::RebasePackageBasis]
+        ) {
+            return Ok(None);
+        }
+        let mut statement = transaction
+            .prepare(
+                "SELECT assessments.assessment_id, activations.activation_id,
+                        activations.plan_manifest_sha256
+                 FROM change_assessments AS assessments
+                 JOIN change_assessment_decisions AS decisions USING (assessment_id)
+                 LEFT JOIN change_assessment_resolutions AS resolutions USING (assessment_id)
+                 JOIN change_assessment_impacts AS impacts USING (assessment_id)
+                 JOIN production_activations AS activations
+                   ON activations.plan_id = impacts.object_id
+                  AND activations.plan_version = impacts.object_version
+                 WHERE decisions.classification = 'material'
+                   AND resolutions.assessment_id IS NULL
+                   AND impacts.kind = 'work_plan'
+                   AND activations.status = 'suspended'
+                   AND EXISTS(
+                     SELECT 1
+                     FROM work_plan_versions AS target_plan
+                     JOIN bid_decision_approval_records AS approvals
+                       ON approvals.package_id = target_plan.bid_package_id
+                      AND approvals.package_version = target_plan.bid_package_version
+                      AND approvals.decision = 'accept'
+                     JOIN bid_decision_approval_invalidations AS invalidations
+                       ON invalidations.approval_id != approvals.approval_id
+                     JOIN json_each(invalidations.affected_areas_json) AS area
+                       ON area.value = 'change_assessment:' || assessments.assessment_id
+                     WHERE target_plan.plan_id = ?1 AND target_plan.version = ?2
+                   )
+                 ORDER BY assessments.assessment_sequence DESC LIMIT 2",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map(params![plan_id, plan_version], |row| {
+                Ok(ProductionRecoveryContext {
+                    assessment_id: row.get(0)?,
+                    source_activation_id: row.get(1)?,
+                    source_plan_manifest_sha256: row.get(2)?,
+                })
+            })
+            .map_err(sql_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_error)?;
+        match rows.as_slice() {
+            [context] => Ok(Some(context.clone())),
+            [] => Ok(None),
+            _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+        }
+    }
+
+    fn carry_forward_compatibility_sha256(
+        connection: &rusqlite::Connection,
+        source: &WorkPlanTask,
+        target: &WorkPlanTask,
+    ) -> Result<Option<String>, TenderCommandError> {
+        let exact_input_shape = |task: &WorkPlanTask| {
+            task.exact_inputs.len() == 2
+                && task
+                    .exact_inputs
+                    .iter()
+                    .filter(|input| input.kind == "tender_revision")
+                    .count()
+                    == 1
+                && task
+                    .exact_inputs
+                    .iter()
+                    .filter(|input| input.kind == "bid_decision_package")
+                    .count()
+                    == 1
+        };
+        if !exact_input_shape(source) || !exact_input_shape(target) {
+            return Ok(None);
+        }
+        let mut source_semantics = source.clone();
+        let mut target_semantics = target.clone();
+        source_semantics.exact_inputs.clear();
+        target_semantics.exact_inputs.clear();
+        if source_semantics != target_semantics {
+            return Ok(None);
+        }
+        let source_contract = production_coordination_contract(connection, source)?;
+        let target_contract = production_coordination_contract(connection, target)?;
+        if source_contract != target_contract {
+            return Ok(None);
+        }
+        Ok(Some(sha256_hex(
+            canonical_json(&json!({
+                "task_semantics": source_semantics,
+                "coordination_contract": source_contract,
+            }))?
+            .as_bytes(),
+        )))
+    }
+
+    fn carry_forward_unaffected_production_task(
+        transaction: &Transaction<'_>,
+        tender_id: &TenderId,
+        recovery: &ProductionRecoveryContext,
+        target: ProductionCarryForwardTarget<'_>,
+    ) -> Result<bool, TenderCommandError> {
+        if task_has_blocking_query(transaction, &target.definition.task_key)? {
+            return Ok(false);
+        }
+        let source: Option<(String, String, String, String)> = transaction
+            .query_row(
+                "SELECT tasks.production_task_id, tasks.task_definition_json,
+                        tasks.task_definition_sha256, tasks.status
+                 FROM production_tasks AS tasks
+                 WHERE tasks.activation_id = ?1 AND tasks.task_key = ?2",
+                params![recovery.source_activation_id, target.definition.task_key],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let Some((
+            source_production_task_id,
+            source_definition_json,
+            source_definition_sha256,
+            source_status,
+        )) = source
+        else {
+            return Ok(false);
+        };
+        if source_status != ProductionTaskState::ReadyForIntegration.as_str()
+            || transaction
+                .query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM change_assessment_impacts
+                       WHERE assessment_id = ?1 AND (
+                         (kind = 'production_task' AND object_id = ?2)
+                         OR (kind = 'production_artifact' AND object_id IN (
+                           SELECT artifact_id FROM production_artifact_versions
+                           WHERE production_task_id = ?2
+                         ))
+                         OR (kind = 'review' AND object_id IN (
+                           SELECT review_id FROM production_reviews
+                           WHERE production_task_id = ?2
+                         ))
+                       )
+                     )",
+                    params![recovery.assessment_id, source_production_task_id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(sql_error)?
+        {
+            return Ok(false);
+        }
+        let source_definition: WorkPlanTask = parse_canonical_json(&source_definition_json)?;
+        let Some(compatibility_sha256) = Self::carry_forward_compatibility_sha256(
+            transaction,
+            &source_definition,
+            target.definition,
+        )?
+        else {
+            return Ok(false);
+        };
+        let Some(source_readiness) =
+            load_production_readiness(transaction, &source_production_task_id)?
+        else {
+            return Ok(false);
+        };
+        let source_record_task_id =
+            production_record_source_task_id(transaction, &source_production_task_id)?;
+        let source_exact: bool = transaction
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM production_artifact_versions AS artifacts
+                   WHERE artifacts.artifact_id = ?1 AND artifacts.version = ?2
+                     AND artifacts.production_task_id = ?3
+                     AND artifacts.payload_sha256 = ?4
+                 ) AND (
+                   (?5 IS NULL AND EXISTS(
+                     SELECT 1 FROM work_plan_versions AS plans
+                     JOIN json_each(plans.tasks_json) AS task
+                       ON json_extract(task.value, '$.task_key') = ?6
+                      AND json_extract(task.value, '$.review_profile_id') IS NULL
+                     WHERE plans.manifest_sha256 = ?7
+                   )) OR EXISTS(
+                     SELECT 1 FROM production_reviews AS reviews
+                     WHERE reviews.review_id = ?5 AND reviews.production_task_id = ?3
+                       AND reviews.target_artifact_id = ?1 AND reviews.target_version = ?2
+                       AND reviews.target_payload_sha256 = ?4 AND reviews.result = 'satisfied'
+                   )
+                 )",
+                params![
+                    source_readiness.artifact_id,
+                    source_readiness.artifact_version,
+                    source_record_task_id,
+                    source_readiness.payload_sha256,
+                    source_readiness.review_id,
+                    target.definition.task_key,
+                    recovery.source_plan_manifest_sha256,
+                ],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if !source_exact
+            || !source_readiness.output_validation_passed
+            || !source_readiness.evidence_verified
+            || !source_readiness.dependencies_satisfied
+        {
+            return Ok(false);
+        }
+        let carry_forward_id = random_identifier(transaction)?;
+        let target_readiness_id = random_identifier(transaction)?;
+        let manifest = ProductionTaskCarryForwardManifest {
+            schema_version: 1,
+            carry_forward_id: carry_forward_id.clone(),
+            assessment_id: recovery.assessment_id.clone(),
+            source_production_task_id: source_production_task_id.clone(),
+            source_task_definition_sha256: source_definition_sha256.clone(),
+            source_readiness_id: source_readiness.readiness_id.clone(),
+            source_artifact_id: source_readiness.artifact_id.clone(),
+            source_artifact_version: source_readiness.artifact_version,
+            source_payload_sha256: source_readiness.payload_sha256.clone(),
+            source_review_id: source_readiness.review_id.clone(),
+            source_finding_dispositions_sha256: source_readiness
+                .finding_dispositions_sha256
+                .clone(),
+            source_plan_manifest_sha256: recovery.source_plan_manifest_sha256.clone(),
+            target_production_task_id: target.production_task_id.to_owned(),
+            target_task_definition_sha256: target.definition_sha256.to_owned(),
+            target_readiness_id: target_readiness_id.clone(),
+            target_plan_manifest_sha256: target.plan_manifest_sha256.to_owned(),
+            compatibility_sha256: compatibility_sha256.clone(),
+            carried_forward_by: "host_policy".into(),
+            acting_role: "integration_gate".into(),
+            created_at: target.created_at.to_owned(),
+        };
+        let manifest_json = canonical_json(&manifest)?;
+        let manifest_sha256 = sha256_hex(manifest_json.as_bytes());
+        let audit_sequence = append_audit_event_with_sequence(
+            transaction,
+            tender_id.as_str(),
+            "production_task_carried_forward",
+            target.tender_revision,
+            json!({
+                "assessment_id": recovery.assessment_id,
+                "carry_forward_id": carry_forward_id,
+                "manifest_sha256": manifest_sha256,
+                "source_production_task_id": source_production_task_id,
+                "target_production_task_id": target.production_task_id,
+            }),
+            target.created_at,
+        )?;
+        transaction
+            .execute(
+                "INSERT INTO production_integration_readiness (
+                   readiness_id, production_task_id, artifact_id, artifact_version,
+                   payload_sha256, review_id, output_validation_passed, evidence_verified,
+                   dependencies_satisfied, approval_gates_json,
+                   finding_dispositions_sha256, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 1, 1, ?7, ?8, ?9)",
+                params![
+                    target_readiness_id,
+                    target.production_task_id,
+                    source_readiness.artifact_id,
+                    source_readiness.artifact_version,
+                    source_readiness.payload_sha256,
+                    source_readiness.review_id,
+                    canonical_json(&source_readiness.approval_gates)?,
+                    source_readiness.finding_dispositions_sha256,
+                    target.created_at,
+                ],
+            )
+            .map_err(sql_error)?;
+        transaction
+            .execute(
+                "INSERT INTO production_task_carry_forwards (
+                   carry_forward_id, assessment_id, source_production_task_id,
+                   target_production_task_id, source_readiness_id, target_readiness_id,
+                   source_artifact_id, source_artifact_version, source_review_id,
+                   source_plan_manifest_sha256, target_plan_manifest_sha256,
+                   compatibility_sha256, manifest_json, manifest_sha256,
+                   audit_sequence, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                           ?12, ?13, ?14, ?15, ?16)",
+                params![
+                    carry_forward_id,
+                    recovery.assessment_id,
+                    source_production_task_id,
+                    target.production_task_id,
+                    source_readiness.readiness_id,
+                    target_readiness_id,
+                    source_readiness.artifact_id,
+                    source_readiness.artifact_version,
+                    source_readiness.review_id,
+                    recovery.source_plan_manifest_sha256,
+                    target.plan_manifest_sha256,
+                    compatibility_sha256,
+                    manifest_json,
+                    manifest_sha256,
+                    audit_sequence,
+                    target.created_at,
+                ],
+            )
+            .map_err(sql_error)?;
+        Ok(true)
+    }
+
     fn activate_tender_production(
         &mut self,
         tender_id: &TenderId,
@@ -2414,6 +2832,12 @@ impl TenderStore {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
 
+        let recovery = Self::production_recovery_context(
+            &transaction,
+            &command.plan_id,
+            command.plan_version,
+        )?;
+
         for task in &plan.tasks {
             budget.check()?;
             match production_coordination_contract(&transaction, task) {
@@ -2479,6 +2903,7 @@ impl TenderStore {
             }
         }
 
+        let mut carried_forward_task_count = 0usize;
         for task in &plan.tasks {
             budget.check()?;
             let task_definition_json = canonical_json(task)?;
@@ -2490,6 +2915,7 @@ impl TenderStore {
             } else {
                 ProductionTaskState::Blocked
             };
+            let production_task_id = random_identifier(&transaction)?;
             transaction
                 .execute(
                     "INSERT INTO production_tasks (
@@ -2497,7 +2923,7 @@ impl TenderStore {
                        task_definition_sha256, task_id, status, created_at, updated_at
                      ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?7)",
                     params![
-                        random_identifier(&transaction)?,
+                        production_task_id,
                         activation_id,
                         task.task_key,
                         task_definition_json,
@@ -2507,6 +2933,38 @@ impl TenderStore {
                     ],
                 )
                 .map_err(sql_error)?;
+            if let Some(recovery) = recovery.as_ref() {
+                if Self::carry_forward_unaffected_production_task(
+                    &transaction,
+                    tender_id,
+                    recovery,
+                    ProductionCarryForwardTarget {
+                        production_task_id: &production_task_id,
+                        definition: task,
+                        definition_sha256: &task_definition_sha256,
+                        plan_manifest_sha256: &command.plan_manifest_sha256,
+                        tender_revision,
+                        created_at: &created_at,
+                    },
+                )? {
+                    if transaction
+                        .execute(
+                            "UPDATE production_tasks
+                             SET status = 'ready_for_integration', updated_at = ?2
+                             WHERE production_task_id = ?1
+                               AND status IN ('blocked', 'ready')",
+                            params![production_task_id, created_at],
+                        )
+                        .map_err(sql_error)?
+                        != 1
+                    {
+                        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+                    }
+                    carried_forward_task_count = carried_forward_task_count
+                        .checked_add(1)
+                        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+                }
+            }
         }
         for task in &plan.tasks {
             budget.check()?;
@@ -2521,6 +2979,7 @@ impl TenderStore {
                     .map_err(sql_error)?;
             }
         }
+        refresh_ready_frontier(&transaction, &activation_id, &created_at)?;
         if transaction
             .execute(
                 "UPDATE tender SET lifecycle_phase = 'active_production'
@@ -2542,6 +3001,8 @@ impl TenderStore {
                 "activated_by": "engineer_user",
                 "acting_role": "tendering_manager",
                 "activation_id": activation_id,
+                "assessment_id": recovery.as_ref().map(|value| value.assessment_id.as_str()),
+                "carried_forward_task_count": carried_forward_task_count.to_string(),
                 "lifecycle_after": "active_production",
                 "lifecycle_before": "tender_planning",
                 "plan_id": command.plan_id,
@@ -2602,6 +3063,8 @@ impl TenderStore {
                 return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
             }
             let production_task_id: String = row.get(0).map_err(sql_error)?;
+            let record_source_task_id =
+                production_record_source_task_id(&self.connection, &production_task_id)?;
             let task_json: String = row.get(1).map_err(sql_error)?;
             let mut run_statement = self
                 .connection
@@ -2637,18 +3100,18 @@ impl TenderStore {
                         WHERE reviews.production_task_id = ?1
                           AND findings.severity IN ('critical', 'major')
                           AND dispositions.finding_id IS NULL)",
-                    [&production_task_id],
+                    [&record_source_task_id],
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
                 .map_err(sql_error)?;
             let latest_artifact =
-                load_latest_artifact_summary(&self.connection, &production_task_id)?;
+                load_latest_artifact_summary(&self.connection, &record_source_task_id)?;
             let latest_review_result = self
                 .connection
                 .query_row(
                     "SELECT result FROM production_reviews
                      WHERE production_task_id = ?1 ORDER BY rowid DESC LIMIT 1",
-                    [&production_task_id],
+                    [&record_source_task_id],
                     |row| row.get::<_, String>(0),
                 )
                 .optional()
@@ -2715,12 +3178,17 @@ impl TenderStore {
         if !exists {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        let artifacts =
-            load_production_artifact_versions(&self.connection, production_task_id, &mut || {
+        let record_source_task_id =
+            production_record_source_task_id(&self.connection, production_task_id)?;
+        let artifacts = load_production_artifact_versions(
+            &self.connection,
+            &record_source_task_id,
+            &mut || budget.check(),
+        )?;
+        let reviews =
+            load_production_reviews(&self.connection, &record_source_task_id, &mut || {
                 budget.check()
             })?;
-        let reviews =
-            load_production_reviews(&self.connection, production_task_id, &mut || budget.check())?;
         let readiness = load_production_readiness(&self.connection, production_task_id)?;
         Ok(ProductionTaskReviewInspection {
             production_task_id: production_task_id.to_owned(),
@@ -3161,6 +3629,291 @@ fn load_production_reviews(
     Ok(reviews)
 }
 
+fn production_record_source_task_id(
+    connection: &rusqlite::Connection,
+    production_task_id: &str,
+) -> Result<String, TenderCommandError> {
+    let mut current = production_task_id.to_owned();
+    let mut visited = std::collections::HashSet::new();
+    for _ in 0..128 {
+        if !visited.insert(current.clone()) {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let source = connection
+            .query_row(
+                "SELECT source_production_task_id FROM production_task_carry_forwards
+                 WHERE target_production_task_id = ?1",
+                [&current],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let Some(source) = source else {
+            return Ok(current);
+        };
+        current = source;
+    }
+    Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+}
+
+fn production_task_carry_forward_is_valid(
+    connection: &rusqlite::Connection,
+    target_production_task_id: &str,
+    target_definition: &WorkPlanTask,
+    target_definition_sha256: &str,
+    target_plan_manifest_sha256: &str,
+) -> Result<Option<bool>, TenderCommandError> {
+    type Row = (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        u32,
+        Option<String>,
+        String,
+        String,
+        String,
+        String,
+        i64,
+        String,
+    );
+    let row: Option<Row> = connection
+        .query_row(
+            "SELECT carry_forward_id, assessment_id, source_production_task_id,
+                    source_readiness_id, target_readiness_id, source_artifact_id,
+                    source_artifact_version, source_review_id,
+                    source_plan_manifest_sha256, target_plan_manifest_sha256,
+                    compatibility_sha256, manifest_json, audit_sequence, created_at
+             FROM production_task_carry_forwards
+             WHERE target_production_task_id = ?1",
+            [target_production_task_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
+                    row.get(11)?,
+                    row.get(12)?,
+                    row.get(13)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let manifest_sha256: String = connection
+        .query_row(
+            "SELECT manifest_sha256 FROM production_task_carry_forwards
+             WHERE carry_forward_id = ?1",
+            [&row.0],
+            |stored| stored.get(0),
+        )
+        .map_err(sql_error)?;
+    if sha256_hex(row.11.as_bytes()) != manifest_sha256 {
+        return Ok(Some(false));
+    }
+    let manifest: ProductionTaskCarryForwardManifest = parse_canonical_json(&row.11)?;
+    let source: Option<(String, String, String, String)> = connection
+        .query_row(
+            "SELECT tasks.task_definition_json, tasks.task_definition_sha256, tasks.status,
+                    activations.plan_manifest_sha256
+             FROM production_tasks AS tasks
+             JOIN production_activations AS activations USING (activation_id)
+             WHERE tasks.production_task_id = ?1
+               AND activations.status IN ('suspended', 'superseded')",
+            [&row.2],
+            |source| {
+                Ok((
+                    source.get(0)?,
+                    source.get(1)?,
+                    source.get(2)?,
+                    source.get(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let Some((source_definition_json, source_definition_sha256, source_status, source_plan_sha)) =
+        source
+    else {
+        return Ok(Some(false));
+    };
+    let source_definition: WorkPlanTask = parse_canonical_json(&source_definition_json)?;
+    let compatibility_sha256 = TenderStore::carry_forward_compatibility_sha256(
+        connection,
+        &source_definition,
+        target_definition,
+    )?;
+    let source_readiness = connection
+        .query_row(
+            "SELECT production_task_id, artifact_id, artifact_version, payload_sha256,
+                    review_id, output_validation_passed, evidence_verified,
+                    dependencies_satisfied, approval_gates_json,
+                    finding_dispositions_sha256, created_at
+             FROM production_integration_readiness WHERE readiness_id = ?1",
+            [&row.3],
+            |ready| {
+                Ok((
+                    ready.get::<_, String>(0)?,
+                    ready.get::<_, String>(1)?,
+                    ready.get::<_, u32>(2)?,
+                    ready.get::<_, String>(3)?,
+                    ready.get::<_, Option<String>>(4)?,
+                    ready.get::<_, bool>(5)?,
+                    ready.get::<_, bool>(6)?,
+                    ready.get::<_, bool>(7)?,
+                    ready.get::<_, String>(8)?,
+                    ready.get::<_, String>(9)?,
+                    ready.get::<_, String>(10)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let target_readiness = connection
+        .query_row(
+            "SELECT production_task_id, artifact_id, artifact_version, payload_sha256,
+                    review_id, output_validation_passed, evidence_verified,
+                    dependencies_satisfied, approval_gates_json,
+                    finding_dispositions_sha256, created_at
+             FROM production_integration_readiness WHERE readiness_id = ?1",
+            [&row.4],
+            |ready| {
+                Ok((
+                    ready.get::<_, String>(0)?,
+                    ready.get::<_, String>(1)?,
+                    ready.get::<_, u32>(2)?,
+                    ready.get::<_, String>(3)?,
+                    ready.get::<_, Option<String>>(4)?,
+                    ready.get::<_, bool>(5)?,
+                    ready.get::<_, bool>(6)?,
+                    ready.get::<_, bool>(7)?,
+                    ready.get::<_, String>(8)?,
+                    ready.get::<_, String>(9)?,
+                    ready.get::<_, String>(10)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let (Some(source_readiness), Some(target_readiness), Some(compatibility_sha256)) =
+        (source_readiness, target_readiness, compatibility_sha256)
+    else {
+        return Ok(Some(false));
+    };
+    let audit_exact: bool = connection
+        .query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM audit_events
+               WHERE sequence = ?1 AND event_type = 'production_task_carried_forward'
+                 AND json_extract(payload_json, '$.change.carry_forward_id') = ?2
+                 AND json_extract(payload_json, '$.change.manifest_sha256') = ?3
+                 AND json_extract(payload_json, '$.change.assessment_id') = ?4
+                 AND json_extract(payload_json, '$.change.target_production_task_id') = ?5
+             )",
+            params![
+                row.12,
+                row.0,
+                manifest_sha256,
+                row.1,
+                target_production_task_id
+            ],
+            |audit| audit.get(0),
+        )
+        .map_err(sql_error)?;
+    let assessment_exact: bool = connection
+        .query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM change_assessments AS assessments
+               JOIN change_assessment_decisions AS decisions USING (assessment_id)
+               WHERE assessments.assessment_id = ?1
+                 AND decisions.classification = 'material'
+                 AND NOT EXISTS(
+                   SELECT 1 FROM change_assessment_impacts AS impacts
+                   WHERE impacts.assessment_id = assessments.assessment_id AND (
+                     (impacts.kind = 'production_task' AND impacts.object_id = ?2)
+                     OR (impacts.kind = 'production_artifact' AND impacts.object_id = ?3
+                         AND impacts.object_version = ?4)
+                     OR (impacts.kind = 'review' AND impacts.object_id = ?5)
+                   )
+                 )
+             )",
+            params![row.1, row.2, row.5, row.6, row.7],
+            |assessment| assessment.get(0),
+        )
+        .map_err(sql_error)?;
+    let target_record_count: u32 = connection
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM production_task_attempts
+                     WHERE production_task_id = ?1)
+                    + (SELECT COUNT(*) FROM production_artifact_versions
+                       WHERE production_task_id = ?1)
+                    + (SELECT COUNT(*) FROM production_reviews
+                       WHERE production_task_id = ?1)",
+            [target_production_task_id],
+            |count| count.get(0),
+        )
+        .map_err(sql_error)?;
+    let canonical_readiness_equal = source_readiness.1 == target_readiness.1
+        && source_readiness.2 == target_readiness.2
+        && source_readiness.3 == target_readiness.3
+        && source_readiness.4 == target_readiness.4
+        && source_readiness.5 == target_readiness.5
+        && source_readiness.6 == target_readiness.6
+        && source_readiness.7 == target_readiness.7
+        && source_readiness.8 == target_readiness.8
+        && source_readiness.9 == target_readiness.9;
+    let manifest_exact = manifest.schema_version == 1
+        && manifest.carry_forward_id == row.0
+        && manifest.assessment_id == row.1
+        && manifest.source_production_task_id == row.2
+        && manifest.source_task_definition_sha256 == source_definition_sha256
+        && manifest.source_readiness_id == row.3
+        && manifest.source_artifact_id == row.5
+        && manifest.source_artifact_version == row.6
+        && manifest.source_payload_sha256 == source_readiness.3
+        && manifest.source_review_id == row.7
+        && manifest.source_finding_dispositions_sha256 == source_readiness.9
+        && manifest.source_plan_manifest_sha256 == row.8
+        && manifest.target_production_task_id == target_production_task_id
+        && manifest.target_task_definition_sha256 == target_definition_sha256
+        && manifest.target_readiness_id == row.4
+        && manifest.target_plan_manifest_sha256 == row.9
+        && manifest.compatibility_sha256 == row.10
+        && manifest.carried_forward_by == "host_policy"
+        && manifest.acting_role == "integration_gate"
+        && manifest.created_at == row.13;
+    Ok(Some(
+        source_status == ProductionTaskState::ReadyForIntegration.as_str()
+            && source_plan_sha == row.8
+            && row.9 == target_plan_manifest_sha256
+            && source_readiness.0 == row.2
+            && target_readiness.0 == target_production_task_id
+            && target_readiness.10 == row.13
+            && source_readiness.1 == row.5
+            && source_readiness.2 == row.6
+            && source_readiness.4 == row.7
+            && compatibility_sha256 == row.10
+            && canonical_readiness_equal
+            && target_record_count == 0
+            && audit_exact
+            && assessment_exact
+            && manifest_exact,
+    ))
+}
+
 fn load_production_readiness(
     connection: &rusqlite::Connection,
     production_task_id: &str,
@@ -3179,6 +3932,15 @@ fn load_production_readiness(
                   AND query_heads.current_version = invalidations.query_version
                  WHERE invalidations.target_kind = 'approval'
                    AND invalidations.target_id = readiness.readiness_id
+               )
+               AND NOT EXISTS(
+                 SELECT 1
+                 FROM change_assessment_impacts AS impacts
+                 JOIN change_assessment_decisions AS decisions
+                   ON decisions.assessment_id = impacts.assessment_id
+                 WHERE impacts.kind = 'production_task'
+                   AND impacts.object_id = readiness.production_task_id
+                   AND decisions.classification = 'material'
                )
              ORDER BY readiness.rowid DESC LIMIT 1",
             [production_task_id],
@@ -3635,7 +4397,9 @@ fn production_task_records_are_valid(
                         &latest_artifact.expect("checked").summary.artifact_id,
                         latest_artifact.expect("checked").summary.version,
                     )?);
-            Ok(review_remediation || query_remediation)
+            let change_remediation =
+                TenderStore::task_has_active_change_rework(connection, production_task_id)?;
+            Ok(review_remediation || query_remediation || change_remediation)
         }
         ProductionTaskState::ReadyForIntegration => Ok(true),
         _ => Ok(readiness.is_none()),
@@ -4517,10 +5281,15 @@ fn validate_artifact_candidate(
         .exact_inputs
         .iter()
         .any(|input| input.kind == "tender_query_version");
+    let has_change_remediation_input = task
+        .exact_inputs
+        .iter()
+        .any(|input| input.kind == "change_assessment");
     if (attempt_kind == "remediation"
         && ((open_findings.is_empty()
             && expected_treatments.is_empty()
-            && !has_query_remediation_input)
+            && !has_query_remediation_input
+            && !has_change_remediation_input)
             || remediated != open_findings))
         || (attempt_kind != "remediation" && !candidate.remediations.is_empty())
         || candidate.remediations.len() != remediated.len()
@@ -4650,6 +5419,9 @@ fn production_coordination_contract(
             else {
                 continue;
             };
+            if !record_observation_is_relevant_to_task(kind, subject, task) {
+                continue;
+            }
             if canonical_coordination_observation_value(subject, &typed_value).is_none() {
                 return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
             }
@@ -4795,6 +5567,99 @@ fn required_coordination_subjects(
         subjects.insert(ProductionCoordinationObservationSubject::SubmissionDeadline);
     }
     subjects
+}
+
+fn record_primary_coordination_subject(
+    kind: TenderRecordKind,
+) -> Option<ProductionCoordinationObservationSubject> {
+    match kind {
+        TenderRecordKind::Requirement => {
+            Some(ProductionCoordinationObservationSubject::ProcurementCommitment)
+        }
+        TenderRecordKind::Clause => {
+            Some(ProductionCoordinationObservationSubject::ContractualCommitment)
+        }
+        TenderRecordKind::Risk => Some(ProductionCoordinationObservationSubject::RiskCommitment),
+        TenderRecordKind::Deliverable | TenderRecordKind::Form => {
+            Some(ProductionCoordinationObservationSubject::SubmissionCommitment)
+        }
+        TenderRecordKind::EvaluationCriterion | TenderRecordKind::ProjectCharacteristic => {
+            Some(ProductionCoordinationObservationSubject::TechnicalCommitment)
+        }
+        TenderRecordKind::Deadline => {
+            Some(ProductionCoordinationObservationSubject::SubmissionDeadline)
+        }
+        TenderRecordKind::Assumption => {
+            Some(ProductionCoordinationObservationSubject::ScopeQualification)
+        }
+        TenderRecordKind::TenderQuery => None,
+    }
+}
+
+fn record_observation_is_relevant_to_task(
+    kind: TenderRecordKind,
+    subject: ProductionCoordinationObservationSubject,
+    task: &WorkPlanTask,
+) -> bool {
+    if matches!(
+        subject,
+        ProductionCoordinationObservationSubject::ScopeQualification
+            | ProductionCoordinationObservationSubject::ScopeExclusion
+    ) {
+        return true;
+    }
+    let required = required_coordination_subjects(task);
+    if subject == ProductionCoordinationObservationSubject::ResponsibleParty {
+        return record_primary_coordination_subject(kind)
+            .is_some_and(|primary| required.contains(&primary));
+    }
+    required.contains(&subject) || subject == required_coordination_subject(&task.workstream_key)
+}
+
+pub(crate) fn record_version_is_relevant_to_production_task(
+    connection: &rusqlite::Connection,
+    record_id: &str,
+    version: u32,
+    task: &WorkPlanTask,
+) -> Result<bool, TenderCommandError> {
+    let (stable_key, kind, fields_json): (String, String, String) = connection
+        .query_row(
+            "SELECT records.stable_key, versions.kind, versions.fields_json
+             FROM tender_records AS records
+             JOIN tender_record_versions AS versions USING (record_id)
+             WHERE versions.record_id = ?1 AND versions.version = ?2",
+            params![record_id, version],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(sql_error)?;
+    let kind = TenderRecordKind::parse(&kind)?;
+    let fields: Vec<serde_json::Value> = parse_canonical_json(&fields_json)?;
+    if fields.len() > 64 {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    for field in fields {
+        let Some(field_name) = field.get("name").and_then(serde_json::Value::as_str) else {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        };
+        let Some(value) = field
+            .get("normalized_value")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| field.get("value").and_then(serde_json::Value::as_str))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let Some((subject, _)) =
+            record_coordination_observation(kind, &stable_key, field_name, value)
+        else {
+            continue;
+        };
+        if record_observation_is_relevant_to_task(kind, subject, task) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub(crate) fn record_coordination_observation(

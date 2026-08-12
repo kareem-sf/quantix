@@ -2,15 +2,17 @@ use std::{fs, io, path::Path, sync::Arc};
 
 use quantix_lib::{
     ensure_quantix_setup, AgentRunRecoveryDisposition, AgentRunState, BootstrapAuthority,
-    BootstrapRole, ConfirmSourceRelationshipCommand, CreateTenderCommand,
-    CreateTenderEngineerEntryCommand, DecideTenderRecordCommand, DeviceProtection,
-    ImportTenderPackageCommand, ParseSourceArtifactCommand, ProviderFailureCategory, QuantixHost,
-    ResolveIndeterminateAgentRunCommand, ReviseTenderCommand, RunTenderRecordExtractionCommand,
-    RunTenderRecordReviewCommand, RuntimeLayout, SetupPlatform, SetupState, SourceRelationshipKind,
-    StoragePermissions, TenderEvidenceReference, TenderIntegrityState,
-    TenderRecordAuthorityReference, TenderRecordBasisKind, TenderRecordEngineerDecisionKind,
-    TenderRecordInspection, TenderRecordKind, TenderRecordReviewOutcome, TenderRecordTrustClass,
-    VerificationStatus, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    BootstrapRole, ChangeAssessmentClassification, ChangeAssessmentStatus,
+    ConfirmSourceRelationshipCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
+    DecideChangeAssessmentCommand, DecideTenderRecordCommand, DeviceProtection,
+    ImportTenderPackageCommand, InspectChangeAssessmentsCommand, ParseSourceArtifactCommand,
+    ProviderFailureCategory, QuantixHost, ResolveIndeterminateAgentRunCommand, ReviseTenderCommand,
+    RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, RuntimeLayout, SetupPlatform,
+    SetupState, SourceRelationshipKind, StoragePermissions, TenderEvidenceReference,
+    TenderIntegrityState, TenderLifecyclePhase, TenderRecordAuthorityReference,
+    TenderRecordBasisKind, TenderRecordEngineerDecisionKind, TenderRecordInspection,
+    TenderRecordKind, TenderRecordReviewOutcome, TenderRecordTrustClass, VerificationStatus,
+    MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 struct ReadySetupPlatform;
@@ -537,6 +539,29 @@ async fn confirmed_addendum_precedence_remains_attached_to_conflicting_records()
             relationship_kind: SourceRelationshipKind::Addendum,
         })
         .expect("confirm addendum relationship");
+    let assessment = harness
+        .host
+        .inspect_change_assessments(InspectChangeAssessmentsCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 4,
+        })
+        .expect("inspect pre-record addendum assessment")
+        .active
+        .expect("pending pre-record addendum assessment");
+    assert!(assessment.impacts.is_empty());
+    let assessment = harness
+        .host
+        .decide_change_assessment(DecideChangeAssessmentCommand {
+            tender_id: harness.tender_id.clone(),
+            assessment_id: assessment.assessment_id,
+            assessment_manifest_sha256: assessment.manifest_sha256,
+            classification: ChangeAssessmentClassification::Material,
+            rationale: "The addendum is authoritative source precedence for future extraction."
+                .into(),
+        })
+        .expect("record exact source precedence without invented rework");
+    assert_eq!(assessment.status, ChangeAssessmentStatus::Resolved);
     let mut evidence = prior.references;
     evidence.extend(addendum.references);
 
@@ -565,6 +590,19 @@ async fn confirmed_addendum_precedence_remains_attached_to_conflicting_records()
         .iter()
         .any(|contradiction| contradiction.evidence.len() >= 2));
     assert_eq!(deadline.verification_status, VerificationStatus::Proposed);
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close source-precedence Tender");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify source-precedence assessment");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
 }
 
 #[tokio::test]
@@ -611,6 +649,41 @@ async fn later_addenda_make_affected_verified_records_visibly_stale() {
             relationship_kind: SourceRelationshipKind::Addendum,
         })
         .expect("confirm later addendum");
+
+    let preserved = inspect_all_records(&harness.host, &harness.tender_id)
+        .into_iter()
+        .find(|record| record.record_id == requirement.record_id)
+        .expect("affected record while assessment is pending");
+    assert_eq!(preserved.verification_status, VerificationStatus::Verified);
+    let assessment = harness
+        .host
+        .inspect_change_assessments(InspectChangeAssessmentsCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 4,
+        })
+        .expect("inspect later addendum assessment")
+        .active
+        .expect("pending later addendum assessment");
+    harness
+        .host
+        .decide_change_assessment(DecideChangeAssessmentCommand {
+            tender_id: harness.tender_id.clone(),
+            assessment_id: assessment.assessment_id,
+            assessment_manifest_sha256: assessment.manifest_sha256,
+            classification: ChangeAssessmentClassification::Material,
+            rationale: "The new addendum changes evidence supporting the verified requirement."
+                .into(),
+        })
+        .expect("classify later addendum as material");
+    assert_eq!(
+        harness
+            .host
+            .open_tender(&harness.tender_id)
+            .expect("inspect targeted Intake recovery lifecycle")
+            .lifecycle_phase,
+        TenderLifecyclePhase::Intake
+    );
 
     let stale = inspect_all_records(&harness.host, &harness.tender_id)
         .into_iter()

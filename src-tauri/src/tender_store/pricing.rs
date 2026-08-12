@@ -3277,7 +3277,9 @@ impl TenderStore {
         command: &CreatePricedCostBaselineCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<PricedCostBaselineVersion, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_estimate(&command.basis_id, command.basis_version)? {
+            self.require_change_intake_writable()?;
+        }
         budget.check()?;
         let transaction = self
             .connection
@@ -3434,7 +3436,9 @@ impl TenderStore {
         version: u32,
         budget: BidPackageOperationBudget,
     ) -> Result<PreparedAgentRun, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_pricing_object(baseline_id, version)? {
+            self.require_change_intake_writable()?;
+        }
         budget.check()?;
         let run_id = random_identifier(&self.connection)?;
         let workspace = self
@@ -3571,7 +3575,9 @@ impl TenderStore {
         command: &ApprovePricedCostBaselineCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<PricedCostBaselineVersion, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_pricing_object(&command.baseline_id, command.version)? {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -4414,7 +4420,16 @@ impl TenderStore {
         command: &CreateCommercialStrategyCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<CommercialStrategy, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        let mut change_authorized = false;
+        for input in &command.reviewed_inputs {
+            if self.active_change_allows_pricing_object(&input.adjustment_id, input.version)? {
+                change_authorized = true;
+                break;
+            }
+        }
+        if !change_authorized {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -4538,7 +4553,9 @@ impl TenderStore {
         command: &ApproveCommercialStrategyCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<CommercialStrategy, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_pricing_object(&command.strategy_id, 1)? {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -4612,7 +4629,12 @@ impl TenderStore {
         command: &CreatePricingScenarioCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<PricingScenarioVersion, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self
+            .active_change_allows_pricing_object(&command.baseline_id, command.baseline_version)?
+            || !self.active_change_allows_pricing_object(&command.strategy_id, 1)?
+        {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -4771,7 +4793,11 @@ impl TenderStore {
         command: &SelectPricingScenarioCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<PricingScenarioVersion, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self
+            .active_change_allows_pricing_object(&command.pricing_scenario_id, command.version)?
+        {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -4873,7 +4899,11 @@ impl TenderStore {
         command: &ApproveTenderPriceCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<PricingScenarioVersion, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self
+            .active_change_allows_pricing_object(&command.pricing_scenario_id, command.version)?
+        {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -5267,7 +5297,14 @@ impl TenderStore {
         command: &CreatePricingAdjustmentCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<PricingAdjustmentVersion, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_calculation_run(&command.calculation_run_id)?
+            || !self.active_change_allows_pricing_object(
+                &command.baseline_id,
+                command.baseline_version,
+            )?
+        {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -5480,7 +5517,9 @@ impl TenderStore {
         version: u32,
         budget: BidPackageOperationBudget,
     ) -> Result<PreparedAgentRun, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_pricing_object(adjustment_id, version)? {
+            self.require_change_intake_writable()?;
+        }
         let run_id = random_identifier(&self.connection)?;
         let workspace = self
             .root
@@ -5630,7 +5669,9 @@ impl TenderStore {
         command: &ApprovePricingAdjustmentCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<PricingAdjustmentVersion, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_pricing_object(&command.adjustment_id, command.version)? {
+            self.require_change_intake_writable()?;
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)

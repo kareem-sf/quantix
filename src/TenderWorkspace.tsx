@@ -18,6 +18,7 @@ import { DocumentEvidenceOffice } from "./DocumentEvidenceOffice";
 import { ExternalRfiPanel } from "./ExternalRfiPanel";
 import { PricingDecisionPanel } from "./PricingDecisionPanel";
 import { CoordinatedBidBaselinePanel } from "./CoordinatedBidBaselinePanel";
+import { ChangeAssessmentPanel } from "./ChangeAssessmentPanel";
 import { TenderBackupPanel } from "./TenderBackupPanel";
 import { TenderRecoveryPanel } from "./TenderRecoveryPanel";
 import { TenderRecordsPanel } from "./TenderRecordsPanel";
@@ -287,9 +288,11 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
 
   const versionKey = (artifactId: string, version: number) =>
     `${artifactId}:${version}`;
-  const registeredDocuments =
+  const parsedRegisteredDocuments =
     documentRegister?.documents.filter(
-      (document) => document.registration_state === "registered",
+      (document) =>
+        document.registration_state === "registered" &&
+        document.parse_state === "parsed",
     ) ?? [];
 
   const handleRelationshipConfirmation = async (
@@ -297,11 +300,11 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
   ) => {
     event.preventDefault();
     if (!selected) return;
-    const prior = registeredDocuments.find(
+    const prior = parsedRegisteredDocuments.find(
       (document) =>
         versionKey(document.artifact_id, document.version) === priorVersionKey,
     );
-    const replacement = registeredDocuments.find(
+    const replacement = parsedRegisteredDocuments.find(
       (document) =>
         versionKey(document.artifact_id, document.version) ===
         replacementVersionKey,
@@ -323,6 +326,7 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
         ),
       );
       updateTender(await openTender(selected.tender_id));
+      reportTenderStateChange();
       setPriorVersionKey("");
       setReplacementVersionKey("");
     } catch {
@@ -572,7 +576,7 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                     Register and records every accepted document or exception.
                   </p>
                 )}
-                {registeredDocuments.length >= 2 ? (
+                {parsedRegisteredDocuments.length >= 2 ? (
                   <form
                     className="relationship-form"
                     onSubmit={handleRelationshipConfirmation}
@@ -598,7 +602,7 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                           disabled={busy || !runtimeReady}
                         >
                           <option value="">Select prior document</option>
-                          {registeredDocuments.map((document) => (
+                          {parsedRegisteredDocuments.map((document) => (
                             <option
                               key={`prior-${versionKey(
                                 document.artifact_id,
@@ -639,7 +643,7 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                           disabled={busy || !runtimeReady}
                         >
                           <option value="">Select new document</option>
-                          {registeredDocuments.map((document) => (
+                          {parsedRegisteredDocuments.map((document) => (
                             <option
                               key={`replacement-${versionKey(
                                 document.artifact_id,
@@ -671,6 +675,13 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                   </form>
                 ) : null}
               </section>
+              <ChangeAssessmentPanel
+                key={"change-assessment-" + selected.tender_id}
+                tenderId={selected.tender_id}
+                refreshToken={tenderStateVersion}
+                reportCommandFailure={reportCommandFailure}
+                onTenderStateChange={reportTenderStateChange}
+              />
               <TenderRecordsPanel
                 key={`records-${selected.tender_id}`}
                 tenderId={selected.tender_id}

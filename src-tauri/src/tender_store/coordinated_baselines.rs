@@ -14,9 +14,10 @@ use super::production_scheduler::{
 };
 use super::{
     append_audit_event_with_sequence, lock_mutex_with_check, random_identifier, sha256_hex,
-    sql_error, sqlite_timestamp, BidPackageOperationBudget, ProductionArtifactPayload,
-    ProductionCoordinationObservationSubject, ProductionCoordinationObservationValue, QuantixHost,
-    TenderCommandError, TenderErrorCode, TenderId, TenderLifecyclePhase, TenderRecordKind,
+    sql_error, sqlite_timestamp, BidPackageOperationBudget, ChangeAssessmentImpactKind,
+    ChangeAssessmentStatus, ProductionArtifactPayload, ProductionCoordinationObservationSubject,
+    ProductionCoordinationObservationValue, QuantixHost, TenderCommandError, TenderErrorCode,
+    TenderId, TenderLifecyclePhase, TenderRecordKind, TenderRecordReviewOutcome,
     TenderRecordTrustClass, TenderStore, WorkPlanTask,
 };
 
@@ -463,10 +464,18 @@ impl TenderStore {
             )
             .optional()
             .map_err(sql_error)?;
+        let approved_base_is_change_target = match &head {
+            Some((baseline_id, version, _, decision)) if decision.as_deref() == Some("approve") => {
+                self.active_change_allows_baseline_successor(baseline_id, *version)?
+            }
+            _ => false,
+        };
         match (&head, command.base_version) {
             (None, None) => {}
             (Some((_, version, _, decision)), Some(base))
-                if *version == base && decision.as_deref() != Some("approve") => {}
+                if *version == base
+                    && (decision.as_deref() != Some("approve")
+                        || approved_base_is_change_target) => {}
             _ => {
                 self.record_baseline_denial(tender_id, "assemble", "base_version_not_current")?;
                 return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
@@ -759,6 +768,17 @@ impl TenderStore {
                 ],
             )
             .map_err(sql_error)?;
+        if command.decision == CoordinatedBidBaselineDecision::Approve {
+            TenderStore::resolve_change_assessment_for_baseline(
+                &transaction,
+                tender_id,
+                baseline.tender_revision,
+                &command.baseline_id,
+                command.version,
+                &command.manifest_sha256,
+                &created_at,
+            )?;
+        }
         if transaction
             .execute(
                 "UPDATE tender SET lifecycle_phase = ?1
@@ -946,7 +966,12 @@ impl TenderStore {
                 |row| row.get(0),
             )
             .map_err(sql_error)?;
-        let current = if head_matches {
+        let current = if head_matches
+            && !self.object_has_material_change_impact(
+                ChangeAssessmentImpactKind::CoordinatedBaseline,
+                baseline_id,
+                version,
+            )? {
             let snapshot = self.derive_coordinated_baseline_snapshot(budget)?;
             snapshot.tender_revision == row.0
                 && snapshot.activation_id == row.1
@@ -2072,6 +2097,7 @@ impl TenderStore {
                     | TenderLifecyclePhase::BidDecision
                     | TenderLifecyclePhase::TenderPlanning
                     | TenderLifecyclePhase::ActiveProduction
+                    | TenderLifecyclePhase::ChangeAssessment
                     | TenderLifecyclePhase::Declined
             ));
         }
@@ -2214,24 +2240,114 @@ impl TenderStore {
         }
         let lifecycle = self.lifecycle_phase()?;
         let head = self.load_coordinated_bid_baseline(&baseline_id, head_version, budget)?;
-        let expected_lifecycle = match head.approval.as_ref().map(|approval| approval.decision) {
-            Some(CoordinatedBidBaselineDecision::Approve) => {
-                if !head.current || !head.blockers.is_empty() || !head.contradictions.is_empty() {
+        let active_assessment = self.unresolved_change_assessment()?;
+        let expected_lifecycle = if let Some((assessment_id, status)) = active_assessment {
+            match status {
+                ChangeAssessmentStatus::Pending => TenderLifecyclePhase::ChangeAssessment,
+                ChangeAssessmentStatus::ReworkRequired => {
+                    let lifecycle_is_valid: bool = match lifecycle {
+                        TenderLifecyclePhase::BidDecision => self
+                            .connection
+                            .query_row(
+                                "SELECT NOT EXISTS(
+                               SELECT 1 FROM bid_decision_package_heads AS heads
+                               JOIN bid_decision_approval_records AS approvals
+                                 ON approvals.package_id = heads.package_id
+                                AND approvals.package_version = heads.current_version
+                               LEFT JOIN bid_decision_approval_invalidations AS invalidations
+                                 ON invalidations.approval_id = approvals.approval_id
+                               WHERE approvals.decision = 'accept'
+                                 AND invalidations.invalidation_id IS NULL
+                             )",
+                                [],
+                                |row| row.get(0),
+                            )
+                            .map_err(sql_error)?,
+                        TenderLifecyclePhase::TenderPlanning => self
+                            .connection
+                            .query_row(
+                                "SELECT EXISTS(
+                               SELECT 1 FROM bid_decision_package_heads AS heads
+                               JOIN bid_decision_approval_records AS approvals
+                                 ON approvals.package_id = heads.package_id
+                                AND approvals.package_version = heads.current_version
+                               LEFT JOIN bid_decision_approval_invalidations AS invalidations
+                                 ON invalidations.approval_id = approvals.approval_id
+                               WHERE approvals.decision = 'accept'
+                                 AND invalidations.invalidation_id IS NULL
+                             ) AND NOT EXISTS(
+                               SELECT 1 FROM production_activations WHERE status = 'active'
+                             )",
+                                [],
+                                |row| row.get(0),
+                            )
+                            .map_err(sql_error)?,
+                        TenderLifecyclePhase::ActiveProduction => self
+                            .connection
+                            .query_row(
+                                "SELECT EXISTS(
+                               SELECT 1 FROM production_activations WHERE status = 'active'
+                             )",
+                                [],
+                                |row| row.get(0),
+                            )
+                            .map_err(sql_error)?,
+                        TenderLifecyclePhase::IntegratedReview => self
+                            .connection
+                            .query_row(
+                                "SELECT EXISTS(
+                               SELECT 1 FROM coordinated_bid_baseline_head AS heads
+                               JOIN coordinated_bid_baseline_versions AS versions
+                                 ON versions.baseline_id = heads.baseline_id
+                                AND versions.version = heads.current_version
+                               LEFT JOIN coordinated_bid_baseline_approvals AS approvals
+                                 ON approvals.baseline_id = versions.baseline_id
+                                AND approvals.baseline_version = versions.version
+                               JOIN change_assessment_impacts AS impacts
+                                 ON impacts.assessment_id = ?1
+                                AND impacts.kind = 'coordinated_baseline'
+                                AND impacts.object_id = versions.baseline_id
+                               WHERE versions.version > impacts.object_version
+                                 AND approvals.approval_id IS NULL
+                                 AND json_array_length(versions.blockers_json) = 0
+                                 AND json_array_length(versions.contradictions_json) = 0
+                             )",
+                                [&assessment_id],
+                                |row| row.get(0),
+                            )
+                            .map_err(sql_error)?,
+                        _ => false,
+                    };
+                    if !lifecycle_is_valid {
+                        return Ok(false);
+                    }
+                    lifecycle
+                }
+                ChangeAssessmentStatus::Resolved => {
                     return Ok(false);
                 }
-                TenderLifecyclePhase::PackageProduction
             }
-            Some(CoordinatedBidBaselineDecision::Return)
-            | Some(CoordinatedBidBaselineDecision::Reject) => {
-                TenderLifecyclePhase::ActiveProduction
-            }
-            None if head.blockers.is_empty() && head.contradictions.is_empty() => {
-                if !head.current {
-                    return Ok(false);
+        } else {
+            match head.approval.as_ref().map(|approval| approval.decision) {
+                Some(CoordinatedBidBaselineDecision::Approve) => {
+                    if !head.current || !head.blockers.is_empty() || !head.contradictions.is_empty()
+                    {
+                        return Ok(false);
+                    }
+                    TenderLifecyclePhase::PackageProduction
                 }
-                TenderLifecyclePhase::IntegratedReview
+                Some(CoordinatedBidBaselineDecision::Return)
+                | Some(CoordinatedBidBaselineDecision::Reject) => {
+                    TenderLifecyclePhase::ActiveProduction
+                }
+                None if head.blockers.is_empty() && head.contradictions.is_empty() => {
+                    if !head.current {
+                        return Ok(false);
+                    }
+                    TenderLifecyclePhase::IntegratedReview
+                }
+                None => TenderLifecyclePhase::ActiveProduction,
             }
-            None => TenderLifecyclePhase::ActiveProduction,
         };
         if lifecycle != expected_lifecycle {
             return Ok(false);
@@ -2331,6 +2447,26 @@ impl TenderStore {
                 };
                 let supporting_review_id =
                     record.reviews.last().map(|review| review.review_id.clone());
+                let effective_review = record
+                    .reviews
+                    .iter()
+                    .rev()
+                    .find(|review| review.reviewer_kind == "engineer_user")
+                    .or_else(|| record.reviews.last());
+                let trust_class = match effective_review
+                    .map(|review| (&review.outcome, review.reviewer_kind.as_str()))
+                {
+                    Some((TenderRecordReviewOutcome::Verified, "engineer_user")) => {
+                        TenderRecordTrustClass::EngineerVerified
+                    }
+                    Some((TenderRecordReviewOutcome::Verified, _)) => {
+                        TenderRecordTrustClass::Verified
+                    }
+                    Some((TenderRecordReviewOutcome::ApprovedAssumption, _)) => {
+                        TenderRecordTrustClass::ApprovedAssumption
+                    }
+                    _ => return Ok(false),
+                };
                 let immutable_record = json!({
                     "record_id": record.record_id,
                     "stable_key": record.stable_key,
@@ -2342,7 +2478,7 @@ impl TenderStore {
                     "author_run_id": record.author_run_id,
                     "author_profile_id": record.author_profile_id,
                     "supporting_review_id": supporting_review_id,
-                    "trust_class": record.trust_class,
+                    "trust_class": trust_class,
                 });
                 let digest = sha256_hex(canonical_json(&immutable_record)?.as_bytes());
                 Ok(

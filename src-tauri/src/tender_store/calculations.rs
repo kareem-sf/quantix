@@ -1832,7 +1832,11 @@ impl TenderStore {
         command: &RunCostEstimatorCalculationCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<PreparedAgentRun, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        let mut recovery_inputs = command.quantity_evidence.clone();
+        recovery_inputs.extend(command.unit_rate_evidence.iter().cloned());
+        if !self.active_change_allows_inputs(&recovery_inputs)? {
+            self.require_change_intake_writable()?;
+        }
         budget.check()?;
         validate_calculation_evidence_basket(&command.quantity_evidence)?;
         validate_calculation_evidence_basket(&command.unit_rate_evidence)?;
@@ -2986,7 +2990,9 @@ impl TenderStore {
         command: &ApproveControlledBoqCalculationRunCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<ControlledBoqCalculationRun, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_calculation_run(&command.calculation_run_id)? {
+            self.require_change_intake_writable()?;
+        }
         budget.check()?;
         let transaction = self
             .connection

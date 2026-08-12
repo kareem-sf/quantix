@@ -761,9 +761,12 @@ fn derive_current_boq_inventory(
                AND locations.cell_range IS NOT NULL
                AND NOT EXISTS (
                  SELECT 1 FROM source_relationships AS relationships
+                 JOIN change_assessments AS assessments USING (relationship_id)
+                 JOIN change_assessment_decisions AS decisions USING (assessment_id)
                  WHERE relationships.prior_artifact_id = designations.artifact_id
                    AND relationships.prior_version = designations.artifact_version
                    AND relationships.relationship_kind = 'replacement'
+                   AND decisions.classification = 'material'
                )
              ORDER BY designations.artifact_id, designations.artifact_version,
                       designations.table_number, locations.ordinal",
@@ -996,9 +999,12 @@ fn inspect_boq_table_candidates(
                         AND locations.table_number > ?3))
                AND NOT EXISTS (
                  SELECT 1 FROM source_relationships AS relationships
+                 JOIN change_assessments AS assessments USING (relationship_id)
+                 JOIN change_assessment_decisions AS decisions USING (assessment_id)
                  WHERE relationships.prior_artifact_id = locations.artifact_id
                    AND relationships.prior_version = locations.version
                    AND relationships.relationship_kind = 'replacement'
+                   AND decisions.classification = 'material'
                )
              GROUP BY locations.artifact_id, locations.version, locations.table_number
              ORDER BY locations.artifact_id, locations.version, locations.table_number
@@ -3109,7 +3115,9 @@ impl TenderStore {
         command: &DesignateBoqTableCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<BoqTableDesignation, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_replacement_is(&command.artifact_id, command.artifact_version)? {
+            self.require_change_intake_writable()?;
+        }
         budget.check()?;
         let transaction = self
             .connection
@@ -3123,9 +3131,12 @@ impl TenderStore {
                      AND versions.registration_state = 'registered'
                      AND NOT EXISTS (
                        SELECT 1 FROM source_relationships AS relationships
+                       JOIN change_assessments AS assessments USING (relationship_id)
+                       JOIN change_assessment_decisions AS decisions USING (assessment_id)
                        WHERE relationships.prior_artifact_id = versions.artifact_id
                          AND relationships.prior_version = versions.version
                          AND relationships.relationship_kind = 'replacement'
+                         AND decisions.classification = 'material'
                      )
                  )",
                 params![command.artifact_id, command.artifact_version],
@@ -3235,7 +3246,16 @@ impl TenderStore {
         command: &RunCostEstimatorBasisCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<PreparedAgentRun, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        let mut change_authorized = false;
+        for calculation_run_id in &command.calculation_run_ids {
+            if self.active_change_allows_calculation_run(calculation_run_id)? {
+                change_authorized = true;
+                break;
+            }
+        }
+        if !change_authorized {
+            self.require_change_intake_writable()?;
+        }
         validate_basis_command(command)?;
         budget.check()?;
         let run_id = random_identifier(&self.connection)?;
@@ -3825,9 +3845,12 @@ fn source_evidence_is_current(
                  AND locations.ordinal = ?3
                  AND NOT EXISTS (
                    SELECT 1 FROM source_relationships AS relationships
+                   JOIN change_assessments AS assessments USING (relationship_id)
+                   JOIN change_assessment_decisions AS decisions USING (assessment_id)
                    WHERE relationships.prior_artifact_id = locations.artifact_id
                      AND relationships.prior_version = locations.version
                      AND relationships.relationship_kind = 'replacement'
+                     AND decisions.classification = 'material'
                  )
              )",
             params![reference.artifact_id, reference.version, reference.ordinal],
@@ -4189,7 +4212,9 @@ impl TenderStore {
         version: u32,
         budget: BidPackageOperationBudget,
     ) -> Result<PreparedAgentRun, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_estimate(basis_id, version)? {
+            self.require_change_intake_writable()?;
+        }
         if !valid_identifier(basis_id) || version == 0 || version > MAX_BASIS_VERSIONS {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
@@ -4360,7 +4385,9 @@ impl TenderStore {
         command: &ApproveBasisOfEstimateCommand,
         budget: BidPackageOperationBudget,
     ) -> Result<BasisOfEstimateVersion, TenderCommandError> {
-        self.require_change_intake_writable()?;
+        if !self.active_change_allows_estimate(&command.basis_id, command.version)? {
+            self.require_change_intake_writable()?;
+        }
         budget.check()?;
         let transaction = self
             .connection

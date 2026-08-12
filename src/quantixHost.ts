@@ -22,8 +22,13 @@ import type { CalculationRuleReviewResult } from "./bindings/CalculationRuleRevi
 import type { CalculationRuleVersion } from "./bindings/CalculationRuleVersion";
 import type { CalculationScenarioVersion } from "./bindings/CalculationScenarioVersion";
 import type { CalculationWorkspaceInspection } from "./bindings/CalculationWorkspaceInspection";
+import type { ChangeAssessment } from "./bindings/ChangeAssessment";
+import type { ChangeAssessmentClassification } from "./bindings/ChangeAssessmentClassification";
+import type { ChangeAssessmentPage } from "./bindings/ChangeAssessmentPage";
 import type { ControlledBoqCalculationRun } from "./bindings/ControlledBoqCalculationRun";
 import type { InspectCalculationWorkspaceCommand } from "./bindings/InspectCalculationWorkspaceCommand";
+import type { InspectChangeAssessmentsCommand } from "./bindings/InspectChangeAssessmentsCommand";
+import type { DecideChangeAssessmentCommand } from "./bindings/DecideChangeAssessmentCommand";
 import type { InspectPricingWorkspaceCommand } from "./bindings/InspectPricingWorkspaceCommand";
 import type { PricingAdjustmentVersion } from "./bindings/PricingAdjustmentVersion";
 import type { PricingScenarioVersion } from "./bindings/PricingScenarioVersion";
@@ -1161,6 +1166,38 @@ export function inspectCoordinatedBidBaselines(
     "inspect_coordinated_bid_baselines",
     { command },
   );
+}
+
+export function inspectChangeAssessments(
+  tenderId: string,
+  beforeSequence: number | null,
+  limit: number,
+): Promise<ChangeAssessmentPage> {
+  const command: InspectChangeAssessmentsCommand = {
+    tender_id: tenderId,
+    before_sequence: beforeSequence,
+    limit,
+  };
+  return invoke<ChangeAssessmentPage>("inspect_change_assessments", {
+    command,
+  });
+}
+
+export function decideChangeAssessment(
+  tenderId: string,
+  assessmentId: string,
+  assessmentManifestSha256: string,
+  classification: ChangeAssessmentClassification,
+  rationale: string,
+): Promise<ChangeAssessment> {
+  const command: DecideChangeAssessmentCommand = {
+    tender_id: tenderId,
+    assessment_id: assessmentId,
+    assessment_manifest_sha256: assessmentManifestSha256,
+    classification,
+    rationale,
+  };
+  return invoke<ChangeAssessment>("decide_change_assessment", { command });
 }
 
 export function decideCoordinatedBidBaseline(

@@ -507,7 +507,11 @@ fn run_agent_turn(
         } else {
             *thread_count
         };
-        new_thread_id = if scenario.starts_with("production-task") {
+        new_thread_id = if scenario == "record-extraction-change-assessment"
+            || scenario == "bid-package-review-change-assessment"
+        {
+            format!("thr_fixture_{}", scenario.replace('-', "_"))
+        } else if scenario.starts_with("production-task") {
             format!(
                 "thr_fixture_{}_{}",
                 scenario.replace('-', "_"),
@@ -900,6 +904,8 @@ fn run_agent_turn(
             | "output-invalid"
             | "record-extraction"
             | "record-extraction-coordinated"
+            | "record-extraction-coordinated-split"
+            | "record-extraction-coordinated-transitive-split"
             | "record-extraction-coordination-many"
             | "record-extraction-coordination-overflow"
             | "record-extraction-decline-risk"
@@ -908,11 +914,13 @@ fn run_agent_turn(
             | "record-extraction-inventory-fill"
             | "record-extraction-inventory-overflow"
             | "record-extraction-delayed"
+            | "record-extraction-change-assessment"
             | "record-extraction-duplicate-citation"
             | "record-extraction-invalid"
             | "record-review"
             | "record-review-delayed"
             | "bid-package-review"
+            | "bid-package-review-change-assessment"
             | "bid-package-review-failed"
             | "bid-package-review-delayed"
             | "external-rfi-review"
@@ -1459,62 +1467,55 @@ fn run_agent_turn(
         added["title"] = serde_json::json!("Late discovered submission obligation");
         candidate["records"] = serde_json::json!([added]);
         candidate
-    } else if scenario == "record-extraction-coordinated" {
-        let mut candidate = record_extraction_candidate(provider_data_view)?;
-        let records = candidate["records"]
-            .as_array_mut()
-            .ok_or("coordinated record candidates")?;
-        if let Some(deadline) = records.iter_mut().find(|record| {
-            record.get("stable_key").and_then(serde_json::Value::as_str)
-                == Some("submission_deadline")
-        }) {
-            deadline["contradictions"] = serde_json::json!([]);
-            deadline["fields"][0]["uncertainty"] = serde_json::Value::Null;
-        }
-        let exact_evidence = records
-            .first()
-            .and_then(|record| record.pointer("/fields/0/evidence/0"))
+    } else if scenario == "record-extraction-change-assessment" {
+        let authoritative = provider_data_view
+            .pointer("/evidence/0/reference")
             .cloned()
-            .ok_or("coordinated record evidence")?;
-        records.push(serde_json::json!({
-            "stable_key": "clarification_cutoff",
-            "kind": "deadline",
-            "title": "Clarification cutoff",
-            "fields": [{
-                "name": "deadline",
-                "value": "8 May 2026 at 14:00 Cairo time",
-                "basis_kind": "evidence",
-                "basis_reference": null,
-                "basis_description": null,
-                "original_expression": "8 May 2026 at 14:00 Cairo time",
-                "normalized_value": "2026-05-08T14:00:00+03:00",
-                "timezone": "Africa/Cairo",
-                "uncertainty": null,
-                "evidence": [exact_evidence.clone()]
-            }],
-            "contradictions": []
-        }));
-        if let Some(project) = records.iter_mut().find(|record| {
-            record.get("stable_key").and_then(serde_json::Value::as_str)
-                == Some("project_delivery_context")
-        }) {
-            project["fields"]
-                .as_array_mut()
-                .ok_or("project delivery fields")?
-                .push(serde_json::json!({
-                    "name": "responsible_party",
-                    "value": "tender_coordinator",
-                    "basis_kind": "evidence",
-                    "basis_reference": null,
-                    "basis_description": null,
-                    "original_expression": null,
-                    "normalized_value": null,
-                    "timezone": null,
-                    "uncertainty": null,
-                    "evidence": [exact_evidence]
-                }));
+            .ok_or("change assessment replacement Evidence")?;
+        let allowed = provider_data_view
+            .pointer("/change_assessment/allowed_stable_keys")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("change assessment stable-key contract")?
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<std::collections::HashSet<_>>();
+        let mut records = provider_data_view
+            .pointer("/change_assessment/prior_records")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("change assessment prior records")?
+            .clone();
+        records
+            .iter_mut()
+            .flat_map(|record| {
+                record
+                    .get_mut("fields")
+                    .and_then(serde_json::Value::as_array_mut)
+                    .into_iter()
+                    .flatten()
+            })
+            .for_each(|field| field["evidence"] = serde_json::json!([authoritative.clone()]));
+        for record in &mut records {
+            record["contradictions"] = serde_json::json!([]);
         }
-        candidate
+        records.retain(|record| {
+            record
+                .get("stable_key")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|stable_key| allowed.contains(stable_key))
+        });
+        serde_json::json!({"records": records})
+    } else if matches!(
+        scenario,
+        "record-extraction-coordinated"
+            | "record-extraction-coordinated-split"
+            | "record-extraction-coordinated-transitive-split"
+    ) {
+        let changed_branch = match scenario {
+            "record-extraction-coordinated-split" => Some("programme_pressure"),
+            "record-extraction-coordinated-transitive-split" => Some("project_delivery_context"),
+            _ => None,
+        };
+        coordinated_record_extraction_candidate(provider_data_view, changed_branch)?
     } else if scenario == "record-extraction" {
         record_extraction_candidate(provider_data_view)?
     } else if scenario == "record-extraction-invalid" {
@@ -1592,7 +1593,10 @@ fn run_agent_turn(
                 "affected_records": affected
             }]
         })
-    } else if scenario == "bid-package-review" {
+    } else if matches!(
+        scenario,
+        "bid-package-review" | "bid-package-review-change-assessment"
+    ) {
         serde_json::json!({ "outcome": "passed", "findings": [] })
     } else if scenario == "external-rfi-review-delayed" {
         fs::write(
@@ -2870,6 +2874,130 @@ fn run_multiplexed_production_turns(
         }))?;
     }
     Ok(true)
+}
+
+fn coordinated_record_extraction_candidate(
+    data_view: &serde_json::Value,
+    changed_branch: Option<&str>,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let mut candidate = record_extraction_candidate(data_view)?;
+    let (general_evidence, changed_branch_evidence) = if changed_branch.is_some() {
+        let evidence = data_view
+            .get("evidence")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("Tender Evidence Data View")?;
+        let mut artifact_ids = Vec::new();
+        for item in evidence {
+            let artifact_id = item
+                .pointer("/reference/artifact_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("split-source Evidence artifact")?;
+            if !artifact_ids
+                .iter()
+                .any(|candidate| candidate == artifact_id)
+            {
+                artifact_ids.push(artifact_id.to_owned());
+            }
+        }
+        if artifact_ids.len() != 2 {
+            return Err("split-source fixture requires exactly two Source Artifacts".into());
+        }
+        let reference_for = |artifact_id: &str| {
+            evidence.iter().find(|item| {
+                item.pointer("/reference/artifact_id")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(artifact_id)
+            })
+        };
+        (
+            reference_for(&artifact_ids[0])
+                .and_then(|item| item.get("reference"))
+                .cloned()
+                .ok_or("general split-source Evidence")?,
+            reference_for(&artifact_ids[1])
+                .and_then(|item| item.get("reference"))
+                .cloned()
+                .ok_or("changed split-source Evidence")?,
+        )
+    } else {
+        let exact = candidate
+            .pointer("/records/0/fields/0/evidence/0")
+            .cloned()
+            .ok_or("coordinated record evidence")?;
+        (exact.clone(), exact)
+    };
+    let records = candidate["records"]
+        .as_array_mut()
+        .ok_or("coordinated record candidates")?;
+    if let Some(changed_branch) = changed_branch {
+        for record in records.iter_mut() {
+            let is_changed_branch = record.get("stable_key").and_then(serde_json::Value::as_str)
+                == Some(changed_branch);
+            for field in record
+                .get_mut("fields")
+                .and_then(serde_json::Value::as_array_mut)
+                .into_iter()
+                .flatten()
+            {
+                if field
+                    .get("evidence")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|evidence| !evidence.is_empty())
+                {
+                    field["evidence"] = serde_json::json!([if is_changed_branch {
+                        changed_branch_evidence.clone()
+                    } else {
+                        general_evidence.clone()
+                    }]);
+                }
+            }
+        }
+    }
+    if let Some(deadline) = records.iter_mut().find(|record| {
+        record.get("stable_key").and_then(serde_json::Value::as_str) == Some("submission_deadline")
+    }) {
+        deadline["contradictions"] = serde_json::json!([]);
+        deadline["fields"][0]["uncertainty"] = serde_json::Value::Null;
+    }
+    records.push(serde_json::json!({
+        "stable_key": "clarification_cutoff",
+        "kind": "deadline",
+        "title": "Clarification cutoff",
+        "fields": [{
+            "name": "deadline",
+            "value": "8 May 2026 at 14:00 Cairo time",
+            "basis_kind": "evidence",
+            "basis_reference": null,
+            "basis_description": null,
+            "original_expression": "8 May 2026 at 14:00 Cairo time",
+            "normalized_value": "2026-05-08T14:00:00+03:00",
+            "timezone": "Africa/Cairo",
+            "uncertainty": null,
+            "evidence": [general_evidence.clone()]
+        }],
+        "contradictions": []
+    }));
+    if let Some(project) = records.iter_mut().find(|record| {
+        record.get("stable_key").and_then(serde_json::Value::as_str)
+            == Some("project_delivery_context")
+    }) {
+        project["fields"]
+            .as_array_mut()
+            .ok_or("project delivery fields")?
+            .push(serde_json::json!({
+                "name": "responsible_party",
+                "value": "tender_coordinator",
+                "basis_kind": "evidence",
+                "basis_reference": null,
+                "basis_description": null,
+                "original_expression": null,
+                "normalized_value": null,
+                "timezone": null,
+                "uncertainty": null,
+                "evidence": [general_evidence]
+            }));
+    }
+    Ok(candidate)
 }
 
 fn record_extraction_candidate(
