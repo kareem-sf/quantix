@@ -3787,13 +3787,15 @@ async fn unapproved_work_plan_can_rebase_after_material_change_reproceed() {
         .host
         .close_tender(&harness.tender_id)
         .expect("close before unapproved rebase integrity inspection");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("inspect unapproved rebase lineage");
     assert_eq!(
-        harness
-            .host
-            .inspect_tender_integrity(&harness.tender_id)
-            .expect("inspect unapproved rebase lineage")
-            .state,
-        TenderIntegrityState::Ready
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "integrity issues: {:?}",
+        integrity.issues
     );
 }
 
@@ -11568,13 +11570,15 @@ async fn material_change_invalidates_proceed_and_reopens_an_exact_successor_path
         .host
         .close_tender(&harness.tender_id)
         .expect("close before invalidation integrity inspection");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("inspect material-change lineage");
     assert_eq!(
-        harness
-            .host
-            .inspect_tender_integrity(&harness.tender_id)
-            .expect("inspect material-change lineage")
-            .state,
-        TenderIntegrityState::Ready
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "integrity issues: {:?}",
+        integrity.issues
     );
     harness
         .host
@@ -11585,7 +11589,77 @@ async fn material_change_invalidates_proceed_and_reopens_an_exact_successor_path
         .join("tenders")
         .join(&harness.tender_id)
         .join("tender.sqlite");
-    let connection = rusqlite::Connection::open(database).expect("open Tender Store");
+    const RESTORE_PACKAGE_VERSION_TRIGGER: &str = concat!(
+        "CREATE TRIGGER bid_decision_package_versions_no_update\n",
+        "BEFORE UPDATE ON bid_decision_package_versions\n",
+        "BEGIN\n",
+        "  SELECT RAISE(ABORT, 'Bid Decision Package Versions are immutable');\n",
+        "END;",
+    );
+    let connection = rusqlite::Connection::open(&database).expect("open Tender Store");
+    let (successor_manifest_json, successor_manifest_sha256): (String, String) = connection
+        .query_row(
+            "SELECT manifest_json, manifest_sha256
+             FROM bid_decision_package_versions WHERE version = 2",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load exact captured successor manifest");
+    let mut missing_basis_manifest: Value =
+        serde_json::from_str(&successor_manifest_json).expect("parse captured successor manifest");
+    missing_basis_manifest["material_change_basis"] = Value::Null;
+    let missing_basis_manifest_json = serde_json_canonicalizer::to_string(&missing_basis_manifest)
+        .expect("canonical missing-basis manifest");
+    let missing_basis_manifest_sha256 = Sha256::digest(missing_basis_manifest_json.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    connection
+        .execute("DROP TRIGGER bid_decision_package_versions_no_update", [])
+        .expect("drop immutable version trigger for missing-basis corruption fixture");
+    connection
+        .execute(
+            "UPDATE bid_decision_package_versions
+             SET manifest_json = ?1, manifest_sha256 = ?2 WHERE version = 2",
+            rusqlite::params![missing_basis_manifest_json, missing_basis_manifest_sha256],
+        )
+        .expect("remove the captured material-change basis");
+    connection
+        .execute_batch(RESTORE_PACKAGE_VERSION_TRIGGER)
+        .expect("restore immutable version trigger");
+    drop(connection);
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("inspect missing captured material-change basis")
+            .state,
+        TenderIntegrityState::RecoveryRequired
+    );
+    let connection = rusqlite::Connection::open(&database).expect("reopen Tender Store");
+    connection
+        .execute("DROP TRIGGER bid_decision_package_versions_no_update", [])
+        .expect("drop immutable version trigger to restore captured basis");
+    connection
+        .execute(
+            "UPDATE bid_decision_package_versions
+             SET manifest_json = ?1, manifest_sha256 = ?2 WHERE version = 2",
+            rusqlite::params![successor_manifest_json, successor_manifest_sha256],
+        )
+        .expect("restore the exact captured material-change basis");
+    connection
+        .execute_batch(RESTORE_PACKAGE_VERSION_TRIGGER)
+        .expect("restore immutable version trigger after basis repair");
+    drop(connection);
+    assert_eq!(
+        harness
+            .host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("inspect restored captured material-change basis")
+            .state,
+        TenderIntegrityState::Ready
+    );
+    let connection = rusqlite::Connection::open(&database).expect("reopen Tender Store");
     let (prior_inventory_json, prior_inventory_sha256): (String, String) = connection
         .query_row(
             "SELECT record_inventory_json, record_inventory_sha256
@@ -11627,6 +11701,9 @@ async fn material_change_invalidates_proceed_and_reopens_an_exact_successor_path
             ],
         )
         .expect("forge unchanged successor dependency snapshot");
+    connection
+        .execute_batch(RESTORE_PACKAGE_VERSION_TRIGGER)
+        .expect("restore immutable version trigger after dependency corruption");
     drop(connection);
     assert_eq!(
         harness

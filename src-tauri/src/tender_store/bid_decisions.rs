@@ -3226,22 +3226,28 @@ fn material_change_basis_for_package(
     package_id: &str,
     version: u32,
 ) -> Result<Option<BidDecisionApprovalInvalidation>, TenderCommandError> {
-    let approval_id: Option<String> = connection
+    let manifest_json: String = connection
         .query_row(
-            "SELECT approvals.approval_id
-             FROM bid_decision_approval_records AS approvals
-             JOIN bid_decision_approval_invalidations AS invalidations USING (approval_id)
-             WHERE approvals.package_id = ?1 AND approvals.package_version < ?2
-             ORDER BY approvals.package_version DESC LIMIT 1",
+            "SELECT manifest_json FROM bid_decision_package_versions
+             WHERE package_id = ?1 AND version = ?2",
             params![package_id, version],
             |row| row.get(0),
         )
-        .optional()
         .map_err(sql_error)?;
-    approval_id
-        .map(|approval_id| load_approval_invalidation(connection, &approval_id))
-        .transpose()
-        .map(Option::flatten)
+    let manifest: Value = parse_canonical_json(&manifest_json)?;
+    let basis: Option<BidDecisionApprovalInvalidation> = serde_json::from_value(
+        manifest
+            .get("material_change_basis")
+            .cloned()
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+    )
+    .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    if let Some(basis) = &basis {
+        if load_approval_invalidation(connection, &basis.approval_id)?.as_ref() != Some(basis) {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+    }
+    Ok(basis)
 }
 
 fn load_approval_history(
@@ -4507,27 +4513,33 @@ fn bid_package_review_profile(profile_id: String) -> AgentProfileVersionView {
     }
 }
 
+struct BidPackageReviewTaskTarget<'a> {
+    tender_id: &'a str,
+    tender_revision: u32,
+    package_id: &'a str,
+    package_version: u32,
+    change_assessment_id: Option<&'a str>,
+}
+
 fn bid_package_review_task(
     task_id: String,
-    tender_id: &str,
-    package: &BidDecisionPackageInspection,
-    change_assessment_id: Option<&str>,
+    target: BidPackageReviewTaskTarget<'_>,
     deadline: String,
     profile: &AgentProfileVersionView,
 ) -> TenderTaskView {
     let mut exact_inputs = vec![
         AgentTaskInputReference {
             kind: "tender_revision".into(),
-            reference: tender_id.into(),
-            version: package.tender_revision,
+            reference: target.tender_id.into(),
+            version: target.tender_revision,
         },
         AgentTaskInputReference {
             kind: "bid_decision_package".into(),
-            reference: package.package_id.clone(),
-            version: package.version,
+            reference: target.package_id.into(),
+            version: target.package_version,
         },
     ];
-    if let Some(change_assessment_id) = change_assessment_id {
+    if let Some(change_assessment_id) = target.change_assessment_id {
         exact_inputs.push(AgentTaskInputReference {
             kind: "change_assessment".into(),
             reference: change_assessment_id.into(),
@@ -4695,9 +4707,13 @@ impl TenderStore {
                 .map_err(sql_error)?;
             let task = bid_package_review_task(
                 random_identifier(&transaction)?,
-                tender_id.as_str(),
-                &package,
-                change_assessment_id.as_deref(),
+                BidPackageReviewTaskTarget {
+                    tender_id: tender_id.as_str(),
+                    tender_revision,
+                    package_id,
+                    package_version: version,
+                    change_assessment_id: change_assessment_id.as_deref(),
+                },
                 deadline,
                 &profile,
             );
@@ -4980,6 +4996,7 @@ impl TenderStore {
                 blocker_count,
                 manifest_json,
                 manifest_sha256,
+                created_at,
             ): (
                 u32,
                 String,
@@ -4990,13 +5007,14 @@ impl TenderStore {
                 u32,
                 String,
                 String,
+                String,
             ) = self
                 .connection
                 .query_row(
                     "SELECT tender_revision, record_inventory_json, record_inventory_sha256,
                             capability_demands_json, resource_implications_json,
                             recommendation_json, analysis_blocker_count,
-                            manifest_json, manifest_sha256
+                            manifest_json, manifest_sha256, created_at
                      FROM bid_decision_package_versions
                      WHERE package_id = ?1 AND version = ?2",
                     params![package_id, version],
@@ -5011,6 +5029,7 @@ impl TenderStore {
                             row.get(6)?,
                             row.get(7)?,
                             row.get(8)?,
+                            row.get(9)?,
                         ))
                     },
                 )
@@ -5112,18 +5131,43 @@ impl TenderStore {
             {
                 return Ok(false);
             }
+            let creation_audit_count: u32 = self
+                .connection
+                .query_row(
+                    "SELECT COUNT(*) FROM audit_events
+                     WHERE event_type = 'bid_decision_package_version_created'
+                       AND aggregate_revision = ?1 AND created_at = ?2
+                       AND json_extract(payload_json, '$.change.package_id') = ?3
+                       AND json_extract(payload_json, '$.change.package_version') = ?4
+                       AND json_extract(payload_json, '$.change.manifest_sha256') = ?5
+                       AND json_extract(payload_json, '$.change.analysis_blocker_count') = ?6",
+                    params![
+                        tender_revision,
+                        created_at,
+                        package_id,
+                        version.to_string(),
+                        manifest_sha256,
+                        blocker_count.to_string(),
+                    ],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            if creation_audit_count != 1 {
+                return Ok(false);
+            }
             if let Some(review) = load_package_review(&self.connection, &package_id, version)? {
+                let attributable = package_review_is_attributable(
+                    self,
+                    &package_id,
+                    version,
+                    tender_revision,
+                    &review,
+                    check,
+                )?;
                 if review.findings.len() > MAX_REVIEW_FINDINGS
                     || review.outcome == BidDecisionPackageReviewOutcome::Failed
                         && review.findings.is_empty()
-                    || !package_review_is_attributable(
-                        self,
-                        &package_id,
-                        version,
-                        tender_revision,
-                        &review,
-                        check,
-                    )?
+                    || !attributable
                 {
                     return Ok(false);
                 }
