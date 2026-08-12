@@ -4510,9 +4510,7 @@ fn bid_package_review_profile(profile_id: String) -> AgentProfileVersionView {
 fn bid_package_review_task(
     task_id: String,
     tender_id: &str,
-    tender_revision: u32,
-    package_id: &str,
-    package_version: u32,
+    package: &BidDecisionPackageInspection,
     change_assessment_id: Option<&str>,
     deadline: String,
     profile: &AgentProfileVersionView,
@@ -4521,12 +4519,12 @@ fn bid_package_review_task(
         AgentTaskInputReference {
             kind: "tender_revision".into(),
             reference: tender_id.into(),
-            version: tender_revision,
+            version: package.tender_revision,
         },
         AgentTaskInputReference {
             kind: "bid_decision_package".into(),
-            reference: package_id.into(),
-            version: package_version,
+            reference: package.package_id.clone(),
+            version: package.version,
         },
     ];
     if let Some(change_assessment_id) = change_assessment_id {
@@ -4698,9 +4696,7 @@ impl TenderStore {
             let task = bid_package_review_task(
                 random_identifier(&transaction)?,
                 tender_id.as_str(),
-                tender_revision,
-                package_id,
-                version,
+                &package,
                 change_assessment_id.as_deref(),
                 deadline,
                 &profile,

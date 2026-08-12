@@ -41,12 +41,14 @@ embed-resource = "3"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+base64 = "0.22.1"
 cacache = { version = "13.1.0", default-features = false, features = ["mmap", "tokio-runtime"] }
 fs4 = "1.1.0"
 garde = { version = "0.23.0", features = ["derive"] }
 infer = "0.19.0"
 jsonschema = { version = "0.40.0", default-features = false }
 jiff = { version = "0.2.35", default-features = false, features = ["std"] }
+minisign-verify = "=0.2.5"
 processkit = { version = "=3.2.0", default-features = false }
 rusqlite = { version = "0.40.1", features = ["backup", "bundled", "limits"] }
 rust_decimal = { version = "1.42.1", default-features = false, features = ["std"] }
@@ -56,6 +58,7 @@ sha2 = "0.11.0"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2.4.3"
+tauri-plugin-updater = "=2.10.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3.27.0"
@@ -73,9 +76,10 @@ junction = { version = "2.0.0", default-features = false }
 windows-permissions = "0.2.4"
 # wmi ranges `windows` and `windows-core` independently, so pin its pair to
 # one minor line. Tauri retains its own compatible 0.61 dependency line.
-windows = { version = "=0.62.2", features = ["Win32_System_Threading"] }
+windows = { version = "=0.62.2", features = ["Win32_Storage_FileSystem", "Win32_System_Threading"] }
 windows-core = "=0.62.2"
 wmi = { version = "0.18.4", default-features = false }
 
 [dev-dependencies]
+minisign = "0.9.1"
 tauri = { version = "2", features = ["test"] }

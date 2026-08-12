@@ -14,7 +14,7 @@ use crate::QuantixHost;
 
 pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 1024 * 1024 * 1024;
 
-const INSTALLATION_SCHEMA_VERSION: i64 = 5;
+pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 8;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
@@ -30,7 +30,7 @@ const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
 ];
 const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 5)
+           schema_version INTEGER NOT NULL CHECK (schema_version = 8)
          )";
 pub(crate) const TENDER_BACKUPS_TABLE_SQL: &str = "CREATE TABLE tender_backups (
            backup_id TEXT PRIMARY KEY CHECK (length(backup_id) = 32),
@@ -116,8 +116,89 @@ pub(crate) const RUNTIME_PREPARATION_TABLE_SQL: &str = "CREATE TABLE runtime_pre
            docling_version TEXT,
            updated_at TEXT NOT NULL
          )";
-const APPLICATION_DIRECTORIES: [&str; 9] = [
-    "archives", "backups", "exports", "logs", "models", "runtimes", "staging", "tenders", "trash",
+pub(crate) const UPDATE_OPERATIONS_TABLE_SQL: &str = "CREATE TABLE update_operations (
+           update_id TEXT PRIMARY KEY CHECK (length(update_id) = 64),
+           state TEXT NOT NULL CHECK (state IN (
+             'awaiting_approval', 'approved', 'denied', 'installing',
+             'restart_validation_required', 'ready', 'rejected', 'repair_required',
+             'rolled_back'
+           )),
+           offer_json TEXT NOT NULL,
+           diagnostic_code TEXT,
+           created_at TEXT NOT NULL,
+           updated_at TEXT NOT NULL,
+           CHECK (
+             (state IN ('awaiting_approval', 'approved', 'denied', 'installing',
+                        'restart_validation_required', 'ready') AND diagnostic_code IS NULL)
+             OR
+             (state IN ('rejected', 'repair_required', 'rolled_back') AND diagnostic_code IS NOT NULL)
+           )
+         )";
+const UPDATE_OPERATIONS_OFFER_NO_UPDATE_SQL: &str =
+    "CREATE TRIGGER update_operations_offer_no_update
+         BEFORE UPDATE OF update_id, offer_json, created_at ON update_operations
+         BEGIN
+           SELECT RAISE(ABORT, 'Update offer evidence is immutable');
+         END";
+const UPDATE_OPERATIONS_NO_DELETE_SQL: &str = "CREATE TRIGGER update_operations_no_delete
+         BEFORE DELETE ON update_operations
+         BEGIN
+           SELECT RAISE(ABORT, 'Update operation history is immutable');
+         END";
+pub(crate) const UPDATE_DECISIONS_TABLE_SQL: &str = "CREATE TABLE update_decisions (
+           sequence INTEGER PRIMARY KEY,
+           update_id TEXT NOT NULL UNIQUE CHECK (length(update_id) = 64),
+           offer_sha256 TEXT NOT NULL CHECK (length(offer_sha256) = 64),
+           decision TEXT NOT NULL CHECK (decision IN ('approve', 'deny')),
+           rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+           decided_by TEXT NOT NULL CHECK (decided_by = 'engineer_user'),
+           acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+           decided_at TEXT NOT NULL,
+           preceding_hash TEXT NOT NULL CHECK (length(preceding_hash) = 64),
+           current_hash TEXT NOT NULL UNIQUE CHECK (length(current_hash) = 64),
+           FOREIGN KEY (update_id) REFERENCES update_operations(update_id),
+           CHECK (offer_sha256 = update_id)
+         )";
+const UPDATE_DECISIONS_NO_UPDATE_SQL: &str = "CREATE TRIGGER update_decisions_no_update
+         BEFORE UPDATE ON update_decisions
+         BEGIN
+           SELECT RAISE(ABORT, 'Update decisions are immutable');
+         END";
+const UPDATE_DECISIONS_NO_DELETE_SQL: &str = "CREATE TRIGGER update_decisions_no_delete
+         BEFORE DELETE ON update_decisions
+         BEGIN
+           SELECT RAISE(ABORT, 'Update decisions are immutable');
+         END";
+pub(crate) const UPDATE_RECOVERY_POINTS_TABLE_SQL: &str = "CREATE TABLE update_recovery_points (
+           update_id TEXT PRIMARY KEY CHECK (length(update_id) = 64),
+           application_version TEXT NOT NULL CHECK (length(CAST(application_version AS BLOB)) BETWEEN 1 AND 64),
+           artifact_kind TEXT NOT NULL CHECK (artifact_kind IN ('windows_bundle', 'mac_os_bundle', 'linux_app_image')),
+           destination_root TEXT NOT NULL CHECK (length(CAST(destination_root AS BLOB)) BETWEEN 1 AND 32767),
+           manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+           manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+           FOREIGN KEY (update_id) REFERENCES update_operations(update_id)
+         )";
+const UPDATE_RECOVERY_POINTS_NO_UPDATE_SQL: &str = "CREATE TRIGGER update_recovery_points_no_update
+         BEFORE UPDATE ON update_recovery_points
+         BEGIN
+           SELECT RAISE(ABORT, 'Update recovery points are immutable');
+         END";
+const UPDATE_RECOVERY_POINTS_NO_DELETE_SQL: &str = "CREATE TRIGGER update_recovery_points_no_delete
+         BEFORE DELETE ON update_recovery_points
+         BEGIN
+           SELECT RAISE(ABORT, 'Update recovery points are immutable');
+         END";
+const APPLICATION_DIRECTORIES: [&str; 10] = [
+    "archives",
+    "backups",
+    "exports",
+    "logs",
+    "models",
+    "runtimes",
+    "staging",
+    "tenders",
+    "trash",
+    "update-recovery",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,6 +249,7 @@ pub enum SetupIssue {
     UnsafeStorageLocation,
     UnsafeStoragePermissions,
     UnsupportedInstallationVersion,
+    UpdateInstallationActive,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -179,7 +261,7 @@ pub struct SetupOutcome {
 }
 
 impl SetupOutcome {
-    fn blocked(state: SetupState, issue: SetupIssue) -> Self {
+    pub(crate) fn blocked(state: SetupState, issue: SetupIssue) -> Self {
         Self {
             state,
             setup_performed: false,
@@ -579,10 +661,19 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     transaction.execute(TENDER_CATALOGUE_TABLE_SQL, [])?;
     transaction.execute(TENDER_RECOVERIES_TABLE_SQL, [])?;
     transaction.execute(TENDER_RECOVERY_DECISIONS_TABLE_SQL, [])?;
+    transaction.execute(UPDATE_OPERATIONS_TABLE_SQL, [])?;
+    transaction.execute(UPDATE_DECISIONS_TABLE_SQL, [])?;
+    transaction.execute(UPDATE_RECOVERY_POINTS_TABLE_SQL, [])?;
     transaction.execute(TENDER_RECOVERY_DECISIONS_NO_UPDATE_SQL, [])?;
     transaction.execute(TENDER_RECOVERY_DECISIONS_NO_DELETE_SQL, [])?;
+    transaction.execute(UPDATE_DECISIONS_NO_UPDATE_SQL, [])?;
+    transaction.execute(UPDATE_DECISIONS_NO_DELETE_SQL, [])?;
+    transaction.execute(UPDATE_OPERATIONS_OFFER_NO_UPDATE_SQL, [])?;
+    transaction.execute(UPDATE_OPERATIONS_NO_DELETE_SQL, [])?;
+    transaction.execute(UPDATE_RECOVERY_POINTS_NO_UPDATE_SQL, [])?;
+    transaction.execute(UPDATE_RECOVERY_POINTS_NO_DELETE_SQL, [])?;
     transaction.execute(
-        "INSERT INTO installation (singleton, schema_version) VALUES (1, 5)",
+        "INSERT INTO installation (singleton, schema_version) VALUES (1, 8)",
         [],
     )?;
     transaction.execute(
@@ -718,6 +809,24 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
                 Some(TENDER_RECOVERY_DECISIONS_TABLE_SQL.to_owned()),
             ),
             (
+                "table".to_owned(),
+                "update_decisions".to_owned(),
+                "update_decisions".to_owned(),
+                Some(UPDATE_DECISIONS_TABLE_SQL.to_owned()),
+            ),
+            (
+                "table".to_owned(),
+                "update_operations".to_owned(),
+                "update_operations".to_owned(),
+                Some(UPDATE_OPERATIONS_TABLE_SQL.to_owned()),
+            ),
+            (
+                "table".to_owned(),
+                "update_recovery_points".to_owned(),
+                "update_recovery_points".to_owned(),
+                Some(UPDATE_RECOVERY_POINTS_TABLE_SQL.to_owned()),
+            ),
+            (
                 "trigger".to_owned(),
                 "tender_recovery_decisions_no_delete".to_owned(),
                 "tender_recovery_decisions".to_owned(),
@@ -728,6 +837,42 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
                 "tender_recovery_decisions_no_update".to_owned(),
                 "tender_recovery_decisions".to_owned(),
                 Some(TENDER_RECOVERY_DECISIONS_NO_UPDATE_SQL.to_owned()),
+            ),
+            (
+                "trigger".to_owned(),
+                "update_decisions_no_delete".to_owned(),
+                "update_decisions".to_owned(),
+                Some(UPDATE_DECISIONS_NO_DELETE_SQL.to_owned()),
+            ),
+            (
+                "trigger".to_owned(),
+                "update_decisions_no_update".to_owned(),
+                "update_decisions".to_owned(),
+                Some(UPDATE_DECISIONS_NO_UPDATE_SQL.to_owned()),
+            ),
+            (
+                "trigger".to_owned(),
+                "update_operations_no_delete".to_owned(),
+                "update_operations".to_owned(),
+                Some(UPDATE_OPERATIONS_NO_DELETE_SQL.to_owned()),
+            ),
+            (
+                "trigger".to_owned(),
+                "update_operations_offer_no_update".to_owned(),
+                "update_operations".to_owned(),
+                Some(UPDATE_OPERATIONS_OFFER_NO_UPDATE_SQL.to_owned()),
+            ),
+            (
+                "trigger".to_owned(),
+                "update_recovery_points_no_delete".to_owned(),
+                "update_recovery_points".to_owned(),
+                Some(UPDATE_RECOVERY_POINTS_NO_DELETE_SQL.to_owned()),
+            ),
+            (
+                "trigger".to_owned(),
+                "update_recovery_points_no_update".to_owned(),
+                "update_recovery_points".to_owned(),
+                Some(UPDATE_RECOVERY_POINTS_NO_UPDATE_SQL.to_owned()),
             ),
         ]
     {

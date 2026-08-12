@@ -3,10 +3,11 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, OnceLock, Weak,
     },
 };
 
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent_runtime::{
@@ -31,13 +32,46 @@ struct QuantixHostInner {
     recovery_operation_lock: Mutex<()>,
     runtime_layout: RuntimeLayout,
     process_supervisor: ProcessSupervisor,
-    runtime_preparation: Mutex<Option<CancellationToken>>,
-    active_parses: Mutex<HashMap<ParseTargetKey, CancellationToken>>,
+    ordinary_work: Arc<RwLock<()>>,
+    update_installation_lease: Mutex<Option<OwnedRwLockWriteGuard<()>>>,
+    runtime_preparation: Mutex<Option<ActiveRuntimePreparation>>,
+    active_parses: Mutex<HashMap<ParseTargetKey, ActiveParse>>,
     active_agent_runs: Mutex<HashMap<String, ActiveAgentRun>>,
-    production_schedulers: Mutex<HashSet<String>>,
+    production_schedulers: Mutex<HashMap<String, OrdinaryWorkLease>>,
     agent_provider: tokio::sync::Mutex<Option<CodexProvider>>,
     provider_rate_limit: Mutex<Option<ProviderRateLimit>>,
     runtime_verified: AtomicBool,
+    update_installation_active: AtomicBool,
+}
+
+static APPLICATION_WORK_LEASES: OnceLock<Mutex<HashMap<PathBuf, Weak<RwLock<()>>>>> =
+    OnceLock::new();
+
+fn shared_application_work_lease(application_home: &Path) -> Arc<RwLock<()>> {
+    let key = application_home
+        .canonicalize()
+        .or_else(|_| {
+            let parent = application_home
+                .parent()
+                .ok_or(std::io::Error::from(std::io::ErrorKind::InvalidInput))?
+                .canonicalize()?;
+            let name = application_home
+                .file_name()
+                .ok_or(std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+            Ok::<PathBuf, std::io::Error>(parent.join(name))
+        })
+        .unwrap_or_else(|_| application_home.to_path_buf());
+    let mut leases = APPLICATION_WORK_LEASES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    leases.retain(|_, lease| lease.strong_count() > 0);
+    if let Some(lease) = leases.get(&key).and_then(Weak::upgrade) {
+        return lease;
+    }
+    let lease = Arc::new(RwLock::new(()));
+    leases.insert(key, Arc::downgrade(&lease));
+    lease
 }
 
 struct ActiveAgentRun {
@@ -45,6 +79,21 @@ struct ActiveAgentRun {
     run_id: Option<String>,
     production: bool,
     cancellation: CancellationToken,
+    _ordinary_work: OrdinaryWorkLease,
+}
+
+struct ActiveRuntimePreparation {
+    cancellation: CancellationToken,
+    _ordinary_work: OrdinaryWorkLease,
+}
+
+struct ActiveParse {
+    cancellation: CancellationToken,
+    _ordinary_work: OrdinaryWorkLease,
+}
+
+pub(crate) struct OrdinaryWorkLease {
+    _guard: OwnedRwLockReadGuard<()>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -98,9 +147,11 @@ impl QuantixHost {
         setup_platform: Arc<dyn SetupPlatform>,
         runtime_layout: RuntimeLayout,
     ) -> Self {
+        let application_home = application_home.as_ref().to_path_buf();
+        let ordinary_work = shared_application_work_lease(&application_home);
         Self {
             inner: Arc::new(QuantixHostInner {
-                application_home: application_home.as_ref().to_path_buf(),
+                application_home,
                 setup_platform,
                 setup_lock: Mutex::new(()),
                 startup_reconciled: Mutex::new(false),
@@ -111,13 +162,16 @@ impl QuantixHost {
                 recovery_operation_lock: Mutex::new(()),
                 runtime_layout,
                 process_supervisor: ProcessSupervisor,
+                ordinary_work,
+                update_installation_lease: Mutex::new(None),
                 runtime_preparation: Mutex::new(None),
                 active_parses: Mutex::new(HashMap::new()),
                 active_agent_runs: Mutex::new(HashMap::new()),
-                production_schedulers: Mutex::new(HashSet::new()),
+                production_schedulers: Mutex::new(HashMap::new()),
                 agent_provider: tokio::sync::Mutex::new(None),
                 provider_rate_limit: Mutex::new(None),
                 runtime_verified: AtomicBool::new(false),
+                update_installation_active: AtomicBool::new(false),
             }),
         }
     }
@@ -131,11 +185,43 @@ impl QuantixHost {
     }
 
     pub(crate) fn ensure_setup(&self) -> SetupOutcome {
+        let Ok(_ordinary_work) = self.begin_setup_work() else {
+            return SetupOutcome::blocked(
+                crate::setup::SetupState::RepairRequired,
+                crate::setup::SetupIssue::UpdateInstallationActive,
+            );
+        };
         let _guard = self
             .inner
             .setup_lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let outcome = ensure_application_home(
+            &self.inner.application_home,
+            self.inner.setup_platform.as_ref(),
+        );
+        if matches!(
+            outcome.state,
+            crate::setup::SetupState::Ready | crate::setup::SetupState::Warning
+        ) && crate::update::update_work_is_blocked(&self.inner.application_home)
+        {
+            return SetupOutcome::blocked(
+                crate::setup::SetupState::RepairRequired,
+                crate::setup::SetupIssue::UpdateInstallationActive,
+            );
+        }
+        outcome
+    }
+
+    pub(crate) fn validate_setup_for_update_restart(&self) -> SetupOutcome {
+        let _guard = self
+            .inner
+            .setup_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Restart validation must inspect the same Application Home invariants as Setup,
+        // while intentionally bypassing only the active-update work gate that ordinary
+        // Setup is required to report as UpdateInstallationActive.
         ensure_application_home(
             &self.inner.application_home,
             self.inner.setup_platform.as_ref(),
@@ -143,6 +229,7 @@ impl QuantixHost {
     }
 
     pub(crate) fn reconcile_startup_once(&self) -> Result<(), TenderCommandError> {
+        let _ordinary_work = self.begin_setup_work()?;
         let mut reconciled = self
             .inner
             .startup_reconciled
@@ -245,11 +332,19 @@ impl QuantixHost {
     }
 
     pub(crate) fn claim_production_scheduler(&self, tender_id: &str) -> bool {
-        self.inner
+        let Ok(ordinary_work) = self.begin_ordinary_work() else {
+            return false;
+        };
+        let mut schedulers = self
+            .inner
             .production_schedulers
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(tender_id.to_owned())
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if schedulers.contains_key(tender_id) {
+            return false;
+        }
+        schedulers.insert(tender_id.to_owned(), ordinary_work);
+        true
     }
 
     pub(crate) fn release_production_scheduler(&self, tender_id: &str) {
@@ -269,6 +364,7 @@ impl QuantixHost {
     }
 
     pub(crate) fn begin_runtime_preparation(&self) -> Option<CancellationToken> {
+        let ordinary_work = self.begin_ordinary_work().ok()?;
         let mut preparation = self
             .inner
             .runtime_preparation
@@ -278,7 +374,10 @@ impl QuantixHost {
             return None;
         }
         let cancellation = CancellationToken::new();
-        *preparation = Some(cancellation.clone());
+        *preparation = Some(ActiveRuntimePreparation {
+            cancellation: cancellation.clone(),
+            _ordinary_work: ordinary_work,
+        });
         Some(cancellation)
     }
 
@@ -296,8 +395,8 @@ impl QuantixHost {
             .runtime_preparation
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(cancellation) = preparation.as_ref() {
-            cancellation.cancel();
+        if let Some(preparation) = preparation.as_ref() {
+            preparation.cancellation.cancel();
             true
         } else {
             false
@@ -308,6 +407,7 @@ impl QuantixHost {
         &self,
         key: ParseTargetKey,
     ) -> Result<CancellationToken, TenderCommandError> {
+        let ordinary_work = self.begin_ordinary_work()?;
         let mut active = self
             .inner
             .active_parses
@@ -317,7 +417,13 @@ impl QuantixHost {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
         let cancellation = CancellationToken::new();
-        active.insert(key, cancellation.clone());
+        active.insert(
+            key,
+            ActiveParse {
+                cancellation: cancellation.clone(),
+                _ordinary_work: ordinary_work,
+            },
+        );
         Ok(cancellation)
     }
 
@@ -335,8 +441,8 @@ impl QuantixHost {
             .active_parses
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(cancellation) = active.get(key) {
-            cancellation.cancel();
+        if let Some(parse) = active.get(key) {
+            parse.cancellation.cancel();
             true
         } else {
             false
@@ -348,6 +454,7 @@ impl QuantixHost {
         tender_id: &str,
         production: bool,
     ) -> Result<(String, CancellationToken), TenderCommandError> {
+        let ordinary_work = self.begin_ordinary_work()?;
         let mut active = self
             .inner
             .active_agent_runs
@@ -370,6 +477,7 @@ impl QuantixHost {
                 run_id: None,
                 production,
                 cancellation: cancellation.clone(),
+                _ordinary_work: ordinary_work,
             },
         );
         Ok((lease_id, cancellation))
@@ -435,11 +543,131 @@ impl QuantixHost {
     }
 
     pub(crate) fn require_runtime_verified(&self) -> Result<(), TenderCommandError> {
-        if self.runtime_is_verified() {
+        if self.runtime_is_verified() && !self.update_installation_is_active() {
             Ok(())
         } else {
             Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired))
         }
+    }
+
+    pub(crate) fn begin_ordinary_work(&self) -> Result<OrdinaryWorkLease, TenderCommandError> {
+        if self.update_installation_is_active() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let guard = Arc::clone(&self.inner.ordinary_work)
+            .try_read_owned()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if self.update_installation_is_active() {
+            drop(guard);
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        Ok(OrdinaryWorkLease { _guard: guard })
+    }
+
+    pub(crate) fn begin_setup_work(&self) -> Result<OrdinaryWorkLease, TenderCommandError> {
+        if self
+            .inner
+            .update_installation_active
+            .load(Ordering::Acquire)
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let guard = Arc::clone(&self.inner.ordinary_work)
+            .try_read_owned()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if self
+            .inner
+            .update_installation_active
+            .load(Ordering::Acquire)
+        {
+            drop(guard);
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        Ok(OrdinaryWorkLease { _guard: guard })
+    }
+
+    pub(crate) fn update_installation_is_active(&self) -> bool {
+        self.inner
+            .update_installation_active
+            .load(Ordering::Acquire)
+            || crate::update::update_work_is_blocked(self.application_home())
+    }
+
+    pub(crate) fn claim_update_installation(&self) -> bool {
+        if self
+            .inner
+            .update_installation_active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return false;
+        }
+        let Ok(guard) = Arc::clone(&self.inner.ordinary_work).try_write_owned() else {
+            self.inner
+                .update_installation_active
+                .store(false, Ordering::Release);
+            return false;
+        };
+        let Ok(mut slot) = self.inner.update_installation_lease.lock() else {
+            self.inner
+                .update_installation_active
+                .store(false, Ordering::Release);
+            return false;
+        };
+        if slot.is_some() {
+            self.inner
+                .update_installation_active
+                .store(false, Ordering::Release);
+            return false;
+        }
+        *slot = Some(guard);
+        true
+    }
+
+    pub(crate) fn release_update_installation(&self) {
+        *self
+            .inner
+            .update_installation_lease
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        self.inner
+            .update_installation_active
+            .store(false, Ordering::Release);
+    }
+
+    pub(crate) fn update_installation_lease_is_held(&self) -> bool {
+        self.inner
+            .update_installation_lease
+            .lock()
+            .map(|lease| lease.is_some())
+            .unwrap_or(false)
+    }
+
+    pub(crate) const fn acting_engineer_user(&self) -> &'static str {
+        "engineer_user"
+    }
+
+    pub(crate) fn update_environment_is_quiescent(&self) -> bool {
+        !self.runtime_preparation_is_active()
+            && self
+                .inner
+                .active_parses
+                .lock()
+                .map(|active| active.is_empty())
+                .unwrap_or(false)
+            && self
+                .inner
+                .active_agent_runs
+                .lock()
+                .map(|active| active.is_empty())
+                .unwrap_or(false)
+            && self
+                .inner
+                .production_schedulers
+                .lock()
+                .map(|active| active.is_empty())
+                .unwrap_or(false)
+            && self.inner.recovery_operation_lock.try_lock().is_ok()
     }
 
     #[cfg(any(test, feature = "runtime-fixture"))]

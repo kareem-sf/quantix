@@ -1471,14 +1471,8 @@ impl TenderStore {
                     |row| row.get::<_, bool>(0),
                 )
                 .map_err(sql_error)?;
-        let lifecycle_after = if command.classification == ChangeAssessmentClassification::Material
-            && impact_count == 0
-        {
-            lifecycle_before
-        } else if package_reentry {
+        let lifecycle_after = if package_reentry {
             TenderLifecyclePhase::BidDecision
-        } else if command.classification == ChangeAssessmentClassification::Material {
-            lifecycle_before
         } else {
             lifecycle_before
         };
@@ -1916,17 +1910,11 @@ impl TenderStore {
                     || decision.1.len() > 4_000
                     || decision.4
                         != if classification == ChangeAssessmentClassification::Material
-                            && impacts.is_empty()
-                        {
-                            row.2.as_str()
-                        } else if classification == ChangeAssessmentClassification::Material
                             && impacts
                                 .iter()
                                 .any(|impact| impact.kind == ChangeAssessmentImpactKind::Package)
                         {
                             TenderLifecyclePhase::BidDecision.as_str()
-                        } else if classification == ChangeAssessmentClassification::Material {
-                            row.2.as_str()
                         } else {
                             row.2.as_str()
                         }

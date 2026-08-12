@@ -8,6 +8,7 @@ mod runtime_readiness;
 mod setup;
 mod tender_intake;
 mod tender_store;
+mod update;
 
 pub use agent_runtime::{
     approve_one_run_access, AccessApproval, AccessRequest, AgentAccessRequestStatus,
@@ -141,10 +142,26 @@ pub use tender_store::{
     WorkPlanCapabilityGap, WorkPlanDecision, WorkPlanProfileBinding, WorkPlanProposalInspection,
     WorkPlanRevisionAction, WorkPlanTask, WorkPlanWorkstream,
 };
+pub use update::{
+    current_application_artifact_is_restorable, current_update_platform,
+    run_update_rollback_helper, run_update_rollback_helper_from_args,
+    run_update_rollback_helper_with_launcher, update_platform_from_target,
+    verify_signed_update_artifact, verify_signed_update_candidate, ApplicationRollbackPlan,
+    DecideUpdateCommand, InstallUpdateCommand, InstalledApplicationArtifactKind,
+    InstalledApplicationArtifactSet, SignedArtifactIdentity, UpdateActionCommand, UpdateCandidate,
+    UpdateCommandError, UpdateCompatibilityManifest, UpdateDecision, UpdateDecisionRecord,
+    UpdateDiagnostic, UpdateImpact, UpdateOffer, UpdatePlatform, UpdateReleaseInformation,
+    UpdateState, UpdateStatus,
+};
 
 use tauri::Manager;
 
 mod tauri_commands {
+    use std::sync::Mutex;
+
+    use garde::Validate;
+    use tauri_plugin_updater::UpdaterExt;
+
     use super::{
         ensure_quantix_setup as ensure_setup, ActivateTenderProductionCommand,
         AgentAccessRequestView, AgentRunActivity, AgentRunHistoryPage, AgentRunInspection,
@@ -205,6 +222,256 @@ mod tauri_commands {
         TenderRecordReviewResult, TenderRecoveryRecord, TenderSummary, WorkPlanProposalInspection,
     };
     use tauri_plugin_dialog::DialogExt;
+
+    struct PendingUpdate {
+        update_id: String,
+        public_key: String,
+        update: tauri_plugin_updater::Update,
+    }
+
+    pub(super) struct PendingSignedUpdate(Mutex<Option<PendingUpdate>>);
+
+    impl PendingSignedUpdate {
+        pub(super) fn new() -> Self {
+            Self(Mutex::new(None))
+        }
+    }
+
+    #[tauri::command]
+    pub(super) async fn check_quantix_update<R: tauri::Runtime>(
+        app: tauri::AppHandle<R>,
+        host: tauri::State<'_, QuantixHost>,
+        pending: tauri::State<'_, PendingSignedUpdate>,
+    ) -> Result<crate::UpdateStatus, crate::UpdateCommandError> {
+        host.require_update_ready_setup()?;
+        let release = crate::update::update_release_configuration()?;
+        let update = app
+            .updater_builder()
+            .endpoints(vec![release.endpoint])
+            .map_err(|_| {
+                crate::UpdateCommandError::new(crate::UpdateDiagnostic::UpdaterUnavailable)
+            })?
+            .pubkey(release.public_key.clone())
+            .build()
+            .map_err(|_| {
+                crate::UpdateCommandError::new(crate::UpdateDiagnostic::UpdaterUnavailable)
+            })?
+            .check()
+            .await
+            .map_err(|_| {
+                crate::UpdateCommandError::new(crate::UpdateDiagnostic::UpdaterUnavailable)
+            })?;
+        let Some(update) = update else {
+            return host.inspect_update_status();
+        };
+        let (candidate, manifest_signature) = crate::update::candidate_from_tauri_update(&update)?;
+        crate::verify_signed_update_candidate(
+            &candidate,
+            &manifest_signature,
+            &release.public_key,
+        )?;
+        let status = host.present_update(candidate)?;
+        let update_id = status
+            .offer
+            .as_ref()
+            .map(|offer| offer.update_id.clone())
+            .ok_or_else(|| {
+                crate::UpdateCommandError::new(crate::UpdateDiagnostic::InvalidManifest)
+            })?;
+        *pending.0.lock().map_err(|_| {
+            crate::UpdateCommandError::new(crate::UpdateDiagnostic::UpdaterUnavailable)
+        })? = Some(PendingUpdate {
+            update_id,
+            public_key: release.public_key,
+            update,
+        });
+        Ok(status)
+    }
+
+    #[tauri::command]
+    pub(super) async fn validate_quantix_update_restart<R: tauri::Runtime>(
+        app: tauri::AppHandle<R>,
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<crate::UpdateStatus, crate::UpdateCommandError> {
+        let application_version = app.package_info().version.to_string();
+        let status = host
+            .validate_update_after_restart(&application_version)
+            .await?;
+        Ok(status)
+    }
+
+    #[tauri::command]
+    pub(super) async fn decide_quantix_update(
+        host: tauri::State<'_, QuantixHost>,
+        command: crate::DecideUpdateCommand,
+    ) -> Result<crate::UpdateStatus, crate::UpdateCommandError> {
+        command.validate().map_err(|_| {
+            crate::UpdateCommandError::new(crate::UpdateDiagnostic::InvalidManifest)
+        })?;
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.decide_update(command.update_id, command.decision, command.rationale)
+        })
+        .await
+        .map_err(|_| crate::UpdateCommandError::new(crate::UpdateDiagnostic::UpdaterUnavailable))?
+    }
+
+    #[tauri::command]
+    pub(super) async fn install_quantix_update(
+        host: tauri::State<'_, QuantixHost>,
+        pending: tauri::State<'_, PendingSignedUpdate>,
+        command: crate::InstallUpdateCommand,
+    ) -> Result<crate::UpdateStatus, crate::UpdateCommandError> {
+        command.validate().map_err(|_| {
+            crate::UpdateCommandError::new(crate::UpdateDiagnostic::InvalidManifest)
+        })?;
+        let pending_update = {
+            let mut slot = pending.0.lock().map_err(|_| {
+                crate::UpdateCommandError::new(crate::UpdateDiagnostic::UpdaterUnavailable)
+            })?;
+            if slot
+                .as_ref()
+                .is_none_or(|candidate| candidate.update_id != command.update_id)
+            {
+                return Err(crate::UpdateCommandError::new(
+                    crate::UpdateDiagnostic::UpdaterUnavailable,
+                ));
+            }
+            slot.take().expect("pending update was checked above")
+        };
+        let installing = match host.authorize_update_installation(&command.update_id) {
+            Ok(status) => status,
+            Err(error) => {
+                *pending.0.lock().map_err(|_| {
+                    crate::UpdateCommandError::new(crate::UpdateDiagnostic::UpdaterUnavailable)
+                })? = Some(pending_update);
+                return Err(error);
+            }
+        };
+        if !host.quiesce_agent_provider_for_update().await {
+            let _ = host.cancel_update_installation_authorization(&command.update_id);
+            *pending.0.lock().map_err(|_| {
+                crate::UpdateCommandError::new(crate::UpdateDiagnostic::UpdaterUnavailable)
+            })? = Some(pending_update);
+            return Err(crate::UpdateCommandError::new(
+                crate::UpdateDiagnostic::ActiveWork,
+            ));
+        }
+        let current_version = installing
+            .offer
+            .as_ref()
+            .map(|offer| offer.current_version.clone())
+            .ok_or_else(|| {
+                crate::UpdateCommandError::new(crate::UpdateDiagnostic::InvalidManifest)
+            })?;
+        let artifact_set = match crate::update::installed_application_artifact_for_recovery() {
+            Ok(artifact_set) => artifact_set,
+            Err(error) => {
+                let _ = host.cancel_update_installation_authorization(&command.update_id);
+                *pending.0.lock().map_err(|_| {
+                    crate::UpdateCommandError::new(crate::UpdateDiagnostic::UpdaterUnavailable)
+                })? = Some(pending_update);
+                return Err(error);
+            }
+        };
+        let expected_sha256 = installing
+            .offer
+            .as_ref()
+            .map(|offer| offer.artifact.sha256.clone())
+            .ok_or_else(|| {
+                crate::UpdateCommandError::new(crate::UpdateDiagnostic::InvalidManifest)
+            })?;
+        let bytes = match pending_update.update.download(|_, _| {}, || {}).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let diagnostic = crate::update::updater_download_diagnostic(&error);
+                if diagnostic == crate::UpdateDiagnostic::DownloadFailed {
+                    let _ = host.cancel_update_installation_authorization(&command.update_id);
+                    *pending.0.lock().map_err(|_| {
+                        crate::UpdateCommandError::new(crate::UpdateDiagnostic::UpdaterUnavailable)
+                    })? = Some(pending_update);
+                    return Err(crate::UpdateCommandError::new(diagnostic));
+                }
+                return host.record_update_rejection_before_install(&command.update_id, diagnostic);
+            }
+        };
+        if let Err(error) = crate::verify_signed_update_artifact(
+            &bytes,
+            &pending_update.update.signature,
+            &pending_update.public_key,
+            &expected_sha256,
+        ) {
+            return host
+                .record_update_rejection_before_install(&command.update_id, error.diagnostic);
+        }
+        if host
+            .stage_application_recovery_point(&command.update_id, &current_version, &artifact_set)
+            .is_err()
+        {
+            let _ = host.cancel_update_installation_authorization(&command.update_id);
+            *pending.0.lock().map_err(|_| {
+                crate::UpdateCommandError::new(crate::UpdateDiagnostic::UpdaterUnavailable)
+            })? = Some(pending_update);
+            return Err(crate::UpdateCommandError::new(
+                crate::UpdateDiagnostic::InstallationFailed,
+            ));
+        }
+        if let Err(error) = host.begin_update_installation_after_recovery(&command.update_id) {
+            let _ = host.cancel_update_installation_authorization(&command.update_id);
+            return Err(error);
+        }
+        if pending_update.update.install(bytes).is_err() {
+            let repair = host.record_update_failure(
+                &command.update_id,
+                crate::UpdateDiagnostic::InstallationFailed,
+            )?;
+            let _ = host.restore_application_recovery_point(&command.update_id);
+            return Ok(repair);
+        }
+        // The pinned Tauri updater exits the Windows process during installer handoff.
+        // On platforms where install returns, persist the explicit renderer-driven restart gate.
+        host.record_update_installed(&command.update_id)
+    }
+
+    #[tauri::command]
+    pub(super) async fn restart_quantix_after_update<R: tauri::Runtime>(
+        app: tauri::AppHandle<R>,
+        host: tauri::State<'_, QuantixHost>,
+        command: crate::UpdateActionCommand,
+    ) -> Result<crate::UpdateStatus, crate::UpdateCommandError> {
+        command.validate().map_err(|_| {
+            crate::UpdateCommandError::new(crate::UpdateDiagnostic::InvalidManifest)
+        })?;
+        let status = host.authorize_update_restart(&command.update_id)?;
+        // request_restart delivers Tauri exit/restart events before replacing this process.
+        Ok(super::perform_authorized_update_restart(status, || {
+            app.request_restart()
+        }))
+    }
+
+    #[tauri::command]
+    pub(super) async fn retry_quantix_update_repair<R: tauri::Runtime>(
+        app: tauri::AppHandle<R>,
+        host: tauri::State<'_, QuantixHost>,
+        command: crate::UpdateActionCommand,
+    ) -> Result<crate::UpdateStatus, crate::UpdateCommandError> {
+        command.validate().map_err(|_| {
+            crate::UpdateCommandError::new(crate::UpdateDiagnostic::InvalidManifest)
+        })?;
+        let status = host.inspect_update_status()?;
+        if status
+            .offer
+            .as_ref()
+            .is_none_or(|offer| offer.update_id != command.update_id)
+        {
+            return Err(crate::UpdateCommandError::new(
+                crate::UpdateDiagnostic::InstallationFailed,
+            ));
+        }
+        host.schedule_application_rollback(&command.update_id)?;
+        app.exit(0);
+        Ok(status)
+    }
 
     #[tauri::command]
     pub(super) async fn ensure_quantix_setup(
@@ -1483,112 +1750,129 @@ mod tauri_commands {
     }
 }
 
+pub fn perform_authorized_update_restart(
+    status: UpdateStatus,
+    request_restart: impl FnOnce(),
+) -> UpdateStatus {
+    request_restart();
+    status
+}
+
 pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
-    builder.invoke_handler(tauri::generate_handler![
-        tauri_commands::ensure_quantix_setup,
-        tauri_commands::create_tender,
-        tauri_commands::list_tenders,
-        tauri_commands::open_tender,
-        tauri_commands::inspect_tender_integrity,
-        tauri_commands::create_tender_backup,
-        tauri_commands::inspect_tender_backups,
-        tauri_commands::prepare_tender_recovery,
-        tauri_commands::inspect_tender_recoveries,
-        tauri_commands::resolve_tender_recovery,
-        tauri_commands::revise_tender,
-        tauri_commands::choose_and_import_tender_package,
-        tauri_commands::inspect_document_register,
-        tauri_commands::confirm_source_relationship,
-        tauri_commands::parse_source_artifact,
-        tauri_commands::cancel_source_artifact_parse,
-        tauri_commands::inspect_evidence,
-        tauri_commands::search_evidence,
-        tauri_commands::inspect_runtime_readiness,
-        tauri_commands::repair_runtime_readiness,
-        tauri_commands::cancel_runtime_preparation,
-        tauri_commands::run_bootstrap_agent,
-        tauri_commands::run_tender_record_extraction,
-        tauri_commands::run_tender_record_review,
-        tauri_commands::inspect_tender_records,
-        tauri_commands::create_tender_engineer_entry,
-        tauri_commands::inspect_tender_record_authorities,
-        tauri_commands::decide_tender_record,
-        tauri_commands::create_tender_query,
-        tauri_commands::revise_tender_query,
-        tauri_commands::decide_tender_query_treatment,
-        tauri_commands::inspect_tender_queries,
-        tauri_commands::create_external_rfi_draft,
-        tauri_commands::revise_external_rfi_draft,
-        tauri_commands::inspect_external_rfis,
-        tauri_commands::inspect_external_rfi_eligible_queries,
-        tauri_commands::inspect_external_rfi_response_candidates,
-        tauri_commands::run_external_rfi_review,
-        tauri_commands::approve_external_rfi_for_issue,
-        tauri_commands::export_approved_external_rfi,
-        tauri_commands::register_external_rfi_response,
-        tauri_commands::interpret_external_rfi_response,
-        tauri_commands::propose_boq_calculation_rule,
-        tauri_commands::run_calculation_rule_review,
-        tauri_commands::approve_calculation_rule,
-        tauri_commands::create_calculation_scenario,
-        tauri_commands::run_cost_estimator_calculation,
-        tauri_commands::approve_controlled_boq_calculation_run,
-        tauri_commands::inspect_calculation_workspace,
-        tauri_commands::designate_boq_table,
-        tauri_commands::run_cost_estimator_basis,
-        tauri_commands::run_basis_of_estimate_review,
-        tauri_commands::approve_basis_of_estimate,
-        tauri_commands::inspect_estimate_workspace,
-        tauri_commands::create_priced_cost_baseline,
-        tauri_commands::run_priced_cost_baseline_review,
-        tauri_commands::approve_priced_cost_baseline,
-        tauri_commands::create_pricing_adjustment,
-        tauri_commands::run_pricing_adjustment_review,
-        tauri_commands::approve_pricing_adjustment,
-        tauri_commands::create_commercial_strategy,
-        tauri_commands::approve_commercial_strategy,
-        tauri_commands::create_pricing_scenario,
-        tauri_commands::select_pricing_scenario,
-        tauri_commands::approve_tender_price,
-        tauri_commands::inspect_pricing_workspace,
-        tauri_commands::assemble_coordinated_bid_baseline,
-        tauri_commands::decide_coordinated_bid_baseline,
-        tauri_commands::inspect_coordinated_bid_baselines,
-        tauri_commands::inspect_change_assessments,
-        tauri_commands::decide_change_assessment,
-        tauri_commands::create_bid_decision_package,
-        tauri_commands::inspect_current_bid_decision_package,
-        tauri_commands::compose_tender_office,
-        tauri_commands::inspect_current_work_plan,
-        tauri_commands::revise_work_plan_proposal,
-        tauri_commands::decide_work_plan_proposal,
-        tauri_commands::activate_tender_production,
-        tauri_commands::inspect_tender_production,
-        tauri_commands::run_production_task,
-        tauri_commands::inspect_production_task_review,
-        tauri_commands::approve_production_finding_exception,
-        tauri_commands::decide_bid_decision_package,
-        tauri_commands::inspect_bid_decision_approval_history,
-        tauri_commands::resolve_bid_decision_return_rework,
-        tauri_commands::invalidate_bid_decision_approval,
-        tauri_commands::inspect_compliance_matrix,
-        tauri_commands::inspect_bid_decision_package_records,
-        tauri_commands::run_bid_decision_package_review,
-        tauri_commands::inspect_agent_run_history,
-        tauri_commands::inspect_agent_run,
-        tauri_commands::inspect_agent_run_activity,
-        tauri_commands::request_agent_access,
-        tauri_commands::approve_agent_access,
-        tauri_commands::resolve_agent_access,
-        tauri_commands::resolve_indeterminate_agent_run,
-        tauri_commands::interrupt_agent_run
-    ])
+    builder
+        .manage(tauri_commands::PendingSignedUpdate::new())
+        .invoke_handler(tauri::generate_handler![
+            tauri_commands::ensure_quantix_setup,
+            tauri_commands::check_quantix_update,
+            tauri_commands::validate_quantix_update_restart,
+            tauri_commands::decide_quantix_update,
+            tauri_commands::install_quantix_update,
+            tauri_commands::restart_quantix_after_update,
+            tauri_commands::retry_quantix_update_repair,
+            tauri_commands::create_tender,
+            tauri_commands::list_tenders,
+            tauri_commands::open_tender,
+            tauri_commands::inspect_tender_integrity,
+            tauri_commands::create_tender_backup,
+            tauri_commands::inspect_tender_backups,
+            tauri_commands::prepare_tender_recovery,
+            tauri_commands::inspect_tender_recoveries,
+            tauri_commands::resolve_tender_recovery,
+            tauri_commands::revise_tender,
+            tauri_commands::choose_and_import_tender_package,
+            tauri_commands::inspect_document_register,
+            tauri_commands::confirm_source_relationship,
+            tauri_commands::parse_source_artifact,
+            tauri_commands::cancel_source_artifact_parse,
+            tauri_commands::inspect_evidence,
+            tauri_commands::search_evidence,
+            tauri_commands::inspect_runtime_readiness,
+            tauri_commands::repair_runtime_readiness,
+            tauri_commands::cancel_runtime_preparation,
+            tauri_commands::run_bootstrap_agent,
+            tauri_commands::run_tender_record_extraction,
+            tauri_commands::run_tender_record_review,
+            tauri_commands::inspect_tender_records,
+            tauri_commands::create_tender_engineer_entry,
+            tauri_commands::inspect_tender_record_authorities,
+            tauri_commands::decide_tender_record,
+            tauri_commands::create_tender_query,
+            tauri_commands::revise_tender_query,
+            tauri_commands::decide_tender_query_treatment,
+            tauri_commands::inspect_tender_queries,
+            tauri_commands::create_external_rfi_draft,
+            tauri_commands::revise_external_rfi_draft,
+            tauri_commands::inspect_external_rfis,
+            tauri_commands::inspect_external_rfi_eligible_queries,
+            tauri_commands::inspect_external_rfi_response_candidates,
+            tauri_commands::run_external_rfi_review,
+            tauri_commands::approve_external_rfi_for_issue,
+            tauri_commands::export_approved_external_rfi,
+            tauri_commands::register_external_rfi_response,
+            tauri_commands::interpret_external_rfi_response,
+            tauri_commands::propose_boq_calculation_rule,
+            tauri_commands::run_calculation_rule_review,
+            tauri_commands::approve_calculation_rule,
+            tauri_commands::create_calculation_scenario,
+            tauri_commands::run_cost_estimator_calculation,
+            tauri_commands::approve_controlled_boq_calculation_run,
+            tauri_commands::inspect_calculation_workspace,
+            tauri_commands::designate_boq_table,
+            tauri_commands::run_cost_estimator_basis,
+            tauri_commands::run_basis_of_estimate_review,
+            tauri_commands::approve_basis_of_estimate,
+            tauri_commands::inspect_estimate_workspace,
+            tauri_commands::create_priced_cost_baseline,
+            tauri_commands::run_priced_cost_baseline_review,
+            tauri_commands::approve_priced_cost_baseline,
+            tauri_commands::create_pricing_adjustment,
+            tauri_commands::run_pricing_adjustment_review,
+            tauri_commands::approve_pricing_adjustment,
+            tauri_commands::create_commercial_strategy,
+            tauri_commands::approve_commercial_strategy,
+            tauri_commands::create_pricing_scenario,
+            tauri_commands::select_pricing_scenario,
+            tauri_commands::approve_tender_price,
+            tauri_commands::inspect_pricing_workspace,
+            tauri_commands::assemble_coordinated_bid_baseline,
+            tauri_commands::decide_coordinated_bid_baseline,
+            tauri_commands::inspect_coordinated_bid_baselines,
+            tauri_commands::inspect_change_assessments,
+            tauri_commands::decide_change_assessment,
+            tauri_commands::create_bid_decision_package,
+            tauri_commands::inspect_current_bid_decision_package,
+            tauri_commands::compose_tender_office,
+            tauri_commands::inspect_current_work_plan,
+            tauri_commands::revise_work_plan_proposal,
+            tauri_commands::decide_work_plan_proposal,
+            tauri_commands::activate_tender_production,
+            tauri_commands::inspect_tender_production,
+            tauri_commands::run_production_task,
+            tauri_commands::inspect_production_task_review,
+            tauri_commands::approve_production_finding_exception,
+            tauri_commands::decide_bid_decision_package,
+            tauri_commands::inspect_bid_decision_approval_history,
+            tauri_commands::resolve_bid_decision_return_rework,
+            tauri_commands::invalidate_bid_decision_approval,
+            tauri_commands::inspect_compliance_matrix,
+            tauri_commands::inspect_bid_decision_package_records,
+            tauri_commands::run_bid_decision_package_review,
+            tauri_commands::inspect_agent_run_history,
+            tauri_commands::inspect_agent_run,
+            tauri_commands::inspect_agent_run_activity,
+            tauri_commands::request_agent_access,
+            tauri_commands::approve_agent_access,
+            tauri_commands::resolve_agent_access,
+            tauri_commands::resolve_indeterminate_agent_run,
+            tauri_commands::interrupt_agent_run
+        ])
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     configure_tauri_builder(tauri::Builder::default())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();

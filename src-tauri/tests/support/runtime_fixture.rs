@@ -28,6 +28,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = env::args_os().skip(1).collect::<Vec<_>>();
 
     if arguments.first().and_then(|value| value.to_str()) == Some("--version") {
+        let version_delay = executable.with_extension("version-delay");
+        if version_delay.is_file() {
+            fs::write(executable.with_extension("version-ready"), b"ready")?;
+            let milliseconds = fs::read_to_string(version_delay)?.trim().parse()?;
+            std::thread::sleep(std::time::Duration::from_millis(milliseconds));
+        }
         let version = fs::read_to_string(executable.with_extension("version"))?;
         println!("{tool} {}", version.trim());
         return Ok(());

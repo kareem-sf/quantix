@@ -454,11 +454,17 @@ impl QuantixHost {
         &self,
         command: CreateTenderBackupCommand,
     ) -> Result<TenderBackupRecord, TenderCommandError> {
+        let _ordinary_work = self.begin_ordinary_work()?;
         require_setup(self)?;
         command
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         let tender_id = TenderId::parse(&command.tender_id)?;
+        let budget = StorageOperationBudget::for_tender(&tender_id);
+        let _operation_guard = lock_with_budget(self.recovery_operation_lock(), budget)?;
+        if self.update_installation_is_active() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
         let backup_id = self.installation_identifier()?;
         let created_at = self.installation_timestamp()?;
         let backups_root = self.application_home().join("backups");
@@ -476,7 +482,6 @@ impl QuantixHost {
             diagnostic_code: None,
             created_at: created_at.clone(),
         })?;
-        let budget = StorageOperationBudget::for_tender(&tender_id);
         let result = (|| {
             budget.check()?;
             let report = self.inspect_tender_integrity_with_check(&tender_id, || budget.check())?;
@@ -537,6 +542,13 @@ impl QuantixHost {
     ) -> Result<Vec<TenderBackupRecord>, TenderCommandError> {
         require_setup(self)?;
         let tender_id = TenderId::parse(tender_id)?;
+        self.inspect_tender_backups_for_update(&tender_id)
+    }
+
+    pub(crate) fn inspect_tender_backups_for_update(
+        &self,
+        tender_id: &TenderId,
+    ) -> Result<Vec<TenderBackupRecord>, TenderCommandError> {
         let _guard = self
             .catalogue_lock()
             .lock()
@@ -602,10 +614,34 @@ impl QuantixHost {
         Ok(records)
     }
 
+    pub(crate) fn has_exact_verified_backup_for_update(
+        &self,
+        tender_id: &TenderId,
+        expected_source: &TenderSummary,
+    ) -> Result<bool, TenderCommandError> {
+        let records = self.inspect_tender_backups_for_update(tender_id)?;
+        let budget = StorageOperationBudget::for_tender(tender_id);
+        for record in records.into_iter().filter(|record| {
+            record.state == TenderBackupState::Ready
+                && record.source.as_ref() == Some(expected_source)
+        }) {
+            budget.check()?;
+            let archive = self
+                .application_home()
+                .join("backups")
+                .join(format!("{}.qtbackup", record.backup_id));
+            if bind_verified_backup_archive(&archive, tender_id, &record, budget).is_ok() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub fn prepare_tender_recovery(
         &self,
         command: PrepareTenderRecoveryCommand,
     ) -> Result<TenderRecoveryRecord, TenderCommandError> {
+        let _ordinary_work = self.begin_ordinary_work()?;
         require_setup(self)?;
         command
             .validate()
@@ -616,6 +652,9 @@ impl QuantixHost {
         }
         let budget = StorageOperationBudget::for_tender(&tender_id);
         let _operation_guard = lock_with_budget(self.recovery_operation_lock(), budget)?;
+        if self.update_installation_is_active() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
         let backup = self
             .inspect_tender_backups(tender_id.as_str())?
             .into_iter()
@@ -794,6 +833,7 @@ impl QuantixHost {
         &self,
         command: ResolveTenderRecoveryCommand,
     ) -> Result<TenderRecoveryRecord, TenderCommandError> {
+        let _ordinary_work = self.begin_ordinary_work()?;
         require_setup(self)?;
         command
             .validate()
@@ -804,6 +844,9 @@ impl QuantixHost {
         }
         let budget = StorageOperationBudget::for_tender(&tender_id);
         let _operation_guard = lock_with_budget(self.recovery_operation_lock(), budget)?;
+        if self.update_installation_is_active() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
         let record = self
             .inspect_tender_recoveries(tender_id.as_str())?
             .into_iter()

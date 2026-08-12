@@ -199,6 +199,9 @@ button {
 }
 
 .status-indicator--warning,
+.status-indicator--awaiting_approval,
+.status-indicator--approved,
+.status-indicator--denied,
 .status-indicator--missing_executable,
 .status-indicator--missing_model,
 .status-indicator--interrupted_preparation,
@@ -210,6 +213,7 @@ button {
 }
 
 .status-indicator--repair_required,
+.status-indicator--rejected,
 .status-indicator--incompatible_version,
 .status-indicator--error {
   background: #d43f45;
@@ -312,6 +316,68 @@ button {
   width: min(1180px, calc(100% - 96px));
   margin: 0 auto;
   padding: 18px 0 88px;
+}
+
+.update-office {
+  display: grid;
+  gap: 1rem;
+  margin: 0 auto 2rem;
+  max-width: 1180px;
+  padding: 0 1.5rem;
+}
+
+.update-evidence {
+  display: grid;
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.update-evidence > div {
+  border-top: 1px solid #d8deea;
+  display: grid;
+  gap: 0.25rem;
+  padding-top: 0.75rem;
+}
+
+.update-evidence dt {
+  color: #596680;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.update-evidence dd {
+  margin: 0;
+}
+
+.mono-value {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.update-actions label,
+.update-actions p {
+  flex-basis: 100%;
+}
+
+.update-actions label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 700;
+}
+
+.update-actions textarea {
+  box-sizing: border-box;
+  min-height: 6rem;
+  resize: vertical;
+  width: 100%;
 }
 
 .runtime-office__heading {

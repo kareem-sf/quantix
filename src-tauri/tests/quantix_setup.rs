@@ -296,7 +296,7 @@ fn newer_installation_catalogue_requires_a_supported_quantix_version() {
     let catalogue = rusqlite::Connection::open(application_home.join("installation.sqlite"))
         .expect("installation catalogue");
     catalogue
-        .execute_batch("PRAGMA user_version = 6;")
+        .execute_batch("PRAGMA user_version = 9;")
         .expect("newer schema marker");
     drop(catalogue);
     let inspection_host =
@@ -308,6 +308,40 @@ fn newer_installation_catalogue_requires_a_supported_quantix_version() {
     assert_eq!(
         outcome.issues,
         vec![SetupIssue::UnsupportedInstallationVersion]
+    );
+}
+
+#[test]
+fn older_installation_catalogue_is_rejected_without_a_compatibility_migration() {
+    let parent = tempfile::tempdir().expect("temporary user home");
+    let application_home = parent.path().join(".quantix");
+    let host = host(&application_home, FakeSetupPlatform::default());
+    assert!(ensure_quantix_setup(&host).setup_performed);
+
+    let catalogue = rusqlite::Connection::open(application_home.join("installation.sqlite"))
+        .expect("installation catalogue");
+    catalogue
+        .execute_batch("PRAGMA user_version = 7;")
+        .expect("older schema marker");
+    drop(catalogue);
+
+    let outcome = ensure_quantix_setup(&QuantixHost::with_setup_platform(
+        &application_home,
+        Arc::new(NoStorageProbePlatform),
+    ));
+    assert_eq!(outcome.state, SetupState::RepairRequired);
+    assert_eq!(
+        outcome.issues,
+        vec![SetupIssue::InstallationCatalogueCorrupt]
+    );
+    let catalogue = rusqlite::Connection::open(application_home.join("installation.sqlite"))
+        .expect("reopen rejected catalogue");
+    assert_eq!(
+        catalogue
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .expect("read unchanged older schema marker"),
+        7,
+        "Setup must not add a compatibility migration"
     );
 }
 

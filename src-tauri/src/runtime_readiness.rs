@@ -21,9 +21,9 @@ use crate::{
 };
 
 const UV_VERSION: &str = "0.12.2";
-const DOCLING_VERSION: &str = "2.118.0";
+pub(crate) const DOCLING_VERSION: &str = "2.118.0";
 const PYTHON_VERSION: &str = "3.12.13";
-const RUNTIME_PROVENANCE_SCHEMA: u32 = 2;
+pub(crate) const RUNTIME_PROVENANCE_SCHEMA: u32 = 2;
 const DOCLING_MANIFEST_SCHEMA: u32 = 2;
 const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 const ENVIRONMENT_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
@@ -271,11 +271,53 @@ impl Drop for RuntimePreparationGuard {
 
 impl QuantixHost {
     pub async fn inspect_runtime_readiness(&self) -> RuntimeReadiness {
+        if self.update_installation_is_active() {
+            return RuntimeReadiness::state(
+                RuntimeReadinessState::Preparing,
+                RuntimeReadinessIssue::RuntimePreparationActive,
+            );
+        }
+        let Ok(_ordinary_work) = self.begin_ordinary_work() else {
+            return RuntimeReadiness::state(
+                RuntimeReadinessState::Preparing,
+                RuntimeReadinessIssue::RuntimePreparationActive,
+            );
+        };
+        // Public inspection must revalidate the managed runtime every time so
+        // filesystem drift and hostile links cannot be hidden by a prior Ready
+        // result. The fixture-only verified shortcut belongs solely to the
+        // post-update validation seam below.
         self.set_runtime_verified(false);
         if !matches!(
             self.ensure_setup().state,
             SetupState::Ready | SetupState::Warning
         ) {
+            return RuntimeReadiness::state(
+                RuntimeReadinessState::RepairRequired,
+                RuntimeReadinessIssue::SetupIncomplete,
+            );
+        }
+        self.inspect_runtime_readiness_for_update().await
+    }
+
+    pub(crate) async fn inspect_runtime_readiness_for_update(&self) -> RuntimeReadiness {
+        #[cfg(feature = "runtime-fixture")]
+        if self.runtime_is_verified() {
+            return RuntimeReadiness {
+                state: RuntimeReadinessState::Ready,
+                issues: Vec::new(),
+                codex_version: Some(CODEX_VERSION.to_owned()),
+                uv_version: Some(UV_VERSION.to_owned()),
+                docling_version: Some(DOCLING_VERSION.to_owned()),
+                repair_available: false,
+            };
+        }
+        self.set_runtime_verified(false);
+        if !self
+            .application_home()
+            .join("installation.sqlite")
+            .is_file()
+        {
             return RuntimeReadiness::state(
                 RuntimeReadinessState::RepairRequired,
                 RuntimeReadinessIssue::SetupIncomplete,

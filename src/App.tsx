@@ -6,6 +6,7 @@ import type { SetupState } from "./bindings/SetupState";
 import { ensureQuantixSetup } from "./quantixHost";
 import { RuntimeReadinessPanel } from "./RuntimeReadinessPanel";
 import { TenderWorkspace } from "./TenderWorkspace";
+import { UpdatePanel } from "./UpdatePanel";
 import "./App.css";
 
 type SetupView =
@@ -65,15 +66,19 @@ const issueCopy: Record<SetupIssue, string> = {
     "Local storage permissions allow access beyond the current Engineer.",
   unsupported_installation_version:
     "Install a compatible Quantix version to use this Application Home.",
+  update_installation_active:
+    "Finish or repair the active Quantix update before using this Application Home.",
 };
 
 function App() {
   const [setup, setSetup] = useState<SetupView>({ kind: "checking" });
   const [runtimeReady, setRuntimeReady] = useState(false);
+  const [updateWorkAvailable, setUpdateWorkAvailable] = useState(false);
 
   const runSetup = useCallback(async () => {
     setSetup({ kind: "checking" });
     setRuntimeReady(false);
+    setUpdateWorkAvailable(false);
 
     try {
       setSetup({ kind: "outcome", outcome: await ensureQuantixSetup() });
@@ -86,8 +91,16 @@ function App() {
     void runSetup();
   }, [runSetup]);
 
+  const completeUpdateRecovery = useCallback(() => {
+    void runSetup();
+  }, [runSetup]);
+
   const outcome = setup.kind === "outcome" ? setup.outcome : undefined;
   const copy = outcome ? stateCopy[outcome.state] : undefined;
+  const setupReady = outcome?.state === "ready" || outcome?.state === "warning";
+  const updateRecoveryRequired =
+    outcome?.state === "repair_required" &&
+    outcome.issues.includes("update_installation_active");
 
   return (
     <div className="app-shell">
@@ -167,12 +180,21 @@ function App() {
         </section>
       </main>
 
-      {outcome && (outcome.state === "ready" || outcome.state === "warning") ? (
+      {setupReady ? (
         <RuntimeReadinessPanel onReadyChange={setRuntimeReady} />
       ) : null}
 
-      {outcome && (outcome.state === "ready" || outcome.state === "warning") ? (
-        <TenderWorkspace runtimeReady={runtimeReady} />
+      {setupReady || updateRecoveryRequired ? (
+        <UpdatePanel
+          onWorkAvailabilityChange={setUpdateWorkAvailable}
+          onTerminalState={
+            updateRecoveryRequired ? completeUpdateRecovery : undefined
+          }
+        />
+      ) : null}
+
+      {setupReady ? (
+        <TenderWorkspace runtimeReady={runtimeReady && updateWorkAvailable} />
       ) : null}
 
       <div className="structural-rail" aria-hidden="true" />

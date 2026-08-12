@@ -1,9 +1,11 @@
 use std::{fs, io, path::Path, sync::Arc, time::Duration};
 
 use quantix_lib::{
-    configure_tauri_builder, ensure_quantix_setup, DeviceProtection, QuantixHost, RuntimeLayout,
-    RuntimeReadinessIssue, RuntimeReadinessState, SetupPlatform, SetupState, StoragePermissions,
-    MINIMUM_SETUP_FREE_SPACE_BYTES,
+    configure_tauri_builder, current_update_platform, ensure_quantix_setup, DeviceProtection,
+    QuantixHost, RuntimeLayout, RuntimeReadinessIssue, RuntimeReadinessState, SetupPlatform,
+    SetupState, SignedArtifactIdentity, StoragePermissions, UpdateCandidate,
+    UpdateCompatibilityManifest, UpdateDecision, UpdateDiagnostic, UpdateImpact,
+    UpdateReleaseInformation, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use sha2::{Digest, Sha256};
 use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
@@ -120,6 +122,34 @@ impl RuntimeHarness {
     fn write_plan(&self, plan: &str) {
         fs::write(self.runtime_bin.join("codex.plan"), format!("{plan}\n"))
             .expect("write Codex plan");
+    }
+}
+
+fn application_only_update() -> UpdateCandidate {
+    UpdateCandidate {
+        current_version: "0.1.0".into(),
+        version: "0.2.0".into(),
+        platform: current_update_platform().expect("supported test platform"),
+        artifact: SignedArtifactIdentity {
+            sha256: "a".repeat(64),
+            signature_sha256: "b".repeat(64),
+        },
+        compatibility: UpdateCompatibilityManifest {
+            installation_schema_version: 8,
+            tender_schema_version: 21,
+            codex_version: "0.147.0".into(),
+            docling_version: "2.118.0".into(),
+            runtime_manifest_schema_version: 2,
+        },
+        release: UpdateReleaseInformation {
+            published_at: "2026-08-12T10:00:00Z".into(),
+            title: "Quantix 0.2.0".into(),
+            notes: "Application-only update".into(),
+        },
+        impact: UpdateImpact {
+            summary: "Application-only update".into(),
+            stored_data_may_change: false,
+        },
     }
 }
 
@@ -285,6 +315,63 @@ async fn readiness_reports_each_engineer_actionable_runtime_state() {
         ]
     );
     assert!(!missing_bundled_tools.repair_available);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn in_flight_runtime_probe_holds_the_global_ordinary_work_lease_until_children_exit() {
+    let harness = RuntimeHarness::new();
+    let offered = harness
+        .host
+        .present_update(application_only_update())
+        .expect("present exact update");
+    let update_id = offered.offer.expect("offer identity").update_id;
+    harness
+        .host
+        .decide_update(
+            update_id.clone(),
+            UpdateDecision::Approve,
+            "Approve only after every readiness child exits".into(),
+        )
+        .expect("approve exact update");
+    fs::write(harness.runtime_bin.join("codex.version-delay"), "5000\n")
+        .expect("delay the public Codex version readiness seam");
+    let probe_ready = harness.runtime_bin.join("codex.version-ready");
+
+    let probing_host = harness.host.clone();
+    let probe = tokio::spawn(async move { probing_host.inspect_runtime_readiness().await });
+    for _ in 0..500 {
+        if probe_ready.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(probe_ready.exists(), "the child readiness probe started");
+
+    let resources = harness
+        .runtime_bin
+        .parent()
+        .and_then(Path::parent)
+        .expect("runtime resource root");
+    let contender = QuantixHost::with_setup_platform_and_runtime(
+        &harness.application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(resources),
+    );
+    assert_eq!(ensure_quantix_setup(&contender).state, SetupState::Ready);
+    assert_eq!(
+        contender
+            .authorize_update_installation(&update_id)
+            .expect_err("update installation cannot race a spawned readiness child")
+            .diagnostic,
+        UpdateDiagnostic::ActiveWork
+    );
+
+    let readiness = probe.await.expect("readiness task completed");
+    assert_eq!(
+        readiness.state,
+        RuntimeReadinessState::MissingExecutable,
+        "the fixture still reports missing Docling after its retained-lease probe"
+    );
 }
 
 #[tokio::test]

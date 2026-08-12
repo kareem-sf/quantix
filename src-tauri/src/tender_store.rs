@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     io::Read,
+    ops::Deref,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
@@ -29,7 +30,7 @@ use crate::tender_intake::{
     ImportTenderPackageCommand, IntakeExceptionCode, PreparedIntake, RegistrationState,
     SupersessionState, TenderPackageImportResult,
 };
-use crate::{setup::SetupState, QuantixHost};
+use crate::{host::OrdinaryWorkLease, setup::SetupState, QuantixHost};
 
 mod agent_records;
 pub(crate) mod backups;
@@ -173,7 +174,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const TENDER_SCHEMA_VERSION: i64 = 21;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 21;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -5143,11 +5144,25 @@ impl TenderStore {
 
 pub(crate) type OpenTenderStores = Mutex<HashMap<TenderId, Arc<Mutex<TenderStore>>>>;
 
+pub(crate) struct TenderStoreLease {
+    store: Arc<Mutex<TenderStore>>,
+    _ordinary_work: OrdinaryWorkLease,
+}
+
+impl Deref for TenderStoreLease {
+    type Target = Arc<Mutex<TenderStore>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.store
+    }
+}
+
 impl QuantixHost {
     pub fn create_tender(
         &self,
         command: CreateTenderCommand,
     ) -> Result<TenderSummary, TenderCommandError> {
+        let _ordinary_work = self.begin_ordinary_work()?;
         self.require_runtime_verified()?;
         require_setup(self)?;
         command
@@ -5316,6 +5331,7 @@ impl QuantixHost {
         &self,
         tender_id: &str,
     ) -> Result<TenderIntegrityReport, TenderCommandError> {
+        let _ordinary_work = self.begin_ordinary_work()?;
         require_setup(self)?;
         let tender_id = TenderId::parse(tender_id)?;
         self.inspect_tender_integrity_with_check(&tender_id, || Ok(()))
@@ -5393,6 +5409,7 @@ impl QuantixHost {
     }
 
     pub fn list_tenders(&self) -> Result<Vec<TenderCatalogueEntry>, TenderCommandError> {
+        let _ordinary_work = self.begin_ordinary_work()?;
         require_setup(self)?;
         let mut catalogue = Vec::new();
         let mut verified_summaries = Vec::new();
@@ -5443,10 +5460,93 @@ impl QuantixHost {
         Ok(catalogue)
     }
 
+    pub(crate) fn all_tender_integrity_ready_for_update(&self) -> Result<bool, TenderCommandError> {
+        if !self
+            .application_home()
+            .join("installation.sqlite")
+            .is_file()
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::SetupRequired));
+        }
+        let entries =
+            fs::read_dir(self.application_home().join("tenders")).map_err(store_unavailable)?;
+        for entry in entries {
+            let entry = entry.map_err(store_unavailable)?;
+            let tender_id = entry
+                .file_name()
+                .to_str()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                .and_then(|value| {
+                    TenderId::parse(value)
+                        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                })?;
+            let metadata = fs::symlink_metadata(entry.path()).map_err(store_unavailable)?;
+            if metadata_is_unsafe_storage_link(&metadata) || !metadata.is_dir() {
+                return Ok(false);
+            }
+            let integrity = self.inspect_tender_integrity_with_check(&tender_id, || Ok(()))?;
+            if integrity.state != TenderIntegrityState::Ready {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    pub(crate) fn tender_summaries_for_update(
+        &self,
+    ) -> Result<Vec<TenderSummary>, TenderCommandError> {
+        if !self
+            .application_home()
+            .join("installation.sqlite")
+            .is_file()
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::SetupRequired));
+        }
+        let mut summaries = Vec::new();
+        let entries =
+            fs::read_dir(self.application_home().join("tenders")).map_err(store_unavailable)?;
+        for entry in entries {
+            let entry = entry.map_err(store_unavailable)?;
+            let tender_id = entry
+                .file_name()
+                .to_str()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                .and_then(|value| {
+                    TenderId::parse(value)
+                        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                })?;
+            let root = entry.path();
+            let metadata = fs::symlink_metadata(&root).map_err(store_unavailable)?;
+            if metadata_is_unsafe_storage_link(&metadata) || !metadata.is_dir() {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            let integrity = self.inspect_tender_integrity_with_check(&tender_id, || Ok(()))?;
+            if integrity.state != TenderIntegrityState::Ready {
+                return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
+            }
+            let cached = self
+                .open_tender_stores()
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                .get(&tender_id)
+                .cloned();
+            let summary = match cached {
+                Some(store) => store
+                    .lock()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                    .summary()?,
+                None => TenderStore::open(&root, &tender_id)?.summary()?,
+            };
+            summaries.push(summary);
+        }
+        summaries.sort_by(|left, right| left.tender_id.cmp(&right.tender_id));
+        Ok(summaries)
+    }
+
     pub(crate) fn tender_store(
         &self,
         tender_id: &TenderId,
-    ) -> Result<Arc<Mutex<TenderStore>>, TenderCommandError> {
+    ) -> Result<TenderStoreLease, TenderCommandError> {
         self.tender_store_with_check(tender_id, &mut || Ok(()))
     }
 
@@ -5454,14 +5554,18 @@ impl QuantixHost {
         &self,
         tender_id: &TenderId,
         check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
-    ) -> Result<Arc<Mutex<TenderStore>>, TenderCommandError> {
+    ) -> Result<TenderStoreLease, TenderCommandError> {
+        let ordinary_work = self.begin_ordinary_work()?;
         let recovery_required = lock_mutex_with_check(self.recovery_required_tenders(), check)?;
         if recovery_required.contains(tender_id) {
             return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
         }
         let mut stores = lock_mutex_with_check(self.open_tender_stores(), check)?;
         if let Some(store) = stores.get(tender_id) {
-            return Ok(Arc::clone(store));
+            return Ok(TenderStoreLease {
+                store: Arc::clone(store),
+                _ordinary_work: ordinary_work,
+            });
         }
 
         let root = self
@@ -5471,7 +5575,10 @@ impl QuantixHost {
         let store = Arc::new(Mutex::new(TenderStore::open(&root, tender_id)?));
         check()?;
         stores.insert(tender_id.clone(), Arc::clone(&store));
-        Ok(store)
+        Ok(TenderStoreLease {
+            store,
+            _ordinary_work: ordinary_work,
+        })
     }
 
     fn mark_tender_recovery_required(&self, tender_id: &TenderId) {

@@ -1945,6 +1945,14 @@ impl QuantixHost {
         }
     }
 
+    pub(crate) async fn quiesce_agent_provider_for_update(&self) -> bool {
+        let provider = self.agent_provider().lock().await.take();
+        match provider {
+            Some(provider) => provider.shutdown().await.is_ok(),
+            None => true,
+        }
+    }
+
     async fn try_inspect_codex_subscription(
         &self,
         cancellation: CancellationToken,

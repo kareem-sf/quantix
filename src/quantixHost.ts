@@ -156,9 +156,54 @@ import type { CoordinatedBidBaselineDecision } from "./bindings/CoordinatedBidBa
 import type { CoordinatedBidBaselinePage } from "./bindings/CoordinatedBidBaselinePage";
 import type { DecideCoordinatedBidBaselineCommand } from "./bindings/DecideCoordinatedBidBaselineCommand";
 import type { InspectCoordinatedBidBaselinesCommand } from "./bindings/InspectCoordinatedBidBaselinesCommand";
+import type { DecideUpdateCommand } from "./bindings/DecideUpdateCommand";
+import type { InstallUpdateCommand } from "./bindings/InstallUpdateCommand";
+import type { UpdateActionCommand } from "./bindings/UpdateActionCommand";
+import type { UpdateDecision } from "./bindings/UpdateDecision";
+import type { UpdateStatus } from "./bindings/UpdateStatus";
 
 export function ensureQuantixSetup(): Promise<SetupOutcome> {
   return invoke<SetupOutcome>("ensure_quantix_setup");
+}
+
+export function checkQuantixUpdate(): Promise<UpdateStatus> {
+  return invoke<UpdateStatus>("check_quantix_update");
+}
+
+export function validateQuantixUpdateRestart(): Promise<UpdateStatus> {
+  return invoke<UpdateStatus>("validate_quantix_update_restart");
+}
+
+export function decideQuantixUpdate(
+  updateId: string,
+  decision: UpdateDecision,
+  rationale: string,
+): Promise<UpdateStatus> {
+  const command: DecideUpdateCommand = {
+    update_id: updateId,
+    decision,
+    rationale,
+  };
+  return invoke<UpdateStatus>("decide_quantix_update", { command });
+}
+
+export function restartQuantixAfterUpdate(
+  updateId: string,
+): Promise<UpdateStatus> {
+  const command: UpdateActionCommand = { update_id: updateId };
+  return invoke<UpdateStatus>("restart_quantix_after_update", { command });
+}
+
+export function retryQuantixUpdateRepair(
+  updateId: string,
+): Promise<UpdateStatus> {
+  const command: UpdateActionCommand = { update_id: updateId };
+  return invoke<UpdateStatus>("retry_quantix_update_repair", { command });
+}
+
+export function installQuantixUpdate(updateId: string): Promise<UpdateStatus> {
+  const command: InstallUpdateCommand = { update_id: updateId };
+  return invoke<UpdateStatus>("install_quantix_update", { command });
 }
 
 export function inspectRuntimeReadiness(): Promise<RuntimeReadiness> {
