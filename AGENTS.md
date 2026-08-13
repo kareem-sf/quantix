@@ -39,6 +39,12 @@ Domain documentation uses the single-context layout. See `docs/agents/domain.md`
 - Check formatting without changing files: `npm run format:check`
 - Run TypeScript typechecking and Rust clippy: `npm run check`
 - Run deterministic tests and regenerate Rust-owned TypeScript DTOs: `npm test`
+- Record deterministic product acceptance from a command file: `npm run acceptance:deterministic -- <application-home> <command.json>`
+- Aggregate deterministic Product Acceptance Runs: `npm run acceptance:aggregate -- <application-home> <source-revision>`
+- Record one opted-in local live-provider run: `npm run acceptance:live -- <application-home> <command.json>`
+- Aggregate five clean private Windows runs: `npm run acceptance:private -- <application-home> <release-candidate-sha256>`
+- Validate native package evidence: `npm run acceptance:native -- <application-home> <native-command.json>`
+- Evaluate aggregate public release acceptance: `npm run acceptance:release -- <application-home> <gate-command.json>`
 - Check the Engineer's existing Codex login locally (explicit opt-in): `npm run smoke:codex`
 - Build the production renderer: `npm run build`
 - Build the native desktop package: `npm run build:desktop`

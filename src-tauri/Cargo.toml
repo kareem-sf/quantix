@@ -24,6 +24,12 @@ required-features = ["runtime-fixture"]
 test = false
 bench = false
 
+[[bin]]
+name = "quantix-product-acceptance"
+path = "src/bin/product_acceptance.rs"
+test = false
+bench = false
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]

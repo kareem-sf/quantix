@@ -1,0 +1,29 @@
+{
+  "oracle_id": "quantix-acceptance-oracle-v1",
+  "fixture_id": "quantix-acceptance-tender-v1",
+  "critical_facts": ["REQ-001", "REQ-002", "ADD-01", "ADD-02", "deadline", "FORM-BID", "FORM-BOQ", "submission_instructions"],
+  "non_critical_facts": ["REQ-003", "REQ-004", "FORM-POWER-OF-ATTORNEY", "FORM-DECLARATIONS", "Q-001"],
+  "boq_rows": ["CIV-001", "ARC-008", "MEP-014"],
+  "expected_calculations": {
+    "CIV-001": "7770000.00",
+    "ARC-008": "5920000.00",
+    "MEP-014": "10800000.00",
+    "subtotal": "24490000.00",
+    "risk_allowance": "612250.00",
+    "commercial_adjustment": "-183675.00",
+    "tender_total": "24918575.00"
+  },
+  "material_claim_provenance_required": true,
+  "required_approvals": ["bid_decision", "work_plan", "coordinated_bid_baseline", "tender_price", "final_approval"],
+  "release_copy_paths": ["technical/technical-submission.docx", "commercial/priced-boq.xlsx"],
+  "safety_cases": ["prompt_injection", "unsafe_archive_entry", "provider_crash", "provider_timeout", "output_flood", "disk_limit", "interruption_recovery", "external_edit"],
+  "accepted_outcomes": {
+    "critical_recall_percent": "100.00",
+    "unsupported_critical_count": 0,
+    "boq_accounting_percent": "100.00",
+    "calculation_reproduction_percent": "100.00",
+    "material_provenance_percent": "100.00",
+    "minimum_non_critical_recall_percent": "95.00",
+    "hard_gate_violations": 0
+  }
+}
