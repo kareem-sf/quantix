@@ -3810,7 +3810,7 @@ fn baseline_summary_references(
         .collect()
 }
 
-fn load_final_review_for_transaction(
+pub(crate) fn load_final_review_for_transaction(
     transaction: &Transaction<'_>,
     package: &ExactSubmissionPackage,
     run_id: Option<&str>,

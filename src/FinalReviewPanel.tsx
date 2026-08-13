@@ -3,10 +3,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FinalReviewInspection } from "./bindings/FinalReviewInspection";
 import type { ManualVerificationResult } from "./bindings/ManualVerificationResult";
 import type { SubmissionPackageVersion } from "./bindings/SubmissionPackageVersion";
+import type { SubmissionReleaseInspection } from "./bindings/SubmissionReleaseInspection";
 import {
   approvePackageFindingException,
+  approveSubmissionRelease,
+  exportReleaseCopy,
   inspectCurrentSubmissionPackage,
   inspectFinalReview,
+  inspectSubmissionRelease,
   recordPackageManualVerification,
   runPackageValidation,
   runSubmissionSectionReview,
@@ -34,7 +38,13 @@ export function FinalReviewPanel({
   const [submissionPackage, setSubmissionPackage] =
     useState<SubmissionPackageVersion | null>(null);
   const [review, setReview] = useState<FinalReviewInspection | null>(null);
+  const [release, setRelease] = useState<SubmissionReleaseInspection | null>(
+    null,
+  );
   const [busy, setBusy] = useState(false);
+  const [releaseRationale, setReleaseRationale] = useState("");
+  const [releaseConditions, setReleaseConditions] = useState("");
+  const [releaseExceptions, setReleaseExceptions] = useState("");
   const [manualOutcomes, setManualOutcomes] = useState<
     Record<string, ManualVerificationResult | "">
   >({});
@@ -53,9 +63,13 @@ export function FinalReviewPanel({
         inspectCurrentSubmissionPackage(tenderId),
         inspectFinalReview(tenderId),
       ]);
+      const releaseInspection = inspected
+        ? await inspectSubmissionRelease(tenderId)
+        : null;
       if (request !== requestGeneration.current) return;
       setSubmissionPackage(assembled);
       setReview(inspected);
+      setRelease(releaseInspection);
     } catch {
       if (request === requestGeneration.current) reportCommandFailure();
     }
@@ -74,6 +88,23 @@ export function FinalReviewPanel({
     try {
       const inspected = await action();
       setReview(inspected);
+      onTenderStateChange();
+    } catch {
+      reportCommandFailure();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function actOnRelease(
+    action: () => Promise<SubmissionReleaseInspection>,
+  ) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const inspected = await action();
+      setRelease(inspected);
+      setReview(inspected.final_review);
       onTenderStateChange();
     } catch {
       reportCommandFailure();
@@ -509,6 +540,126 @@ export function FinalReviewPanel({
             Changes:{" "}
             {review.live_changes.filter((change) => !change.current).length}
           </p>
+
+          <h3>Final Approval and Release Copy</h3>
+          {release?.approval ? (
+            <>
+              <p role="status">
+                {release.state === "ready_for_submission"
+                  ? "Ready for Submission"
+                  : "Final Approval revoked by a changed release condition"}
+              </p>
+              <p>
+                Approved by {release.approval.engineer_identity} as{" "}
+                {humanize(release.approval.acting_role)} ·{" "}
+                <code>{release.approval.canonical_manifest_root}</code>
+              </p>
+              {release.approval.conditions.length ? (
+                <ul aria-label="Final Approval conditions">
+                  {release.approval.conditions.map((condition) => (
+                    <li key={condition}>{condition}</li>
+                  ))}
+                </ul>
+              ) : null}
+              {release.approval.exceptions.length ? (
+                <ul aria-label="Final Approval exceptions">
+                  {release.approval.exceptions.map((exception) => (
+                    <li key={exception}>{exception}</li>
+                  ))}
+                </ul>
+              ) : null}
+              <button
+                type="button"
+                disabled={busy || release.state !== "ready_for_submission"}
+                onClick={() =>
+                  void actOnRelease(() =>
+                    exportReleaseCopy({
+                      tender_id: tenderId,
+                      approval_id: release.approval!.approval_id,
+                      approval_manifest_sha256:
+                        release.approval!.manifest_sha256,
+                    }),
+                  )
+                }
+              >
+                Export and verify Release Copy
+              </button>
+              {release.exports.map((exportRecord) => (
+                <p key={exportRecord.export_id}>
+                  Verified Release Copy: {exportRecord.relative_path} ·{" "}
+                  {exportRecord.items.length} exact file
+                  {exportRecord.items.length === 1 ? "" : "s"} · no submission
+                  claimed
+                </p>
+              ))}
+            </>
+          ) : (
+            <fieldset>
+              <legend>Atomic Tendering Manager decision</legend>
+              <label>
+                Approval rationale
+                <textarea
+                  value={releaseRationale}
+                  disabled={busy || !exactCurrent || !review.ready}
+                  onChange={(event) => setReleaseRationale(event.target.value)}
+                />
+              </label>
+              <label>
+                Conditions (one per line)
+                <textarea
+                  value={releaseConditions}
+                  disabled={busy || !exactCurrent || !review.ready}
+                  onChange={(event) => setReleaseConditions(event.target.value)}
+                />
+              </label>
+              <label>
+                Approved exceptions (one per line)
+                <textarea
+                  value={releaseExceptions}
+                  disabled={busy || !exactCurrent || !review.ready}
+                  onChange={(event) => setReleaseExceptions(event.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                disabled={
+                  busy ||
+                  !exactCurrent ||
+                  !review.ready ||
+                  !releaseRationale.trim()
+                }
+                onClick={() =>
+                  void actOnRelease(() =>
+                    approveSubmissionRelease({
+                      tender_id: tenderId,
+                      package_id: review.package.package_id,
+                      package_version: review.package.version,
+                      package_manifest_sha256: review.package.manifest_sha256,
+                      readiness_report_id: review.report.report_id,
+                      readiness_report_version: review.report.version,
+                      readiness_report_manifest_sha256:
+                        review.report.manifest_sha256,
+                      rationale: releaseRationale.trim(),
+                      conditions: releaseConditions
+                        .split("\n")
+                        .map((value) => value.trim())
+                        .filter(Boolean),
+                      exceptions: releaseExceptions
+                        .split("\n")
+                        .map((value) => value.trim())
+                        .filter(Boolean),
+                    }),
+                  )
+                }
+              >
+                Approve exact package as Ready for Submission
+              </button>
+              <p>
+                This decision freezes the exact package and permits a verified
+                copy. It does not email, upload, deliver, or submit anything.
+              </p>
+            </fieldset>
+          )}
         </>
       )}
     </section>

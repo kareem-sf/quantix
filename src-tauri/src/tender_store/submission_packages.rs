@@ -1801,33 +1801,22 @@ fn decision_references_from_binding(
 
 fn load_submission_deadline(
     connection: &Connection,
-    generation: &PackageProductionGeneration,
+    _generation: &PackageProductionGeneration,
     bindings: &[CoordinatedBidBaselineBinding],
 ) -> Result<Option<SubmissionPackageDependency>, TenderCommandError> {
-    let candidates = generation
-        .requirements
+    let candidates = bindings
         .iter()
-        .map(|requirement| {
-            (
-                requirement.record.record_id.clone(),
-                requirement.record.version,
-                requirement.record.manifest_sha256.clone(),
-            )
+        .filter(|binding| {
+            binding.kind == CoordinatedBidBaselineBindingKind::TenderRecordVersion
+                && binding.source == "submission_deadline"
         })
-        .chain(
-            bindings
-                .iter()
-                .filter(|binding| {
-                    binding.kind == CoordinatedBidBaselineBindingKind::TenderRecordVersion
-                })
-                .map(|binding| {
-                    (
-                        binding.reference_id.clone(),
-                        binding.version,
-                        binding.manifest_sha256.clone(),
-                    )
-                }),
-        );
+        .map(|binding| {
+            (
+                binding.reference_id.clone(),
+                binding.version,
+                binding.manifest_sha256.clone(),
+            )
+        });
     for (record_id, version, manifest_sha256) in candidates {
         let record = inspect_tender_record_version_in_connection(connection, &record_id, version)?;
         let supporting_review_id = record.reviews.last().map(|review| review.review_id.clone());
