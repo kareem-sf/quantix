@@ -21,6 +21,7 @@ import { CoordinatedBidBaselinePanel } from "./CoordinatedBidBaselinePanel";
 import { ChangeAssessmentPanel } from "./ChangeAssessmentPanel";
 import { DecisionCockpitPanel } from "./DecisionCockpitPanel";
 import { PackageProductionPanel } from "./PackageProductionPanel";
+import { FinalReviewPanel } from "./FinalReviewPanel";
 import { TenderBackupPanel } from "./TenderBackupPanel";
 import { TenderRecoveryPanel } from "./TenderRecoveryPanel";
 import { TenderRecordsPanel } from "./TenderRecordsPanel";
@@ -765,6 +766,14 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
               />
               <PackageProductionPanel
                 key={`package-production-${selected.tender_id}`}
+                tenderId={selected.tender_id}
+                runtimeReady={runtimeReady}
+                refreshToken={tenderStateVersion}
+                reportCommandFailure={reportCommandFailure}
+                onTenderStateChange={reportTenderStateChange}
+              />
+              <FinalReviewPanel
+                key={`final-review-${selected.tender_id}`}
                 tenderId={selected.tender_id}
                 runtimeReady={runtimeReady}
                 refreshToken={tenderStateVersion}

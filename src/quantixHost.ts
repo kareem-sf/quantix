@@ -173,6 +173,12 @@ import type { InspectSubmissionPackageCommand } from "./bindings/InspectSubmissi
 import type { InspectSubmissionPackageItemContentCommand } from "./bindings/InspectSubmissionPackageItemContentCommand";
 import type { SubmissionItemContent } from "./bindings/SubmissionItemContent";
 import type { SubmissionPackageVersion } from "./bindings/SubmissionPackageVersion";
+import type { ApprovePackageFindingExceptionCommand } from "./bindings/ApprovePackageFindingExceptionCommand";
+import type { FinalReviewInspection } from "./bindings/FinalReviewInspection";
+import type { RecordPackageManualVerificationCommand } from "./bindings/RecordPackageManualVerificationCommand";
+import type { RunPackageValidationCommand } from "./bindings/RunPackageValidationCommand";
+import type { RunSubmissionSectionReviewCommand } from "./bindings/RunSubmissionSectionReviewCommand";
+import type { SubmissionSectionReviewRunResult } from "./bindings/SubmissionSectionReviewRunResult";
 
 export function ensureQuantixSetup(): Promise<SetupOutcome> {
   return invoke<SetupOutcome>("ensure_quantix_setup");
@@ -1045,6 +1051,46 @@ export function inspectSubmissionPackageItemContent(
     "inspect_submission_package_item_content",
     { command },
   );
+}
+
+export function runPackageValidation(
+  command: RunPackageValidationCommand,
+): Promise<FinalReviewInspection> {
+  return invoke<FinalReviewInspection>("run_package_validation", { command });
+}
+
+export function inspectFinalReview(
+  tenderId: string,
+): Promise<FinalReviewInspection | null> {
+  const command: OpenTenderCommand = { tender_id: tenderId };
+  return invoke<FinalReviewInspection | null>("inspect_final_review", {
+    command,
+  });
+}
+
+export function recordPackageManualVerification(
+  command: RecordPackageManualVerificationCommand,
+): Promise<FinalReviewInspection> {
+  return invoke<FinalReviewInspection>("record_package_manual_verification", {
+    command,
+  });
+}
+
+export function runSubmissionSectionReview(
+  command: RunSubmissionSectionReviewCommand,
+): Promise<SubmissionSectionReviewRunResult> {
+  return invoke<SubmissionSectionReviewRunResult>(
+    "run_submission_section_review",
+    { command },
+  );
+}
+
+export function approvePackageFindingException(
+  command: ApprovePackageFindingExceptionCommand,
+): Promise<FinalReviewInspection> {
+  return invoke<FinalReviewInspection>("approve_package_finding_exception", {
+    command,
+  });
 }
 
 export function runProductionTask(

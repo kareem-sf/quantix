@@ -49,26 +49,27 @@ pub use tender_store::{
     ActivateTenderProductionCommand, AgentTenderQueryProposal, AgentTenderQueryUpdate,
     ApproveBasisOfEstimateCommand, ApproveCalculationRuleCommand, ApproveCommercialStrategyCommand,
     ApproveControlledBoqCalculationRunCommand, ApproveExternalRfiForIssueCommand,
-    ApprovePricedCostBaselineCommand, ApprovePricingAdjustmentCommand,
-    ApproveProductionFindingExceptionCommand, ApproveTenderPriceCommand, ApprovedQueryTreatment,
-    ApprovedTenderPrice, AssembleCoordinatedBidBaselineCommand, AssembleSubmissionPackageCommand,
-    BasisOfEstimateReview, BasisOfEstimateReviewFinding, BasisOfEstimateReviewOutcome,
-    BasisOfEstimateReviewResult, BasisOfEstimateVersion, BidDecisionApprovalDecision,
-    BidDecisionApprovalHistoryPage, BidDecisionApprovalInvalidation,
-    BidDecisionApprovalInvalidationResult, BidDecisionApprovalRecord, BidDecisionApprovalResult,
-    BidDecisionGateBlocker, BidDecisionPackageChangeSummary, BidDecisionPackageInspection,
-    BidDecisionPackageRecordBinding, BidDecisionPackageRecordCategory,
-    BidDecisionPackageRecordPage, BidDecisionPackageReview, BidDecisionPackageReviewFinding,
-    BidDecisionPackageReviewOutcome, BidDecisionPackageReviewResult,
-    BidDecisionReturnReworkDisposition, BidDecisionReturnReworkItem, BidDecisionReturnReworkResult,
-    BidRecommendation, BidRecommendationOutcome, BoqAccountRow, BoqInventoryRow, BoqRowDisposition,
-    BoqTableCandidate, BoqTableDesignation, CalculationDecimalInput, CalculationInputState,
-    CalculationRoundingMode, CalculationRuleApproval, CalculationRuleReview,
-    CalculationRuleReviewFinding, CalculationRuleReviewOutcome, CalculationRuleReviewResult,
-    CalculationRuleTestResult, CalculationRuleVersion, CalculationScenarioVersion,
-    CalculationWorkspaceInspection, CapabilityDemand, CapabilityDemandClassification,
-    ChangeAssessment, ChangeAssessmentApprovalConsequence, ChangeAssessmentClassification,
-    ChangeAssessmentDecision, ChangeAssessmentDependencyKind, ChangeAssessmentDependencyReference,
+    ApprovePackageFindingExceptionCommand, ApprovePricedCostBaselineCommand,
+    ApprovePricingAdjustmentCommand, ApproveProductionFindingExceptionCommand,
+    ApproveTenderPriceCommand, ApprovedQueryTreatment, ApprovedTenderPrice,
+    AssembleCoordinatedBidBaselineCommand, AssembleSubmissionPackageCommand, BasisOfEstimateReview,
+    BasisOfEstimateReviewFinding, BasisOfEstimateReviewOutcome, BasisOfEstimateReviewResult,
+    BasisOfEstimateVersion, BidDecisionApprovalDecision, BidDecisionApprovalHistoryPage,
+    BidDecisionApprovalInvalidation, BidDecisionApprovalInvalidationResult,
+    BidDecisionApprovalRecord, BidDecisionApprovalResult, BidDecisionGateBlocker,
+    BidDecisionPackageChangeSummary, BidDecisionPackageInspection, BidDecisionPackageRecordBinding,
+    BidDecisionPackageRecordCategory, BidDecisionPackageRecordPage, BidDecisionPackageReview,
+    BidDecisionPackageReviewFinding, BidDecisionPackageReviewOutcome,
+    BidDecisionPackageReviewResult, BidDecisionReturnReworkDisposition,
+    BidDecisionReturnReworkItem, BidDecisionReturnReworkResult, BidRecommendation,
+    BidRecommendationOutcome, BoqAccountRow, BoqInventoryRow, BoqRowDisposition, BoqTableCandidate,
+    BoqTableDesignation, CalculationDecimalInput, CalculationInputState, CalculationRoundingMode,
+    CalculationRuleApproval, CalculationRuleReview, CalculationRuleReviewFinding,
+    CalculationRuleReviewOutcome, CalculationRuleReviewResult, CalculationRuleTestResult,
+    CalculationRuleVersion, CalculationScenarioVersion, CalculationWorkspaceInspection,
+    CapabilityDemand, CapabilityDemandClassification, ChangeAssessment,
+    ChangeAssessmentApprovalConsequence, ChangeAssessmentClassification, ChangeAssessmentDecision,
+    ChangeAssessmentDependencyKind, ChangeAssessmentDependencyReference,
     ChangeAssessmentEvidenceExcerpt, ChangeAssessmentImpact, ChangeAssessmentImpactConsequence,
     ChangeAssessmentImpactKind, ChangeAssessmentObjectKind, ChangeAssessmentPage,
     ChangeAssessmentSource, ChangeAssessmentStatus, CommercialStrategy, CommercialStrategyApproval,
@@ -99,7 +100,8 @@ pub use tender_store::{
     ExternalRfiFindingSeverity, ExternalRfiPage, ExternalRfiQueryReference, ExternalRfiQuestion,
     ExternalRfiRecipient, ExternalRfiResponseCandidatePage, ExternalRfiResponseInterpretation,
     ExternalRfiResponseLink, ExternalRfiReview, ExternalRfiReviewFinding, ExternalRfiReviewOutcome,
-    ExternalRfiReviewResult, GenerateSubmissionSectionsCommand, GenerationAuthoringMode,
+    ExternalRfiReviewResult, FinalReviewAssignment, FinalReviewInspection, FinalReviewPlan,
+    FinalReviewReviewer, GenerateSubmissionSectionsCommand, GenerationAuthoringMode,
     GenerationRequirement, GenerationRequirementAvailability, GenerationRequirementKind,
     GenerationRequirementRecordReference, InspectBidDecisionApprovalHistoryCommand,
     InspectBidDecisionPackageRecordsCommand, InspectCalculationWorkspaceCommand,
@@ -112,38 +114,44 @@ pub use tender_store::{
     InspectSubmissionPackageCommand, InspectSubmissionPackageItemContentCommand,
     InspectTenderQueriesCommand, InspectTenderRecordsCommand, InterpretExternalRfiResponseCommand,
     InvalidateBidDecisionApprovalCommand, MajorFindingPolicy, ManagerCapabilityDemandInput,
-    OpenTenderCommand, PackageProductionGeneration, PendingDecision, PrepareTenderRecoveryCommand,
-    PricedCostBaselineApproval, PricedCostBaselineReview, PricedCostBaselineReviewFinding,
-    PricedCostBaselineReviewOutcome, PricedCostBaselineReviewResult, PricedCostBaselineVersion,
-    PricingAdjustmentApproval, PricingAdjustmentDirection, PricingAdjustmentKind,
-    PricingAdjustmentReference, PricingAdjustmentReviewResult, PricingAdjustmentVersion,
-    PricingCalculationAdjustmentInput, PricingCalculationRun, PricingDecisionHistoryEntry,
-    PricingScenarioSelection, PricingScenarioVersion, PricingWorkspaceInspection,
-    ProductionArtifactPayload, ProductionArtifactVersion, ProductionArtifactVersionSummary,
-    ProductionCoordinationObservation, ProductionCoordinationObservationSubject,
-    ProductionCoordinationObservationValue, ProductionFindingDisposition,
-    ProductionFindingDispositionKind, ProductionFindingSeverity, ProductionIntegrationReadiness,
-    ProductionQueryTreatmentApplication, ProductionRemediation, ProductionReview,
-    ProductionReviewFinding, ProductionReviewResult, ProductionTaskInspection,
+    ManualVerificationResult, OpenTenderCommand, PackageFindingExceptionApproval,
+    PackageManualVerification, PackageProductionGeneration, PackageReviewFinding,
+    PackageReviewResult, PackageValidationCheckCategory, PackageValidationOutcome,
+    PackageValidationPolicy, PackageValidationResult, PackageValidationRule, PackageValidationRun,
+    PendingDecision, PrepareTenderRecoveryCommand, PricedCostBaselineApproval,
+    PricedCostBaselineReview, PricedCostBaselineReviewFinding, PricedCostBaselineReviewOutcome,
+    PricedCostBaselineReviewResult, PricedCostBaselineVersion, PricingAdjustmentApproval,
+    PricingAdjustmentDirection, PricingAdjustmentKind, PricingAdjustmentReference,
+    PricingAdjustmentReviewResult, PricingAdjustmentVersion, PricingCalculationAdjustmentInput,
+    PricingCalculationRun, PricingDecisionHistoryEntry, PricingScenarioSelection,
+    PricingScenarioVersion, PricingWorkspaceInspection, ProductionArtifactPayload,
+    ProductionArtifactVersion, ProductionArtifactVersionSummary, ProductionCoordinationObservation,
+    ProductionCoordinationObservationSubject, ProductionCoordinationObservationValue,
+    ProductionFindingDisposition, ProductionFindingDispositionKind, ProductionFindingSeverity,
+    ProductionIntegrationReadiness, ProductionQueryTreatmentApplication, ProductionRemediation,
+    ProductionReview, ProductionReviewFinding, ProductionReviewResult, ProductionTaskInspection,
     ProductionTaskReviewInspection, ProductionTaskRunResult, ProductionTaskState,
-    ProposeBoqCalculationRuleCommand, RegisterExternalRfiResponseCommand,
-    RegisterTenderContentCommand, ResolveBidDecisionReturnReworkCommand,
-    ResolveTenderRecoveryCommand, ResourceImplication, ReviewFindingSeverity,
-    ReviseExternalRfiDraftCommand, ReviseTenderCommand, ReviseTenderQueryCommand,
-    ReviseWorkPlanProposalCommand, RunBasisOfEstimateReviewCommand,
+    ProposeBoqCalculationRuleCommand, RecordPackageManualVerificationCommand,
+    RegisterExternalRfiResponseCommand, RegisterTenderContentCommand, ReleaseReadinessBlocker,
+    ReleaseReadinessBlockerCode, ReleaseReadinessCategorySummary, ReleaseReadinessReport,
+    ResolveBidDecisionReturnReworkCommand, ResolveTenderRecoveryCommand, ResourceImplication,
+    ReviewFindingSeverity, ReviseExternalRfiDraftCommand, ReviseTenderCommand,
+    ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand, RunBasisOfEstimateReviewCommand,
     RunBidDecisionPackageReviewCommand, RunCalculationRuleReviewCommand,
     RunCostEstimatorBasisCommand, RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand,
-    RunPricedCostBaselineReviewCommand, RunPricingAdjustmentReviewCommand,
-    RunProductionTaskCommand, RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand,
-    SelectPricingScenarioCommand, StartupReconciliationReport, SubmissionArtifactContent,
-    SubmissionArtifactVersion, SubmissionAuthorshipProvenance, SubmissionContributionKind,
-    SubmissionCoverageBlocker, SubmissionCoverageBlockerCode, SubmissionCoverageDisposition,
-    SubmissionCoverageRow, SubmissionGeneratedArtifactReference, SubmissionItemContent,
-    SubmissionItemSource, SubmissionPackageAssessment, SubmissionPackageCurrentnessCode,
+    RunPackageValidationCommand, RunPricedCostBaselineReviewCommand,
+    RunPricingAdjustmentReviewCommand, RunProductionTaskCommand, RunSubmissionSectionReviewCommand,
+    RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, SelectPricingScenarioCommand,
+    StartupReconciliationReport, SubmissionArtifactContent, SubmissionArtifactVersion,
+    SubmissionAuthorshipProvenance, SubmissionContributionKind, SubmissionCoverageBlocker,
+    SubmissionCoverageBlockerCode, SubmissionCoverageDisposition, SubmissionCoverageRow,
+    SubmissionGeneratedArtifactReference, SubmissionItemContent, SubmissionItemSource,
+    SubmissionPackageAssessment, SubmissionPackageCurrentnessCode,
     SubmissionPackageCurrentnessFact, SubmissionPackageDependency, SubmissionPackageDependencyKind,
     SubmissionPackageItem, SubmissionPackageSection, SubmissionPackageStatus,
     SubmissionPackageVersion, SubmissionProfileVersionReference,
-    SubmissionSectionIndependenceContext, SubmissionSectionRiskContext,
+    SubmissionSectionIndependenceContext, SubmissionSectionReview,
+    SubmissionSectionReviewRunResult, SubmissionSectionRiskContext,
     SubmissionSourceArtifactReference, SubmissionValidationContextInput, SubmissionWorkPlanContext,
     TenderBackupRecord, TenderBackupState, TenderCatalogueEntry, TenderCommandError,
     TenderErrorCode, TenderEvidenceReference, TenderInspection, TenderIntegrityIssue,
@@ -188,18 +196,19 @@ mod tauri_commands {
         AgentRunRecoveryDecision, ApproveAgentAccessCommand, ApproveBasisOfEstimateCommand,
         ApproveCalculationRuleCommand, ApproveCommercialStrategyCommand,
         ApproveControlledBoqCalculationRunCommand, ApproveExternalRfiForIssueCommand,
-        ApprovePricedCostBaselineCommand, ApprovePricingAdjustmentCommand,
-        ApproveProductionFindingExceptionCommand, ApproveTenderPriceCommand,
-        AssembleCoordinatedBidBaselineCommand, AssembleSubmissionPackageCommand,
-        BasisOfEstimateReviewResult, BasisOfEstimateVersion, BidDecisionApprovalHistoryPage,
-        BidDecisionApprovalInvalidationResult, BidDecisionApprovalResult,
-        BidDecisionPackageInspection, BidDecisionPackageRecordPage, BidDecisionPackageReviewResult,
-        BidDecisionReturnReworkResult, BoqTableDesignation, CalculationRuleReviewResult,
-        CalculationRuleVersion, CalculationScenarioVersion, CalculationWorkspaceInspection,
-        ChangeAssessment, ChangeAssessmentPage, ChooseTenderPackageCommand, CommercialStrategy,
-        ComplianceMatrixPage, ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand,
-        ControlledBoqCalculationRun, CoordinatedBidBaseline, CoordinatedBidBaselinePage,
-        CostEstimatorBasisResult, CostEstimatorCalculationResult, CreateBidDecisionPackageCommand,
+        ApprovePackageFindingExceptionCommand, ApprovePricedCostBaselineCommand,
+        ApprovePricingAdjustmentCommand, ApproveProductionFindingExceptionCommand,
+        ApproveTenderPriceCommand, AssembleCoordinatedBidBaselineCommand,
+        AssembleSubmissionPackageCommand, BasisOfEstimateReviewResult, BasisOfEstimateVersion,
+        BidDecisionApprovalHistoryPage, BidDecisionApprovalInvalidationResult,
+        BidDecisionApprovalResult, BidDecisionPackageInspection, BidDecisionPackageRecordPage,
+        BidDecisionPackageReviewResult, BidDecisionReturnReworkResult, BoqTableDesignation,
+        CalculationRuleReviewResult, CalculationRuleVersion, CalculationScenarioVersion,
+        CalculationWorkspaceInspection, ChangeAssessment, ChangeAssessmentPage,
+        ChooseTenderPackageCommand, CommercialStrategy, ComplianceMatrixPage,
+        ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand, ControlledBoqCalculationRun,
+        CoordinatedBidBaseline, CoordinatedBidBaselinePage, CostEstimatorBasisResult,
+        CostEstimatorCalculationResult, CreateBidDecisionPackageCommand,
         CreateCalculationScenarioCommand, CreateCommercialStrategyCommand,
         CreateExternalRfiDraftCommand, CreatePricedCostBaselineCommand,
         CreatePricingAdjustmentCommand, CreatePricingScenarioCommand, CreateTenderBackupCommand,
@@ -211,8 +220,8 @@ mod tauri_commands {
         EstimateWorkspaceInspection, EvidenceDocument, EvidenceSearchResult,
         ExportApprovedExternalRfiCommand, ExternalRfiDraft, ExternalRfiEligibleQueryPage,
         ExternalRfiExportRecord, ExternalRfiPage, ExternalRfiResponseCandidatePage,
-        ExternalRfiReviewResult, GenerateSubmissionSectionsCommand, ImportTenderPackageCommand,
-        InspectAgentRunCommand, InspectAgentRunHistoryCommand,
+        ExternalRfiReviewResult, FinalReviewInspection, GenerateSubmissionSectionsCommand,
+        ImportTenderPackageCommand, InspectAgentRunCommand, InspectAgentRunHistoryCommand,
         InspectBidDecisionApprovalHistoryCommand, InspectBidDecisionPackageRecordsCommand,
         InspectCalculationWorkspaceCommand, InspectChangeAssessmentsCommand,
         InspectComplianceMatrixCommand, InspectCoordinatedBidBaselinesCommand,
@@ -228,17 +237,20 @@ mod tauri_commands {
         PricedCostBaselineVersion, PricingAdjustmentReviewResult, PricingAdjustmentVersion,
         PricingScenarioVersion, PricingWorkspaceInspection, ProductionTaskReviewInspection,
         ProductionTaskRunResult, ProposeBoqCalculationRuleCommand, QuantixHost,
-        RegisterExternalRfiResponseCommand, RequestAgentAccessCommand, ResolveAgentAccessCommand,
+        RecordPackageManualVerificationCommand, RegisterExternalRfiResponseCommand,
+        RequestAgentAccessCommand, ResolveAgentAccessCommand,
         ResolveBidDecisionReturnReworkCommand, ResolveIndeterminateAgentRunCommand,
         ResolveTenderRecoveryCommand, ReviseExternalRfiDraftCommand, ReviseTenderCommand,
         ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand, RunBasisOfEstimateReviewCommand,
         RunBidDecisionPackageReviewCommand, RunBootstrapAgentCommand,
         RunCalculationRuleReviewCommand, RunCostEstimatorBasisCommand,
         RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand,
-        RunPricedCostBaselineReviewCommand, RunPricingAdjustmentReviewCommand,
-        RunProductionTaskCommand, RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand,
-        RuntimeReadiness, SearchEvidenceCommand, SelectPricingScenarioCommand, SetupOutcome,
-        SubmissionArtifactContent, SubmissionItemContent, SubmissionPackageVersion,
+        RunPackageValidationCommand, RunPricedCostBaselineReviewCommand,
+        RunPricingAdjustmentReviewCommand, RunProductionTaskCommand,
+        RunSubmissionSectionReviewCommand, RunTenderRecordExtractionCommand,
+        RunTenderRecordReviewCommand, RuntimeReadiness, SearchEvidenceCommand,
+        SelectPricingScenarioCommand, SetupOutcome, SubmissionArtifactContent,
+        SubmissionItemContent, SubmissionPackageVersion, SubmissionSectionReviewRunResult,
         TenderBackupRecord, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
         TenderIntegrityReport, TenderPackageImportResult, TenderPackageSourceKind,
         TenderProductionInspection, TenderQuery, TenderQueryPage, TenderRecordAuthority,
@@ -1460,6 +1472,70 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn run_package_validation(
+        host: tauri::State<'_, QuantixHost>,
+        command: RunPackageValidationCommand,
+    ) -> Result<FinalReviewInspection, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.run_package_validation(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_final_review(
+        host: tauri::State<'_, QuantixHost>,
+        command: OpenTenderCommand,
+    ) -> Result<Option<FinalReviewInspection>, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.inspect_final_review(&command.tender_id))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn record_package_manual_verification(
+        host: tauri::State<'_, QuantixHost>,
+        command: RecordPackageManualVerificationCommand,
+    ) -> Result<FinalReviewInspection, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.record_package_manual_verification(command)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn run_submission_section_review(
+        host: tauri::State<'_, QuantixHost>,
+        command: RunSubmissionSectionReviewCommand,
+    ) -> Result<SubmissionSectionReviewRunResult, TenderCommandError> {
+        host.inner().run_submission_section_review(command).await
+    }
+
+    #[tauri::command]
+    pub(super) async fn approve_package_finding_exception(
+        host: tauri::State<'_, QuantixHost>,
+        command: ApprovePackageFindingExceptionCommand,
+    ) -> Result<FinalReviewInspection, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.approve_package_finding_exception(command)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?
+    }
+
+    #[tauri::command]
     pub(super) async fn inspect_change_assessments(
         host: tauri::State<'_, QuantixHost>,
         command: InspectChangeAssessmentsCommand,
@@ -1964,6 +2040,11 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::assemble_submission_package,
             tauri_commands::inspect_current_submission_package,
             tauri_commands::inspect_submission_package_item_content,
+            tauri_commands::run_package_validation,
+            tauri_commands::inspect_final_review,
+            tauri_commands::record_package_manual_verification,
+            tauri_commands::run_submission_section_review,
+            tauri_commands::approve_package_finding_exception,
             tauri_commands::inspect_change_assessments,
             tauri_commands::decide_change_assessment,
             tauri_commands::create_bid_decision_package,

@@ -2087,6 +2087,41 @@ pub(crate) fn load_exact_submission_package_for_transaction(
     )
 }
 
+pub(crate) fn load_submission_package_for_review_transaction(
+    transaction: &Transaction<'_>,
+    package_id: &str,
+    version: u32,
+    manifest_sha256: &str,
+    require_current: bool,
+    budget: BidPackageOperationBudget,
+) -> Result<ExactSubmissionPackage, TenderCommandError> {
+    load_stored_package(
+        transaction,
+        package_id,
+        version,
+        manifest_sha256,
+        require_current,
+        budget,
+    )
+}
+
+pub(crate) fn load_submission_package_snapshot_for_integrity(
+    connection: &Connection,
+    package_id: &str,
+    version: u32,
+    manifest_sha256: &str,
+) -> Result<SubmissionPackageVersion, TenderCommandError> {
+    load_stored_package(
+        connection,
+        package_id,
+        version,
+        manifest_sha256,
+        false,
+        BidPackageOperationBudget::from_connection(connection)?,
+    )
+    .map(|exact| exact.package)
+}
+
 pub(crate) fn load_exact_submission_package_item_bytes_for_transaction(
     content_root: &Path,
     item: &ExactSubmissionPackageItem,

@@ -31,10 +31,11 @@ use crate::{
         RunCalculationRuleReviewCommand, RunCostEstimatorBasisCommand,
         RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand,
         RunPricedCostBaselineReviewCommand, RunPricingAdjustmentReviewCommand,
-        RunProductionTaskCommand, RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand,
-        TenderCommandError, TenderErrorCode, TenderId, TenderRecordAuthority,
-        TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordPage,
-        TenderRecordReviewResult, TenderStore,
+        RunProductionTaskCommand, RunSubmissionSectionReviewCommand,
+        RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand,
+        SubmissionSectionReviewRunResult, TenderCommandError, TenderErrorCode, TenderId,
+        TenderRecordAuthority, TenderRecordDecisionResult, TenderRecordExtractionResult,
+        TenderRecordPage, TenderRecordReviewResult, TenderStore,
     },
     QuantixHost,
 };
@@ -1750,6 +1751,40 @@ impl QuantixHost {
         Ok(BidDecisionPackageReviewResult {
             run: store.inspect_agent_run(&prepared.run_id)?,
             package: store.inspect_bid_decision_package(&command.package_id, command.version)?,
+        })
+    }
+
+    pub async fn run_submission_section_review(
+        &self,
+        command: RunSubmissionSectionReviewCommand,
+    ) -> Result<SubmissionSectionReviewRunResult, TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        let _active = ActiveAgentRunGuard {
+            host: self.clone(),
+            lease_id: lease_id.clone(),
+        };
+        let store = self.tender_store(&tender_id)?;
+        let prepared = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .prepare_submission_section_review_run(&tender_id, &command)?;
+        self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
+        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let mut store = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        store.complete_agent_run(&tender_id, &prepared, execution)?;
+        Ok(SubmissionSectionReviewRunResult {
+            run: store.inspect_agent_run(&prepared.run_id)?,
+            final_review: store
+                .inspect_final_review(BidPackageOperationBudget::for_tender(&tender_id))?
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
         })
     }
 

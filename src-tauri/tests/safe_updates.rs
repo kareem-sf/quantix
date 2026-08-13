@@ -142,7 +142,7 @@ fn valid_offer(data_may_change: bool) -> UpdateCandidate {
         },
         compatibility: UpdateCompatibilityManifest {
             installation_schema_version: 8,
-            tender_schema_version: 23,
+            tender_schema_version: 24,
             codex_version: "0.147.0".into(),
             docling_version: "2.118.0".into(),
             runtime_manifest_schema_version: 2,
@@ -623,7 +623,7 @@ fn valid_signed_update_is_presented_and_requires_exact_backup_before_installatio
     assert_eq!(presented.version, "0.2.0");
     assert_eq!(presented.artifact.sha256, "a".repeat(64));
     assert_eq!(presented.artifact.signature_sha256, "b".repeat(64));
-    assert_eq!(presented.compatibility.tender_schema_version, 23);
+    assert_eq!(presented.compatibility.tender_schema_version, 24);
     assert!(presented.impact.stored_data_may_change);
 
     let approved = host
@@ -1062,7 +1062,7 @@ fn unsafe_or_incompatible_offers_are_rejected_before_approval() {
         (
             {
                 let mut offer = valid_offer(false);
-                offer.compatibility.tender_schema_version = 24;
+                offer.compatibility.tender_schema_version = 25;
                 offer
             },
             UpdateDiagnostic::TenderStoreIncompatible,

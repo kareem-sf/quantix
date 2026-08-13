@@ -9,13 +9,13 @@ use quantix_lib::{
     AgentRunRecoveryDisposition, AgentRunState, AgentTaskInputReference,
     ApproveBasisOfEstimateCommand, ApproveCalculationRuleCommand, ApproveCommercialStrategyCommand,
     ApproveControlledBoqCalculationRunCommand, ApproveExternalRfiForIssueCommand,
-    ApprovePricedCostBaselineCommand, ApprovePricingAdjustmentCommand,
-    ApproveProductionFindingExceptionCommand, ApproveTenderPriceCommand,
-    AssembleCoordinatedBidBaselineCommand, AssembleSubmissionPackageCommand,
-    BasisOfEstimateReviewOutcome, BasisOfEstimateVersion, BidDecisionApprovalDecision,
-    BidDecisionPackageInspection, BidDecisionPackageReviewOutcome, BidRecommendationOutcome,
-    BoqRowDisposition, CalculationDecimalInput, CalculationInputState, CalculationRoundingMode,
-    CalculationRuleReviewOutcome, ChangeAssessmentClassification,
+    ApprovePackageFindingExceptionCommand, ApprovePricedCostBaselineCommand,
+    ApprovePricingAdjustmentCommand, ApproveProductionFindingExceptionCommand,
+    ApproveTenderPriceCommand, AssembleCoordinatedBidBaselineCommand,
+    AssembleSubmissionPackageCommand, BasisOfEstimateReviewOutcome, BasisOfEstimateVersion,
+    BidDecisionApprovalDecision, BidDecisionPackageInspection, BidDecisionPackageReviewOutcome,
+    BidRecommendationOutcome, BoqRowDisposition, CalculationDecimalInput, CalculationInputState,
+    CalculationRoundingMode, CalculationRuleReviewOutcome, ChangeAssessmentClassification,
     ChangeAssessmentImpactConsequence, ChangeAssessmentImpactKind, ChangeAssessmentObjectKind,
     ChangeAssessmentStatus, ComplianceDisposition, ComplianceDispositionUpdate,
     ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand, ControlledBoqCalculationStatus,
@@ -29,36 +29,548 @@ use quantix_lib::{
     DecideTenderQueryTreatmentCommand, DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
     DecisionAction, DecisionFactKind, DecisionKind, DecisionStatus, DecisionTargetKind,
     DesignateBoqTableCommand, DeviceProtection, ExchangeRateType, ExportApprovedExternalRfiCommand,
-    ExternalRfiQueryReference, ExternalRfiRecipient, GenerateSubmissionSectionsCommand,
-    GenerationAuthoringMode, GenerationRequirementAvailability, GenerationRequirementKind,
-    ImportTenderPackageCommand, InspectBidDecisionApprovalHistoryCommand,
-    InspectCalculationWorkspaceCommand, InspectChangeAssessmentsCommand,
-    InspectCoordinatedBidBaselinesCommand, InspectDecisionCockpitCommand,
-    InspectEstimateWorkspaceCommand, InspectExternalRfiResponseCandidatesCommand,
-    InspectExternalRfisCommand, InspectPackageProductionCommand,
-    InspectProductionTaskReviewCommand, InspectSubmissionArtifactContentCommand,
-    InspectSubmissionPackageItemContentCommand, InspectTenderQueriesCommand,
-    InterpretExternalRfiResponseCommand, InvalidateBidDecisionApprovalCommand, MajorFindingPolicy,
-    ManagerCapabilityDemandInput, ParseSourceArtifactCommand, PrepareTenderRecoveryCommand,
-    PricedCostBaselineReviewOutcome, PricingAdjustmentDirection, PricingAdjustmentKind,
-    PricingAdjustmentReference, ProductionFindingDispositionKind, ProductionFindingSeverity,
-    ProductionTaskState, ProposeBoqCalculationRuleCommand, ProviderFailureCategory, QuantixHost,
-    RegisterExternalRfiResponseCommand, ResolveBidDecisionReturnReworkCommand,
+    ExternalRfiQueryReference, ExternalRfiRecipient, FinalReviewInspection,
+    GenerateSubmissionSectionsCommand, GenerationAuthoringMode, GenerationRequirementAvailability,
+    GenerationRequirementKind, ImportTenderPackageCommand,
+    InspectBidDecisionApprovalHistoryCommand, InspectCalculationWorkspaceCommand,
+    InspectChangeAssessmentsCommand, InspectCoordinatedBidBaselinesCommand,
+    InspectDecisionCockpitCommand, InspectEstimateWorkspaceCommand,
+    InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
+    InspectPackageProductionCommand, InspectProductionTaskReviewCommand,
+    InspectSubmissionArtifactContentCommand, InspectSubmissionPackageItemContentCommand,
+    InspectTenderQueriesCommand, InterpretExternalRfiResponseCommand,
+    InvalidateBidDecisionApprovalCommand, MajorFindingPolicy, ManagerCapabilityDemandInput,
+    ManualVerificationResult, PackageValidationCheckCategory, PackageValidationOutcome,
+    ParseSourceArtifactCommand, PrepareTenderRecoveryCommand, PricedCostBaselineReviewOutcome,
+    PricingAdjustmentDirection, PricingAdjustmentKind, PricingAdjustmentReference,
+    ProductionFindingDispositionKind, ProductionFindingSeverity, ProductionTaskState,
+    ProposeBoqCalculationRuleCommand, ProviderFailureCategory, QuantixHost,
+    RecordPackageManualVerificationCommand, RegisterExternalRfiResponseCommand,
+    ReleaseReadinessBlockerCode, ResolveBidDecisionReturnReworkCommand,
     ResolveIndeterminateAgentRunCommand, ReviseExternalRfiDraftCommand, ReviseTenderCommand,
     ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand, RunBasisOfEstimateReviewCommand,
     RunBidDecisionPackageReviewCommand, RunBootstrapAgentCommand, RunCalculationRuleReviewCommand,
     RunCostEstimatorBasisCommand, RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand,
-    RunPricedCostBaselineReviewCommand, RunPricingAdjustmentReviewCommand,
-    RunProductionTaskCommand, RunTenderRecordExtractionCommand, RuntimeLayout,
-    SelectPricingScenarioCommand, SetupPlatform, SetupState, SourceRelationshipKind,
-    StoragePermissions, SubmissionCoverageDisposition, SubmissionItemSource,
-    SubmissionPackageAssessment, SubmissionPackageCurrentnessCode, SubmissionPackageStatus,
-    TenderErrorCode, TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase,
-    TenderQuery, TenderQueryTreatment, TenderQueryTreatmentProposalInput, TenderQueryType,
-    TenderRecordEngineerDecisionKind, TenderRecordInspection, TenderRecordKind,
-    TenderRecordVersionReference, VerificationStatus, WorkPlanDecision, WorkPlanRevisionAction,
-    MINIMUM_SETUP_FREE_SPACE_BYTES,
+    RunPackageValidationCommand, RunPricedCostBaselineReviewCommand,
+    RunPricingAdjustmentReviewCommand, RunProductionTaskCommand, RunSubmissionSectionReviewCommand,
+    RunTenderRecordExtractionCommand, RuntimeLayout, SelectPricingScenarioCommand, SetupPlatform,
+    SetupState, SourceRelationshipKind, StoragePermissions, SubmissionCoverageDisposition,
+    SubmissionItemSource, SubmissionPackageAssessment, SubmissionPackageCurrentnessCode,
+    SubmissionPackageStatus, SubmissionPackageVersion, TenderErrorCode, TenderEvidenceReference,
+    TenderIntegrityState, TenderLifecyclePhase, TenderQuery, TenderQueryTreatment,
+    TenderQueryTreatmentProposalInput, TenderQueryType, TenderRecordEngineerDecisionKind,
+    TenderRecordInspection, TenderRecordKind, TenderRecordVersionReference, VerificationStatus,
+    WorkPlanDecision, WorkPlanRevisionAction, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
+
+#[tokio::test]
+async fn exact_package_validation_manual_checks_and_independent_reviews_produce_readiness() {
+    let harness = Harness::new("record-extraction-submission-generation");
+    let baseline = approved_package_production(&harness).await;
+    let generation = harness
+        .host
+        .generate_submission_sections(GenerateSubmissionSectionsCommand {
+            tender_id: harness.tender_id.clone(),
+            baseline_id: baseline.baseline_id,
+            baseline_version: baseline.version,
+            baseline_manifest_sha256: baseline.manifest_sha256,
+        })
+        .expect("generate exact submission sections");
+    let package = harness
+        .host
+        .assemble_submission_package(AssembleSubmissionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            generation_id: generation.generation_id,
+            generation_manifest_sha256: generation.manifest_sha256,
+        })
+        .expect("assemble exact package");
+
+    let mut final_review = harness
+        .host
+        .run_package_validation(RunPackageValidationCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id.clone(),
+            package_version: package.version,
+            package_manifest_sha256: package.manifest_sha256.clone(),
+        })
+        .expect("validate exact package and allocate Final Review");
+
+    let categories = final_review
+        .validation_run
+        .results
+        .iter()
+        .map(|result| result.category)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        categories,
+        BTreeSet::from([
+            PackageValidationCheckCategory::FileStructure,
+            PackageValidationCheckCategory::Rendering,
+            PackageValidationCheckCategory::Calculation,
+            PackageValidationCheckCategory::CrossArtifactConsistency,
+            PackageValidationCheckCategory::HiddenContent,
+            PackageValidationCheckCategory::InformationBoundary,
+            PackageValidationCheckCategory::Filename,
+            PackageValidationCheckCategory::Hash,
+            PackageValidationCheckCategory::PackageWide,
+        ])
+    );
+    assert!(final_review
+        .validation_run
+        .results
+        .iter()
+        .filter(|result| result.outcome == PackageValidationOutcome::ManualVerificationRequired)
+        .all(|result| result.item_id.is_some()));
+    assert!(final_review
+        .report
+        .blockers
+        .iter()
+        .any(|blocker| blocker.code == ReleaseReadinessBlockerCode::ManualVerificationMissing));
+    assert!(final_review
+        .report
+        .blockers
+        .iter()
+        .any(|blocker| blocker.code == ReleaseReadinessBlockerCode::ReviewMissing));
+    assert!(final_review
+        .review_plan
+        .assignments
+        .iter()
+        .all(|assignment| {
+            let reviewer = assignment.reviewer.as_ref().expect("qualified reviewer");
+            reviewer
+                .capabilities
+                .contains(&format!("review_{}", assignment.required_capability))
+                && !assignment.author_profile_versions.iter().any(|author| {
+                    author.profile_id == reviewer.profile_id
+                        && author.profile_version == reviewer.profile_version
+                })
+        }));
+    let expected_assignments = package
+        .sections
+        .iter()
+        .flat_map(|section| {
+            let capabilities = if section.required_capabilities.is_empty() {
+                vec!["independent_review".to_owned()]
+            } else {
+                section.required_capabilities.clone()
+            };
+            capabilities
+                .into_iter()
+                .map(|capability| {
+                    (
+                        section.section_key.clone(),
+                        section.envelope_key.clone(),
+                        section.language.clone(),
+                        capability,
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<BTreeSet<_>>();
+    let actual_assignments = final_review
+        .review_plan
+        .assignments
+        .iter()
+        .map(|assignment| {
+            (
+                assignment.section_key.clone(),
+                assignment.envelope_key.clone(),
+                assignment.language.clone(),
+                assignment.required_capability.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(actual_assignments, expected_assignments);
+    assert_eq!(
+        final_review.review_plan.assignments.len(),
+        actual_assignments.len(),
+        "review allocation must be duplicate-free"
+    );
+
+    let manual_results = final_review
+        .validation_run
+        .results
+        .iter()
+        .filter(|result| result.outcome == PackageValidationOutcome::ManualVerificationRequired)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(!manual_results.is_empty());
+    assert!(!final_review.review_plan.assignments.is_empty());
+    assert!(!final_review.policy.tender_rules.is_empty());
+    assert!(final_review.policy.tender_rules.iter().all(|rule| {
+        final_review
+            .validation_run
+            .results
+            .iter()
+            .any(|result| result.check_id == rule.rule_id)
+    }));
+    for result in manual_results {
+        let item_id = result.item_id.clone().expect("manual item");
+        let item = package
+            .items
+            .iter()
+            .find(|item| item.item_id == item_id)
+            .expect("exact manual item");
+        let rule = final_review
+            .policy
+            .fixed_rules
+            .iter()
+            .chain(&final_review.policy.tender_rules)
+            .find(|rule| rule.rule_id == result.check_id)
+            .expect("exact Manual Verification policy rule");
+        let capability = package
+            .sections
+            .iter()
+            .find(|section| section.item_ids.contains(&item.item_id))
+            .and_then(|section| section.required_capabilities.first())
+            .cloned()
+            .expect("manual verification capability");
+        final_review = harness
+            .host
+            .record_package_manual_verification(RecordPackageManualVerificationCommand {
+                tender_id: harness.tender_id.clone(),
+                package_id: package.package_id.clone(),
+                package_version: package.version,
+                package_manifest_sha256: package.manifest_sha256.clone(),
+                validation_run_id: final_review.validation_run.run_id.clone(),
+                validation_result_id: result.result_id.clone(),
+                item_id,
+                content_sha256: item.content_sha256.clone(),
+                capability,
+                checks: rule.manual_checklist.clone(),
+                evidence_references: item
+                    .evidence
+                    .iter()
+                    .map(|evidence| {
+                        format!(
+                            "source:{}:{}:{}",
+                            evidence.reference.artifact_id,
+                            evidence.reference.version,
+                            evidence.reference.ordinal
+                        )
+                    })
+                    .collect(),
+                result: ManualVerificationResult::Passed,
+                limitations: vec!["Limited to the exact registered file hash.".into()],
+            })
+            .expect("record exact-hash Manual Verification");
+    }
+
+    harness.set_agent_scenario("submission-final-review");
+    for assignment in final_review.review_plan.assignments.clone() {
+        let review_result = harness
+            .host
+            .run_submission_section_review(RunSubmissionSectionReviewCommand {
+                tender_id: harness.tender_id.clone(),
+                package_id: package.package_id.clone(),
+                package_version: package.version,
+                package_manifest_sha256: package.manifest_sha256.clone(),
+                plan_id: final_review.review_plan.plan_id.clone(),
+                plan_manifest_sha256: final_review.review_plan.manifest_sha256.clone(),
+                assignment_id: assignment.assignment_id,
+            })
+            .await
+            .expect("run qualified independent section review");
+        assert_eq!(
+            review_result.run.state,
+            AgentRunState::Completed,
+            "{:#?}",
+            review_result.run
+        );
+    }
+    final_review = harness
+        .host
+        .inspect_final_review(&harness.tender_id)
+        .expect("inspect exact Final Review")
+        .expect("Final Review exists");
+    assert!(final_review.ready, "{:#?}", final_review.live_blockers);
+    assert!(final_review.live_blockers.is_empty());
+    assert_eq!(final_review.report.package_id, package.package_id);
+    assert_eq!(
+        final_review.report.package_manifest_sha256,
+        package.manifest_sha256
+    );
+    assert_eq!(
+        final_review.reviews.len(),
+        final_review.review_plan.assignments.len()
+    );
+    let summary_categories = final_review
+        .report
+        .summaries
+        .iter()
+        .map(|summary| summary.category.as_str())
+        .collect::<BTreeSet<_>>();
+    assert!(BTreeSet::from([
+        "coverage",
+        "baselines",
+        "validations",
+        "calculations",
+        "manual_verifications",
+        "execution_and_signatures",
+        "queries_and_treatments",
+        "assumptions",
+        "qualifications",
+        "exclusions",
+        "departures",
+        "findings",
+        "exceptions",
+        "information_boundaries",
+        "deadline",
+        "changes",
+        "final_review_plan",
+    ])
+    .is_subset(&summary_categories));
+    let mut report_value = serde_json::to_value(&final_review.report).expect("serialize report");
+    report_value["manifest_sha256"] = Value::String(String::new());
+    let canonical = serde_json_canonicalizer::to_vec(&report_value)
+        .expect("canonical Release Readiness Report");
+    assert_eq!(
+        Sha256::digest(canonical)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
+        final_review.report.manifest_sha256
+    );
+
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close before cold Final Review integrity check");
+    let reopened = QuantixHost::with_setup_platform_and_runtime(
+        &harness.application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(harness._root.path().join("resources")),
+    );
+    reopened.accept_runtime_fixture();
+    assert_eq!(ensure_quantix_setup(&reopened).state, SetupState::Ready);
+    reopened
+        .open_tender(&harness.tender_id)
+        .expect("cold-open exact Final Review integrity");
+    let integrity = reopened
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("inspect cold Final Review integrity");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:?}"
+    );
+    let reopened_review = reopened
+        .inspect_final_review(&harness.tender_id)
+        .expect("inspect reopened Final Review")
+        .expect("reopened Final Review exists");
+    assert!(
+        reopened_review.ready,
+        "{:#?}",
+        reopened_review.live_blockers
+    );
+    assert_eq!(reopened_review.report, final_review.report);
+}
+
+#[tokio::test]
+async fn policy_permitted_major_finding_requires_an_exact_engineer_exception() {
+    let harness = Harness::new("record-extraction-submission-generation");
+    let (package, mut final_review) = harness.validated_package_with_manual_checks().await;
+    let assignments = final_review.review_plan.assignments.clone();
+    harness.set_agent_scenario("submission-final-review-major");
+    let first = harness
+        .host
+        .run_submission_section_review(RunSubmissionSectionReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id.clone(),
+            package_version: package.version,
+            package_manifest_sha256: package.manifest_sha256.clone(),
+            plan_id: final_review.review_plan.plan_id.clone(),
+            plan_manifest_sha256: final_review.review_plan.manifest_sha256.clone(),
+            assignment_id: assignments[0].assignment_id.clone(),
+        })
+        .await
+        .expect("publish exact Major finding");
+    harness.set_agent_scenario("submission-final-review");
+    for assignment in &assignments[1..] {
+        harness
+            .host
+            .run_submission_section_review(RunSubmissionSectionReviewCommand {
+                tender_id: harness.tender_id.clone(),
+                package_id: package.package_id.clone(),
+                package_version: package.version,
+                package_manifest_sha256: package.manifest_sha256.clone(),
+                plan_id: final_review.review_plan.plan_id.clone(),
+                plan_manifest_sha256: final_review.review_plan.manifest_sha256.clone(),
+                assignment_id: assignment.assignment_id.clone(),
+            })
+            .await
+            .expect("complete remaining exact reviews");
+    }
+    final_review = harness
+        .host
+        .inspect_final_review(&harness.tender_id)
+        .expect("inspect Major blocker")
+        .expect("Final Review exists");
+    let finding = first.final_review.reviews[0].findings[0].clone();
+    assert!(!final_review.ready);
+    assert_eq!(finding.severity, ProductionFindingSeverity::Major);
+    assert!(final_review.live_blockers.iter().any(|blocker| {
+        blocker.code == ReleaseReadinessBlockerCode::MajorFinding
+            && blocker.reference_id == finding.finding_id
+    }));
+
+    final_review = harness
+        .host
+        .approve_package_finding_exception(ApprovePackageFindingExceptionCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id,
+            package_version: package.version,
+            package_manifest_sha256: package.manifest_sha256,
+            review_id: finding.review_id.clone(),
+            finding_id: finding.finding_id.clone(),
+            rationale: "Accepted by the Tendering Manager under the exact rendering policy.".into(),
+        })
+        .expect("approve exact policy-permitted Major exception");
+    assert!(final_review.ready, "{:#?}", final_review.live_blockers);
+    assert!(final_review.live_blockers.is_empty());
+    assert_eq!(final_review.exceptions.len(), 1);
+    assert_eq!(final_review.exceptions[0].finding_id, finding.finding_id);
+    assert_eq!(final_review.exceptions[0].decided_by, "engineer_user");
+    assert_eq!(final_review.exceptions[0].acting_role, "tendering_manager");
+    assert!(final_review
+        .report
+        .exception_approval_ids
+        .contains(&final_review.exceptions[0].approval_id));
+}
+
+#[tokio::test]
+async fn policy_impermissible_major_finding_cannot_receive_an_exception() {
+    let harness = Harness::new("record-extraction-submission-generation");
+    let (package, final_review) = harness.validated_package_with_manual_checks().await;
+    let assignment = final_review.review_plan.assignments[0].clone();
+    harness.set_agent_scenario("submission-final-review-major-impermissible");
+    let published = harness
+        .host
+        .run_submission_section_review(RunSubmissionSectionReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id.clone(),
+            package_version: package.version,
+            package_manifest_sha256: package.manifest_sha256.clone(),
+            plan_id: final_review.review_plan.plan_id.clone(),
+            plan_manifest_sha256: final_review.review_plan.manifest_sha256,
+            assignment_id: assignment.assignment_id,
+        })
+        .await
+        .expect("publish exact policy-impermissible Major finding");
+    let finding = published.final_review.reviews[0].findings[0].clone();
+    assert_eq!(finding.severity, ProductionFindingSeverity::Major);
+    let error = harness
+        .host
+        .approve_package_finding_exception(ApprovePackageFindingExceptionCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id,
+            package_version: package.version,
+            package_manifest_sha256: package.manifest_sha256,
+            review_id: finding.review_id,
+            finding_id: finding.finding_id,
+            rationale: "This rule does not authorize an exception.".into(),
+        })
+        .expect_err("policy-impermissible Major cannot receive an Exception Approval");
+    assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+}
+
+#[tokio::test]
+async fn critical_findings_are_nonwaivable_and_minor_findings_remain_disclosed() {
+    let critical_harness = Harness::new("record-extraction-submission-generation");
+    let (critical_package, critical_review) = critical_harness
+        .validated_package_with_manual_checks()
+        .await;
+    critical_harness.set_agent_scenario("submission-final-review-critical");
+    let critical_assignment = critical_review.review_plan.assignments[0].clone();
+    let published = critical_harness
+        .host
+        .run_submission_section_review(RunSubmissionSectionReviewCommand {
+            tender_id: critical_harness.tender_id.clone(),
+            package_id: critical_package.package_id.clone(),
+            package_version: critical_package.version,
+            package_manifest_sha256: critical_package.manifest_sha256.clone(),
+            plan_id: critical_review.review_plan.plan_id.clone(),
+            plan_manifest_sha256: critical_review.review_plan.manifest_sha256.clone(),
+            assignment_id: critical_assignment.assignment_id,
+        })
+        .await
+        .expect("publish exact Critical finding");
+    let critical = published.final_review.reviews[0].findings[0].clone();
+    let error = critical_harness
+        .host
+        .approve_package_finding_exception(ApprovePackageFindingExceptionCommand {
+            tender_id: critical_harness.tender_id.clone(),
+            package_id: critical_package.package_id,
+            package_version: critical_package.version,
+            package_manifest_sha256: critical_package.manifest_sha256,
+            review_id: critical.review_id,
+            finding_id: critical.finding_id,
+            rationale: "Critical findings must not be waivable.".into(),
+        })
+        .expect_err("Critical finding cannot receive an Exception Approval");
+    assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+    assert!(published
+        .final_review
+        .live_blockers
+        .iter()
+        .any(|blocker| { blocker.code == ReleaseReadinessBlockerCode::CriticalFinding }));
+
+    let minor_harness = Harness::new("record-extraction-submission-generation");
+    let (minor_package, minor_review) = minor_harness.validated_package_with_manual_checks().await;
+    let assignments = minor_review.review_plan.assignments.clone();
+    minor_harness.set_agent_scenario("submission-final-review-minor");
+    minor_harness
+        .host
+        .run_submission_section_review(RunSubmissionSectionReviewCommand {
+            tender_id: minor_harness.tender_id.clone(),
+            package_id: minor_package.package_id.clone(),
+            package_version: minor_package.version,
+            package_manifest_sha256: minor_package.manifest_sha256.clone(),
+            plan_id: minor_review.review_plan.plan_id.clone(),
+            plan_manifest_sha256: minor_review.review_plan.manifest_sha256.clone(),
+            assignment_id: assignments[0].assignment_id.clone(),
+        })
+        .await
+        .expect("publish disclosed Minor finding");
+    minor_harness.set_agent_scenario("submission-final-review");
+    for assignment in &assignments[1..] {
+        minor_harness
+            .host
+            .run_submission_section_review(RunSubmissionSectionReviewCommand {
+                tender_id: minor_harness.tender_id.clone(),
+                package_id: minor_package.package_id.clone(),
+                package_version: minor_package.version,
+                package_manifest_sha256: minor_package.manifest_sha256.clone(),
+                plan_id: minor_review.review_plan.plan_id.clone(),
+                plan_manifest_sha256: minor_review.review_plan.manifest_sha256.clone(),
+                assignment_id: assignment.assignment_id.clone(),
+            })
+            .await
+            .expect("complete remaining reviews");
+    }
+    let minor = minor_harness
+        .host
+        .inspect_final_review(&minor_harness.tender_id)
+        .expect("inspect disclosed Minor")
+        .expect("Final Review exists");
+    assert!(minor.ready, "{:#?}", minor.live_blockers);
+    let minor_findings = minor
+        .reviews
+        .iter()
+        .flat_map(|review| review.findings.iter())
+        .filter(|finding| finding.severity == ProductionFindingSeverity::Minor)
+        .collect::<Vec<_>>();
+    assert_eq!(minor_findings.len(), 1);
+    let finding_summary = minor
+        .report
+        .summaries
+        .iter()
+        .find(|summary| summary.category == "findings")
+        .expect("findings summary");
+    assert!(finding_summary
+        .references
+        .contains(&minor_findings[0].finding_id));
+}
 
 #[tokio::test]
 async fn decision_cockpit_projects_the_exact_reviewed_bid_decision_gate() {
@@ -1253,6 +1765,42 @@ async fn stale_submission_package_keeps_exact_historical_item_bytes_inspectable(
             generation_manifest_sha256: generation.manifest_sha256,
         })
         .expect("assemble immutable package before source replacement");
+    let validation = harness
+        .host
+        .run_package_validation(RunPackageValidationCommand {
+            tender_id: harness.tender_id.clone(),
+            package_id: package.package_id.clone(),
+            package_version: package.version,
+            package_manifest_sha256: package.manifest_sha256.clone(),
+        })
+        .expect("validate immutable package before source replacement");
+    let validation = harness.record_all_manual_checks(&package, validation);
+    harness.set_agent_scenario("submission-final-review");
+    for assignment in validation.review_plan.assignments.clone() {
+        harness
+            .host
+            .run_submission_section_review(RunSubmissionSectionReviewCommand {
+                tender_id: harness.tender_id.clone(),
+                package_id: package.package_id.clone(),
+                package_version: package.version,
+                package_manifest_sha256: package.manifest_sha256.clone(),
+                plan_id: validation.review_plan.plan_id.clone(),
+                plan_manifest_sha256: validation.review_plan.manifest_sha256.clone(),
+                assignment_id: assignment.assignment_id,
+            })
+            .await
+            .expect("complete immutable section review before source replacement");
+    }
+    let historical_review = harness
+        .host
+        .inspect_final_review(&harness.tender_id)
+        .expect("inspect exact ready package before replacement")
+        .expect("Final Review exists");
+    assert!(
+        historical_review.ready,
+        "{:#?}",
+        historical_review.live_blockers
+    );
     let (item_id, prior_artifact_id, prior_version) = package
         .items
         .iter()
@@ -1399,6 +1947,27 @@ async fn stale_submission_package_keeps_exact_historical_item_bytes_inspectable(
     assert!(pending_stale.currentness_facts.iter().any(|fact| {
         fact.code == SubmissionPackageCurrentnessCode::SourceChanged && !fact.current
     }));
+    let live_stale_review = harness
+        .host
+        .inspect_final_review(&harness.tender_id)
+        .expect("inspect live-stale Final Review")
+        .expect("historical Final Review remains inspectable");
+    assert!(!live_stale_review.current);
+    assert!(!live_stale_review.ready);
+    assert!(live_stale_review
+        .live_blockers
+        .iter()
+        .any(|blocker| blocker.code == ReleaseReadinessBlockerCode::StaleInput));
+    assert_eq!(live_stale_review.report, historical_review.report);
+    assert_eq!(
+        live_stale_review.validation_run,
+        historical_review.validation_run
+    );
+    assert_eq!(live_stale_review.reviews, historical_review.reviews);
+    assert_eq!(
+        live_stale_review.manual_verifications,
+        historical_review.manual_verifications
+    );
     let assessment = harness
         .host
         .inspect_change_assessments(InspectChangeAssessmentsCommand {
@@ -1620,6 +2189,106 @@ impl Harness {
     fn set_agent_scenario(&self, scenario: &str) {
         fs::write(self.codex.with_extension("agent-scenario"), scenario)
             .expect("update fake app-server scenario");
+    }
+
+    async fn validated_package_with_manual_checks(
+        &self,
+    ) -> (SubmissionPackageVersion, FinalReviewInspection) {
+        let baseline = approved_package_production(self).await;
+        let generation = self
+            .host
+            .generate_submission_sections(GenerateSubmissionSectionsCommand {
+                tender_id: self.tender_id.clone(),
+                baseline_id: baseline.baseline_id,
+                baseline_version: baseline.version,
+                baseline_manifest_sha256: baseline.manifest_sha256,
+            })
+            .expect("generate exact submission sections");
+        let package = self
+            .host
+            .assemble_submission_package(AssembleSubmissionPackageCommand {
+                tender_id: self.tender_id.clone(),
+                generation_id: generation.generation_id,
+                generation_manifest_sha256: generation.manifest_sha256,
+            })
+            .expect("assemble exact package");
+        let review = self
+            .host
+            .run_package_validation(RunPackageValidationCommand {
+                tender_id: self.tender_id.clone(),
+                package_id: package.package_id.clone(),
+                package_version: package.version,
+                package_manifest_sha256: package.manifest_sha256.clone(),
+            })
+            .expect("validate exact package");
+        let review = self.record_all_manual_checks(&package, review);
+        (package, review)
+    }
+
+    fn record_all_manual_checks(
+        &self,
+        package: &SubmissionPackageVersion,
+        mut review: FinalReviewInspection,
+    ) -> FinalReviewInspection {
+        let manual_results = review
+            .validation_run
+            .results
+            .iter()
+            .filter(|result| result.outcome == PackageValidationOutcome::ManualVerificationRequired)
+            .cloned()
+            .collect::<Vec<_>>();
+        for result in manual_results {
+            let item_id = result.item_id.clone().expect("manual item");
+            let item = package
+                .items
+                .iter()
+                .find(|item| item.item_id == item_id)
+                .expect("exact manual item");
+            let rule = review
+                .policy
+                .fixed_rules
+                .iter()
+                .chain(&review.policy.tender_rules)
+                .find(|rule| rule.rule_id == result.check_id)
+                .expect("exact Manual Verification rule");
+            let capability = package
+                .sections
+                .iter()
+                .find(|section| section.item_ids.contains(&item.item_id))
+                .and_then(|section| section.required_capabilities.first())
+                .cloned()
+                .expect("manual capability");
+            review = self
+                .host
+                .record_package_manual_verification(RecordPackageManualVerificationCommand {
+                    tender_id: self.tender_id.clone(),
+                    package_id: package.package_id.clone(),
+                    package_version: package.version,
+                    package_manifest_sha256: package.manifest_sha256.clone(),
+                    validation_run_id: review.validation_run.run_id.clone(),
+                    validation_result_id: result.result_id,
+                    item_id,
+                    content_sha256: item.content_sha256.clone(),
+                    capability,
+                    checks: rule.manual_checklist.clone(),
+                    evidence_references: item
+                        .evidence
+                        .iter()
+                        .map(|evidence| {
+                            format!(
+                                "source:{}:{}:{}",
+                                evidence.reference.artifact_id,
+                                evidence.reference.version,
+                                evidence.reference.ordinal
+                            )
+                        })
+                        .collect(),
+                    result: ManualVerificationResult::Passed,
+                    limitations: vec!["Limited to the exact registered file hash.".into()],
+                })
+                .expect("record exact Manual Verification");
+        }
+        review
     }
 
     async fn import_evidence(&self) -> Vec<TenderEvidenceReference> {

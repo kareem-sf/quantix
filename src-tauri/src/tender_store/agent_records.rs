@@ -40,6 +40,11 @@ use super::external_rfis::{
     external_rfi_review_target_is_open, publish_external_rfi_review, ExternalRfiReviewCandidate,
     ExternalRfiReviewPublication,
 };
+use super::package_validation::{
+    publish_submission_section_review, submission_section_review_target_is_open,
+    submission_section_review_task, validate_submission_section_review_candidate,
+    SubmissionSectionReviewCandidate,
+};
 use super::pricing::{
     publish_priced_cost_baseline_review, publish_pricing_adjustment_review,
     PricedCostBaselineReviewCandidate, PricingReviewPublication,
@@ -513,6 +518,7 @@ impl TenderStore {
         let mut tender_record_candidate: Option<TenderRecordCandidateBatch> = None;
         let mut tender_record_review: Option<TenderRecordReviewCandidate> = None;
         let mut bid_package_review: Option<BidDecisionPackageReviewCandidate> = None;
+        let mut submission_section_review: Option<SubmissionSectionReviewCandidate> = None;
         let mut external_rfi_review: Option<ExternalRfiReviewCandidate> = None;
         let mut calculation_rule_review: Option<CalculationRuleReviewCandidate> = None;
         let mut cost_estimator_calculation: Option<CostEstimatorCalculationCandidate> = None;
@@ -552,6 +558,40 @@ impl TenderStore {
                     {
                         event.summary =
                             "Candidate Tender Records failed provenance validation".into();
+                    }
+                }
+            }
+        }
+        if execution.state == AgentRunState::Completed
+            && submission_section_review_task(&prepared.task)
+        {
+            let validation = execution
+                .candidate_payload_json
+                .as_deref()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                .and_then(|payload| {
+                    validate_submission_section_review_candidate(&prepared.task, payload)
+                });
+            match validation {
+                Ok(candidate) => submission_section_review = Some(candidate),
+                Err(_) => {
+                    execution.state = AgentRunState::Failed;
+                    execution.failure = Some(ProviderFailure::new(
+                        ProviderFailureCategory::OutputInvalid,
+                        true,
+                        "Review the exact Submission Package section again with bounded attributable findings.",
+                        Some("The independent Submission Package section review failed exact validation."),
+                    ));
+                    execution.candidate_payload_json = None;
+                    if let Some(event) = execution
+                        .events
+                        .iter_mut()
+                        .rev()
+                        .find(|event| event.kind == ProviderEventKind::Terminal)
+                    {
+                        event.summary =
+                            "Independent Submission Package section review failed validation"
+                                .into();
                     }
                 }
             }
@@ -870,6 +910,7 @@ impl TenderStore {
             ));
             execution.candidate_payload_json = None;
             bid_package_review = None;
+            submission_section_review = None;
             if let Some(event) = execution
                 .events
                 .iter_mut()
@@ -1065,6 +1106,7 @@ impl TenderStore {
             tender_record_candidate = None;
             tender_record_review = None;
             bid_package_review = None;
+            submission_section_review = None;
             external_rfi_review = None;
             calculation_rule_review = None;
             cost_estimator_calculation = None;
@@ -1125,6 +1167,30 @@ impl TenderStore {
             {
                 event.summary =
                     "Independent package review rejected because its exact target is no longer open".into();
+            }
+        }
+        if execution.state == AgentRunState::Completed
+            && submission_section_review.is_some()
+            && !submission_section_review_target_is_open(&transaction, &prepared.task)?
+        {
+            execution.state = AgentRunState::Failed;
+            execution.failure = Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                false,
+                "Inspect the current exact Submission Package, validation, and Final Review Plan.",
+                Some("The section assignment was reviewed, superseded, or became stale before publication."),
+            ));
+            execution.candidate_payload_json = None;
+            submission_section_review = None;
+            if let Some(event) = execution
+                .events
+                .iter_mut()
+                .rev()
+                .find(|event| event.kind == ProviderEventKind::Terminal)
+            {
+                event.summary =
+                    "Independent Submission Package review rejected because its exact target is no longer open"
+                        .into();
             }
         }
         if execution.state == AgentRunState::Completed
@@ -1300,6 +1366,7 @@ impl TenderStore {
             tender_record_candidate = None;
             tender_record_review = None;
             bid_package_review = None;
+            submission_section_review = None;
             if let Some(event) = execution
                 .events
                 .iter_mut()
@@ -1458,6 +1525,20 @@ impl TenderStore {
                 tender_id,
                 tender_revision,
                 &prepared.run_id,
+                &prepared.task,
+                candidate,
+                &completed_at,
+            )?;
+        }
+        if let Some(candidate) = submission_section_review.as_ref() {
+            if result_id.is_none() {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            publish_submission_section_review(
+                &transaction,
+                tender_id,
+                &prepared.run_id,
+                &prepared.profile,
                 &prepared.task,
                 candidate,
                 &completed_at,

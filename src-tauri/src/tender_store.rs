@@ -42,6 +42,7 @@ mod decision_cockpit;
 mod estimates;
 mod external_rfis;
 mod package_production;
+mod package_validation;
 mod pricing;
 mod production_scheduler;
 mod submission_packages;
@@ -139,6 +140,16 @@ pub use package_production::{
     SubmissionArtifactContent, SubmissionArtifactVersion, SubmissionGeneratedArtifactReference,
     SubmissionSourceArtifactReference,
 };
+pub use package_validation::{
+    ApprovePackageFindingExceptionCommand, FinalReviewAssignment, FinalReviewInspection,
+    FinalReviewPlan, FinalReviewReviewer, ManualVerificationResult,
+    PackageFindingExceptionApproval, PackageManualVerification, PackageReviewFinding,
+    PackageReviewResult, PackageValidationCheckCategory, PackageValidationOutcome,
+    PackageValidationPolicy, PackageValidationResult, PackageValidationRule, PackageValidationRun,
+    RecordPackageManualVerificationCommand, ReleaseReadinessBlocker, ReleaseReadinessBlockerCode,
+    ReleaseReadinessCategorySummary, ReleaseReadinessReport, RunPackageValidationCommand,
+    RunSubmissionSectionReviewCommand, SubmissionSectionReview, SubmissionSectionReviewRunResult,
+};
 pub use pricing::{
     ApproveCommercialStrategyCommand, ApprovePricedCostBaselineCommand,
     ApprovePricingAdjustmentCommand, ApproveTenderPriceCommand, ApprovedTenderPrice,
@@ -206,7 +217,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 23;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 24;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -2188,6 +2199,189 @@ CREATE TABLE submission_package_head (
   FOREIGN KEY (package_id, current_version)
     REFERENCES submission_package_versions(package_id, version)
 );
+CREATE TABLE package_validation_policies (
+  policy_id TEXT NOT NULL CHECK (length(policy_id) = 32),
+  version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 32),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (policy_id, version)
+);
+CREATE TABLE package_validation_runs (
+  run_id TEXT PRIMARY KEY CHECK (length(run_id) = 32),
+  package_id TEXT NOT NULL,
+  package_version INTEGER NOT NULL CHECK (package_version BETWEEN 1 AND 32),
+  package_manifest_sha256 TEXT NOT NULL CHECK (length(package_manifest_sha256) = 64),
+  policy_id TEXT NOT NULL,
+  policy_version INTEGER NOT NULL CHECK (policy_version BETWEEN 1 AND 32),
+  policy_manifest_sha256 TEXT NOT NULL CHECK (length(policy_manifest_sha256) = 64),
+  validator_version INTEGER NOT NULL CHECK (validator_version > 0),
+  renderer_version INTEGER NOT NULL CHECK (renderer_version > 0),
+  context_sha256 TEXT NOT NULL CHECK (length(context_sha256) = 64),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  created_at TEXT NOT NULL,
+  UNIQUE (package_id, package_version),
+  FOREIGN KEY (package_id, package_version)
+    REFERENCES submission_package_versions(package_id, version),
+  FOREIGN KEY (policy_id, policy_version)
+    REFERENCES package_validation_policies(policy_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE package_validation_item_results (
+  result_id TEXT PRIMARY KEY CHECK (length(result_id) = 32),
+  run_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 65536),
+  item_id TEXT NOT NULL CHECK (length(item_id) = 64),
+  content_sha256 TEXT NOT NULL CHECK (length(content_sha256) = 64),
+  validation_context_sha256 TEXT NOT NULL CHECK (length(validation_context_sha256) = 64),
+  check_id TEXT NOT NULL CHECK (length(CAST(check_id AS BLOB)) BETWEEN 1 AND 200),
+  check_version INTEGER NOT NULL CHECK (check_version > 0),
+  category TEXT NOT NULL CHECK (category IN (
+    'file_structure', 'rendering', 'calculation', 'cross_artifact_consistency',
+    'hidden_content', 'information_boundary', 'filename', 'hash', 'package_wide'
+  )),
+  outcome TEXT NOT NULL CHECK (outcome IN ('passed', 'failed', 'manual_verification_required')),
+  policy_manifest_sha256 TEXT NOT NULL CHECK (length(policy_manifest_sha256) = 64),
+  reused_from_result_id TEXT,
+  result_json TEXT NOT NULL CHECK (json_valid(result_json)),
+  UNIQUE (run_id, ordinal),
+  UNIQUE (run_id, item_id, check_id),
+  FOREIGN KEY (run_id) REFERENCES package_validation_runs(run_id),
+  FOREIGN KEY (reused_from_result_id) REFERENCES package_validation_item_results(result_id)
+);
+CREATE TABLE package_validation_package_results (
+  result_id TEXT PRIMARY KEY CHECK (length(result_id) = 32),
+  run_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 4096),
+  check_id TEXT NOT NULL CHECK (length(CAST(check_id AS BLOB)) BETWEEN 1 AND 200),
+  check_version INTEGER NOT NULL CHECK (check_version > 0),
+  category TEXT NOT NULL CHECK (category IN (
+    'file_structure', 'rendering', 'calculation', 'cross_artifact_consistency',
+    'hidden_content', 'information_boundary', 'filename', 'hash', 'package_wide'
+  )),
+  outcome TEXT NOT NULL CHECK (outcome IN ('passed', 'failed', 'manual_verification_required')),
+  result_json TEXT NOT NULL CHECK (json_valid(result_json)),
+  UNIQUE (run_id, ordinal),
+  UNIQUE (run_id, check_id),
+  FOREIGN KEY (run_id) REFERENCES package_validation_runs(run_id)
+);
+CREATE TABLE package_manual_verifications (
+  verification_id TEXT PRIMARY KEY CHECK (length(verification_id) = 32),
+  validation_result_id TEXT NOT NULL UNIQUE,
+  package_id TEXT NOT NULL,
+  package_version INTEGER NOT NULL CHECK (package_version BETWEEN 1 AND 32),
+  package_manifest_sha256 TEXT NOT NULL CHECK (length(package_manifest_sha256) = 64),
+  item_id TEXT NOT NULL CHECK (length(item_id) = 64),
+  content_sha256 TEXT NOT NULL CHECK (length(content_sha256) = 64),
+  capability TEXT NOT NULL CHECK (length(CAST(capability AS BLOB)) BETWEEN 1 AND 100),
+  result TEXT NOT NULL CHECK (result IN ('passed', 'failed')),
+  verification_json TEXT NOT NULL CHECK (json_valid(verification_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (validation_result_id) REFERENCES package_validation_item_results(result_id),
+  FOREIGN KEY (package_id, package_version)
+    REFERENCES submission_package_versions(package_id, version)
+);
+CREATE TABLE final_review_plans (
+  plan_id TEXT PRIMARY KEY CHECK (length(plan_id) = 32),
+  package_id TEXT NOT NULL,
+  package_version INTEGER NOT NULL CHECK (package_version BETWEEN 1 AND 32),
+  package_manifest_sha256 TEXT NOT NULL CHECK (length(package_manifest_sha256) = 64),
+  validation_run_id TEXT NOT NULL UNIQUE,
+  policy_manifest_sha256 TEXT NOT NULL CHECK (length(policy_manifest_sha256) = 64),
+  plan_json TEXT NOT NULL CHECK (json_valid(plan_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  UNIQUE (package_id, package_version),
+  FOREIGN KEY (validation_run_id) REFERENCES package_validation_runs(run_id),
+  FOREIGN KEY (package_id, package_version)
+    REFERENCES submission_package_versions(package_id, version)
+);
+CREATE TABLE final_review_assignments (
+  assignment_id TEXT PRIMARY KEY CHECK (length(assignment_id) = 32),
+  plan_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 4096),
+  section_key TEXT NOT NULL,
+  required_capability TEXT NOT NULL,
+  reviewer_profile_id TEXT,
+  reviewer_profile_version INTEGER,
+  assignment_json TEXT NOT NULL CHECK (json_valid(assignment_json)),
+  UNIQUE (plan_id, ordinal),
+  FOREIGN KEY (plan_id) REFERENCES final_review_plans(plan_id),
+  FOREIGN KEY (reviewer_profile_id, reviewer_profile_version)
+    REFERENCES agent_profile_versions(profile_id, version),
+  CHECK ((reviewer_profile_id IS NULL AND reviewer_profile_version IS NULL)
+    OR (reviewer_profile_id IS NOT NULL AND reviewer_profile_version > 0))
+);
+CREATE TABLE submission_section_reviews (
+  review_id TEXT PRIMARY KEY CHECK (length(review_id) = 32),
+  assignment_id TEXT NOT NULL UNIQUE,
+  package_id TEXT NOT NULL,
+  package_version INTEGER NOT NULL CHECK (package_version BETWEEN 1 AND 32),
+  package_manifest_sha256 TEXT NOT NULL CHECK (length(package_manifest_sha256) = 64),
+  reviewer_run_id TEXT NOT NULL UNIQUE,
+  reviewer_profile_id TEXT NOT NULL,
+  reviewer_profile_version INTEGER NOT NULL CHECK (reviewer_profile_version > 0),
+  result TEXT NOT NULL CHECK (result IN ('satisfied', 'requires_remediation')),
+  review_json TEXT NOT NULL CHECK (json_valid(review_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (assignment_id) REFERENCES final_review_assignments(assignment_id),
+  FOREIGN KEY (reviewer_run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (reviewer_profile_id, reviewer_profile_version)
+    REFERENCES agent_profile_versions(profile_id, version),
+  FOREIGN KEY (package_id, package_version)
+    REFERENCES submission_package_versions(package_id, version)
+);
+CREATE TABLE submission_section_review_findings (
+  finding_id TEXT PRIMARY KEY CHECK (length(finding_id) = 32),
+  review_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 64),
+  severity TEXT NOT NULL CHECK (severity IN ('critical', 'major', 'minor')),
+  policy_rule_id TEXT NOT NULL,
+  finding_json TEXT NOT NULL CHECK (json_valid(finding_json)),
+  UNIQUE (review_id, ordinal),
+  FOREIGN KEY (review_id) REFERENCES submission_section_reviews(review_id)
+);
+CREATE TABLE package_finding_exception_approvals (
+  approval_id TEXT PRIMARY KEY CHECK (length(approval_id) = 32),
+  finding_id TEXT NOT NULL UNIQUE,
+  package_id TEXT NOT NULL,
+  package_version INTEGER NOT NULL CHECK (package_version BETWEEN 1 AND 32),
+  package_manifest_sha256 TEXT NOT NULL CHECK (length(package_manifest_sha256) = 64),
+  approval_json TEXT NOT NULL CHECK (json_valid(approval_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (finding_id) REFERENCES submission_section_review_findings(finding_id),
+  FOREIGN KEY (package_id, package_version)
+    REFERENCES submission_package_versions(package_id, version)
+);
+CREATE TABLE release_readiness_reports (
+  report_id TEXT NOT NULL CHECK (length(report_id) = 32),
+  version INTEGER NOT NULL CHECK (version > 0),
+  package_id TEXT NOT NULL,
+  package_version INTEGER NOT NULL CHECK (package_version BETWEEN 1 AND 32),
+  package_manifest_sha256 TEXT NOT NULL CHECK (length(package_manifest_sha256) = 64),
+  through_event_sequence INTEGER NOT NULL CHECK (through_event_sequence > 0),
+  report_json TEXT NOT NULL CHECK (json_valid(report_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (report_id, version),
+  FOREIGN KEY (package_id, package_version)
+    REFERENCES submission_package_versions(package_id, version),
+  FOREIGN KEY (through_event_sequence) REFERENCES audit_events(sequence),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE release_readiness_report_head (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  report_id TEXT NOT NULL,
+  current_version INTEGER NOT NULL CHECK (current_version > 0),
+  FOREIGN KEY (report_id, current_version)
+    REFERENCES release_readiness_reports(report_id, version)
+);
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
   event_type TEXT NOT NULL,
@@ -2638,6 +2832,30 @@ CREATE TRIGGER submission_package_uncovered_requirements_no_update BEFORE UPDATE
 CREATE TRIGGER submission_package_uncovered_requirements_no_delete BEFORE DELETE ON submission_package_uncovered_requirements BEGIN SELECT RAISE(ABORT, 'Submission Package Uncovered Requirements are immutable'); END;
 CREATE TRIGGER submission_package_head_identity_immutable BEFORE UPDATE ON submission_package_head WHEN NEW.singleton != OLD.singleton OR NEW.package_id != OLD.package_id BEGIN SELECT RAISE(ABORT, 'Submission Package head identity is immutable'); END;
 CREATE TRIGGER submission_package_head_no_delete BEFORE DELETE ON submission_package_head BEGIN SELECT RAISE(ABORT, 'Submission Package head cannot be deleted'); END;
+CREATE TRIGGER package_validation_policies_no_update BEFORE UPDATE ON package_validation_policies BEGIN SELECT RAISE(ABORT, 'Package Validation Policies are immutable'); END;
+CREATE TRIGGER package_validation_policies_no_delete BEFORE DELETE ON package_validation_policies BEGIN SELECT RAISE(ABORT, 'Package Validation Policies are immutable'); END;
+CREATE TRIGGER package_validation_runs_no_update BEFORE UPDATE ON package_validation_runs BEGIN SELECT RAISE(ABORT, 'Package Validation Runs are immutable'); END;
+CREATE TRIGGER package_validation_runs_no_delete BEFORE DELETE ON package_validation_runs BEGIN SELECT RAISE(ABORT, 'Package Validation Runs are immutable'); END;
+CREATE TRIGGER package_validation_item_results_no_update BEFORE UPDATE ON package_validation_item_results BEGIN SELECT RAISE(ABORT, 'Package Validation item results are immutable'); END;
+CREATE TRIGGER package_validation_item_results_no_delete BEFORE DELETE ON package_validation_item_results BEGIN SELECT RAISE(ABORT, 'Package Validation item results are immutable'); END;
+CREATE TRIGGER package_validation_package_results_no_update BEFORE UPDATE ON package_validation_package_results BEGIN SELECT RAISE(ABORT, 'Package Validation package results are immutable'); END;
+CREATE TRIGGER package_validation_package_results_no_delete BEFORE DELETE ON package_validation_package_results BEGIN SELECT RAISE(ABORT, 'Package Validation package results are immutable'); END;
+CREATE TRIGGER package_manual_verifications_no_update BEFORE UPDATE ON package_manual_verifications BEGIN SELECT RAISE(ABORT, 'Manual Verifications are immutable'); END;
+CREATE TRIGGER package_manual_verifications_no_delete BEFORE DELETE ON package_manual_verifications BEGIN SELECT RAISE(ABORT, 'Manual Verifications are immutable'); END;
+CREATE TRIGGER final_review_plans_no_update BEFORE UPDATE ON final_review_plans BEGIN SELECT RAISE(ABORT, 'Final Review Plans are immutable'); END;
+CREATE TRIGGER final_review_plans_no_delete BEFORE DELETE ON final_review_plans BEGIN SELECT RAISE(ABORT, 'Final Review Plans are immutable'); END;
+CREATE TRIGGER final_review_assignments_no_update BEFORE UPDATE ON final_review_assignments BEGIN SELECT RAISE(ABORT, 'Final Review assignments are immutable'); END;
+CREATE TRIGGER final_review_assignments_no_delete BEFORE DELETE ON final_review_assignments BEGIN SELECT RAISE(ABORT, 'Final Review assignments are immutable'); END;
+CREATE TRIGGER submission_section_reviews_no_update BEFORE UPDATE ON submission_section_reviews BEGIN SELECT RAISE(ABORT, 'Submission Section Reviews are immutable'); END;
+CREATE TRIGGER submission_section_reviews_no_delete BEFORE DELETE ON submission_section_reviews BEGIN SELECT RAISE(ABORT, 'Submission Section Reviews are immutable'); END;
+CREATE TRIGGER submission_section_review_findings_no_update BEFORE UPDATE ON submission_section_review_findings BEGIN SELECT RAISE(ABORT, 'Submission Section Review Findings are immutable'); END;
+CREATE TRIGGER submission_section_review_findings_no_delete BEFORE DELETE ON submission_section_review_findings BEGIN SELECT RAISE(ABORT, 'Submission Section Review Findings are immutable'); END;
+CREATE TRIGGER package_finding_exception_approvals_no_update BEFORE UPDATE ON package_finding_exception_approvals BEGIN SELECT RAISE(ABORT, 'Package Finding Exception Approvals are immutable'); END;
+CREATE TRIGGER package_finding_exception_approvals_no_delete BEFORE DELETE ON package_finding_exception_approvals BEGIN SELECT RAISE(ABORT, 'Package Finding Exception Approvals are immutable'); END;
+CREATE TRIGGER release_readiness_reports_no_update BEFORE UPDATE ON release_readiness_reports BEGIN SELECT RAISE(ABORT, 'Release Readiness Reports are immutable'); END;
+CREATE TRIGGER release_readiness_reports_no_delete BEFORE DELETE ON release_readiness_reports BEGIN SELECT RAISE(ABORT, 'Release Readiness Reports are immutable'); END;
+CREATE TRIGGER release_readiness_report_head_identity_immutable BEFORE UPDATE ON release_readiness_report_head WHEN NEW.singleton != OLD.singleton OR NEW.report_id != OLD.report_id BEGIN SELECT RAISE(ABORT, 'Release Readiness Report head identity is immutable'); END;
+CREATE TRIGGER release_readiness_report_head_no_delete BEFORE DELETE ON release_readiness_report_head BEGIN SELECT RAISE(ABORT, 'Release Readiness Report head cannot be deleted'); END;
 CREATE TRIGGER source_artifacts_no_update
 BEFORE UPDATE ON source_artifacts
 BEGIN
@@ -4012,6 +4230,9 @@ impl TenderStore {
             return Ok(false);
         }
         if !self.submission_package_manifests_are_valid_with_check(check)? {
+            return Ok(false);
+        }
+        if !self.package_validation_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
         let mut statement = self

@@ -464,6 +464,7 @@ fn run_agent_turn(
         || scenario.starts_with("basis-of-estimate-review")
         || scenario.starts_with("priced-cost-baseline-review")
         || scenario.starts_with("pricing-adjustment-review")
+        || scenario.starts_with("submission-final-review")
         || scenario.starts_with("production-task");
     let dynamic_tools_are_exact = if is_record_scenario {
         thread_request
@@ -668,6 +669,7 @@ fn run_agent_turn(
         .pointer("/tender/name")
         .or_else(|| provider_data_view.pointer("/record/title"))
         .or_else(|| provider_data_view.pointer("/manifest/package_id"))
+        .or_else(|| provider_data_view.pointer("/package/package_id"))
         .or_else(|| provider_data_view.pointer("/external_rfi/rfi_id"))
         .and_then(serde_json::Value::as_str)
         .ok_or("provider-visible Tender name")?
@@ -965,6 +967,11 @@ fn run_agent_turn(
             | "priced-cost-baseline-review-failed"
             | "pricing-adjustment-review"
             | "pricing-adjustment-review-failed"
+            | "submission-final-review"
+            | "submission-final-review-critical"
+            | "submission-final-review-major"
+            | "submission-final-review-major-impermissible"
+            | "submission-final-review-minor"
             | "production-task"
             | "production-task-coordination-cost-conflict"
             | "production-task-coordination-commitment-conflict"
@@ -1614,6 +1621,52 @@ fn run_agent_turn(
         "bid-package-review" | "bid-package-review-change-assessment"
     ) {
         serde_json::json!({ "outcome": "passed", "findings": [] })
+    } else if scenario.starts_with("submission-final-review") {
+        let assignment = provider_data_view
+            .get("assignment")
+            .ok_or("Submission Final Review assignment")?;
+        let package = provider_data_view
+            .get("package")
+            .ok_or("Submission Final Review package")?;
+        let findings = match scenario {
+            "submission-final-review-critical" => serde_json::json!([{
+                "severity": "critical",
+                "policy_rule_id": "quantix.content_hash",
+                "summary": "The exact package has a critical release-integrity defect.",
+                "evidence_references": [package.get("manifest_sha256").cloned().ok_or("package manifest")?]
+            }]),
+            "submission-final-review-major" => serde_json::json!([{
+                "severity": "major",
+                "policy_rule_id": "quantix.rendering_model",
+                "summary": "The exact package has a policy-permitted major filename defect.",
+                "evidence_references": [package.get("manifest_sha256").cloned().ok_or("package manifest")?]
+            }]),
+            "submission-final-review-major-impermissible" => serde_json::json!([{
+                "severity": "major",
+                "policy_rule_id": "quantix.filename",
+                "summary": "The exact package has a Major filename defect that policy does not permit as an exception.",
+                "evidence_references": [package.get("manifest_sha256").cloned().ok_or("package manifest")?]
+            }]),
+            "submission-final-review-minor" => serde_json::json!([{
+                "severity": "minor",
+                "policy_rule_id": "quantix.rendering_model",
+                "summary": "The exact package has a disclosed nonblocking presentation defect.",
+                "evidence_references": [package.get("manifest_sha256").cloned().ok_or("package manifest")?]
+            }]),
+            _ => serde_json::json!([]),
+        };
+        serde_json::json!({
+            "assignment_id": assignment.get("assignment_id").cloned().ok_or("assignment id")?,
+            "package_id": package.get("package_id").cloned().ok_or("package id")?,
+            "package_version": package.get("version").cloned().ok_or("package version")?,
+            "package_manifest_sha256": package.get("manifest_sha256").cloned().ok_or("package manifest")?,
+            "result": if findings.as_array().is_some_and(Vec::is_empty) || scenario == "submission-final-review-minor" {
+                "satisfied"
+            } else {
+                "requires_remediation"
+            },
+            "findings": findings,
+        })
     } else if scenario == "external-rfi-review-delayed" {
         fs::write(
             executable.with_extension("external-rfi-review-waiting"),
