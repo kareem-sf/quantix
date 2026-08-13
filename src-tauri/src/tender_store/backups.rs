@@ -401,6 +401,8 @@ struct TrashedTenderLifecycleDecision {
     decided_by: String,
     acting_role: String,
     created_at: String,
+    audit_event_count: Option<u64>,
+    audit_chain_head: Option<String>,
     manifest_sha256: String,
 }
 
@@ -1878,15 +1880,10 @@ impl QuantixHost {
         if purge_root.exists() {
             return Err(TenderCommandError::new(TenderErrorCode::StoreUnavailable));
         }
-        let (next_record, receipt) =
-            self.begin_purge_from_trash(record, command.rationale.trim(), &summary)?;
-        record = next_record;
+        record = self.begin_purge_from_trash(record, command.rationale.trim(), &summary)?;
         fs::rename(&source, &purge_root).map_err(store_unavailable)?;
         remove_verified_directory(&self.application_home().join("staging"), &purge_root)?;
-        record.state = TrashedTenderState::Purged;
-        record.updated_at = self.installation_timestamp()?;
-        self.update_trash_record(&record, TrashedTenderState::Purging)?;
-        Ok(receipt)
+        self.complete_purge_from_trash(record)
     }
 
     pub fn inspect_deletion_receipts(&self) -> Result<Vec<DeletionReceipt>, TenderCommandError> {
@@ -2076,6 +2073,8 @@ impl QuantixHost {
             decided_by: "engineer_user".into(),
             acting_role: "tendering_manager".into(),
             created_at: created_at.clone(),
+            audit_event_count: None,
+            audit_chain_head: None,
             manifest_sha256: String::new(),
         };
         decision.manifest_sha256 = manifest_sha256_record(&decision)?;
@@ -2101,7 +2100,7 @@ impl QuantixHost {
         mut record: TrashedTenderRecord,
         rationale: &str,
         summary: &TenderSummary,
-    ) -> Result<(TrashedTenderRecord, DeletionReceipt), TenderCommandError> {
+    ) -> Result<TrashedTenderRecord, TenderCommandError> {
         let _guard = self
             .catalogue_lock()
             .lock()
@@ -2125,19 +2124,76 @@ impl QuantixHost {
             decided_by: "engineer_user".into(),
             acting_role: "tendering_manager".into(),
             created_at: created_at.clone(),
+            audit_event_count: Some(summary.audit_event_count),
+            audit_chain_head: Some(summary.audit_chain_head.clone()),
             manifest_sha256: String::new(),
         };
         decision.manifest_sha256 = manifest_sha256_record(&decision)?;
         insert_trash_lifecycle_decision(&transaction, &decision)?;
+        let changed = transaction
+            .execute(
+                "UPDATE tender_trash SET state = 'purging', updated_at = ?2
+                 WHERE deletion_id = ?1 AND state = 'trashed'",
+                params![record.deletion_id, created_at],
+            )
+            .map_err(sql_error)?;
+        if changed != 1 {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        transaction.commit().map_err(sql_error)?;
+        record.state = TrashedTenderState::Purging;
+        record.updated_at = created_at;
+        Ok(record)
+    }
+
+    fn complete_purge_from_trash(
+        &self,
+        record: TrashedTenderRecord,
+    ) -> Result<DeletionReceipt, TenderCommandError> {
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let mut connection = Connection::open(self.application_home().join("installation.sqlite"))
+            .map_err(sql_error)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let decision_json: String = transaction
+            .query_row(
+                "SELECT decision_json FROM tender_trash_decisions
+                 WHERE deletion_id = ?1 AND action = 'purge'
+                 ORDER BY created_at DESC, decision_id DESC LIMIT 1",
+                params![record.deletion_id],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        let decision = parse_canonical_record::<TrashedTenderLifecycleDecision>(&decision_json)?;
+        if decision.deletion_id != record.deletion_id
+            || decision.tender_id != record.tender_id
+            || decision.action != "purge"
+            || manifest_sha256_record(&decision)? != decision.manifest_sha256
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let purged_at: String = transaction
+            .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |row| {
+                row.get(0)
+            })
+            .map_err(sql_error)?;
         let mut receipt = DeletionReceipt {
             receipt_id: random_identifier(&transaction)?,
             deletion_id: record.deletion_id.clone(),
             tender_id: record.tender_id.clone(),
-            audit_event_count: summary.audit_event_count,
-            audit_chain_head: summary.audit_chain_head.clone(),
-            purged_by: "engineer_user".into(),
-            acting_role: "tendering_manager".into(),
-            purged_at: created_at.clone(),
+            audit_event_count: decision
+                .audit_event_count
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            audit_chain_head: decision
+                .audit_chain_head
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            purged_by: decision.decided_by,
+            acting_role: decision.acting_role,
+            purged_at: purged_at.clone(),
             manifest_sha256: String::new(),
         };
         receipt.manifest_sha256 = manifest_sha256_record(&receipt)?;
@@ -2158,18 +2214,16 @@ impl QuantixHost {
             .map_err(sql_error)?;
         let changed = transaction
             .execute(
-                "UPDATE tender_trash SET state = 'purging', updated_at = ?2
-                 WHERE deletion_id = ?1 AND state = 'trashed'",
-                params![record.deletion_id, created_at],
+                "UPDATE tender_trash SET state = 'purged', diagnostic_code = NULL, updated_at = ?2
+                 WHERE deletion_id = ?1 AND state = 'purging'",
+                params![record.deletion_id, purged_at],
             )
             .map_err(sql_error)?;
         if changed != 1 {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
         transaction.commit().map_err(sql_error)?;
-        record.state = TrashedTenderState::Purging;
-        record.updated_at = created_at;
-        Ok((record, receipt))
+        Ok(receipt)
     }
 
     fn ensure_tender_identity_available(
@@ -2341,7 +2395,8 @@ impl QuantixHost {
                             &purging,
                         )?;
                     }
-                    record.state = TrashedTenderState::Purged;
+                    self.complete_purge_from_trash(record)?;
+                    continue;
                 }
                 _ => return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
             }
