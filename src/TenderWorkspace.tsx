@@ -27,7 +27,10 @@ import { TenderRecoveryPanel } from "./TenderRecoveryPanel";
 import { TenderRecordsPanel } from "./TenderRecordsPanel";
 import { TenderOfficePanel } from "./TenderOfficePanel";
 import { TenderQueryRegisterPanel } from "./TenderQueryRegisterPanel";
+import { TenderRetentionPanel } from "./TenderRetentionPanel";
+import { TenderTrashPanel } from "./TenderTrashPanel";
 import {
+  chooseAndImportPortableTenderArchive,
   chooseAndImportTenderPackage,
   confirmSourceRelationship,
   createTenderBackup,
@@ -77,6 +80,18 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
     () => setTenderStateVersion((version) => version + 1),
     [],
   );
+  const reloadCatalogue = useCallback(() => {
+    void listTenders()
+      .then((tenders) => setCatalogue({ kind: "ready", tenders }))
+      .catch(() => setCatalogue({ kind: "error" }));
+  }, []);
+  const handleTenderRemoved = useCallback(() => {
+    setSelected(undefined);
+    setRecovery(undefined);
+    setDocumentRegister(undefined);
+    reloadCatalogue();
+    reportTenderStateChange();
+  }, [reloadCatalogue, reportTenderStateChange]);
 
   const refreshBackupRecovery = async (tenderId: string) => {
     const [nextBackups, nextRecoveries] = await Promise.all([
@@ -158,6 +173,26 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
         setRecoveries([]);
       }
     });
+  };
+
+  const handlePortableArchiveImport = async () => {
+    setBusy(true);
+    setCommandFailed(false);
+    try {
+      const imported = await chooseAndImportPortableTenderArchive();
+      if (imported) {
+        updateTender(imported);
+        setDocumentRegister(await inspectDocumentRegister(imported.tender_id));
+        await refreshBackupRecovery(imported.tender_id);
+        setLastIntake(undefined);
+        setPriorVersionKey("");
+        setReplacementVersionKey("");
+      }
+    } catch {
+      setCommandFailed(true);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleRevise = (event: FormEvent<HTMLFormElement>) => {
@@ -373,6 +408,13 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
               </button>
             </div>
           </form>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void handlePortableArchiveImport()}
+          >
+            Import verified Portable Tender Archive
+          </button>
 
           {!runtimeReady ? (
             <p className="catalogue-message" role="status">
@@ -434,6 +476,11 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
               ))}
             </ul>
           ) : null}
+          <TenderTrashPanel
+            refreshToken={tenderStateVersion}
+            reportCommandFailure={reportCommandFailure}
+            onCatalogueChange={reloadCatalogue}
+          />
         </div>
 
         <aside className="tender-detail" aria-live="polite">
@@ -779,6 +826,14 @@ export function TenderWorkspace({ runtimeReady }: TenderWorkspaceProps) {
                 refreshToken={tenderStateVersion}
                 reportCommandFailure={reportCommandFailure}
                 onTenderStateChange={reportTenderStateChange}
+              />
+              <TenderRetentionPanel
+                key={`retention-${selected.tender_id}`}
+                tenderId={selected.tender_id}
+                refreshToken={tenderStateVersion}
+                reportCommandFailure={reportCommandFailure}
+                onTenderStateChange={reportTenderStateChange}
+                onTenderRemoved={handleTenderRemoved}
               />
             </>
           ) : recovery ? (

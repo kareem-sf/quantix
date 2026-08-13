@@ -7,7 +7,9 @@ use std::{
 };
 
 use garde::Validate;
-use rusqlite::{backup::StepResult, params, Connection, OpenFlags, TransactionBehavior};
+use rusqlite::{
+    backup::StepResult, params, Connection, OpenFlags, Transaction, TransactionBehavior,
+};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
@@ -241,6 +243,165 @@ pub struct TenderRecoveryRecord {
     pub diagnostic_code: Option<String>,
     pub decision_record: Option<TenderRecoveryDecisionRecord>,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Validate, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct CreatePortableTenderArchiveCommand {
+    #[garde(length(bytes, min = 32, max = 32), ascii)]
+    pub tender_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Validate, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ImportPortableTenderArchiveCommand {
+    #[garde(length(bytes, min = 1, max = 32767))]
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Validate, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct TenderRetentionDecisionCommand {
+    #[garde(length(bytes, min = 32, max = 32), ascii)]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 1, max = 4000))]
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Validate, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct TrashedTenderDecisionCommand {
+    #[garde(length(bytes, min = 32, max = 32), ascii)]
+    pub deletion_id: String,
+    #[garde(length(bytes, min = 1, max = 4000))]
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TenderRetentionState {
+    Active,
+    Archived,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PortableTenderArchiveRecord {
+    pub archive_id: String,
+    pub tender_id: String,
+    pub backup_id: String,
+    pub relative_path: String,
+    pub source: TenderSummary,
+    pub database_sha256: String,
+    pub content_object_count: u64,
+    pub audit_event_count: u64,
+    pub audit_chain_head: String,
+    pub tender_schema_version: i64,
+    pub quantix_version: String,
+    pub manifest_sha256: String,
+    pub archive_size_bytes: u64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TenderRetentionDecisionRecord {
+    pub decision_id: String,
+    pub tender_id: String,
+    pub state: TenderRetentionState,
+    pub rationale: String,
+    pub decided_by: String,
+    pub acting_role: String,
+    pub manifest_sha256: String,
+    pub decided_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TrashedTenderState {
+    Moving,
+    Trashed,
+    Restoring,
+    Purging,
+    Restored,
+    Purged,
+    Failed,
+}
+
+impl TrashedTenderState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Moving => "moving",
+            Self::Trashed => "trashed",
+            Self::Restoring => "restoring",
+            Self::Purging => "purging",
+            Self::Restored => "restored",
+            Self::Purged => "purged",
+            Self::Failed => "failed",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, TenderCommandError> {
+        match value {
+            "moving" => Ok(Self::Moving),
+            "trashed" => Ok(Self::Trashed),
+            "restoring" => Ok(Self::Restoring),
+            "purging" => Ok(Self::Purging),
+            "restored" => Ok(Self::Restored),
+            "purged" => Ok(Self::Purged),
+            "failed" => Ok(Self::Failed),
+            _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TrashedTenderRecord {
+    pub deletion_id: String,
+    pub tender_id: String,
+    pub state: TrashedTenderState,
+    pub relative_path: String,
+    pub rationale: String,
+    pub decided_by: String,
+    pub acting_role: String,
+    pub approval_manifest_sha256: String,
+    pub diagnostic_code: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DeletionReceipt {
+    pub receipt_id: String,
+    pub deletion_id: String,
+    pub tender_id: String,
+    pub audit_event_count: u64,
+    pub audit_chain_head: String,
+    pub purged_by: String,
+    pub acting_role: String,
+    pub purged_at: String,
+    pub manifest_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct TrashedTenderLifecycleDecision {
+    decision_id: String,
+    deletion_id: String,
+    tender_id: String,
+    action: String,
+    rationale: String,
+    decided_by: String,
+    acting_role: String,
+    created_at: String,
+    manifest_sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1315,6 +1476,881 @@ impl QuantixHost {
     }
 }
 
+impl QuantixHost {
+    pub fn create_portable_tender_archive(
+        &self,
+        command: CreatePortableTenderArchiveCommand,
+    ) -> Result<PortableTenderArchiveRecord, TenderCommandError> {
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let backup = self.create_tender_backup(CreateTenderBackupCommand {
+            tender_id: tender_id.as_str().into(),
+        })?;
+        if backup.state != TenderBackupState::Ready {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let budget = StorageOperationBudget::for_tender(&tender_id);
+        let source = self
+            .application_home()
+            .join("backups")
+            .join(format!("{}.qtbackup", backup.backup_id));
+        let manifest = bind_verified_backup_archive(&source, &tender_id, &backup, budget)?;
+        let archive_id = self.installation_identifier()?;
+        let relative_path = format!("{archive_id}.qtarchive");
+        let destination = self
+            .application_home()
+            .join("archives")
+            .join(&relative_path);
+        copy_file_verified(&source, &destination, budget)?;
+        bind_verified_backup_archive(&destination, &tender_id, &backup, budget)?;
+        let archive_size_bytes = fs::metadata(&destination).map_err(store_unavailable)?.len();
+        let manifest_json = serde_json_canonicalizer::to_string(&manifest)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let record = PortableTenderArchiveRecord {
+            archive_id,
+            tender_id: tender_id.as_str().into(),
+            backup_id: backup.backup_id,
+            relative_path,
+            source: manifest.source.clone(),
+            database_sha256: manifest.database.sha256.clone(),
+            content_object_count: manifest.content.len() as u64,
+            audit_event_count: manifest.source.audit_event_count,
+            audit_chain_head: manifest.source.audit_chain_head.clone(),
+            tender_schema_version: manifest.tender_schema_version,
+            quantix_version: manifest.quantix_version.clone(),
+            manifest_sha256: sha256_hex(manifest_json.as_bytes()),
+            archive_size_bytes,
+            created_at: manifest.creation.created_at,
+        };
+        if let Err(error) = self.insert_portable_archive(&record) {
+            let _ = fs::remove_file(&destination);
+            return Err(error);
+        }
+        Ok(record)
+    }
+
+    pub fn inspect_portable_tender_archives(
+        &self,
+        tender_id: &str,
+    ) -> Result<Vec<PortableTenderArchiveRecord>, TenderCommandError> {
+        require_setup(self)?;
+        let tender_id = TenderId::parse(tender_id)?;
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let connection = Connection::open_with_flags(
+            self.application_home().join("installation.sqlite"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(sql_error)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT archive_json FROM portable_tender_archives
+                 WHERE tender_id = ?1 ORDER BY created_at, archive_id",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([tender_id.as_str()], |row| row.get::<_, String>(0))
+            .map_err(sql_error)?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(parse_canonical_record(&row.map_err(sql_error)?)?);
+        }
+        Ok(records)
+    }
+
+    pub fn import_portable_tender_archive(
+        &self,
+        command: ImportPortableTenderArchiveCommand,
+    ) -> Result<TenderSummary, TenderCommandError> {
+        let _ordinary_work = self.begin_ordinary_work()?;
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let source = Path::new(&command.source_path);
+        if !source.is_absolute()
+            || fs::symlink_metadata(source)
+                .map(|metadata| metadata.file_type().is_symlink() || !metadata.is_file())
+                .unwrap_or(true)
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let provisional_budget = StorageOperationBudget {
+            deadline: Instant::now()
+                .checked_add(MAX_BACKUP_OPERATION_DURATION)
+                .expect("fixed archive duration fits Instant"),
+        };
+        let manifest = read_backup_manifest(source, provisional_budget)?;
+        let tender_id = TenderId::parse(&manifest.tender_id)?;
+        let budget = StorageOperationBudget::for_tender(&tender_id);
+        self.ensure_tender_identity_available(&tender_id, None)?;
+        let manifest_json = serde_json_canonicalizer::to_string(&manifest)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let record = TenderBackupRecord {
+            backup_id: manifest.creation.backup_id.clone(),
+            tender_id: tender_id.as_str().into(),
+            state: TenderBackupState::Ready,
+            source: Some(manifest.source.clone()),
+            content_object_count: manifest.content.len() as u64,
+            manifest_sha256: Some(sha256_hex(manifest_json.as_bytes())),
+            archive_size_bytes: Some(fs::metadata(source).map_err(store_unavailable)?.len()),
+            diagnostic_code: None,
+            created_at: manifest.creation.created_at.clone(),
+        };
+        bind_verified_backup_archive(source, &tender_id, &record, budget)?;
+        let staging = self
+            .application_home()
+            .join("staging")
+            .join(format!("archive-import-{}", tender_id.as_str()));
+        let final_root = self
+            .application_home()
+            .join("tenders")
+            .join(tender_id.as_str());
+        if staging.exists() {
+            return Err(TenderCommandError::new(TenderErrorCode::StoreUnavailable));
+        }
+        fs::create_dir(&staging).map_err(store_unavailable)?;
+        let available = fs4::available_space(
+            staging
+                .parent()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+        )
+        .map_err(store_unavailable)?;
+        let imported = extract_verified_recovery_candidate(
+            source, &staging, &tender_id, &record, available, budget,
+        );
+        let summary = match imported {
+            Ok(summary) => summary,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&staging);
+                return Err(error);
+            }
+        };
+        if let Err(error) = fs::rename(&staging, &final_root) {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(store_unavailable(error));
+        }
+        let verified =
+            TenderStore::inspect_integrity_with_check(&final_root, &tender_id, || budget.check())?;
+        if verified.state != TenderIntegrityState::Ready {
+            let _ = fs::rename(&final_root, &staging);
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        Ok(summary)
+    }
+
+    pub fn archive_tender(
+        &self,
+        command: TenderRetentionDecisionCommand,
+    ) -> Result<TenderRetentionDecisionRecord, TenderCommandError> {
+        self.set_tender_retention(command, TenderRetentionState::Archived)
+    }
+
+    pub fn restore_archived_tender(
+        &self,
+        command: TenderRetentionDecisionCommand,
+    ) -> Result<TenderRetentionDecisionRecord, TenderCommandError> {
+        self.set_tender_retention(command, TenderRetentionState::Active)
+    }
+
+    pub fn inspect_tender_retention(
+        &self,
+        tender_id: &str,
+    ) -> Result<TenderRetentionState, TenderCommandError> {
+        require_setup(self)?;
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let archived = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .archived;
+        Ok(if archived {
+            TenderRetentionState::Archived
+        } else {
+            TenderRetentionState::Active
+        })
+    }
+
+    pub fn trash_tender(
+        &self,
+        command: TenderRetentionDecisionCommand,
+    ) -> Result<TrashedTenderRecord, TenderCommandError> {
+        let _ordinary_work = self.begin_ordinary_work()?;
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if command.rationale.trim().is_empty() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let integrity = self.inspect_tender_integrity(tender_id.as_str())?;
+        if integrity.state != TenderIntegrityState::Ready {
+            return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
+        }
+        let deletion_id = self.installation_identifier()?;
+        let created_at = self.installation_timestamp()?;
+        let relative_path = format!("{}-{}", tender_id.as_str(), deletion_id);
+        let mut record = TrashedTenderRecord {
+            deletion_id,
+            tender_id: tender_id.as_str().into(),
+            state: TrashedTenderState::Moving,
+            relative_path,
+            rationale: command.rationale.trim().into(),
+            decided_by: "engineer_user".into(),
+            acting_role: "tendering_manager".into(),
+            approval_manifest_sha256: String::new(),
+            diagnostic_code: None,
+            created_at: created_at.clone(),
+            updated_at: created_at,
+        };
+        record.approval_manifest_sha256 = manifest_sha256_record(&record)?;
+        self.insert_trash_record(&record)?;
+        let store = self.tender_store(&tender_id)?;
+        {
+            let mut store = store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            let transaction = store
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(sql_error)?;
+            let summary = store_summary_from_connection(&transaction)?;
+            let decision_time = sqlite_timestamp(&transaction)?;
+            append_audit_event_with_sequence(
+                &transaction,
+                tender_id.as_str(),
+                "tender_deletion_approved",
+                summary.revision,
+                serde_json::json!({
+                    "approval_manifest_sha256": record.approval_manifest_sha256,
+                    "deletion_id": record.deletion_id,
+                    "decided_by": record.decided_by,
+                }),
+                &decision_time,
+            )?;
+            transaction.commit().map_err(sql_error)?;
+        }
+        drop(store);
+        self.close_tender(tender_id.as_str())?;
+        let source = self
+            .application_home()
+            .join("tenders")
+            .join(tender_id.as_str());
+        let destination = self
+            .application_home()
+            .join("trash")
+            .join(&record.relative_path);
+        match fs::rename(&source, &destination) {
+            Ok(()) => {
+                record.state = TrashedTenderState::Trashed;
+                record.updated_at = self.installation_timestamp()?;
+                self.update_trash_record(&record, TrashedTenderState::Moving)?;
+                Ok(record)
+            }
+            Err(error) => {
+                record.state = TrashedTenderState::Failed;
+                record.diagnostic_code = Some("move_failed".into());
+                record.updated_at = self.installation_timestamp()?;
+                self.update_trash_record(&record, TrashedTenderState::Moving)?;
+                Err(store_unavailable(error))
+            }
+        }
+    }
+
+    pub fn inspect_trashed_tenders(&self) -> Result<Vec<TrashedTenderRecord>, TenderCommandError> {
+        require_setup(self)?;
+        self.reconcile_trash_records()?;
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let connection = Connection::open_with_flags(
+            self.application_home().join("installation.sqlite"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(sql_error)?;
+        let mut statement = connection
+            .prepare("SELECT approval_json, state, diagnostic_code, updated_at FROM tender_trash ORDER BY created_at, deletion_id")
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(sql_error)?;
+        let mut records = Vec::new();
+        for row in rows {
+            let (json, state, diagnostic_code, updated_at) = row.map_err(sql_error)?;
+            let mut record: TrashedTenderRecord = parse_canonical_record(&json)?;
+            record.state = TrashedTenderState::parse(&state)?;
+            record.diagnostic_code = diagnostic_code;
+            record.updated_at = updated_at;
+            records.push(record);
+        }
+        Ok(records)
+    }
+
+    pub fn restore_trashed_tender(
+        &self,
+        command: TrashedTenderDecisionCommand,
+    ) -> Result<TrashedTenderRecord, TenderCommandError> {
+        let _ordinary_work = self.begin_ordinary_work()?;
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let mut record = self
+            .inspect_trashed_tenders()?
+            .into_iter()
+            .find(|record| {
+                record.deletion_id == command.deletion_id
+                    && record.state == TrashedTenderState::Trashed
+            })
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&record.tender_id)?;
+        self.ensure_tender_identity_available(&tender_id, Some(&record.deletion_id))?;
+        let source = self
+            .application_home()
+            .join("trash")
+            .join(&record.relative_path);
+        let destination = self
+            .application_home()
+            .join("tenders")
+            .join(tender_id.as_str());
+        let integrity = TenderStore::inspect_integrity_with_check(&source, &tender_id, || Ok(()))?;
+        if integrity.state != TenderIntegrityState::Ready {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        record = self.begin_restore_from_trash(record, command.rationale.trim())?;
+        if let Err(error) = fs::rename(&source, &destination) {
+            return Err(store_unavailable(error));
+        }
+        record.state = TrashedTenderState::Restored;
+        record.updated_at = self.installation_timestamp()?;
+        self.update_trash_record(&record, TrashedTenderState::Restoring)?;
+        Ok(record)
+    }
+
+    pub fn purge_trashed_tender(
+        &self,
+        command: TrashedTenderDecisionCommand,
+    ) -> Result<DeletionReceipt, TenderCommandError> {
+        let _ordinary_work = self.begin_ordinary_work()?;
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if command.rationale.trim().is_empty() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let mut record = self
+            .inspect_trashed_tenders()?
+            .into_iter()
+            .find(|record| {
+                record.deletion_id == command.deletion_id
+                    && record.state == TrashedTenderState::Trashed
+            })
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&record.tender_id)?;
+        let source = self
+            .application_home()
+            .join("trash")
+            .join(&record.relative_path);
+        let integrity = TenderStore::inspect_integrity_with_check(&source, &tender_id, || Ok(()))?;
+        if integrity.state != TenderIntegrityState::Ready {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let summary = inspect_summary_at(&source, &tender_id)?;
+        let purge_root = self
+            .application_home()
+            .join("staging")
+            .join(format!("purge-{}", record.deletion_id));
+        if purge_root.exists() {
+            return Err(TenderCommandError::new(TenderErrorCode::StoreUnavailable));
+        }
+        let (next_record, receipt) =
+            self.begin_purge_from_trash(record, command.rationale.trim(), &summary)?;
+        record = next_record;
+        fs::rename(&source, &purge_root).map_err(store_unavailable)?;
+        remove_verified_directory(&self.application_home().join("staging"), &purge_root)?;
+        record.state = TrashedTenderState::Purged;
+        record.updated_at = self.installation_timestamp()?;
+        self.update_trash_record(&record, TrashedTenderState::Purging)?;
+        Ok(receipt)
+    }
+
+    pub fn inspect_deletion_receipts(&self) -> Result<Vec<DeletionReceipt>, TenderCommandError> {
+        require_setup(self)?;
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let connection = Connection::open_with_flags(
+            self.application_home().join("installation.sqlite"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(sql_error)?;
+        let mut statement = connection
+            .prepare("SELECT receipt_json FROM deletion_receipts ORDER BY created_at, receipt_id")
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(sql_error)?;
+        let mut receipts = Vec::new();
+        for row in rows {
+            receipts.push(parse_canonical_record(&row.map_err(sql_error)?)?);
+        }
+        Ok(receipts)
+    }
+
+    fn set_tender_retention(
+        &self,
+        command: TenderRetentionDecisionCommand,
+        state: TenderRetentionState,
+    ) -> Result<TenderRetentionDecisionRecord, TenderCommandError> {
+        let _ordinary_work = self.begin_ordinary_work()?;
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if command.rationale.trim().is_empty() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let integrity = self.inspect_tender_integrity(tender_id.as_str())?;
+        if integrity.state != TenderIntegrityState::Ready {
+            return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
+        }
+        let store = self.tender_store(&tender_id)?;
+        let mut store = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        if (state == TenderRetentionState::Archived && store.archived)
+            || (state == TenderRetentionState::Active && !store.archived)
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let transaction = store
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let summary = store_summary_from_connection(&transaction)?;
+        let decided_at = sqlite_timestamp(&transaction)?;
+        let decision_id = random_identifier(&transaction)?;
+        let mut decision = TenderRetentionDecisionRecord {
+            decision_id,
+            tender_id: tender_id.as_str().into(),
+            state,
+            rationale: command.rationale.trim().into(),
+            decided_by: "engineer_user".into(),
+            acting_role: "tendering_manager".into(),
+            manifest_sha256: String::new(),
+            decided_at: decided_at.clone(),
+        };
+        decision.manifest_sha256 = manifest_sha256_record(&decision)?;
+        let state_value = match state {
+            TenderRetentionState::Active => "active",
+            TenderRetentionState::Archived => "archived",
+        };
+        let changed = transaction
+            .execute(
+                "UPDATE tender_retention
+                 SET state = ?1, decision_id = ?2, decision_manifest_sha256 = ?3, updated_at = ?4
+                 WHERE singleton = 1 AND state != ?1",
+                params![
+                    state_value,
+                    decision.decision_id,
+                    decision.manifest_sha256,
+                    decision.decided_at,
+                ],
+            )
+            .map_err(sql_error)?;
+        if changed != 1 {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let audit_sequence = append_audit_event_with_sequence(
+            &transaction,
+            tender_id.as_str(),
+            match state {
+                TenderRetentionState::Active => "tender_restored_from_archive",
+                TenderRetentionState::Archived => "tender_archived_read_only",
+            },
+            summary.revision,
+            serde_json::json!({
+                "decision_id": decision.decision_id,
+                "manifest_sha256": decision.manifest_sha256,
+                "state": state_value,
+            }),
+            &decided_at,
+        )?;
+        transaction
+            .execute(
+                "INSERT INTO tender_retention_decisions (
+                   decision_id, state, rationale, decided_by, acting_role,
+                   decision_json, manifest_sha256, audit_sequence, decided_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    decision.decision_id,
+                    state_value,
+                    decision.rationale,
+                    decision.decided_by,
+                    decision.acting_role,
+                    canonical_json_record(&decision)?,
+                    decision.manifest_sha256,
+                    audit_sequence,
+                    decision.decided_at,
+                ],
+            )
+            .map_err(sql_error)?;
+        transaction.commit().map_err(sql_error)?;
+        store.archived = state == TenderRetentionState::Archived;
+        Ok(decision)
+    }
+
+    fn insert_portable_archive(
+        &self,
+        record: &PortableTenderArchiveRecord,
+    ) -> Result<(), TenderCommandError> {
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        Connection::open(self.application_home().join("installation.sqlite"))
+            .map_err(sql_error)?
+            .execute(
+                "INSERT INTO portable_tender_archives (
+                   archive_id, tender_id, backup_id, relative_path, manifest_sha256,
+                   archive_size_bytes, archive_json, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    record.archive_id,
+                    record.tender_id,
+                    record.backup_id,
+                    record.relative_path,
+                    record.manifest_sha256,
+                    i64::try_from(record.archive_size_bytes)
+                        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+                    canonical_json_record(record)?,
+                    record.created_at,
+                ],
+            )
+            .map(|_| ())
+            .map_err(sql_error)
+    }
+
+    fn begin_restore_from_trash(
+        &self,
+        mut record: TrashedTenderRecord,
+        rationale: &str,
+    ) -> Result<TrashedTenderRecord, TenderCommandError> {
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let mut connection = Connection::open(self.application_home().join("installation.sqlite"))
+            .map_err(sql_error)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let created_at: String = transaction
+            .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |row| {
+                row.get(0)
+            })
+            .map_err(sql_error)?;
+        let mut decision = TrashedTenderLifecycleDecision {
+            decision_id: random_identifier(&transaction)?,
+            deletion_id: record.deletion_id.clone(),
+            tender_id: record.tender_id.clone(),
+            action: "restore".into(),
+            rationale: rationale.into(),
+            decided_by: "engineer_user".into(),
+            acting_role: "tendering_manager".into(),
+            created_at: created_at.clone(),
+            manifest_sha256: String::new(),
+        };
+        decision.manifest_sha256 = manifest_sha256_record(&decision)?;
+        insert_trash_lifecycle_decision(&transaction, &decision)?;
+        let changed = transaction
+            .execute(
+                "UPDATE tender_trash SET state = 'restoring', updated_at = ?2
+                 WHERE deletion_id = ?1 AND state = 'trashed'",
+                params![record.deletion_id, created_at],
+            )
+            .map_err(sql_error)?;
+        if changed != 1 {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        transaction.commit().map_err(sql_error)?;
+        record.state = TrashedTenderState::Restoring;
+        record.updated_at = created_at;
+        Ok(record)
+    }
+
+    fn begin_purge_from_trash(
+        &self,
+        mut record: TrashedTenderRecord,
+        rationale: &str,
+        summary: &TenderSummary,
+    ) -> Result<(TrashedTenderRecord, DeletionReceipt), TenderCommandError> {
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let mut connection = Connection::open(self.application_home().join("installation.sqlite"))
+            .map_err(sql_error)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let created_at: String = transaction
+            .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |row| {
+                row.get(0)
+            })
+            .map_err(sql_error)?;
+        let mut decision = TrashedTenderLifecycleDecision {
+            decision_id: random_identifier(&transaction)?,
+            deletion_id: record.deletion_id.clone(),
+            tender_id: record.tender_id.clone(),
+            action: "purge".into(),
+            rationale: rationale.into(),
+            decided_by: "engineer_user".into(),
+            acting_role: "tendering_manager".into(),
+            created_at: created_at.clone(),
+            manifest_sha256: String::new(),
+        };
+        decision.manifest_sha256 = manifest_sha256_record(&decision)?;
+        insert_trash_lifecycle_decision(&transaction, &decision)?;
+        let mut receipt = DeletionReceipt {
+            receipt_id: random_identifier(&transaction)?,
+            deletion_id: record.deletion_id.clone(),
+            tender_id: record.tender_id.clone(),
+            audit_event_count: summary.audit_event_count,
+            audit_chain_head: summary.audit_chain_head.clone(),
+            purged_by: "engineer_user".into(),
+            acting_role: "tendering_manager".into(),
+            purged_at: created_at.clone(),
+            manifest_sha256: String::new(),
+        };
+        receipt.manifest_sha256 = manifest_sha256_record(&receipt)?;
+        transaction
+            .execute(
+                "INSERT INTO deletion_receipts (
+                   receipt_id, tender_id, deletion_id, receipt_json, manifest_sha256, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    receipt.receipt_id,
+                    receipt.tender_id,
+                    receipt.deletion_id,
+                    canonical_json_record(&receipt)?,
+                    receipt.manifest_sha256,
+                    receipt.purged_at,
+                ],
+            )
+            .map_err(sql_error)?;
+        let changed = transaction
+            .execute(
+                "UPDATE tender_trash SET state = 'purging', updated_at = ?2
+                 WHERE deletion_id = ?1 AND state = 'trashed'",
+                params![record.deletion_id, created_at],
+            )
+            .map_err(sql_error)?;
+        if changed != 1 {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        transaction.commit().map_err(sql_error)?;
+        record.state = TrashedTenderState::Purging;
+        record.updated_at = created_at;
+        Ok((record, receipt))
+    }
+
+    fn ensure_tender_identity_available(
+        &self,
+        tender_id: &TenderId,
+        excluded_deletion_id: Option<&str>,
+    ) -> Result<(), TenderCommandError> {
+        if self
+            .application_home()
+            .join("tenders")
+            .join(tender_id.as_str())
+            .exists()
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let collision: bool = Connection::open(self.application_home().join("installation.sqlite"))
+            .map_err(sql_error)?
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM tender_trash
+                   WHERE tender_id = ?1 AND deletion_id != COALESCE(?2, '')
+                 )",
+                params![tender_id.as_str(), excluded_deletion_id],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if collision {
+            Err(TenderCommandError::new(TenderErrorCode::InvalidCommand))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn insert_trash_record(&self, record: &TrashedTenderRecord) -> Result<(), TenderCommandError> {
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        Connection::open(self.application_home().join("installation.sqlite"))
+            .map_err(sql_error)?
+            .execute(
+                "INSERT INTO tender_trash (
+                   deletion_id, tender_id, state, relative_path, approval_json,
+                   approval_manifest_sha256, diagnostic_code, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    record.deletion_id,
+                    record.tender_id,
+                    record.state.as_str(),
+                    record.relative_path,
+                    canonical_json_record(record)?,
+                    record.approval_manifest_sha256,
+                    record.diagnostic_code,
+                    record.created_at,
+                    record.updated_at,
+                ],
+            )
+            .map(|_| ())
+            .map_err(sql_error)
+    }
+
+    fn update_trash_record(
+        &self,
+        record: &TrashedTenderRecord,
+        expected: TrashedTenderState,
+    ) -> Result<(), TenderCommandError> {
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let changed = Connection::open(self.application_home().join("installation.sqlite"))
+            .map_err(sql_error)?
+            .execute(
+                "UPDATE tender_trash SET state = ?2, diagnostic_code = ?3, updated_at = ?4
+                 WHERE deletion_id = ?1 AND state = ?5",
+                params![
+                    record.deletion_id,
+                    record.state.as_str(),
+                    record.diagnostic_code,
+                    record.updated_at,
+                    expected.as_str(),
+                ],
+            )
+            .map_err(sql_error)?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(TenderCommandError::new(TenderErrorCode::InvalidCommand))
+        }
+    }
+
+    fn reconcile_trash_records(&self) -> Result<(), TenderCommandError> {
+        let records = {
+            let _guard = self
+                .catalogue_lock()
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            let connection = Connection::open_with_flags(
+                self.application_home().join("installation.sqlite"),
+                OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .map_err(sql_error)?;
+            let mut statement = connection
+                .prepare(
+                    "SELECT approval_json, state FROM tender_trash
+                     WHERE state IN ('moving', 'restoring', 'purging')",
+                )
+                .map_err(sql_error)?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(sql_error)?;
+            let mut records = Vec::new();
+            for row in rows {
+                let (json, state) = row.map_err(sql_error)?;
+                let mut record = parse_canonical_record::<TrashedTenderRecord>(&json)?;
+                record.state = TrashedTenderState::parse(&state)?;
+                records.push(record);
+            }
+            records
+        };
+        for mut record in records {
+            let live = self
+                .application_home()
+                .join("tenders")
+                .join(&record.tender_id);
+            let trashed = self
+                .application_home()
+                .join("trash")
+                .join(&record.relative_path);
+            let purging = self
+                .application_home()
+                .join("staging")
+                .join(format!("purge-{}", record.deletion_id));
+            record.updated_at = self.installation_timestamp()?;
+            let expected = record.state;
+            match expected {
+                TrashedTenderState::Moving => match (live.exists(), trashed.exists()) {
+                    (false, true) => record.state = TrashedTenderState::Trashed,
+                    (true, false) => {
+                        record.state = TrashedTenderState::Failed;
+                        record.diagnostic_code = Some("move_not_published".into());
+                    }
+                    _ => return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired)),
+                },
+                TrashedTenderState::Restoring => match (live.exists(), trashed.exists()) {
+                    (false, true) => {
+                        fs::rename(&trashed, &live).map_err(store_unavailable)?;
+                        record.state = TrashedTenderState::Restored;
+                    }
+                    (true, false) => record.state = TrashedTenderState::Restored,
+                    _ => return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired)),
+                },
+                TrashedTenderState::Purging => {
+                    if live.exists() || (trashed.exists() && purging.exists()) {
+                        return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
+                    }
+                    if trashed.exists() {
+                        fs::rename(&trashed, &purging).map_err(store_unavailable)?;
+                    }
+                    if purging.exists() {
+                        remove_verified_directory(
+                            &self.application_home().join("staging"),
+                            &purging,
+                        )?;
+                    }
+                    record.state = TrashedTenderState::Purged;
+                }
+                _ => return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+            }
+            self.update_trash_record(&record, expected)?;
+        }
+        Ok(())
+    }
+}
+
 pub(crate) fn reconcile_interrupted_backup_operations(
     application_home: &Path,
 ) -> Result<(), TenderCommandError> {
@@ -1485,6 +2521,154 @@ pub(crate) fn reconcile_interrupted_backup_operations(
         )?;
     }
     Ok(())
+}
+
+fn copy_file_verified(
+    source: &Path,
+    destination: &Path,
+    budget: StorageOperationBudget,
+) -> Result<(), TenderCommandError> {
+    let mut input = File::open(source).map_err(store_unavailable)?;
+    let mut output = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(destination)
+        .map_err(store_unavailable)?;
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut source_hasher = sha2::Sha256::new();
+    loop {
+        budget.check()?;
+        let read = input.read(&mut buffer).map_err(store_unavailable)?;
+        if read == 0 {
+            break;
+        }
+        source_hasher.update(&buffer[..read]);
+        output
+            .write_all(&buffer[..read])
+            .map_err(store_unavailable)?;
+    }
+    output.sync_all().map_err(store_unavailable)?;
+    let source_hash: String = source_hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let (destination_hash, _) = sha256_file(destination, budget)?;
+    if source_hash != destination_hash {
+        let _ = fs::remove_file(destination);
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(())
+}
+
+fn inspect_summary_at(
+    root: &Path,
+    tender_id: &TenderId,
+) -> Result<TenderSummary, TenderCommandError> {
+    let connection = Connection::open_with_flags(
+        root.join("tender.sqlite"),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(sql_error)?;
+    let summary = store_summary_from_connection(&connection)?;
+    if summary.tender_id != tender_id.as_str() {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(summary)
+}
+
+fn store_summary_from_connection(
+    connection: &Connection,
+) -> Result<TenderSummary, TenderCommandError> {
+    let (tender_id, revision, lifecycle_phase, name): (String, u32, String, String) = connection
+        .query_row(
+            "SELECT tender.tender_id, tender.current_revision, tender.lifecycle_phase,
+                    tender_revisions.name
+             FROM tender
+             JOIN tender_revisions ON tender_revisions.revision = tender.current_revision
+             WHERE tender.singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .map_err(sql_error)?;
+    let (audit_event_count, audit_chain_head): (i64, Option<String>) = connection
+        .query_row(
+            "SELECT COUNT(*), MAX(current_hash) FILTER (
+               WHERE sequence = (SELECT MAX(sequence) FROM audit_events)
+             ) FROM audit_events",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(sql_error)?;
+    Ok(TenderSummary {
+        tender_id,
+        name,
+        revision,
+        lifecycle_phase: TenderLifecyclePhase::parse(&lifecycle_phase)?,
+        audit_event_count: audit_event_count
+            .try_into()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+        audit_chain_head: audit_chain_head.unwrap_or_else(|| ZERO_AUDIT_HASH.into()),
+    })
+}
+
+fn canonical_json_record<T: Serialize>(value: &T) -> Result<String, TenderCommandError> {
+    serde_json_canonicalizer::to_string(value)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+}
+
+fn insert_trash_lifecycle_decision(
+    transaction: &Transaction<'_>,
+    decision: &TrashedTenderLifecycleDecision,
+) -> Result<(), TenderCommandError> {
+    transaction
+        .execute(
+            "INSERT INTO tender_trash_decisions (
+               decision_id, deletion_id, action, rationale, decided_by, acting_role,
+               decision_json, manifest_sha256, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                decision.decision_id,
+                decision.deletion_id,
+                decision.action,
+                decision.rationale,
+                decision.decided_by,
+                decision.acting_role,
+                canonical_json_record(decision)?,
+                decision.manifest_sha256,
+                decision.created_at,
+            ],
+        )
+        .map(|_| ())
+        .map_err(sql_error)
+}
+
+fn parse_canonical_record<T: for<'de> Deserialize<'de> + Serialize>(
+    value: &str,
+) -> Result<T, TenderCommandError> {
+    let record: T = serde_json::from_str(value)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    if canonical_json_record(&record)? != value {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(record)
+}
+
+fn manifest_sha256_record<T: Serialize>(value: &T) -> Result<String, TenderCommandError> {
+    let mut value = serde_json::to_value(value)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let field = if object.contains_key("manifest_sha256") {
+        "manifest_sha256"
+    } else {
+        "approval_manifest_sha256"
+    };
+    object.insert(field.into(), serde_json::Value::String(String::new()));
+    let bytes = serde_json_canonicalizer::to_vec(&value)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    Ok(sha256_hex(&bytes))
 }
 
 fn read_backup_record(
@@ -1806,6 +2990,7 @@ fn verify_recovery_candidate_directory(
         root: staging.to_path_buf(),
         connection,
         recovery_required: false,
+        archived: false,
     };
     let source = store.summary()?;
     if source != manifest.source {
@@ -2018,6 +3203,7 @@ fn inspect_current_summary(application_home: &Path, tender_id: &TenderId) -> Opt
         root,
         connection,
         recovery_required: false,
+        archived: false,
     }
     .summary()
     .ok()
