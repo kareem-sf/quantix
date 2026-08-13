@@ -179,6 +179,22 @@ import type { RecordPackageManualVerificationCommand } from "./bindings/RecordPa
 import type { RunPackageValidationCommand } from "./bindings/RunPackageValidationCommand";
 import type { RunSubmissionSectionReviewCommand } from "./bindings/RunSubmissionSectionReviewCommand";
 import type { SubmissionSectionReviewRunResult } from "./bindings/SubmissionSectionReviewRunResult";
+import type { ApproveSubmissionReleaseCommand } from "./bindings/ApproveSubmissionReleaseCommand";
+import type { ExportReleaseCopyCommand } from "./bindings/ExportReleaseCopyCommand";
+import type { SubmissionReleaseInspection } from "./bindings/SubmissionReleaseInspection";
+import type { PortableTenderArchiveRecord } from "./bindings/PortableTenderArchiveRecord";
+import type { TenderRetentionDecisionRecord } from "./bindings/TenderRetentionDecisionRecord";
+import type { TenderRetentionState } from "./bindings/TenderRetentionState";
+import type { TrashedTenderRecord } from "./bindings/TrashedTenderRecord";
+import type { DeletionReceipt } from "./bindings/DeletionReceipt";
+import type { ProductAcceptanceRun } from "./bindings/ProductAcceptanceRun";
+import type { ProductAcceptanceRecord } from "./bindings/ProductAcceptanceRecord";
+import type { RunDeterministicAcceptanceCommand } from "./bindings/RunDeterministicAcceptanceCommand";
+import type { RecordLiveQualificationRunCommand } from "./bindings/RecordLiveQualificationRunCommand";
+import type { LiveQualificationRun } from "./bindings/LiveQualificationRun";
+import type { PrivateQualificationRecord } from "./bindings/PrivateQualificationRecord";
+import type { EvaluatePublicReleaseGateCommand } from "./bindings/EvaluatePublicReleaseGateCommand";
+import type { PublicReleaseGateRecord } from "./bindings/PublicReleaseGateRecord";
 
 export function ensureQuantixSetup(): Promise<SetupOutcome> {
   return invoke<SetupOutcome>("ensure_quantix_setup");
@@ -1091,6 +1107,179 @@ export function approvePackageFindingException(
   return invoke<FinalReviewInspection>("approve_package_finding_exception", {
     command,
   });
+}
+
+export function approveSubmissionRelease(
+  command: ApproveSubmissionReleaseCommand,
+): Promise<SubmissionReleaseInspection> {
+  return invoke<SubmissionReleaseInspection>("approve_submission_release", {
+    command,
+  });
+}
+
+export function inspectSubmissionRelease(
+  tenderId: string,
+): Promise<SubmissionReleaseInspection | null> {
+  const command: OpenTenderCommand = { tender_id: tenderId };
+  return invoke<SubmissionReleaseInspection | null>(
+    "inspect_submission_release",
+    { command },
+  );
+}
+
+export function exportReleaseCopy(
+  command: ExportReleaseCopyCommand,
+): Promise<SubmissionReleaseInspection> {
+  return invoke<SubmissionReleaseInspection>("export_release_copy", {
+    command,
+  });
+}
+
+export function createPortableTenderArchive(
+  tenderId: string,
+): Promise<PortableTenderArchiveRecord> {
+  return invoke<PortableTenderArchiveRecord>("create_portable_tender_archive", {
+    command: { tender_id: tenderId },
+  });
+}
+
+export function inspectPortableTenderArchives(
+  tenderId: string,
+): Promise<PortableTenderArchiveRecord[]> {
+  const command: OpenTenderCommand = { tender_id: tenderId };
+  return invoke<PortableTenderArchiveRecord[]>(
+    "inspect_portable_tender_archives",
+    { command },
+  );
+}
+
+export function chooseAndImportPortableTenderArchive(): Promise<TenderSummary | null> {
+  return invoke<TenderSummary | null>(
+    "choose_and_import_portable_tender_archive",
+  );
+}
+
+export function inspectTenderRetention(
+  tenderId: string,
+): Promise<TenderRetentionState> {
+  const command: OpenTenderCommand = { tender_id: tenderId };
+  return invoke<TenderRetentionState>("inspect_tender_retention", { command });
+}
+
+export function archiveTender(
+  tenderId: string,
+  rationale: string,
+): Promise<TenderRetentionDecisionRecord> {
+  return invoke<TenderRetentionDecisionRecord>("archive_tender", {
+    command: { tender_id: tenderId, rationale },
+  });
+}
+
+export function restoreArchivedTender(
+  tenderId: string,
+  rationale: string,
+): Promise<TenderRetentionDecisionRecord> {
+  return invoke<TenderRetentionDecisionRecord>("restore_archived_tender", {
+    command: { tender_id: tenderId, rationale },
+  });
+}
+
+export function trashTender(
+  tenderId: string,
+  rationale: string,
+): Promise<TrashedTenderRecord> {
+  return invoke<TrashedTenderRecord>("trash_tender", {
+    command: { tender_id: tenderId, rationale },
+  });
+}
+
+export function inspectTrashedTenders(): Promise<TrashedTenderRecord[]> {
+  return invoke<TrashedTenderRecord[]>("inspect_trashed_tenders");
+}
+
+export function restoreTrashedTender(
+  deletionId: string,
+  rationale: string,
+): Promise<TrashedTenderRecord> {
+  return invoke<TrashedTenderRecord>("restore_trashed_tender", {
+    command: { deletion_id: deletionId, rationale },
+  });
+}
+
+export function purgeTrashedTender(
+  deletionId: string,
+  rationale: string,
+): Promise<DeletionReceipt> {
+  return invoke<DeletionReceipt>("purge_trashed_tender", {
+    command: { deletion_id: deletionId, rationale },
+  });
+}
+
+export function inspectDeletionReceipts(): Promise<DeletionReceipt[]> {
+  return invoke<DeletionReceipt[]>("inspect_deletion_receipts");
+}
+
+export function runDeterministicProductAcceptance(
+  command: RunDeterministicAcceptanceCommand,
+): Promise<ProductAcceptanceRun> {
+  return invoke<ProductAcceptanceRun>("run_deterministic_product_acceptance", {
+    command,
+  });
+}
+
+export function inspectProductAcceptanceRuns(): Promise<
+  ProductAcceptanceRun[]
+> {
+  return invoke<ProductAcceptanceRun[]>("inspect_product_acceptance_runs");
+}
+
+export function aggregateProductAcceptance(
+  sourceRevision: string,
+): Promise<ProductAcceptanceRecord> {
+  return invoke<ProductAcceptanceRecord>("aggregate_product_acceptance", {
+    sourceRevision,
+  });
+}
+
+export function recordLiveQualificationRun(
+  command: RecordLiveQualificationRunCommand,
+): Promise<LiveQualificationRun> {
+  return invoke<LiveQualificationRun>("record_live_qualification_run", {
+    command,
+  });
+}
+
+export function inspectLiveQualificationRuns(
+  releaseCandidateSha256: string,
+): Promise<LiveQualificationRun[]> {
+  return invoke<LiveQualificationRun[]>("inspect_live_qualification_runs", {
+    releaseCandidateSha256,
+  });
+}
+
+export function qualifyPrivateV0(
+  releaseCandidateSha256: string,
+): Promise<PrivateQualificationRecord> {
+  return invoke<PrivateQualificationRecord>("qualify_private_v0", {
+    releaseCandidateSha256,
+  });
+}
+
+export function evaluatePublicReleaseGate(
+  command: EvaluatePublicReleaseGateCommand,
+): Promise<PublicReleaseGateRecord> {
+  return invoke<PublicReleaseGateRecord>("evaluate_public_release_gate", {
+    command,
+  });
+}
+
+export function inspectCurrentPublicReleaseGate(
+  releaseCandidateSha256: string,
+): Promise<PublicReleaseGateRecord | null> {
+  return invoke<PublicReleaseGateRecord | null>(
+    "inspect_current_public_release_gate",
+    { releaseCandidateSha256 },
+  );
 }
 
 export function runProductionTask(

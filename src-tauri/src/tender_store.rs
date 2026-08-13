@@ -41,6 +41,7 @@ mod coordinated_baselines;
 mod decision_cockpit;
 mod estimates;
 mod external_rfis;
+mod final_release;
 mod package_production;
 mod package_validation;
 mod pricing;
@@ -53,9 +54,12 @@ mod tender_records;
 pub(crate) use coordinated_baselines::exact_approved_coordinated_baseline_is_current_in_connection;
 
 pub use backups::{
-    CreateTenderBackupCommand, PrepareTenderRecoveryCommand, ResolveTenderRecoveryCommand,
-    TenderBackupRecord, TenderBackupState, TenderRecoveryDecision, TenderRecoveryDecisionRecord,
-    TenderRecoveryRecord, TenderRecoveryState,
+    CreatePortableTenderArchiveCommand, CreateTenderBackupCommand, DeletionReceipt,
+    ImportPortableTenderArchiveCommand, PortableTenderArchiveRecord, PrepareTenderRecoveryCommand,
+    ResolveTenderRecoveryCommand, TenderBackupRecord, TenderBackupState, TenderRecoveryDecision,
+    TenderRecoveryDecisionRecord, TenderRecoveryRecord, TenderRecoveryState,
+    TenderRetentionDecisionCommand, TenderRetentionDecisionRecord, TenderRetentionState,
+    TrashedTenderDecisionCommand, TrashedTenderRecord, TrashedTenderState,
 };
 pub(crate) use bid_decisions::BidPackageOperationBudget;
 pub use bid_decisions::{
@@ -132,6 +136,10 @@ pub use external_rfis::{
     InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
     InterpretExternalRfiResponseCommand, RegisterExternalRfiResponseCommand,
     ReviseExternalRfiDraftCommand, RunExternalRfiReviewCommand,
+};
+pub use final_release::{
+    ApproveSubmissionReleaseCommand, ExportReleaseCopyCommand, ReleaseCopyExport, ReleaseCopyItem,
+    SubmissionReleaseApproval, SubmissionReleaseInspection, SubmissionReleaseState,
 };
 pub use package_production::{
     GenerateSubmissionSectionsCommand, GenerationRequirement, GenerationRequirementAvailability,
@@ -217,7 +225,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 24;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 26;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -239,6 +247,31 @@ CREATE TABLE tender_revisions (
   name TEXT NOT NULL CHECK (length(CAST(name AS BLOB)) BETWEEN 1 AND 200),
   created_at TEXT NOT NULL,
   FOREIGN KEY (tender_id) REFERENCES tender(tender_id)
+);
+CREATE TABLE tender_retention (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  state TEXT NOT NULL CHECK (state IN ('active', 'archived')),
+  decision_id TEXT,
+  decision_manifest_sha256 TEXT CHECK (
+    decision_manifest_sha256 IS NULL OR length(decision_manifest_sha256) = 64
+  ),
+  updated_at TEXT NOT NULL,
+  CHECK (
+    (state = 'active')
+    OR (state = 'archived' AND length(decision_id) = 32 AND decision_manifest_sha256 IS NOT NULL)
+  )
+);
+CREATE TABLE tender_retention_decisions (
+  decision_id TEXT PRIMARY KEY CHECK (length(decision_id) = 32),
+  state TEXT NOT NULL CHECK (state IN ('active', 'archived')),
+  rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+  decided_by TEXT NOT NULL CHECK (decided_by = 'engineer_user'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+  decision_json TEXT NOT NULL CHECK (json_valid(decision_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  decided_at TEXT NOT NULL,
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
 );
 CREATE TABLE content_objects (
   sha256 TEXT PRIMARY KEY CHECK (length(sha256) = 64),
@@ -2382,6 +2415,37 @@ CREATE TABLE release_readiness_report_head (
   FOREIGN KEY (report_id, current_version)
     REFERENCES release_readiness_reports(report_id, version)
 );
+CREATE TABLE submission_release_approvals (
+  approval_id TEXT PRIMARY KEY CHECK (length(approval_id) = 32),
+  package_id TEXT NOT NULL,
+  package_version INTEGER NOT NULL CHECK (package_version BETWEEN 1 AND 32),
+  package_manifest_sha256 TEXT NOT NULL CHECK (length(package_manifest_sha256) = 64),
+  canonical_manifest_root TEXT NOT NULL CHECK (length(canonical_manifest_root) = 64),
+  readiness_report_id TEXT NOT NULL,
+  readiness_report_version INTEGER NOT NULL CHECK (readiness_report_version > 0),
+  readiness_report_manifest_sha256 TEXT NOT NULL CHECK (length(readiness_report_manifest_sha256) = 64),
+  approval_json TEXT NOT NULL CHECK (json_valid(approval_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  created_at TEXT NOT NULL,
+  UNIQUE (package_id, package_version),
+  FOREIGN KEY (package_id, package_version)
+    REFERENCES submission_package_versions(package_id, version),
+  FOREIGN KEY (readiness_report_id, readiness_report_version)
+    REFERENCES release_readiness_reports(report_id, version),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
+CREATE TABLE release_copy_exports (
+  export_id TEXT PRIMARY KEY CHECK (length(export_id) = 32),
+  approval_id TEXT NOT NULL,
+  relative_path TEXT NOT NULL UNIQUE CHECK (length(CAST(relative_path AS BLOB)) BETWEEN 1 AND 1000),
+  export_json TEXT NOT NULL CHECK (json_valid(export_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (approval_id) REFERENCES submission_release_approvals(approval_id),
+  FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
+);
 CREATE TABLE audit_events (
   sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
   event_type TEXT NOT NULL,
@@ -2410,6 +2474,46 @@ CREATE TRIGGER tender_revisions_no_delete
 BEFORE DELETE ON tender_revisions
 BEGIN
   SELECT RAISE(ABORT, 'Tender revisions are immutable');
+END;
+CREATE TRIGGER tender_retention_identity_no_update
+BEFORE UPDATE OF singleton ON tender_retention
+BEGIN
+  SELECT RAISE(ABORT, 'Tender retention identity is immutable');
+END;
+CREATE TRIGGER tender_retention_no_delete
+BEFORE DELETE ON tender_retention
+BEGIN
+  SELECT RAISE(ABORT, 'Tender retention state cannot be deleted');
+END;
+CREATE TRIGGER tender_retention_decisions_no_update
+BEFORE UPDATE ON tender_retention_decisions
+BEGIN
+  SELECT RAISE(ABORT, 'Tender retention decisions are immutable');
+END;
+CREATE TRIGGER tender_retention_decisions_no_delete
+BEFORE DELETE ON tender_retention_decisions
+BEGIN
+  SELECT RAISE(ABORT, 'Tender retention decisions are immutable');
+END;
+CREATE TRIGGER submission_release_approvals_no_update
+BEFORE UPDATE ON submission_release_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Submission Release approvals are immutable');
+END;
+CREATE TRIGGER submission_release_approvals_no_delete
+BEFORE DELETE ON submission_release_approvals
+BEGIN
+  SELECT RAISE(ABORT, 'Submission Release approvals are immutable');
+END;
+CREATE TRIGGER release_copy_exports_no_update
+BEFORE UPDATE ON release_copy_exports
+BEGIN
+  SELECT RAISE(ABORT, 'Release Copy exports are immutable');
+END;
+CREATE TRIGGER release_copy_exports_no_delete
+BEFORE DELETE ON release_copy_exports
+BEGIN
+  SELECT RAISE(ABORT, 'Release Copy exports are immutable');
 END;
 CREATE TRIGGER content_objects_no_update
 BEFORE UPDATE ON content_objects
@@ -3644,6 +3748,7 @@ pub(crate) struct TenderStore {
     root: std::path::PathBuf,
     connection: Connection,
     recovery_required: bool,
+    archived: bool,
 }
 
 struct RawDocumentRegisterEntry {
@@ -3763,6 +3868,14 @@ impl TenderStore {
                 params![tender_id.as_str(), name, created_at],
             )
             .map_err(sql_error)?;
+        transaction
+            .execute(
+                "INSERT INTO tender_retention (
+                   singleton, state, decision_id, decision_manifest_sha256, updated_at
+                 ) VALUES (1, 'active', NULL, NULL, ?1)",
+                [&created_at],
+            )
+            .map_err(sql_error)?;
         for role in BootstrapRole::ALL {
             let profile = bootstrap_profile(role, random_identifier(&transaction)?);
             agent_records::insert_profile(
@@ -3786,6 +3899,7 @@ impl TenderStore {
             root: root.to_path_buf(),
             connection,
             recovery_required: false,
+            archived: false,
         })
     }
 
@@ -3926,11 +4040,22 @@ impl TenderStore {
         if inspect_referenced_content(&connection, &root.join("content"))?.is_some() {
             return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
         }
+        let archived: bool = connection
+            .query_row(
+                "SELECT state = 'archived' FROM tender_retention WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::RecoveryRequired))?;
         let mut store = Self {
             root: root.to_path_buf(),
             connection,
             recovery_required: false,
+            archived,
         };
+        if store.archived {
+            return Ok(store);
+        }
         store
             .reconcile_uncommitted_content(expected_tender_id)
             .map_err(recovery_required_if_integrity)?;
@@ -4156,6 +4281,7 @@ impl TenderStore {
             root: root.to_path_buf(),
             connection,
             recovery_required: false,
+            archived: false,
         };
         if !store.semantic_manifests_are_valid_with_check(&mut check)? {
             issues.push(TenderIntegrityIssue::ManifestInvalid);
@@ -4277,6 +4403,8 @@ impl TenderStore {
     fn require_storage_writable(&self) -> Result<(), TenderCommandError> {
         if self.recovery_required {
             Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired))
+        } else if self.archived {
+            Err(TenderCommandError::new(TenderErrorCode::InvalidCommand))
         } else {
             Ok(())
         }

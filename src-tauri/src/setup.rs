@@ -14,7 +14,7 @@ use crate::QuantixHost;
 
 pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 1024 * 1024 * 1024;
 
-pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 8;
+pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 14;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
@@ -30,7 +30,7 @@ const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
 ];
 const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 8)
+           schema_version INTEGER NOT NULL CHECK (schema_version = 14)
          )";
 pub(crate) const TENDER_BACKUPS_TABLE_SQL: &str = "CREATE TABLE tender_backups (
            backup_id TEXT PRIMARY KEY CHECK (length(backup_id) = 32),
@@ -108,6 +108,165 @@ const TENDER_CATALOGUE_TABLE_SQL: &str = "CREATE TABLE tender_catalogue (
            audit_event_count INTEGER NOT NULL CHECK (audit_event_count > 0),
            audit_chain_head TEXT NOT NULL CHECK (length(audit_chain_head) = 64)
          )";
+const PORTABLE_TENDER_ARCHIVES_TABLE_SQL: &str = "CREATE TABLE portable_tender_archives (
+           archive_id TEXT PRIMARY KEY CHECK (length(archive_id) = 32),
+           tender_id TEXT NOT NULL CHECK (length(tender_id) = 32),
+           backup_id TEXT NOT NULL CHECK (length(backup_id) = 32),
+           relative_path TEXT NOT NULL UNIQUE CHECK (length(CAST(relative_path AS BLOB)) BETWEEN 1 AND 1000),
+           manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+           archive_size_bytes INTEGER NOT NULL CHECK (archive_size_bytes > 0),
+           archive_json TEXT NOT NULL CHECK (json_valid(archive_json)),
+           created_at TEXT NOT NULL
+         )";
+const TENDER_TRASH_TABLE_SQL: &str = "CREATE TABLE tender_trash (
+           deletion_id TEXT PRIMARY KEY CHECK (length(deletion_id) = 32),
+           tender_id TEXT NOT NULL CHECK (length(tender_id) = 32),
+           state TEXT NOT NULL CHECK (state IN ('moving', 'trashed', 'restoring', 'purging', 'restored', 'purged', 'failed')),
+           relative_path TEXT NOT NULL UNIQUE CHECK (length(CAST(relative_path AS BLOB)) BETWEEN 1 AND 1000),
+           approval_json TEXT NOT NULL CHECK (json_valid(approval_json)),
+           approval_manifest_sha256 TEXT NOT NULL CHECK (length(approval_manifest_sha256) = 64),
+           diagnostic_code TEXT,
+           created_at TEXT NOT NULL,
+           updated_at TEXT NOT NULL
+         )";
+const TENDER_TRASH_DECISIONS_TABLE_SQL: &str = "CREATE TABLE tender_trash_decisions (
+           decision_id TEXT PRIMARY KEY CHECK (length(decision_id) = 32),
+           deletion_id TEXT NOT NULL,
+           action TEXT NOT NULL CHECK (action IN ('restore', 'purge')),
+           rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
+           decided_by TEXT NOT NULL CHECK (decided_by = 'engineer_user'),
+           acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+           decision_json TEXT NOT NULL CHECK (json_valid(decision_json)),
+           manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+           created_at TEXT NOT NULL,
+           FOREIGN KEY (deletion_id) REFERENCES tender_trash(deletion_id)
+         )";
+const TENDER_TRASH_DECISIONS_NO_UPDATE_SQL: &str = "CREATE TRIGGER tender_trash_decisions_no_update
+         BEFORE UPDATE ON tender_trash_decisions
+         BEGIN SELECT RAISE(ABORT, 'Tender Trash decisions are immutable'); END";
+const TENDER_TRASH_DECISIONS_NO_DELETE_SQL: &str = "CREATE TRIGGER tender_trash_decisions_no_delete
+         BEFORE DELETE ON tender_trash_decisions
+         BEGIN SELECT RAISE(ABORT, 'Tender Trash decisions are immutable'); END";
+const DELETION_RECEIPTS_TABLE_SQL: &str = "CREATE TABLE deletion_receipts (
+           receipt_id TEXT PRIMARY KEY CHECK (length(receipt_id) = 32),
+           tender_id TEXT NOT NULL UNIQUE CHECK (length(tender_id) = 32),
+           deletion_id TEXT NOT NULL UNIQUE CHECK (length(deletion_id) = 32),
+           receipt_json TEXT NOT NULL CHECK (json_valid(receipt_json)),
+           manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+           created_at TEXT NOT NULL,
+           FOREIGN KEY (deletion_id) REFERENCES tender_trash(deletion_id)
+         )";
+const PORTABLE_TENDER_ARCHIVES_NO_UPDATE_SQL: &str =
+    "CREATE TRIGGER portable_tender_archives_no_update
+         BEFORE UPDATE ON portable_tender_archives
+         BEGIN SELECT RAISE(ABORT, 'Portable Tender Archive records are immutable'); END";
+const PORTABLE_TENDER_ARCHIVES_NO_DELETE_SQL: &str =
+    "CREATE TRIGGER portable_tender_archives_no_delete
+         BEFORE DELETE ON portable_tender_archives
+         BEGIN SELECT RAISE(ABORT, 'Portable Tender Archive records are immutable'); END";
+const DELETION_RECEIPTS_NO_UPDATE_SQL: &str = "CREATE TRIGGER deletion_receipts_no_update
+         BEFORE UPDATE ON deletion_receipts
+         BEGIN SELECT RAISE(ABORT, 'Deletion Receipts are immutable'); END";
+const DELETION_RECEIPTS_NO_DELETE_SQL: &str = "CREATE TRIGGER deletion_receipts_no_delete
+         BEFORE DELETE ON deletion_receipts
+         BEGIN SELECT RAISE(ABORT, 'Deletion Receipts are immutable'); END";
+const PRODUCT_ACCEPTANCE_RUNS_TABLE_SQL: &str = "CREATE TABLE product_acceptance_runs (
+           run_id TEXT PRIMARY KEY CHECK (length(run_id) = 32),
+           suite TEXT NOT NULL CHECK (suite IN ('deterministic', 'live_provider', 'native_package')),
+           source_revision TEXT NOT NULL CHECK (length(CAST(source_revision AS BLOB)) BETWEEN 1 AND 200),
+           outcome TEXT NOT NULL CHECK (outcome IN ('passed', 'failed')),
+           run_json TEXT NOT NULL CHECK (json_valid(run_json)),
+           manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+           created_at TEXT NOT NULL
+         )";
+const PRODUCT_ACCEPTANCE_RECORDS_TABLE_SQL: &str = "CREATE TABLE product_acceptance_records (
+           record_id TEXT PRIMARY KEY CHECK (length(record_id) = 32),
+           source_revision TEXT NOT NULL CHECK (length(CAST(source_revision AS BLOB)) BETWEEN 1 AND 200),
+           record_json TEXT NOT NULL CHECK (json_valid(record_json)),
+           manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+           created_at TEXT NOT NULL
+         )";
+const PRODUCT_ACCEPTANCE_RUNS_NO_UPDATE_SQL: &str =
+    "CREATE TRIGGER product_acceptance_runs_no_update
+         BEFORE UPDATE ON product_acceptance_runs
+         BEGIN SELECT RAISE(ABORT, 'Product Acceptance Runs are immutable'); END";
+const PRODUCT_ACCEPTANCE_RUNS_NO_DELETE_SQL: &str =
+    "CREATE TRIGGER product_acceptance_runs_no_delete
+         BEFORE DELETE ON product_acceptance_runs
+         BEGIN SELECT RAISE(ABORT, 'Product Acceptance Runs are immutable'); END";
+const PRODUCT_ACCEPTANCE_RECORDS_NO_UPDATE_SQL: &str =
+    "CREATE TRIGGER product_acceptance_records_no_update
+         BEFORE UPDATE ON product_acceptance_records
+         BEGIN SELECT RAISE(ABORT, 'Product Acceptance Records are immutable'); END";
+const PRODUCT_ACCEPTANCE_RECORDS_NO_DELETE_SQL: &str =
+    "CREATE TRIGGER product_acceptance_records_no_delete
+         BEFORE DELETE ON product_acceptance_records
+         BEGIN SELECT RAISE(ABORT, 'Product Acceptance Records are immutable'); END";
+const LIVE_QUALIFICATION_RUNS_TABLE_SQL: &str = "CREATE TABLE live_qualification_runs (
+           run_id TEXT PRIMARY KEY CHECK (length(run_id) = 32),
+           release_candidate_sha256 TEXT NOT NULL CHECK (length(release_candidate_sha256) = 64),
+           sequence_number INTEGER NOT NULL CHECK (sequence_number BETWEEN 1 AND 5),
+           outcome TEXT NOT NULL CHECK (outcome IN ('passed', 'failed')),
+           run_json TEXT NOT NULL CHECK (json_valid(run_json)),
+           manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+           created_at TEXT NOT NULL
+         )";
+const PRIVATE_QUALIFICATION_RECORDS_TABLE_SQL: &str = "CREATE TABLE private_qualification_records (
+           record_id TEXT PRIMARY KEY CHECK (length(record_id) = 32),
+           release_candidate_sha256 TEXT NOT NULL UNIQUE CHECK (length(release_candidate_sha256) = 64),
+           record_json TEXT NOT NULL CHECK (json_valid(record_json)),
+           manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+           created_at TEXT NOT NULL
+         )";
+const LIVE_QUALIFICATION_RUNS_NO_UPDATE_SQL: &str =
+    "CREATE TRIGGER live_qualification_runs_no_update
+         BEFORE UPDATE ON live_qualification_runs
+         BEGIN SELECT RAISE(ABORT, 'Live Qualification Runs are immutable'); END";
+const LIVE_QUALIFICATION_RUNS_NO_DELETE_SQL: &str =
+    "CREATE TRIGGER live_qualification_runs_no_delete
+         BEFORE DELETE ON live_qualification_runs
+         BEGIN SELECT RAISE(ABORT, 'Live Qualification Runs are immutable'); END";
+const PRIVATE_QUALIFICATION_RECORDS_NO_UPDATE_SQL: &str =
+    "CREATE TRIGGER private_qualification_records_no_update
+         BEFORE UPDATE ON private_qualification_records
+         BEGIN SELECT RAISE(ABORT, 'Private Qualification Records are immutable'); END";
+const PRIVATE_QUALIFICATION_RECORDS_NO_DELETE_SQL: &str =
+    "CREATE TRIGGER private_qualification_records_no_delete
+         BEFORE DELETE ON private_qualification_records
+         BEGIN SELECT RAISE(ABORT, 'Private Qualification Records are immutable'); END";
+const PUBLIC_RELEASE_GATE_RECORDS_TABLE_SQL: &str = "CREATE TABLE public_release_gate_records (
+           gate_id TEXT PRIMARY KEY CHECK (length(gate_id) = 32),
+           release_candidate_sha256 TEXT NOT NULL CHECK (length(release_candidate_sha256) = 64),
+           outcome TEXT NOT NULL CHECK (outcome IN ('blocked', 'authorized')),
+           record_json TEXT NOT NULL CHECK (json_valid(record_json)),
+           manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+           created_at TEXT NOT NULL
+         )";
+const NATIVE_PLATFORM_QUALIFICATION_RECORDS_TABLE_SQL: &str =
+    "CREATE TABLE native_platform_qualification_records (
+           record_id TEXT PRIMARY KEY CHECK (length(record_id) = 32),
+           platform TEXT NOT NULL CHECK (platform IN ('windows_11_x64', 'macos_14_apple_silicon', 'ubuntu_24_04_x64')),
+           outcome TEXT NOT NULL CHECK (outcome IN ('passed', 'failed')),
+           record_json TEXT NOT NULL CHECK (json_valid(record_json)),
+           manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+           created_at TEXT NOT NULL
+         )";
+const NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_UPDATE_SQL: &str =
+    "CREATE TRIGGER native_platform_qualification_records_no_update
+         BEFORE UPDATE ON native_platform_qualification_records
+         BEGIN SELECT RAISE(ABORT, 'Native platform Qualification records are immutable'); END";
+const NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_DELETE_SQL: &str =
+    "CREATE TRIGGER native_platform_qualification_records_no_delete
+         BEFORE DELETE ON native_platform_qualification_records
+         BEGIN SELECT RAISE(ABORT, 'Native platform Qualification records are immutable'); END";
+const PUBLIC_RELEASE_GATE_RECORDS_NO_UPDATE_SQL: &str =
+    "CREATE TRIGGER public_release_gate_records_no_update
+         BEFORE UPDATE ON public_release_gate_records
+         BEGIN SELECT RAISE(ABORT, 'Public Release Gate records are immutable'); END";
+const PUBLIC_RELEASE_GATE_RECORDS_NO_DELETE_SQL: &str =
+    "CREATE TRIGGER public_release_gate_records_no_delete
+         BEFORE DELETE ON public_release_gate_records
+         BEGIN SELECT RAISE(ABORT, 'Public Release Gate records are immutable'); END";
 pub(crate) const RUNTIME_PREPARATION_TABLE_SQL: &str = "CREATE TABLE runtime_preparation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
            status TEXT NOT NULL CHECK (status IN ('not_started', 'preparing', 'ready', 'failed')),
@@ -659,6 +818,16 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     transaction.execute(RUNTIME_PREPARATION_TABLE_SQL, [])?;
     transaction.execute(TENDER_BACKUPS_TABLE_SQL, [])?;
     transaction.execute(TENDER_CATALOGUE_TABLE_SQL, [])?;
+    transaction.execute(PORTABLE_TENDER_ARCHIVES_TABLE_SQL, [])?;
+    transaction.execute(TENDER_TRASH_TABLE_SQL, [])?;
+    transaction.execute(TENDER_TRASH_DECISIONS_TABLE_SQL, [])?;
+    transaction.execute(DELETION_RECEIPTS_TABLE_SQL, [])?;
+    transaction.execute(PRODUCT_ACCEPTANCE_RUNS_TABLE_SQL, [])?;
+    transaction.execute(PRODUCT_ACCEPTANCE_RECORDS_TABLE_SQL, [])?;
+    transaction.execute(LIVE_QUALIFICATION_RUNS_TABLE_SQL, [])?;
+    transaction.execute(PRIVATE_QUALIFICATION_RECORDS_TABLE_SQL, [])?;
+    transaction.execute(PUBLIC_RELEASE_GATE_RECORDS_TABLE_SQL, [])?;
+    transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_TABLE_SQL, [])?;
     transaction.execute(TENDER_RECOVERIES_TABLE_SQL, [])?;
     transaction.execute(TENDER_RECOVERY_DECISIONS_TABLE_SQL, [])?;
     transaction.execute(UPDATE_OPERATIONS_TABLE_SQL, [])?;
@@ -672,8 +841,26 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     transaction.execute(UPDATE_OPERATIONS_NO_DELETE_SQL, [])?;
     transaction.execute(UPDATE_RECOVERY_POINTS_NO_UPDATE_SQL, [])?;
     transaction.execute(UPDATE_RECOVERY_POINTS_NO_DELETE_SQL, [])?;
+    transaction.execute(PORTABLE_TENDER_ARCHIVES_NO_UPDATE_SQL, [])?;
+    transaction.execute(PORTABLE_TENDER_ARCHIVES_NO_DELETE_SQL, [])?;
+    transaction.execute(DELETION_RECEIPTS_NO_UPDATE_SQL, [])?;
+    transaction.execute(DELETION_RECEIPTS_NO_DELETE_SQL, [])?;
+    transaction.execute(TENDER_TRASH_DECISIONS_NO_UPDATE_SQL, [])?;
+    transaction.execute(TENDER_TRASH_DECISIONS_NO_DELETE_SQL, [])?;
+    transaction.execute(PRODUCT_ACCEPTANCE_RUNS_NO_UPDATE_SQL, [])?;
+    transaction.execute(PRODUCT_ACCEPTANCE_RUNS_NO_DELETE_SQL, [])?;
+    transaction.execute(PRODUCT_ACCEPTANCE_RECORDS_NO_UPDATE_SQL, [])?;
+    transaction.execute(PRODUCT_ACCEPTANCE_RECORDS_NO_DELETE_SQL, [])?;
+    transaction.execute(LIVE_QUALIFICATION_RUNS_NO_UPDATE_SQL, [])?;
+    transaction.execute(LIVE_QUALIFICATION_RUNS_NO_DELETE_SQL, [])?;
+    transaction.execute(PRIVATE_QUALIFICATION_RECORDS_NO_UPDATE_SQL, [])?;
+    transaction.execute(PRIVATE_QUALIFICATION_RECORDS_NO_DELETE_SQL, [])?;
+    transaction.execute(PUBLIC_RELEASE_GATE_RECORDS_NO_UPDATE_SQL, [])?;
+    transaction.execute(PUBLIC_RELEASE_GATE_RECORDS_NO_DELETE_SQL, [])?;
+    transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_UPDATE_SQL, [])?;
+    transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_DELETE_SQL, [])?;
     transaction.execute(
-        "INSERT INTO installation (singleton, schema_version) VALUES (1, 8)",
+        "INSERT INTO installation (singleton, schema_version) VALUES (1, 14)",
         [],
     )?;
     transaction.execute(
@@ -737,6 +924,23 @@ enum CatalogueStatus {
     Corrupt,
 }
 
+fn schema_object(
+    object_type: &str,
+    table_name: &str,
+    sql: &str,
+) -> (String, String, String, Option<String>) {
+    let object_name = sql
+        .split_ascii_whitespace()
+        .nth(2)
+        .expect("owned Quantix schema declarations have an object name");
+    (
+        object_type.to_owned(),
+        object_name.to_owned(),
+        table_name.to_owned(),
+        Some(sql.to_owned()),
+    )
+}
+
 fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     connection.busy_timeout(Duration::from_secs(5))?;
@@ -770,112 +974,203 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(statement);
-    if schema_objects
-        != [
-            (
-                "table".to_owned(),
-                "installation".to_owned(),
-                "installation".to_owned(),
-                Some(INSTALLATION_TABLE_SQL.to_owned()),
-            ),
-            (
-                "table".to_owned(),
-                "runtime_preparation".to_owned(),
-                "runtime_preparation".to_owned(),
-                Some(RUNTIME_PREPARATION_TABLE_SQL.to_owned()),
-            ),
-            (
-                "table".to_owned(),
-                "tender_backups".to_owned(),
-                "tender_backups".to_owned(),
-                Some(TENDER_BACKUPS_TABLE_SQL.to_owned()),
-            ),
-            (
-                "table".to_owned(),
-                "tender_catalogue".to_owned(),
-                "tender_catalogue".to_owned(),
-                Some(TENDER_CATALOGUE_TABLE_SQL.to_owned()),
-            ),
-            (
-                "table".to_owned(),
-                "tender_recoveries".to_owned(),
-                "tender_recoveries".to_owned(),
-                Some(TENDER_RECOVERIES_TABLE_SQL.to_owned()),
-            ),
-            (
-                "table".to_owned(),
-                "tender_recovery_decisions".to_owned(),
-                "tender_recovery_decisions".to_owned(),
-                Some(TENDER_RECOVERY_DECISIONS_TABLE_SQL.to_owned()),
-            ),
-            (
-                "table".to_owned(),
-                "update_decisions".to_owned(),
-                "update_decisions".to_owned(),
-                Some(UPDATE_DECISIONS_TABLE_SQL.to_owned()),
-            ),
-            (
-                "table".to_owned(),
-                "update_operations".to_owned(),
-                "update_operations".to_owned(),
-                Some(UPDATE_OPERATIONS_TABLE_SQL.to_owned()),
-            ),
-            (
-                "table".to_owned(),
-                "update_recovery_points".to_owned(),
-                "update_recovery_points".to_owned(),
-                Some(UPDATE_RECOVERY_POINTS_TABLE_SQL.to_owned()),
-            ),
-            (
-                "trigger".to_owned(),
-                "tender_recovery_decisions_no_delete".to_owned(),
-                "tender_recovery_decisions".to_owned(),
-                Some(TENDER_RECOVERY_DECISIONS_NO_DELETE_SQL.to_owned()),
-            ),
-            (
-                "trigger".to_owned(),
-                "tender_recovery_decisions_no_update".to_owned(),
-                "tender_recovery_decisions".to_owned(),
-                Some(TENDER_RECOVERY_DECISIONS_NO_UPDATE_SQL.to_owned()),
-            ),
-            (
-                "trigger".to_owned(),
-                "update_decisions_no_delete".to_owned(),
-                "update_decisions".to_owned(),
-                Some(UPDATE_DECISIONS_NO_DELETE_SQL.to_owned()),
-            ),
-            (
-                "trigger".to_owned(),
-                "update_decisions_no_update".to_owned(),
-                "update_decisions".to_owned(),
-                Some(UPDATE_DECISIONS_NO_UPDATE_SQL.to_owned()),
-            ),
-            (
-                "trigger".to_owned(),
-                "update_operations_no_delete".to_owned(),
-                "update_operations".to_owned(),
-                Some(UPDATE_OPERATIONS_NO_DELETE_SQL.to_owned()),
-            ),
-            (
-                "trigger".to_owned(),
-                "update_operations_offer_no_update".to_owned(),
-                "update_operations".to_owned(),
-                Some(UPDATE_OPERATIONS_OFFER_NO_UPDATE_SQL.to_owned()),
-            ),
-            (
-                "trigger".to_owned(),
-                "update_recovery_points_no_delete".to_owned(),
-                "update_recovery_points".to_owned(),
-                Some(UPDATE_RECOVERY_POINTS_NO_DELETE_SQL.to_owned()),
-            ),
-            (
-                "trigger".to_owned(),
-                "update_recovery_points_no_update".to_owned(),
-                "update_recovery_points".to_owned(),
-                Some(UPDATE_RECOVERY_POINTS_NO_UPDATE_SQL.to_owned()),
-            ),
-        ]
-    {
+    let mut expected_schema_objects = vec![
+        schema_object("table", "installation", INSTALLATION_TABLE_SQL),
+        schema_object(
+            "table",
+            "runtime_preparation",
+            RUNTIME_PREPARATION_TABLE_SQL,
+        ),
+        schema_object("table", "tender_backups", TENDER_BACKUPS_TABLE_SQL),
+        schema_object("table", "tender_catalogue", TENDER_CATALOGUE_TABLE_SQL),
+        schema_object(
+            "table",
+            "portable_tender_archives",
+            PORTABLE_TENDER_ARCHIVES_TABLE_SQL,
+        ),
+        schema_object("table", "tender_trash", TENDER_TRASH_TABLE_SQL),
+        schema_object(
+            "table",
+            "tender_trash_decisions",
+            TENDER_TRASH_DECISIONS_TABLE_SQL,
+        ),
+        schema_object("table", "deletion_receipts", DELETION_RECEIPTS_TABLE_SQL),
+        schema_object(
+            "table",
+            "product_acceptance_runs",
+            PRODUCT_ACCEPTANCE_RUNS_TABLE_SQL,
+        ),
+        schema_object(
+            "table",
+            "product_acceptance_records",
+            PRODUCT_ACCEPTANCE_RECORDS_TABLE_SQL,
+        ),
+        schema_object(
+            "table",
+            "live_qualification_runs",
+            LIVE_QUALIFICATION_RUNS_TABLE_SQL,
+        ),
+        schema_object(
+            "table",
+            "private_qualification_records",
+            PRIVATE_QUALIFICATION_RECORDS_TABLE_SQL,
+        ),
+        schema_object(
+            "table",
+            "public_release_gate_records",
+            PUBLIC_RELEASE_GATE_RECORDS_TABLE_SQL,
+        ),
+        schema_object(
+            "table",
+            "native_platform_qualification_records",
+            NATIVE_PLATFORM_QUALIFICATION_RECORDS_TABLE_SQL,
+        ),
+        schema_object("table", "tender_recoveries", TENDER_RECOVERIES_TABLE_SQL),
+        schema_object(
+            "table",
+            "tender_recovery_decisions",
+            TENDER_RECOVERY_DECISIONS_TABLE_SQL,
+        ),
+        schema_object("table", "update_decisions", UPDATE_DECISIONS_TABLE_SQL),
+        schema_object("table", "update_operations", UPDATE_OPERATIONS_TABLE_SQL),
+        schema_object(
+            "table",
+            "update_recovery_points",
+            UPDATE_RECOVERY_POINTS_TABLE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "tender_recovery_decisions",
+            TENDER_RECOVERY_DECISIONS_NO_UPDATE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "tender_recovery_decisions",
+            TENDER_RECOVERY_DECISIONS_NO_DELETE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "update_decisions",
+            UPDATE_DECISIONS_NO_UPDATE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "update_decisions",
+            UPDATE_DECISIONS_NO_DELETE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "update_operations",
+            UPDATE_OPERATIONS_OFFER_NO_UPDATE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "update_operations",
+            UPDATE_OPERATIONS_NO_DELETE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "update_recovery_points",
+            UPDATE_RECOVERY_POINTS_NO_UPDATE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "update_recovery_points",
+            UPDATE_RECOVERY_POINTS_NO_DELETE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "portable_tender_archives",
+            PORTABLE_TENDER_ARCHIVES_NO_UPDATE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "portable_tender_archives",
+            PORTABLE_TENDER_ARCHIVES_NO_DELETE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "deletion_receipts",
+            DELETION_RECEIPTS_NO_UPDATE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "deletion_receipts",
+            DELETION_RECEIPTS_NO_DELETE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "tender_trash_decisions",
+            TENDER_TRASH_DECISIONS_NO_UPDATE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "tender_trash_decisions",
+            TENDER_TRASH_DECISIONS_NO_DELETE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "product_acceptance_runs",
+            PRODUCT_ACCEPTANCE_RUNS_NO_UPDATE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "product_acceptance_runs",
+            PRODUCT_ACCEPTANCE_RUNS_NO_DELETE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "product_acceptance_records",
+            PRODUCT_ACCEPTANCE_RECORDS_NO_UPDATE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "product_acceptance_records",
+            PRODUCT_ACCEPTANCE_RECORDS_NO_DELETE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "live_qualification_runs",
+            LIVE_QUALIFICATION_RUNS_NO_UPDATE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "live_qualification_runs",
+            LIVE_QUALIFICATION_RUNS_NO_DELETE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "private_qualification_records",
+            PRIVATE_QUALIFICATION_RECORDS_NO_UPDATE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "private_qualification_records",
+            PRIVATE_QUALIFICATION_RECORDS_NO_DELETE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "public_release_gate_records",
+            PUBLIC_RELEASE_GATE_RECORDS_NO_UPDATE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "public_release_gate_records",
+            PUBLIC_RELEASE_GATE_RECORDS_NO_DELETE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "native_platform_qualification_records",
+            NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_UPDATE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "native_platform_qualification_records",
+            NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_DELETE_SQL,
+        ),
+    ];
+    expected_schema_objects.sort();
+    if schema_objects != expected_schema_objects {
         return Ok(CatalogueStatus::Corrupt);
     }
 
