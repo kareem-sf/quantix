@@ -1,4 +1,9 @@
-use std::collections::BTreeSet;
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use garde::Validate;
 use jiff::Timestamp;
@@ -29,12 +34,29 @@ const REQUIRED_NATIVE_CHECKS: [&str; 8] = [
     "uninstall",
 ];
 const CODEX_APP_SERVER_PRODUCTION_SUPPORTED: bool = false;
+const RELEASE_CANDIDATE_DIRECTORIES: [&str; 4] = ["src", "src-tauri/src", "fixtures", "scripts"];
+const RELEASE_CANDIDATE_FILES: [&str; 8] = [
+    "package.json",
+    "package-lock.json",
+    "src-tauri/Cargo.toml",
+    "src-tauri/Cargo.lock",
+    "src-tauri/tauri.conf.json",
+    "src-tauri/runtime/runtime-provenance.json",
+    "src-tauri/runtime/codex_app_server_protocol.schemas.json",
+    "src-tauri/runtime/docling/uv.lock",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, Validate)]
 #[ts(export)]
 pub struct NativePlatformQualificationEvidence {
     #[garde(length(bytes, min = 1, max = 100))]
     pub platform: String,
+    #[garde(length(bytes, min = 1, max = 32767))]
+    pub signed_binary_path: String,
+    #[garde(length(bytes, min = 1, max = 32767))]
+    pub signature_path: String,
+    #[garde(length(bytes, min = 1, max = 32767))]
+    pub signature_public_key_path: String,
     #[garde(length(bytes, min = 64, max = 64), ascii)]
     pub release_candidate_manifest_sha256: String,
     #[garde(length(bytes, min = 64, max = 64), ascii)]
@@ -217,14 +239,24 @@ impl QuantixHost {
         }
         let connection = self.open_release_gate_database()?;
         let mut blockers = Vec::new();
-        let current_platform = match (std::env::consts::OS, std::env::consts::ARCH) {
-            ("windows", "x86_64") => Some("windows_11_x64"),
-            ("macos", "aarch64") => Some("macos_14_apple_silicon"),
-            ("linux", "x86_64") => Some("ubuntu_24_04_x64"),
-            _ => None,
-        };
+        let current_platform = inspect_exact_native_platform();
         if current_platform != Some(evidence.platform.as_str()) {
             blockers.push("native_platform_does_not_match_current_host".into());
+        }
+        let signed_binary = Path::new(&evidence.signed_binary_path);
+        if !signed_binary.is_absolute()
+            || fs::symlink_metadata(signed_binary)
+                .map(|metadata| metadata.file_type().is_symlink() || !metadata.is_file())
+                .unwrap_or(true)
+            || sha256_file(signed_binary).as_deref() != Some(&evidence.signed_binary_sha256)
+        {
+            blockers.push("signed_binary_missing_or_changed".into());
+        } else if !verify_native_signature(
+            signed_binary,
+            Path::new(&evidence.signature_path),
+            Path::new(&evidence.signature_public_key_path),
+        ) {
+            blockers.push("native_binary_signature_invalid".into());
         }
         let completed = evidence
             .completed_checks
@@ -529,7 +561,42 @@ impl QuantixHost {
             || evidence_expired(&record.license_review.expires_at)
             || evidence_expired(&record.codex_production_assurance.expires_at)
             || evidence_expired(&record.integration_terms.expires_at);
-        if expired {
+        let authoritative_records_current = record.native_platforms.iter().all(|native| {
+            connection
+                .query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM native_platform_qualification_records
+                       WHERE platform = ?1 AND manifest_sha256 = ?2 AND outcome = 'passed'
+                     )",
+                    params![native.evidence.platform, native.manifest_sha256],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap_or(false)
+        });
+        let superseded = record.native_platforms.iter().any(|native| {
+            connection
+                .query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM native_platform_qualification_records
+                       WHERE platform = ?1 AND created_at > ?2
+                         AND (manifest_sha256 <> ?3 OR outcome <> 'passed')
+                     )",
+                    params![
+                        native.evidence.platform,
+                        native.created_at,
+                        native.manifest_sha256
+                    ],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap_or(true)
+        });
+        if expired
+            || !authoritative_records_current
+            || superseded
+            || !record.public_production_ready
+            || record.outcome != PublicReleaseGateOutcome::Authorized
+            || !record.blockers.is_empty()
+        {
             Ok(None)
         } else {
             Ok(Some(record))
@@ -539,6 +606,64 @@ impl QuantixHost {
     fn open_release_gate_database(&self) -> Result<Connection, TenderCommandError> {
         Connection::open(self.application_home().join("installation.sqlite")).map_err(sql_error)
     }
+}
+
+pub fn release_candidate_manifest_sha256(
+    repository_root: &Path,
+) -> Result<String, TenderCommandError> {
+    let repository_root = repository_root
+        .canonicalize()
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+    let mut paths = RELEASE_CANDIDATE_FILES
+        .iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    for directory in RELEASE_CANDIDATE_DIRECTORIES {
+        let root = repository_root.join(directory);
+        if !root.is_dir() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        for entry in walkdir::WalkDir::new(&root).follow_links(false) {
+            let entry =
+                entry.map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+            if entry.file_type().is_symlink() {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            if entry.file_type().is_file() {
+                paths.push(
+                    entry
+                        .path()
+                        .strip_prefix(&repository_root)
+                        .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?
+                        .to_path_buf(),
+                );
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    let mut entries = Vec::with_capacity(paths.len());
+    for relative in paths {
+        let absolute = repository_root.join(&relative);
+        let metadata = fs::symlink_metadata(&absolute)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        entries.push(serde_json::json!({
+            "path": relative.to_string_lossy().replace('\\', "/"),
+            "sha256": sha256_file(&absolute)
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?,
+            "size_bytes": metadata.len().to_string(),
+        }));
+    }
+    let manifest = serde_json::json!({
+        "format_version": 1,
+        "files": entries,
+    });
+    let bytes = serde_json_canonicalizer::to_vec(&manifest)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    Ok(sha256_hex(&bytes))
 }
 
 fn validate_timestamp_order(created_at: &str, expires_at: &str) -> Result<(), TenderCommandError> {
@@ -562,6 +687,100 @@ fn evidence_expired(expires_at: &str) -> bool {
         .parse::<Timestamp>()
         .map(|expires| expires <= Timestamp::now())
         .unwrap_or(true)
+}
+
+fn inspect_exact_native_platform() -> Option<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => {
+            let output = Command::new("powershell.exe")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "[System.Environment]::OSVersion.Version.ToString()",
+                ])
+                .output()
+                .ok()?;
+            let version = String::from_utf8(output.stdout).ok()?;
+            let components = version
+                .trim()
+                .split('.')
+                .map(str::parse::<u32>)
+                .collect::<Result<Vec<_>, _>>()
+                .ok()?;
+            (output.status.success()
+                && components.get(0) == Some(&10)
+                && components.get(1) == Some(&0)
+                && components.get(2).is_some_and(|build| *build >= 22_000))
+            .then_some("windows_11_x64")
+        }
+        ("macos", "aarch64") => {
+            let output = Command::new("sw_vers")
+                .args(["-productVersion"])
+                .output()
+                .ok()?;
+            let major = String::from_utf8(output.stdout)
+                .ok()?
+                .trim()
+                .split('.')
+                .next()?
+                .parse::<u32>()
+                .ok()?;
+            (output.status.success() && major >= 14).then_some("macos_14_apple_silicon")
+        }
+        ("linux", "x86_64") => {
+            let release = fs::read_to_string("/etc/os-release").ok()?;
+            (release.lines().any(|line| line == "ID=ubuntu")
+                && release.lines().any(|line| line == "VERSION_ID=\"24.04\""))
+            .then_some("ubuntu_24_04_x64")
+        }
+        _ => None,
+    }
+}
+
+fn verify_native_signature(path: &Path, signature_path: &Path, public_key_path: &Path) -> bool {
+    match std::env::consts::OS {
+        "windows" => Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$signature = Get-AuthenticodeSignature -LiteralPath $args[0]; if ($signature.Status -eq 'Valid' -and $null -ne $signature.SignerCertificate) { exit 0 } else { exit 1 }",
+                path.to_string_lossy().as_ref(),
+            ])
+            .status()
+            .is_ok_and(|status| status.success()),
+        "macos" => Command::new("codesign")
+            .args(["--verify", "--deep", "--strict", "--verbose=2"])
+            .arg(path)
+            .status()
+            .is_ok_and(|status| status.success()),
+        "linux" => {
+            use minisign_verify::{PublicKey, Signature};
+            let Ok(public_key) = PublicKey::from_file(public_key_path) else {
+                return false;
+            };
+            let Ok(signature) = Signature::from_file(signature_path) else {
+                return false;
+            };
+            let Ok(content) = fs::read(path) else {
+                return false;
+            };
+            public_key.verify(&content, &signature, false).is_ok()
+        }
+        _ => false,
+    }
+}
+
+fn sha256_file(path: &Path) -> Option<String> {
+    use sha2::Digest;
+    let bytes = fs::read(path).ok()?;
+    Some(
+        sha2::Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
 }
 
 fn installation_identifier(connection: &Connection) -> Result<String, TenderCommandError> {

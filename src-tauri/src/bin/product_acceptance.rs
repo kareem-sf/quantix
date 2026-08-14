@@ -1,8 +1,8 @@
 use std::{env, fs, path::PathBuf, process::Command};
 
 use quantix_lib::{
-    CodexReadiness, EvaluatePublicReleaseGateCommand, QuantixHost,
-    RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand,
+    release_candidate_manifest_sha256, CodexReadiness, EvaluatePublicReleaseGateCommand,
+    QuantixHost, RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand,
     RunDeterministicAcceptanceCommand,
 };
 
@@ -14,6 +14,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|_| "QUANTIX_APPLICATION_HOME is required for release packaging")?;
         let release_candidate = env::var("QUANTIX_RELEASE_CANDIDATE_SHA256")
             .map_err(|_| "QUANTIX_RELEASE_CANDIDATE_SHA256 is required for release packaging")?;
+        let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .ok_or("repository root is unavailable")?
+            .to_path_buf();
+        let measured_candidate = release_candidate_manifest_sha256(&repository_root)?;
+        if measured_candidate != release_candidate {
+            return Err(
+                "release candidate manifest changed since Public Release Gate approval".into(),
+            );
+        }
         let resource_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let host = QuantixHost::new(application_home, resource_directory);
         let gate = host.inspect_current_public_release_gate(&release_candidate)?;

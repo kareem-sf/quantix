@@ -43,10 +43,11 @@ pub use document_parsing::{
 };
 pub use host::QuantixHost;
 pub use release_gate::{
-    CodexProductionAssuranceEvidence, EvaluatePublicReleaseGateCommand, IntegrationTermsDecision,
-    LicenseDistributionReview, NativePlatformQualificationEvidence,
-    NativePlatformQualificationRecord, PublicReleaseGateOutcome, PublicReleaseGateRecord,
-    RecordNativePlatformQualificationCommand, TechnicalRiskAcceptance,
+    release_candidate_manifest_sha256, CodexProductionAssuranceEvidence,
+    EvaluatePublicReleaseGateCommand, IntegrationTermsDecision, LicenseDistributionReview,
+    NativePlatformQualificationEvidence, NativePlatformQualificationRecord,
+    PublicReleaseGateOutcome, PublicReleaseGateRecord, RecordNativePlatformQualificationCommand,
+    TechnicalRiskAcceptance,
 };
 pub use runtime_readiness::{
     RuntimeLayout, RuntimeReadiness, RuntimeReadinessIssue, RuntimeReadinessState,
