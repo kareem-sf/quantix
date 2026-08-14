@@ -14,7 +14,7 @@ use crate::QuantixHost;
 
 pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 1024 * 1024 * 1024;
 
-pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 14;
+pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 15;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
@@ -30,7 +30,17 @@ const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
 ];
 const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 14)
+           schema_version INTEGER NOT NULL CHECK (schema_version = 15)
+         )";
+const MANAGER_WORKSPACE_SELECTION_TABLE_SQL: &str = "CREATE TABLE manager_workspace_selection (
+           singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+           selected_tender_id TEXT CHECK (selected_tender_id IS NULL OR length(selected_tender_id) = 32),
+           selection_sequence INTEGER NOT NULL CHECK (selection_sequence >= 0),
+           selected_at TEXT,
+           pending_tender_id TEXT CHECK (pending_tender_id IS NULL OR length(pending_tender_id) = 32),
+           pending_at TEXT,
+           CHECK ((selected_tender_id IS NULL) = (selected_at IS NULL)),
+           CHECK ((pending_tender_id IS NULL) = (pending_at IS NULL))
          )";
 pub(crate) const TENDER_BACKUPS_TABLE_SQL: &str = "CREATE TABLE tender_backups (
            backup_id TEXT PRIMARY KEY CHECK (length(backup_id) = 32),
@@ -815,6 +825,7 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute(INSTALLATION_TABLE_SQL, [])?;
+    transaction.execute(MANAGER_WORKSPACE_SELECTION_TABLE_SQL, [])?;
     transaction.execute(RUNTIME_PREPARATION_TABLE_SQL, [])?;
     transaction.execute(TENDER_BACKUPS_TABLE_SQL, [])?;
     transaction.execute(TENDER_CATALOGUE_TABLE_SQL, [])?;
@@ -860,13 +871,20 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_UPDATE_SQL, [])?;
     transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_DELETE_SQL, [])?;
     transaction.execute(
-        "INSERT INTO installation (singleton, schema_version) VALUES (1, 14)",
+        "INSERT INTO installation (singleton, schema_version) VALUES (1, 15)",
         [],
     )?;
     transaction.execute(
         "INSERT INTO runtime_preparation (
            singleton, status, codex_version, uv_version, docling_version, updated_at
          ) VALUES (1, 'not_started', NULL, NULL, NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        [],
+    )?;
+    transaction.execute(
+        "INSERT INTO manager_workspace_selection (
+           singleton, selected_tender_id, selection_sequence, selected_at,
+           pending_tender_id, pending_at
+         ) VALUES (1, NULL, 0, NULL, NULL, NULL)",
         [],
     )?;
     transaction.pragma_update(None, "user_version", INSTALLATION_SCHEMA_VERSION)?;
@@ -976,6 +994,11 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
     drop(statement);
     let mut expected_schema_objects = vec![
         schema_object("table", "installation", INSTALLATION_TABLE_SQL),
+        schema_object(
+            "table",
+            "manager_workspace_selection",
+            MANAGER_WORKSPACE_SELECTION_TABLE_SQL,
+        ),
         schema_object(
             "table",
             "runtime_preparation",
@@ -1193,6 +1216,14 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
         |row| row.get(0),
     )?;
     if runtime_row_count != 1 {
+        return Ok(CatalogueStatus::Corrupt);
+    }
+    let workspace_selection_row_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM manager_workspace_selection WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    if workspace_selection_row_count != 1 {
         return Ok(CatalogueStatus::Corrupt);
     }
 

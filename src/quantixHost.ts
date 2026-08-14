@@ -106,10 +106,13 @@ import type { InspectBidDecisionApprovalHistoryCommand } from "./bindings/Inspec
 import type { InvalidateBidDecisionApprovalCommand } from "./bindings/InvalidateBidDecisionApprovalCommand";
 import type { InspectComplianceMatrixCommand } from "./bindings/InspectComplianceMatrixCommand";
 import type { InspectProductionTaskReviewCommand } from "./bindings/InspectProductionTaskReviewCommand";
+import type { InspectManagerWorkspaceCommand } from "./bindings/InspectManagerWorkspaceCommand";
+import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
 import type { ManagerCapabilityDemandInput } from "./bindings/ManagerCapabilityDemandInput";
 import type { OpenTenderCommand } from "./bindings/OpenTenderCommand";
 import type { ParseSourceArtifactCommand } from "./bindings/ParseSourceArtifactCommand";
 import type { PrepareTenderRecoveryCommand } from "./bindings/PrepareTenderRecoveryCommand";
+import type { RecordEngineerWorkspaceMessageCommand } from "./bindings/RecordEngineerWorkspaceMessageCommand";
 import type { ReviseTenderCommand } from "./bindings/ReviseTenderCommand";
 import type { ReviseTenderQueryCommand } from "./bindings/ReviseTenderQueryCommand";
 import type { ReviseExternalRfiDraftCommand } from "./bindings/ReviseExternalRfiDraftCommand";
@@ -129,8 +132,10 @@ import type { RegisterExternalRfiResponseCommand } from "./bindings/RegisterExte
 import type { RunTenderRecordExtractionCommand } from "./bindings/RunTenderRecordExtractionCommand";
 import type { RunTenderRecordReviewCommand } from "./bindings/RunTenderRecordReviewCommand";
 import type { SearchEvidenceCommand } from "./bindings/SearchEvidenceCommand";
+import type { SelectManagerWorkspaceTenderCommand } from "./bindings/SelectManagerWorkspaceTenderCommand";
 import type { SetupOutcome } from "./bindings/SetupOutcome";
 import type { SourceRelationshipKind } from "./bindings/SourceRelationshipKind";
+import type { StartManagerTenderCommand } from "./bindings/StartManagerTenderCommand";
 import type { TenderSummary } from "./bindings/TenderSummary";
 import type { TenderCatalogueEntry } from "./bindings/TenderCatalogueEntry";
 import type { TenderBackupRecord } from "./bindings/TenderBackupRecord";
@@ -256,6 +261,47 @@ export function createTender(name: string): Promise<TenderSummary> {
 
 export function listTenders(): Promise<TenderCatalogueEntry[]> {
   return invoke<TenderCatalogueEntry[]>("list_tenders");
+}
+
+export function inspectManagerWorkspace(
+  tenderId: string | null = null,
+): Promise<ManagerWorkspaceProjection> {
+  const command: InspectManagerWorkspaceCommand = { tender_id: tenderId };
+  return invoke<ManagerWorkspaceProjection>("inspect_manager_workspace", {
+    command,
+  });
+}
+
+export function startManagerTender(
+  sourceKind: TenderPackageSourceKind,
+): Promise<ManagerWorkspaceProjection | null> {
+  const command: StartManagerTenderCommand = { source_kind: sourceKind };
+  return invoke<ManagerWorkspaceProjection | null>("start_manager_tender", {
+    command,
+  });
+}
+
+export function selectManagerWorkspaceTender(
+  tenderId: string,
+): Promise<ManagerWorkspaceProjection> {
+  const command: SelectManagerWorkspaceTenderCommand = { tender_id: tenderId };
+  return invoke<ManagerWorkspaceProjection>("select_manager_workspace_tender", {
+    command,
+  });
+}
+
+export function recordEngineerWorkspaceMessage(
+  tenderId: string,
+  body: string,
+): Promise<ManagerWorkspaceProjection> {
+  const command: RecordEngineerWorkspaceMessageCommand = {
+    tender_id: tenderId,
+    body,
+  };
+  return invoke<ManagerWorkspaceProjection>(
+    "record_engineer_workspace_message",
+    { command },
+  );
 }
 
 export function openTender(tenderId: string): Promise<TenderSummary> {

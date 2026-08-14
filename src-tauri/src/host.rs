@@ -27,6 +27,7 @@ struct QuantixHostInner {
     startup_reconciled: Mutex<bool>,
     startup_reconciliation: Mutex<StartupReconciliationReport>,
     catalogue_lock: Mutex<()>,
+    manager_tender_start_lock: Mutex<()>,
     open_tender_stores: OpenTenderStores,
     recovery_required_tenders: Mutex<HashSet<TenderId>>,
     recovery_operation_lock: Mutex<()>,
@@ -157,6 +158,7 @@ impl QuantixHost {
                 startup_reconciled: Mutex::new(false),
                 startup_reconciliation: Mutex::new(Default::default()),
                 catalogue_lock: Mutex::new(()),
+                manager_tender_start_lock: Mutex::new(()),
                 open_tender_stores: Mutex::new(Default::default()),
                 recovery_required_tenders: Mutex::new(Default::default()),
                 recovery_operation_lock: Mutex::new(()),
@@ -276,6 +278,10 @@ impl QuantixHost {
 
     pub(crate) fn catalogue_lock(&self) -> &Mutex<()> {
         &self.inner.catalogue_lock
+    }
+
+    pub(crate) fn manager_tender_start_lock(&self) -> &Mutex<()> {
+        &self.inner.manager_tender_start_lock
     }
 
     pub(crate) fn runtime_layout(&self) -> &RuntimeLayout {

@@ -2,17 +2,21 @@ use quantix_lib::{
     AcceptanceArtifactHash, AcceptanceCheckResult, AcceptanceStageTiming,
     ApproveSubmissionReleaseCommand, CodexProductionAssuranceEvidence,
     CreatePortableTenderArchiveCommand, DeletionReceipt, EvaluatePublicReleaseGateCommand,
-    ExportReleaseCopyCommand, ImportPortableTenderArchiveCommand, IntegrationTermsDecision,
-    LicenseDistributionReview, LiveQualificationMetrics, LiveQualificationRun,
+    ExportReleaseCopyCommand, ImportPortableTenderArchiveCommand, InspectManagerWorkspaceCommand,
+    IntegrationTermsDecision, LicenseDistributionReview, LiveQualificationMetrics,
+    LiveQualificationRun, ManagerConversation, ManagerWorkspaceProjection, ManagerWorkspaceTender,
     NativePlatformQualificationEvidence, NativePlatformQualificationRecord,
     PortableTenderArchiveRecord, PrivateQualificationRecord, ProductAcceptanceOutcome,
     ProductAcceptanceRecord, ProductAcceptanceRun, PublicReleaseGateOutcome,
-    PublicReleaseGateRecord, RecordLiveQualificationRunCommand,
-    RecordNativePlatformQualificationCommand, ReleaseCopyExport, ReleaseCopyItem,
-    RunDeterministicAcceptanceCommand, SubmissionReleaseApproval, SubmissionReleaseInspection,
-    SubmissionReleaseState, TechnicalRiskAcceptance, TenderRetentionDecisionCommand,
+    PublicReleaseGateRecord, RecordEngineerWorkspaceMessageCommand,
+    RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand, ReleaseCopyExport,
+    ReleaseCopyItem, RunDeterministicAcceptanceCommand, SelectManagerWorkspaceTenderCommand,
+    StartManagerTenderCommand, SubmissionReleaseApproval, SubmissionReleaseInspection,
+    SubmissionReleaseState, TechnicalRiskAcceptance, TenderOfficeMessage,
+    TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderRetentionDecisionCommand,
     TenderRetentionDecisionRecord, TenderRetentionState, TrashedTenderDecisionCommand,
-    TrashedTenderRecord, TrashedTenderState,
+    TrashedTenderRecord, TrashedTenderState, WorkspaceActionKind, WorkspaceCurrentAction,
+    WorkspaceFilesSummary, WorkspaceTeamSummary, WorkspaceWorkSummary,
 };
 use ts_rs::{Config, TS};
 
@@ -57,5 +61,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     PublicReleaseGateOutcome::export_all(&config)?;
     PublicReleaseGateRecord::export_all(&config)?;
     TechnicalRiskAcceptance::export_all(&config)?;
+    InspectManagerWorkspaceCommand::export_all(&config)?;
+    StartManagerTenderCommand::export_all(&config)?;
+    SelectManagerWorkspaceTenderCommand::export_all(&config)?;
+    RecordEngineerWorkspaceMessageCommand::export_all(&config)?;
+    TenderOfficeMessageAuthor::export_all(&config)?;
+    TenderOfficeMessageKind::export_all(&config)?;
+    TenderOfficeMessage::export_all(&config)?;
+    ManagerConversation::export_all(&config)?;
+    ManagerWorkspaceTender::export_all(&config)?;
+    WorkspaceActionKind::export_all(&config)?;
+    WorkspaceCurrentAction::export_all(&config)?;
+    WorkspaceWorkSummary::export_all(&config)?;
+    WorkspaceFilesSummary::export_all(&config)?;
+    WorkspaceTeamSummary::export_all(&config)?;
+    ManagerWorkspaceProjection::export_all(&config)?;
     Ok(())
 }

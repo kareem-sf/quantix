@@ -1,205 +1,136 @@
+import { CircleAlert, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import type { SetupIssue } from "./bindings/SetupIssue";
-import type { SetupOutcome } from "./bindings/SetupOutcome";
-import type { SetupState } from "./bindings/SetupState";
-import { ensureQuantixSetup } from "./quantixHost";
-import { RuntimeReadinessPanel } from "./RuntimeReadinessPanel";
-import { TenderWorkspace } from "./TenderWorkspace";
-import { UpdatePanel } from "./UpdatePanel";
+import { ManagerWorkspace } from "./ManagerWorkspace";
+import {
+  ensureQuantixSetup,
+  inspectRuntimeReadiness,
+  validateQuantixUpdateRestart,
+} from "./quantixHost";
 import "./App.css";
 
-type SetupView =
+type AppState =
   | { kind: "checking" }
-  | { kind: "outcome"; outcome: SetupOutcome }
-  | { kind: "error" };
+  | { kind: "ready"; aiAvailable: boolean }
+  | { kind: "blocked"; title: string; summary: string };
 
-const stateCopy: Record<SetupState, { title: string; summary: string }> = {
-  ready: {
-    title: "Tender office ready",
-    summary:
-      "The local Quantix foundation is ready for Engineer-controlled work.",
-  },
-  warning: {
-    title: "Ready with warnings",
-    summary:
-      "Setup completed, but the Engineer should review the checks below.",
-  },
-  authentication_required: {
-    title: "Authentication required",
-    summary:
-      "A connected service requires the Engineer to sign in before work can continue.",
-  },
-  missing_capability: {
-    title: "Capability required",
-    summary: "This device is missing a capability required by Quantix.",
-  },
-  unsupported_version: {
-    title: "Update required",
-    summary:
-      "This Application Home was created by a newer, unsupported Quantix version.",
-  },
-  repair_required: {
-    title: "Repair required",
-    summary:
-      "Quantix stopped safely without changing the existing Application Home.",
-  },
-};
-
-const issueCopy: Record<SetupIssue, string> = {
-  application_home_unavailable: "The local Application Home is unavailable.",
-  device_protection_disabled: "Device storage protection is disabled.",
+const setupIssueCopy: Record<SetupIssue, string> = {
+  application_home_unavailable: "The local Quantix workspace is unavailable.",
+  device_protection_disabled: "Device storage protection must be enabled.",
   device_protection_unverified:
-    "Device storage protection could not be verified.",
+    "Quantix could not verify device storage protection.",
   installation_catalogue_corrupt:
-    "The installation catalogue is incomplete or corrupt.",
-  insufficient_free_space:
-    "At least 1 GB of free space is required for first-run setup.",
-  storage_not_writable: "Quantix cannot write to its local Application Home.",
+    "The local Quantix installation record needs repair.",
+  insufficient_free_space: "This device needs at least 1 GB of free space.",
+  storage_not_writable: "Quantix cannot write to its local workspace.",
   storage_permissions_unverified:
-    "Local storage permissions could not be verified.",
+    "Quantix could not verify local storage permissions.",
   unrecognized_application_home:
-    "Existing, unrecognized Quantix data was preserved for Engineer review.",
+    "Existing unrecognized Quantix data was preserved for review.",
   unsafe_storage_location:
-    "The Application Home resolves through an unsafe linked storage location.",
+    "The Quantix workspace uses an unsafe linked location.",
   unsafe_storage_permissions:
-    "Local storage permissions allow access beyond the current Engineer.",
+    "The Quantix workspace can be accessed by other device users.",
   unsupported_installation_version:
-    "Install a compatible Quantix version to use this Application Home.",
+    "Install a compatible Quantix version to open this workspace.",
   update_installation_active:
-    "Finish or repair the active Quantix update before using this Application Home.",
+    "Finish or repair the active Quantix update before continuing.",
 };
 
 function App() {
-  const [setup, setSetup] = useState<SetupView>({ kind: "checking" });
-  const [runtimeReady, setRuntimeReady] = useState(false);
-  const [updateWorkAvailable, setUpdateWorkAvailable] = useState(false);
+  const [state, setState] = useState<AppState>({ kind: "checking" });
 
-  const runSetup = useCallback(async () => {
-    setSetup({ kind: "checking" });
-    setRuntimeReady(false);
-    setUpdateWorkAvailable(false);
-
+  const openWorkspace = useCallback(async () => {
+    setState({ kind: "checking" });
     try {
-      setSetup({ kind: "outcome", outcome: await ensureQuantixSetup() });
+      const setup = await ensureQuantixSetup();
+      if (setup.state !== "ready" && setup.state !== "warning") {
+        setState({
+          kind: "blocked",
+          title: "Quantix needs attention",
+          summary:
+            setup.issues.map((issue) => setupIssueCopy[issue]).join(" ") ||
+            "The local workspace could not be opened safely.",
+        });
+        return;
+      }
+
+      const [runtimeResult, updateResult] = await Promise.allSettled([
+        inspectRuntimeReadiness(),
+        validateQuantixUpdateRestart(),
+      ]);
+      if (updateResult.status === "rejected") {
+        setState({
+          kind: "blocked",
+          title: "Quantix update state is unavailable",
+          summary:
+            "Quantix could not verify whether an update needs recovery. Nothing was changed; try again before continuing.",
+        });
+        return;
+      }
+      if (
+        [
+          "installing",
+          "restart_validation_required",
+          "repair_required",
+        ].includes(updateResult.value.state)
+      ) {
+        setState({
+          kind: "blocked",
+          title: "Finish the Quantix update",
+          summary:
+            "Tender records are protected while the signed application update is completed or repaired.",
+        });
+        return;
+      }
+      setState({
+        kind: "ready",
+        aiAvailable:
+          runtimeResult.status === "fulfilled" &&
+          runtimeResult.value.state === "ready",
+      });
     } catch {
-      setSetup({ kind: "error" });
+      setState({
+        kind: "blocked",
+        title: "Quantix could not open",
+        summary:
+          "The local Host did not respond. Nothing was changed; try opening the workspace again.",
+      });
     }
   }, []);
 
   useEffect(() => {
-    void runSetup();
-  }, [runSetup]);
+    void openWorkspace();
+  }, [openWorkspace]);
 
-  const completeUpdateRecovery = useCallback(() => {
-    void runSetup();
-  }, [runSetup]);
-
-  const outcome = setup.kind === "outcome" ? setup.outcome : undefined;
-  const copy = outcome ? stateCopy[outcome.state] : undefined;
-  const setupReady = outcome?.state === "ready" || outcome?.state === "warning";
-  const updateRecoveryRequired =
-    outcome?.state === "repair_required" &&
-    outcome.issues.includes("update_installation_active");
-
-  return (
-    <div className="app-shell">
-      <header className="app-header">
-        <span className="wordmark">Quantix</span>
-        <span className="environment">Local desktop</span>
-      </header>
-
-      <main className="connection-layout">
-        <section className="introduction" aria-labelledby="page-title">
-          <p className="eyebrow">First-run setup</p>
-          <h1 id="page-title">Engineer-controlled tender office</h1>
-          <p>
-            Quantix verifies its private local foundation before any tender work
-            begins. The Engineer remains in control of every consequential
-            action.
-          </p>
-          <button
-            className="connection-button"
-            type="button"
-            onClick={() => void runSetup()}
-            disabled={setup.kind === "checking"}
-          >
-            {setup.kind === "checking" ? "Checking setup…" : "Run setup checks"}
-          </button>
-        </section>
-
-        <section className="status-panel" aria-labelledby="setup-title">
-          <div className="status-heading" aria-live="polite">
-            <span
-              className={`status-indicator status-indicator--${outcome?.state ?? setup.kind}`}
-              aria-hidden="true"
-            />
-            <div>
-              <p className="status-kicker">Application Home</p>
-              <h2 id="setup-title">
-                {copy?.title ??
-                  (setup.kind === "checking"
-                    ? "Checking local setup"
-                    : "Setup unavailable")}
-              </h2>
-            </div>
-          </div>
-
-          {outcome && copy ? (
-            <div className="setup-outcome">
-              <p className="outcome-summary">{copy.summary}</p>
-              {outcome.issues.length > 0 ? (
-                <ul className="issue-list">
-                  {outcome.issues.map((issue) => (
-                    <li key={issue}>{issueCopy[issue]}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="success-message">
-                  {outcome.setup_performed
-                    ? "Application Home created and verified."
-                    : "Existing Application Home verified."}
-                </p>
-              )}
-            </div>
-          ) : null}
-
-          {setup.kind === "checking" ? (
-            <p className="status-message">
-              <span className="spinner" aria-hidden="true" />
-              Verifying storage, permissions, and installation state…
-            </p>
-          ) : null}
-
-          {setup.kind === "error" ? (
-            <p className="error-message" role="alert">
-              The local Quantix host did not respond. Restart the dev app and
-              try again.
-            </p>
-          ) : null}
-        </section>
+  if (state.kind === "checking") {
+    return (
+      <main className="quantix-startup" aria-live="polite">
+        <span className="quantix-startup__mark">Q</span>
+        <h1>Quantix</h1>
+        <p>
+          <LoaderCircle size={16} aria-hidden="true" />
+          Opening your workspace…
+        </p>
       </main>
+    );
+  }
 
-      {setupReady ? (
-        <RuntimeReadinessPanel onReadyChange={setRuntimeReady} />
-      ) : null}
+  if (state.kind === "blocked") {
+    return (
+      <main className="quantix-blocked">
+        <CircleAlert size={23} aria-hidden="true" />
+        <h1>{state.title}</h1>
+        <p>{state.summary}</p>
+        <button type="button" onClick={() => void openWorkspace()}>
+          Try again
+        </button>
+      </main>
+    );
+  }
 
-      {setupReady || updateRecoveryRequired ? (
-        <UpdatePanel
-          onWorkAvailabilityChange={setUpdateWorkAvailable}
-          onTerminalState={
-            updateRecoveryRequired ? completeUpdateRecovery : undefined
-          }
-        />
-      ) : null}
-
-      {setupReady ? (
-        <TenderWorkspace runtimeReady={runtimeReady && updateWorkAvailable} />
-      ) : null}
-
-      <div className="structural-rail" aria-hidden="true" />
-    </div>
-  );
+  return <ManagerWorkspace aiAvailable={state.aiAvailable} />;
 }
 
 export default App;

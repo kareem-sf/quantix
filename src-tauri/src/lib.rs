@@ -129,11 +129,13 @@ pub use tender_store::{
     InspectCoordinatedBidBaselinesCommand, InspectDecisionCockpitCommand,
     InspectEstimateWorkspaceCommand, InspectExternalRfiEligibleQueriesCommand,
     InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
-    InspectPackageProductionCommand, InspectPricingWorkspaceCommand,
-    InspectProductionTaskReviewCommand, InspectSubmissionArtifactContentCommand,
-    InspectSubmissionPackageCommand, InspectSubmissionPackageItemContentCommand,
-    InspectTenderQueriesCommand, InspectTenderRecordsCommand, InterpretExternalRfiResponseCommand,
+    InspectManagerWorkspaceCommand, InspectPackageProductionCommand,
+    InspectPricingWorkspaceCommand, InspectProductionTaskReviewCommand,
+    InspectSubmissionArtifactContentCommand, InspectSubmissionPackageCommand,
+    InspectSubmissionPackageItemContentCommand, InspectTenderQueriesCommand,
+    InspectTenderRecordsCommand, InterpretExternalRfiResponseCommand,
     InvalidateBidDecisionApprovalCommand, MajorFindingPolicy, ManagerCapabilityDemandInput,
+    ManagerConversation, ManagerWorkspaceProjection, ManagerWorkspaceTender,
     ManualVerificationResult, OpenTenderCommand, PackageFindingExceptionApproval,
     PackageManualVerification, PackageProductionGeneration, PackageReviewFinding,
     PackageReviewResult, PackageValidationCheckCategory, PackageValidationOutcome,
@@ -152,18 +154,19 @@ pub use tender_store::{
     ProductionQueryTreatmentApplication, ProductionRemediation, ProductionReview,
     ProductionReviewFinding, ProductionReviewResult, ProductionTaskInspection,
     ProductionTaskReviewInspection, ProductionTaskRunResult, ProductionTaskState,
-    ProposeBoqCalculationRuleCommand, RecordPackageManualVerificationCommand,
-    RegisterExternalRfiResponseCommand, RegisterTenderContentCommand, ReleaseCopyExport,
-    ReleaseCopyItem, ReleaseReadinessBlocker, ReleaseReadinessBlockerCode,
-    ReleaseReadinessCategorySummary, ReleaseReadinessReport, ResolveBidDecisionReturnReworkCommand,
-    ResolveTenderRecoveryCommand, ResourceImplication, ReviewFindingSeverity,
-    ReviseExternalRfiDraftCommand, ReviseTenderCommand, ReviseTenderQueryCommand,
-    ReviseWorkPlanProposalCommand, RunBasisOfEstimateReviewCommand,
+    ProposeBoqCalculationRuleCommand, RecordEngineerWorkspaceMessageCommand,
+    RecordPackageManualVerificationCommand, RegisterExternalRfiResponseCommand,
+    RegisterTenderContentCommand, ReleaseCopyExport, ReleaseCopyItem, ReleaseReadinessBlocker,
+    ReleaseReadinessBlockerCode, ReleaseReadinessCategorySummary, ReleaseReadinessReport,
+    ResolveBidDecisionReturnReworkCommand, ResolveTenderRecoveryCommand, ResourceImplication,
+    ReviewFindingSeverity, ReviseExternalRfiDraftCommand, ReviseTenderCommand,
+    ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand, RunBasisOfEstimateReviewCommand,
     RunBidDecisionPackageReviewCommand, RunCalculationRuleReviewCommand,
     RunCostEstimatorBasisCommand, RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand,
     RunPackageValidationCommand, RunPricedCostBaselineReviewCommand,
     RunPricingAdjustmentReviewCommand, RunProductionTaskCommand, RunSubmissionSectionReviewCommand,
-    RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, SelectPricingScenarioCommand,
+    RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand,
+    SelectManagerWorkspaceTenderCommand, SelectPricingScenarioCommand, StartManagerTenderCommand,
     StartupReconciliationReport, SubmissionArtifactContent, SubmissionArtifactVersion,
     SubmissionAuthorshipProvenance, SubmissionContributionKind, SubmissionCoverageBlocker,
     SubmissionCoverageBlockerCode, SubmissionCoverageDisposition, SubmissionCoverageRow,
@@ -177,8 +180,9 @@ pub use tender_store::{
     SubmissionSourceArtifactReference, SubmissionValidationContextInput, SubmissionWorkPlanContext,
     TenderBackupRecord, TenderBackupState, TenderCatalogueEntry, TenderCommandError,
     TenderErrorCode, TenderEvidenceReference, TenderInspection, TenderIntegrityIssue,
-    TenderIntegrityReport, TenderIntegrityState, TenderLifecyclePhase, TenderProductionInspection,
-    TenderQuery, TenderQueryInvalidation, TenderQueryPage, TenderQueryResponse, TenderQueryStatus,
+    TenderIntegrityReport, TenderIntegrityState, TenderLifecyclePhase, TenderOfficeMessage,
+    TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderProductionInspection, TenderQuery,
+    TenderQueryInvalidation, TenderQueryPage, TenderQueryResponse, TenderQueryStatus,
     TenderQueryTreatment, TenderQueryTreatmentProposal, TenderQueryTreatmentProposalInput,
     TenderQueryType, TenderRecordAuthority, TenderRecordAuthorityKind,
     TenderRecordAuthorityReference, TenderRecordBasisKind, TenderRecordContradiction,
@@ -192,7 +196,8 @@ pub use tender_store::{
     TenderRetentionState, TenderSummary, TrashedTenderDecisionCommand, TrashedTenderRecord,
     TrashedTenderState, WorkPlanApprovalRecord, WorkPlanCapabilityGap, WorkPlanDecision,
     WorkPlanProfileBinding, WorkPlanProposalInspection, WorkPlanRevisionAction, WorkPlanTask,
-    WorkPlanWorkstream,
+    WorkPlanWorkstream, WorkspaceActionKind, WorkspaceCurrentAction, WorkspaceFilesSummary,
+    WorkspaceTeamSummary, WorkspaceWorkSummary,
 };
 pub use update::{
     current_application_artifact_is_restorable, current_update_platform,
@@ -253,20 +258,21 @@ mod tauri_commands {
         InspectComplianceMatrixCommand, InspectCoordinatedBidBaselinesCommand,
         InspectDecisionCockpitCommand, InspectEstimateWorkspaceCommand,
         InspectExternalRfiEligibleQueriesCommand, InspectExternalRfiResponseCandidatesCommand,
-        InspectExternalRfisCommand, InspectPackageProductionCommand,
-        InspectPricingWorkspaceCommand, InspectProductionTaskReviewCommand,
-        InspectSubmissionArtifactContentCommand, InspectSubmissionPackageCommand,
-        InspectSubmissionPackageItemContentCommand, InspectTenderQueriesCommand,
-        InspectTenderRecordsCommand, InterpretExternalRfiResponseCommand, InterruptAgentRunCommand,
-        InvalidateBidDecisionApprovalCommand, LiveQualificationRun, OpenTenderCommand,
-        PackageProductionGeneration, ParseSourceArtifactCommand, PortableTenderArchiveRecord,
-        PrepareTenderRecoveryCommand, PricedCostBaselineReviewResult, PricedCostBaselineVersion,
-        PricingAdjustmentReviewResult, PricingAdjustmentVersion, PricingScenarioVersion,
-        PricingWorkspaceInspection, PrivateQualificationRecord, ProductAcceptanceRecord,
-        ProductAcceptanceRun, ProductionTaskReviewInspection, ProductionTaskRunResult,
-        ProposeBoqCalculationRuleCommand, PublicReleaseGateRecord, QuantixHost,
-        RecordPackageManualVerificationCommand, RegisterExternalRfiResponseCommand,
-        RequestAgentAccessCommand, ResolveAgentAccessCommand,
+        InspectExternalRfisCommand, InspectManagerWorkspaceCommand,
+        InspectPackageProductionCommand, InspectPricingWorkspaceCommand,
+        InspectProductionTaskReviewCommand, InspectSubmissionArtifactContentCommand,
+        InspectSubmissionPackageCommand, InspectSubmissionPackageItemContentCommand,
+        InspectTenderQueriesCommand, InspectTenderRecordsCommand,
+        InterpretExternalRfiResponseCommand, InterruptAgentRunCommand,
+        InvalidateBidDecisionApprovalCommand, LiveQualificationRun, ManagerWorkspaceProjection,
+        OpenTenderCommand, PackageProductionGeneration, ParseSourceArtifactCommand,
+        PortableTenderArchiveRecord, PrepareTenderRecoveryCommand, PricedCostBaselineReviewResult,
+        PricedCostBaselineVersion, PricingAdjustmentReviewResult, PricingAdjustmentVersion,
+        PricingScenarioVersion, PricingWorkspaceInspection, PrivateQualificationRecord,
+        ProductAcceptanceRecord, ProductAcceptanceRun, ProductionTaskReviewInspection,
+        ProductionTaskRunResult, ProposeBoqCalculationRuleCommand, PublicReleaseGateRecord,
+        QuantixHost, RecordEngineerWorkspaceMessageCommand, RecordPackageManualVerificationCommand,
+        RegisterExternalRfiResponseCommand, RequestAgentAccessCommand, ResolveAgentAccessCommand,
         ResolveBidDecisionReturnReworkCommand, ResolveIndeterminateAgentRunCommand,
         ResolveTenderRecoveryCommand, ReviseExternalRfiDraftCommand, ReviseTenderCommand,
         ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand, RunBasisOfEstimateReviewCommand,
@@ -277,15 +283,16 @@ mod tauri_commands {
         RunPricingAdjustmentReviewCommand, RunProductionTaskCommand,
         RunSubmissionSectionReviewCommand, RunTenderRecordExtractionCommand,
         RunTenderRecordReviewCommand, RuntimeReadiness, SearchEvidenceCommand,
-        SelectPricingScenarioCommand, SetupOutcome, SubmissionArtifactContent,
-        SubmissionItemContent, SubmissionPackageVersion, SubmissionReleaseInspection,
-        SubmissionSectionReviewRunResult, TenderBackupRecord, TenderCatalogueEntry,
-        TenderCommandError, TenderErrorCode, TenderIntegrityReport, TenderPackageImportResult,
-        TenderPackageSourceKind, TenderProductionInspection, TenderQuery, TenderQueryPage,
-        TenderRecordAuthority, TenderRecordDecisionResult, TenderRecordExtractionResult,
-        TenderRecordPage, TenderRecordReviewResult, TenderRecoveryRecord,
-        TenderRetentionDecisionCommand, TenderRetentionDecisionRecord, TenderSummary,
-        TrashedTenderDecisionCommand, TrashedTenderRecord, WorkPlanProposalInspection,
+        SelectManagerWorkspaceTenderCommand, SelectPricingScenarioCommand, SetupOutcome,
+        StartManagerTenderCommand, SubmissionArtifactContent, SubmissionItemContent,
+        SubmissionPackageVersion, SubmissionReleaseInspection, SubmissionSectionReviewRunResult,
+        TenderBackupRecord, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
+        TenderIntegrityReport, TenderPackageImportResult, TenderPackageSourceKind,
+        TenderProductionInspection, TenderQuery, TenderQueryPage, TenderRecordAuthority,
+        TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordPage,
+        TenderRecordReviewResult, TenderRecoveryRecord, TenderRetentionDecisionCommand,
+        TenderRetentionDecisionRecord, TenderSummary, TrashedTenderDecisionCommand,
+        TrashedTenderRecord, WorkPlanProposalInspection,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -572,6 +579,83 @@ mod tauri_commands {
             .map_err(|_| TenderCommandError {
                 code: TenderErrorCode::StoreUnavailable,
             })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_manager_workspace(
+        host: tauri::State<'_, QuantixHost>,
+        command: InspectManagerWorkspaceCommand,
+    ) -> Result<ManagerWorkspaceProjection, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.inspect_manager_workspace(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn start_manager_tender<R: tauri::Runtime>(
+        app: tauri::AppHandle<R>,
+        host: tauri::State<'_, QuantixHost>,
+        command: StartManagerTenderCommand,
+    ) -> Result<Option<ManagerWorkspaceProjection>, TenderCommandError> {
+        let selected = tauri::async_runtime::spawn_blocking(move || {
+            let picker = app.dialog().file();
+            match command.source_kind {
+                TenderPackageSourceKind::Directory => picker.blocking_pick_folder(),
+                TenderPackageSourceKind::ZipArchive => picker
+                    .add_filter("ZIP archive", &["zip"])
+                    .blocking_pick_file(),
+            }
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?;
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        let source_path = selected.into_path().map_err(|_| TenderCommandError {
+            code: TenderErrorCode::InvalidCommand,
+        })?;
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.start_manager_tender_from_package(&source_path)
+                .map(Some)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn select_manager_workspace_tender(
+        host: tauri::State<'_, QuantixHost>,
+        command: SelectManagerWorkspaceTenderCommand,
+    ) -> Result<ManagerWorkspaceProjection, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.select_manager_workspace_tender(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn record_engineer_workspace_message(
+        host: tauri::State<'_, QuantixHost>,
+        command: RecordEngineerWorkspaceMessageCommand,
+    ) -> Result<ManagerWorkspaceProjection, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.record_engineer_workspace_message(command)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?
     }
 
     #[tauri::command]
@@ -2288,6 +2372,10 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::retry_quantix_update_repair,
             tauri_commands::create_tender,
             tauri_commands::list_tenders,
+            tauri_commands::inspect_manager_workspace,
+            tauri_commands::start_manager_tender,
+            tauri_commands::select_manager_workspace_tender,
+            tauri_commands::record_engineer_workspace_message,
             tauri_commands::open_tender,
             tauri_commands::inspect_tender_integrity,
             tauri_commands::create_tender_backup,

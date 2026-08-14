@@ -50,6 +50,7 @@ mod submission_packages;
 mod team_composer;
 mod tender_queries;
 mod tender_records;
+mod workspace;
 
 pub(crate) use coordinated_baselines::exact_approved_coordinated_baseline_is_current_in_connection;
 
@@ -219,6 +220,13 @@ pub use tender_records::{
     TenderRecordReview, TenderRecordReviewOutcome, TenderRecordReviewResult,
     TenderRecordSourceRelationship, TenderRecordTrustClass,
 };
+pub use workspace::{
+    InspectManagerWorkspaceCommand, ManagerConversation, ManagerWorkspaceProjection,
+    ManagerWorkspaceTender, RecordEngineerWorkspaceMessageCommand,
+    SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand, TenderOfficeMessage,
+    TenderOfficeMessageAuthor, TenderOfficeMessageKind, WorkspaceActionKind,
+    WorkspaceCurrentAction, WorkspaceFilesSummary, WorkspaceTeamSummary, WorkspaceWorkSummary,
+};
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -226,7 +234,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 26;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 27;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -249,6 +257,48 @@ CREATE TABLE tender_revisions (
   created_at TEXT NOT NULL,
   FOREIGN KEY (tender_id) REFERENCES tender(tender_id)
 );
+CREATE TABLE tender_office_conversations (
+  conversation_id TEXT PRIMARY KEY CHECK (length(conversation_id) = 32),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE manager_workspace_state (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  conversation_id TEXT NOT NULL UNIQUE,
+  last_activity_at TEXT NOT NULL,
+  FOREIGN KEY (conversation_id) REFERENCES tender_office_conversations(conversation_id)
+);
+CREATE TABLE tender_office_messages (
+  message_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id TEXT NOT NULL UNIQUE CHECK (length(message_id) = 32),
+  conversation_id TEXT NOT NULL,
+  author TEXT NOT NULL CHECK (author IN ('engineer', 'manager', 'system')),
+  kind TEXT NOT NULL CHECK (kind IN (
+    'routine', 'status', 'question', 'finding', 'handoff', 'blocker', 'output'
+  )),
+  body TEXT NOT NULL CHECK (length(CAST(body AS BLOB)) BETWEEN 1 AND 4000),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (conversation_id) REFERENCES tender_office_conversations(conversation_id)
+);
+CREATE TRIGGER tender_office_conversations_no_update
+BEFORE UPDATE ON tender_office_conversations
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Office Conversations are immutable');
+END;
+CREATE TRIGGER tender_office_conversations_no_delete
+BEFORE DELETE ON tender_office_conversations
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Office Conversations are immutable');
+END;
+CREATE TRIGGER tender_office_messages_no_update
+BEFORE UPDATE ON tender_office_messages
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Office messages are immutable');
+END;
+CREATE TRIGGER tender_office_messages_no_delete
+BEFORE DELETE ON tender_office_messages
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Office messages are immutable');
+END;
 CREATE TABLE tender_retention (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
   state TEXT NOT NULL CHECK (state IN ('active', 'archived')),
@@ -3898,6 +3948,7 @@ impl TenderStore {
                 [&created_at],
             )
             .map_err(sql_error)?;
+        workspace::initialize_manager_workspace(&transaction, name, &created_at)?;
         for role in BootstrapRole::ALL {
             let profile = bootstrap_profile(role, random_identifier(&transaction)?);
             agent_records::insert_profile(
@@ -5526,6 +5577,13 @@ impl TenderStore {
                 )?;
             }
         }
+        let system_message_id = workspace::append_system_status(
+            &transaction,
+            &format!(
+                "Tender Package registered: {registered_count} documents available; {exception_count} need attention."
+            ),
+            &created_at,
+        )?;
         append_audit_event(
             &transaction,
             &tender_id,
@@ -5535,6 +5593,7 @@ impl TenderStore {
                 "discovered_count": discovered_count.to_string(),
                 "exception_count": exception_count.to_string(),
                 "intake_id": intake_id,
+                "system_message_id": system_message_id,
                 "registered_count": registered_count.to_string(),
                 "source_kind": prepared.source_kind.as_str(),
                 "source_name": prepared.source_name,
