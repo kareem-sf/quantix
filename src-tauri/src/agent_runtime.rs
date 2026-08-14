@@ -685,6 +685,13 @@ pub(crate) struct ProviderExecution {
     pub candidate_payload_json: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum DeterministicProviderOutcome {
+    Completed,
+    Failed,
+    Interrupted,
+}
+
 struct ActiveAgentRunGuard {
     host: QuantixHost,
     lease_id: String,
@@ -735,6 +742,22 @@ impl QuantixHost {
         &self,
         command: RunBootstrapAgentCommand,
     ) -> Result<AgentRunInspection, TenderCommandError> {
+        self.run_bootstrap_agent_inner(command, None).await
+    }
+
+    pub(crate) async fn run_bootstrap_agent_with_deterministic_provider(
+        &self,
+        command: RunBootstrapAgentCommand,
+        outcome: DeterministicProviderOutcome,
+    ) -> Result<AgentRunInspection, TenderCommandError> {
+        self.run_bootstrap_agent_inner(command, Some(outcome)).await
+    }
+
+    async fn run_bootstrap_agent_inner(
+        &self,
+        command: RunBootstrapAgentCommand,
+        deterministic_outcome: Option<DeterministicProviderOutcome>,
+    ) -> Result<AgentRunInspection, TenderCommandError> {
         self.require_runtime_verified()?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
@@ -762,7 +785,10 @@ impl QuantixHost {
             )?;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
 
-        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let execution = match deterministic_outcome {
+            Some(outcome) => deterministic_provider_execution(&prepared, outcome),
+            None => execute_provider_turn(self, &store, &prepared, cancellation).await,
+        };
         store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
@@ -2215,6 +2241,53 @@ fn failed_execution(failure: ProviderFailure, started: Instant) -> ProviderExecu
         },
         failure: Some(failure),
         candidate_payload_json: None,
+    }
+}
+
+fn deterministic_provider_execution(
+    prepared: &PreparedAgentRun,
+    outcome: DeterministicProviderOutcome,
+) -> ProviderExecution {
+    match outcome {
+        DeterministicProviderOutcome::Completed => ProviderExecution {
+            state: AgentRunState::Completed,
+            provider_thread_ref: Some(
+                prepared
+                    .provider_thread_ref
+                    .clone()
+                    .unwrap_or_else(|| format!("acceptance-thread-{}", prepared.run_id)),
+            ),
+            provider_turn_ref: Some(format!("acceptance-turn-{}", prepared.run_id)),
+            events: vec![PendingProviderEvent::new(
+                ProviderEventKind::Terminal,
+                "Deterministic acceptance provider returned a schema-valid proposed result",
+                Some("quantix-deterministic-provider-v1"),
+            )],
+            usage: ProviderUsage {
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                elapsed_milliseconds: Some(0),
+                ..ProviderUsage::default()
+            },
+            failure: None,
+            candidate_payload_json: Some(
+                serde_json_canonicalizer::to_string(&json!({
+                    "recommended_next_action": "Continue controlled fixture processing",
+                    "summary": "Deterministic provider outcome for the challenged application"
+                }))
+                .expect("static deterministic provider result is canonical JSON"),
+            ),
+        },
+        DeterministicProviderOutcome::Failed => failed_execution(
+            ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                true,
+                "Retry only after the deterministic provider failure is reviewed.",
+                Some("The deterministic adapter injected an invalid provider outcome."),
+            ),
+            Instant::now(),
+        ),
+        DeterministicProviderOutcome::Interrupted => interrupted_execution(Instant::now()),
     }
 }
 

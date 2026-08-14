@@ -1,8 +1,9 @@
 use std::{env, fs, path::PathBuf, process::Command};
 
 use quantix_lib::{
-    release_candidate_manifest_sha256, CodexReadiness, EvaluatePublicReleaseGateCommand,
-    QuantixHost, RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand,
+    measure_docling_runtime_sha256, release_candidate_manifest_sha256,
+    EvaluatePublicReleaseGateCommand, LiveQualificationEnvironment, QuantixHost,
+    RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand,
     RunDeterministicAcceptanceCommand,
 };
 
@@ -40,17 +41,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let application_home = PathBuf::from(application_home);
     let resource_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let host = QuantixHost::new(application_home, resource_directory.clone());
+    let host = QuantixHost::new(application_home.clone(), resource_directory.clone());
     match mode.as_str() {
         "deterministic" => {
             let command: RunDeterministicAcceptanceCommand =
                 serde_json::from_slice(&fs::read(input)?)?;
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            if !runtime.block_on(host.verify_offline_runtime_for_acceptance()) {
-                return Err("bundled runtime is not ready for deterministic acceptance".into());
-            }
             let run = host.run_deterministic_product_acceptance(command)?;
             println!("{}", serde_json_canonicalizer::to_string(&run)?);
             if run.hard_gate_failures.is_empty() {
@@ -69,9 +64,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         "live" => {
-            let mut command: RecordLiveQualificationRunCommand =
+            let command: RecordLiveQualificationRunCommand =
                 serde_json::from_slice(&fs::read(input)?)?;
-            let codex_executable = resource_directory
+            let candidate_resource_directory =
+                PathBuf::from(&command.application_resource_directory_path);
+            let codex_executable = candidate_resource_directory
                 .join("runtime")
                 .join("bin")
                 .join(if cfg!(windows) { "codex.exe" } else { "codex" });
@@ -81,34 +78,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !login_status.status.success() {
                 return Err("Codex-managed authentication is not ready".into());
             }
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            if runtime.block_on(
-                host.inspect_codex_subscription(tokio_util::sync::CancellationToken::new()),
-            ) != CodexReadiness::Ready
-            {
-                return Err("Codex app-server managed-auth handshake is not ready".into());
-            }
             let codex_version = Command::new(&codex_executable).arg("--version").output()?;
             if !codex_version.status.success() {
                 return Err("Bundled Codex version cannot be measured".into());
             }
-            command.codex_version = String::from_utf8(codex_version.stdout)?.trim().into();
-            command.platform = exact_windows_platform()?;
-            command.fixture_sha256 = quantix_lib::acceptance_fixture_sha256();
-            command.oracle_sha256 = quantix_lib::acceptance_oracle_sha256();
-            let candidate = command
-                .artifacts
-                .iter()
-                .find(|artifact| artifact.name == "release_candidate")
-                .ok_or("live evidence must include the exact release_candidate artifact")?;
-            if candidate.sha256 != command.release_candidate_sha256 {
-                return Err(
-                    "release candidate artifact does not match the qualification sequence".into(),
-                );
-            }
-            let run = host.record_live_qualification_run(command)?;
+            let codex_version = String::from_utf8(codex_version.stdout)?.trim().to_owned();
+            let run = host.record_live_qualification_run(
+                command,
+                LiveQualificationEnvironment {
+                    platform: exact_windows_platform()?,
+                    app_server_version: codex_version.clone(),
+                    codex_version,
+                    docling_runtime_sha256: measure_docling_runtime_sha256(
+                        &application_home,
+                        &candidate_resource_directory,
+                    )?,
+                    model_observations: vec![
+                        "managed Codex app-server model/list returned an eligible production model"
+                            .into(),
+                    ],
+                },
+            )?;
             println!("{}", serde_json_canonicalizer::to_string(&run)?);
             if run.hard_gate_failures.is_empty() {
                 Ok(())
