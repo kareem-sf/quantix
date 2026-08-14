@@ -191,7 +191,6 @@ import type { ProductAcceptanceRun } from "./bindings/ProductAcceptanceRun";
 import type { ProductAcceptanceRecord } from "./bindings/ProductAcceptanceRecord";
 import type { LiveQualificationRun } from "./bindings/LiveQualificationRun";
 import type { PrivateQualificationRecord } from "./bindings/PrivateQualificationRecord";
-import type { EvaluatePublicReleaseGateCommand } from "./bindings/EvaluatePublicReleaseGateCommand";
 import type { PublicReleaseGateRecord } from "./bindings/PublicReleaseGateRecord";
 
 export function ensureQuantixSetup(): Promise<SetupOutcome> {
@@ -1244,14 +1243,6 @@ export function qualifyPrivateV0(
 ): Promise<PrivateQualificationRecord> {
   return invoke<PrivateQualificationRecord>("qualify_private_v0", {
     releaseCandidateSha256,
-  });
-}
-
-export function evaluatePublicReleaseGate(
-  command: EvaluatePublicReleaseGateCommand,
-): Promise<PublicReleaseGateRecord> {
-  return invoke<PublicReleaseGateRecord>("evaluate_public_release_gate", {
-    command,
   });
 }
 

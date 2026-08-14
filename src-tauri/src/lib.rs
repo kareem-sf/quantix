@@ -239,9 +239,9 @@ mod tauri_commands {
         DecideCoordinatedBidBaselineCommand, DecideTenderQueryTreatmentCommand,
         DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DecisionCockpit, DeletionReceipt,
         DesignateBoqTableCommand, DocumentParseResult, DocumentRegister,
-        EstimateWorkspaceInspection, EvaluatePublicReleaseGateCommand, EvidenceDocument,
-        EvidenceSearchResult, ExportApprovedExternalRfiCommand, ExportReleaseCopyCommand,
-        ExternalRfiDraft, ExternalRfiEligibleQueryPage, ExternalRfiExportRecord, ExternalRfiPage,
+        EstimateWorkspaceInspection, EvidenceDocument, EvidenceSearchResult,
+        ExportApprovedExternalRfiCommand, ExportReleaseCopyCommand, ExternalRfiDraft,
+        ExternalRfiEligibleQueryPage, ExternalRfiExportRecord, ExternalRfiPage,
         ExternalRfiResponseCandidatePage, ExternalRfiReviewResult, FinalReviewInspection,
         GenerateSubmissionSectionsCommand, ImportPortableTenderArchiveCommand,
         ImportTenderPackageCommand, InspectAgentRunCommand, InspectAgentRunHistoryCommand,
@@ -626,19 +626,6 @@ mod tauri_commands {
         .map_err(|_| TenderCommandError {
             code: TenderErrorCode::StoreUnavailable,
         })?
-    }
-
-    #[tauri::command]
-    pub(super) async fn evaluate_public_release_gate(
-        host: tauri::State<'_, QuantixHost>,
-        command: EvaluatePublicReleaseGateCommand,
-    ) -> Result<PublicReleaseGateRecord, TenderCommandError> {
-        let host = host.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || host.evaluate_public_release_gate(command))
-            .await
-            .map_err(|_| TenderCommandError {
-                code: TenderErrorCode::StoreUnavailable,
-            })?
     }
 
     #[tauri::command]
@@ -2289,7 +2276,6 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::aggregate_product_acceptance,
             tauri_commands::inspect_live_qualification_runs,
             tauri_commands::qualify_private_v0,
-            tauri_commands::evaluate_public_release_gate,
             tauri_commands::inspect_current_public_release_gate,
             tauri_commands::check_quantix_update,
             tauri_commands::validate_quantix_update_restart,
