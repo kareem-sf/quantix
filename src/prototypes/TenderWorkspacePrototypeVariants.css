@@ -1,0 +1,198 @@
+/* Variant A: a visible Tender shelf beside one focused workspace. */
+.qxp-variant-a {
+  display: grid;
+  grid-template-columns: 268px minmax(0, 1fr);
+  grid-template-rows: 64px minmax(0, 1fr);
+}
+
+.qxp-variant-a.is-shelf-collapsed {
+  grid-template-columns: 76px minmax(0, 1fr);
+}
+
+.qxp-a-header {
+  z-index: 3;
+  display: flex;
+  grid-column: 1;
+  grid-row: 1;
+  gap: 12px;
+  align-items: center;
+  padding: 0 16px;
+  border-right: 1px solid var(--qxp-border);
+  border-bottom: 1px solid var(--qxp-border);
+  background: var(--qxp-surface);
+}
+
+.qxp-shelf-toggle {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  color: var(--qxp-text-soft);
+  background: transparent;
+}
+
+.qxp-shelf-toggle:hover {
+  background: var(--qxp-surface-soft);
+}
+
+.qxp-shelf-toggle span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+.qxp-a-shelf {
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 0;
+  padding: 22px 10px;
+  overflow-y: auto;
+  border-right: 1px solid var(--qxp-border);
+  background: #eef1f4;
+}
+
+.qxp-variant-a.is-shelf-collapsed .qxp-a-shelf {
+  overflow: hidden;
+}
+
+.qxp-variant-a.is-shelf-collapsed .qxp-tender-list {
+  visibility: hidden;
+}
+
+.qxp-variant-a.is-shelf-collapsed .qxp-a-header .qxp-brand {
+  display: none;
+}
+
+.qxp-a-workspace {
+  display: grid;
+  grid-column: 2;
+  grid-row: 1 / 3;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+/* Variant B: a wide conversation canvas with Tenders behind one switcher. */
+.qxp-variant-b {
+  display: grid;
+  grid-template-rows: 66px auto minmax(0, 1fr);
+  background: #f8f9fa;
+}
+
+.qxp-b-header {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr) 160px;
+  align-items: center;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--qxp-border);
+  background: var(--qxp-surface);
+}
+
+.qxp-b-tender {
+  display: flex;
+  width: min(480px, 100%);
+  justify-self: center;
+  gap: 9px;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 12px;
+  overflow: hidden;
+  color: var(--qxp-text);
+  border-radius: 9px;
+  background: var(--qxp-surface-soft);
+}
+
+.qxp-b-tender span {
+  overflow: hidden;
+  font-weight: 670;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qxp-b-tender svg:last-child {
+  transform: rotate(90deg);
+}
+
+.qxp-b-header .qxp-team-button {
+  justify-self: end;
+}
+
+.qxp-b-navigation {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid var(--qxp-border);
+  background: var(--qxp-surface);
+}
+
+.qxp-b-navigation .qxp-workspace-nav {
+  border: 0;
+}
+
+.qxp-b-navigation > span {
+  position: absolute;
+  right: 25px;
+  color: var(--qxp-text-soft);
+  font-size: 13px;
+}
+
+.qxp-content--canvas .qxp-manager-flow {
+  width: min(820px, calc(100% - 40px));
+  padding-top: 54px;
+}
+
+.qxp-content--canvas .qxp-current-action {
+  border-radius: 22px;
+}
+
+/* Variant C: a contained Manager brief, like a quiet working document. */
+.qxp-variant-c {
+  background: #eceff2;
+}
+
+.qxp-c-header {
+  display: flex;
+  height: 66px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+}
+
+.qxp-c-frame {
+  display: grid;
+  width: min(1080px, calc(100% - 48px));
+  min-height: calc(100vh - 116px);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  margin: 0 auto 28px;
+  overflow: hidden;
+  border: 1px solid var(--qxp-border-strong);
+  border-radius: 18px;
+  background: var(--qxp-surface);
+  box-shadow: var(--qxp-shadow);
+}
+
+.qxp-c-frame .qxp-tender-heading {
+  padding: 19px 30px;
+}
+
+.qxp-c-frame .qxp-workspace-nav {
+  justify-content: center;
+}
+
+.qxp-content--brief {
+  background: linear-gradient(180deg, var(--qxp-surface-soft), var(--qxp-surface));
+}
+
+.qxp-content--brief .qxp-manager-flow {
+  width: min(700px, calc(100% - 44px));
+}
+
+.qxp-content--brief .qxp-current-action {
+  border-left: 5px solid var(--qxp-accent);
+  border-radius: 8px;
+  box-shadow: none;
+}
