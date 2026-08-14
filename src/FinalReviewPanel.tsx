@@ -525,6 +525,73 @@ export function FinalReviewPanel({
               </li>
             ))}
           </ul>
+          <h4>Underlying decision evidence</h4>
+          <ul aria-label="Release readiness underlying evidence">
+            {review.package.coverage.map((row) => (
+              <li key={row.requirement.requirement_id}>
+                <strong>{humanize(row.requirement.kind)}</strong>:{" "}
+                {row.requirement.record.title}
+                {row.requirement.evidence.length ? (
+                  <ul>
+                    {row.requirement.evidence.map((evidence) => (
+                      <li
+                        key={`${evidence.reference.artifact_id}:${evidence.reference.version}:${evidence.reference.ordinal}`}
+                      >
+                        {evidence.package_path} ·{" "}
+                        {evidence.location.structural_path} ·{" "}
+                        {evidence.location.original_text}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {row.blockers.length ? (
+                  <ul>
+                    {row.blockers.map((blocker) => (
+                      <li key={blocker.code + ":" + blocker.detail}>
+                        {humanize(blocker.code)}: {blocker.detail}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+          <h4>Qualifications, exclusions, departures, and open queries</h4>
+          <ul aria-label="Release readiness decision records">
+            {review.package.current_decision_references.map((decision) => (
+              <li
+                key={`${decision.kind}:${decision.decision_id}:${decision.subject_version}`}
+              >
+                <strong>{humanize(decision.kind)}</strong>:{" "}
+                {humanize(decision.subject_kind)}{" "}
+                {decision.subject_reference_id} v{decision.subject_version} ·{" "}
+                <code>{decision.subject_manifest_sha256}</code>
+              </li>
+            ))}
+          </ul>
+          <h4>Exact package evidence and provenance</h4>
+          <ul aria-label="Release readiness package items">
+            {review.package.items.map((item) => (
+              <li key={item.item_id}>
+                <strong>{item.package_path}</strong> ·{" "}
+                <code>{item.content_sha256}</code>
+                <ul>
+                  {item.provenance.map((reference) => (
+                    <li key={reference}>{reference}</li>
+                  ))}
+                  {item.evidence.map((evidence) => (
+                    <li
+                      key={`${evidence.reference.artifact_id}:${evidence.reference.version}:${evidence.reference.ordinal}`}
+                    >
+                      {evidence.package_path} ·{" "}
+                      {evidence.location.structural_path} ·{" "}
+                      {evidence.location.original_text}
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
           {review.live_blockers.length ? (
             <ul aria-label="Release blockers">
               {review.live_blockers.map((blocker) => (
