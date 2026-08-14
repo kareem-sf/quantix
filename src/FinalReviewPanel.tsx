@@ -558,16 +558,50 @@ export function FinalReviewPanel({
           </ul>
           <h4>Qualifications, exclusions, departures, and open queries</h4>
           <ul aria-label="Release readiness decision records">
-            {review.package.current_decision_references.map((decision) => (
+            {review.decision_evidence.map((decision) => (
               <li
-                key={`${decision.kind}:${decision.decision_id}:${decision.subject_version}`}
+                key={`${decision.binding.kind}:${decision.binding.reference_id}:${decision.binding.version}`}
               >
-                <strong>{humanize(decision.kind)}</strong>:{" "}
-                {humanize(decision.subject_kind)}{" "}
-                {decision.subject_reference_id} v{decision.subject_version} ·{" "}
-                <code>{decision.subject_manifest_sha256}</code>
+                <strong>{humanize(decision.category)}</strong>:{" "}
+                {decision.binding.summary}
+                {decision.question ? <p>Query: {decision.question}</p> : null}
+                {decision.ambiguity_or_gap ? (
+                  <p>Gap or ambiguity: {decision.ambiguity_or_gap}</p>
+                ) : null}
+                {decision.treatment ? (
+                  <p>Treatment: {humanize(decision.treatment)}</p>
+                ) : null}
+                {decision.rationale ? (
+                  <p>Rationale: {decision.rationale}</p>
+                ) : null}
+                {decision.treatment_details ? (
+                  <p>Decision details: {decision.treatment_details}</p>
+                ) : null}
+                {decision.closed !== null ? (
+                  <p>Status: {decision.closed ? "Closed" : "Open"}</p>
+                ) : null}
+                <p>
+                  {humanize(decision.binding.kind)}{" "}
+                  {decision.binding.reference_id} v{decision.binding.version} ·
+                  source {humanize(decision.binding.source)} ·{" "}
+                  <code>{decision.binding.manifest_sha256}</code>
+                </p>
+                {decision.binding.approval_id ? (
+                  <p>Approval record: {decision.binding.approval_id}</p>
+                ) : null}
+                {decision.binding.supporting_review_id ? (
+                  <p>
+                    Independent review: {decision.binding.supporting_review_id}
+                  </p>
+                ) : null}
               </li>
             ))}
+            {review.decision_evidence.length === 0 ? (
+              <li>
+                No assumptions, qualifications, exclusions, departures, or open
+                queries.
+              </li>
+            ) : null}
           </ul>
           <h4>Exact package evidence and provenance</h4>
           <ul aria-label="Release readiness package items">

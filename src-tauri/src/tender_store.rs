@@ -149,11 +149,12 @@ pub use package_production::{
     SubmissionSourceArtifactReference,
 };
 pub use package_validation::{
-    ApprovePackageFindingExceptionCommand, FinalReviewAssignment, FinalReviewInspection,
-    FinalReviewPlan, FinalReviewReviewer, ManualVerificationResult,
-    PackageFindingExceptionApproval, PackageManualVerification, PackageReviewFinding,
-    PackageReviewResult, PackageValidationCheckCategory, PackageValidationOutcome,
-    PackageValidationPolicy, PackageValidationResult, PackageValidationRule, PackageValidationRun,
+    ApprovePackageFindingExceptionCommand, FinalReviewAssignment, FinalReviewDecisionEvidence,
+    FinalReviewDecisionEvidenceCategory, FinalReviewInspection, FinalReviewPlan,
+    FinalReviewReviewer, ManualVerificationResult, PackageFindingExceptionApproval,
+    PackageManualVerification, PackageReviewFinding, PackageReviewResult,
+    PackageValidationCheckCategory, PackageValidationOutcome, PackageValidationPolicy,
+    PackageValidationResult, PackageValidationRule, PackageValidationRun,
     RecordPackageManualVerificationCommand, ReleaseReadinessBlocker, ReleaseReadinessBlockerCode,
     ReleaseReadinessCategorySummary, ReleaseReadinessReport, RunPackageValidationCommand,
     RunSubmissionSectionReviewCommand, SubmissionSectionReview, SubmissionSectionReviewRunResult,

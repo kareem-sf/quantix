@@ -31,10 +31,11 @@ use super::{
     },
     append_audit_event_with_sequence, lock_mutex_with_check, random_identifier, sha256_hex,
     sql_error, sqlite_timestamp, BidPackageOperationBudget, CoordinatedBidBaselineBinding,
-    CoordinatedBidBaselineCategory, ProductionFindingSeverity, QuantixHost, SubmissionCoverageRow,
-    SubmissionPackageAssessment, SubmissionPackageCurrentnessFact, SubmissionPackageItem,
-    SubmissionPackageSection, SubmissionPackageVersion, SubmissionProfileVersionReference,
-    TenderCommandError, TenderErrorCode, TenderId, TenderStore, WorkPlanProfileBinding,
+    CoordinatedBidBaselineBindingKind, CoordinatedBidBaselineCategory, ProductionFindingSeverity,
+    QuantixHost, SubmissionCoverageRow, SubmissionPackageAssessment,
+    SubmissionPackageCurrentnessFact, SubmissionPackageItem, SubmissionPackageSection,
+    SubmissionPackageVersion, SubmissionProfileVersionReference, TenderCommandError,
+    TenderErrorCode, TenderId, TenderStore, WorkPlanProfileBinding,
 };
 
 const VALIDATOR_VERSION: u32 = 1;
@@ -433,8 +434,33 @@ pub struct ReleaseReadinessReport {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
+pub struct FinalReviewDecisionEvidence {
+    pub category: FinalReviewDecisionEvidenceCategory,
+    pub binding: CoordinatedBidBaselineBinding,
+    pub question: Option<String>,
+    pub ambiguity_or_gap: Option<String>,
+    pub treatment: Option<String>,
+    pub rationale: Option<String>,
+    pub treatment_details: Option<String>,
+    pub closed: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum FinalReviewDecisionEvidenceCategory {
+    Assumption,
+    Qualification,
+    Exclusion,
+    OpenQuery,
+    OtherDecision,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct FinalReviewInspection {
     pub package: SubmissionPackageVersion,
+    pub decision_evidence: Vec<FinalReviewDecisionEvidence>,
     pub policy: PackageValidationPolicy,
     pub validation_run: PackageValidationRun,
     pub manual_verifications: Vec<PackageManualVerification>,
@@ -3853,8 +3879,49 @@ pub(crate) fn load_final_review_for_transaction(
     )?;
     let current = package.package.current;
     let ready = current && live_blockers.is_empty();
+    let all_baseline_bindings: Vec<CoordinatedBidBaselineBinding> = transaction
+        .query_row(
+            "SELECT bindings_json FROM coordinated_bid_baseline_versions
+             WHERE baseline_id = ?1 AND version = ?2 AND manifest_sha256 = ?3",
+            params![
+                package.package.baseline_id,
+                package.package.baseline_version,
+                package.package.baseline_manifest_sha256,
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(sql_error)
+        .and_then(|json| parse_canonical(&json))?;
+    let decision_bindings = all_baseline_bindings
+        .into_iter()
+        .filter(|binding| {
+            matches!(
+                binding.category,
+                CoordinatedBidBaselineCategory::Qualification
+                    | CoordinatedBidBaselineCategory::Exclusion
+                    | CoordinatedBidBaselineCategory::Query
+            ) || package
+                .package
+                .current_decision_references
+                .iter()
+                .any(|reference| {
+                    reference.subject_kind == binding.kind
+                        && reference.subject_reference_id == binding.reference_id
+                        && reference.subject_version == binding.version
+                        && reference.subject_manifest_sha256 == binding.manifest_sha256
+                        && (binding.approval_id.as_ref() == Some(&reference.decision_id)
+                            || binding.supporting_review_id.as_ref()
+                                == Some(&reference.decision_id))
+                })
+        })
+        .collect::<Vec<_>>();
+    let decision_evidence = decision_bindings
+        .into_iter()
+        .map(|binding| load_final_review_decision_evidence(transaction, binding))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(FinalReviewInspection {
         package: package.package.clone(),
+        decision_evidence,
         policy,
         validation_run: run,
         manual_verifications,
@@ -3866,6 +3933,72 @@ pub(crate) fn load_final_review_for_transaction(
         ready,
         live_blockers,
         live_changes: package.package.currentness_facts.clone(),
+    })
+}
+
+fn load_final_review_decision_evidence(
+    transaction: &Transaction<'_>,
+    binding: CoordinatedBidBaselineBinding,
+) -> Result<FinalReviewDecisionEvidence, TenderCommandError> {
+    if binding.kind != CoordinatedBidBaselineBindingKind::TenderQueryVersion {
+        return Ok(FinalReviewDecisionEvidence {
+            category: FinalReviewDecisionEvidenceCategory::OtherDecision,
+            binding,
+            question: None,
+            ambiguity_or_gap: None,
+            treatment: None,
+            rationale: None,
+            treatment_details: None,
+            closed: None,
+        });
+    }
+    type QueryDecision = (
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<bool>,
+    );
+    let decision: QueryDecision = transaction
+        .query_row(
+            "SELECT versions.question, versions.ambiguity_or_gap,
+                    decisions.treatment, decisions.rationale,
+                    decisions.treatment_details, decisions.closes_query
+             FROM tender_query_versions AS versions
+             LEFT JOIN tender_query_treatment_decisions AS decisions
+               ON decisions.query_id = versions.query_id
+              AND decisions.query_version = versions.version
+             WHERE versions.query_id = ?1 AND versions.version = ?2",
+            params![binding.reference_id, binding.version],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .map_err(sql_error)?;
+    let category = match decision.2.as_deref() {
+        Some("approved_assumption") => FinalReviewDecisionEvidenceCategory::Assumption,
+        Some("qualification") => FinalReviewDecisionEvidenceCategory::Qualification,
+        Some("exclusion") => FinalReviewDecisionEvidenceCategory::Exclusion,
+        _ if decision.5 != Some(true) => FinalReviewDecisionEvidenceCategory::OpenQuery,
+        _ => FinalReviewDecisionEvidenceCategory::OtherDecision,
+    };
+    Ok(FinalReviewDecisionEvidence {
+        category,
+        binding,
+        question: Some(decision.0),
+        ambiguity_or_gap: Some(decision.1),
+        treatment: decision.2,
+        rationale: decision.3,
+        treatment_details: decision.4,
+        closed: decision.5,
     })
 }
 

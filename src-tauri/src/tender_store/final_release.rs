@@ -5,6 +5,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use fs4::FileExt;
 use garde::Validate;
 use jiff::Timestamp;
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
@@ -17,10 +18,7 @@ use super::{
     append_audit_event_with_sequence,
     package_validation::{load_final_review_for_transaction, FinalReviewInspection},
     random_identifier, require_setup, sha256_hex, sql_error, sqlite_timestamp,
-    submission_packages::{
-        load_exact_submission_package_item_bytes_for_transaction,
-        load_submission_package_for_review_transaction, ExactSubmissionPackage,
-    },
+    submission_packages::{load_submission_package_for_review_transaction, ExactSubmissionPackage},
     tender_records::TenderRecordFieldCandidate,
     BidPackageOperationBudget, QuantixHost, TenderCommandError, TenderErrorCode, TenderId,
     TenderStore,
@@ -197,8 +195,8 @@ impl TenderStore {
             true,
             budget,
         )?;
-        let approved_bytes =
-            load_exact_package_bytes(&self.root.join("content"), &package, budget)?;
+        let (approved_bytes, approved_source_locks) =
+            lock_and_load_exact_package_bytes(&self.root.join("content"), &package, budget)?;
         let final_review = load_final_review_for_transaction(&transaction, &package, None, budget)?;
         if !final_review.current
             || !final_review.ready
@@ -242,7 +240,6 @@ impl TenderStore {
             manifest_sha256: String::new(),
         };
         approval.manifest_sha256 = manifest_sha256(&approval)?;
-        verify_exact_package_bytes(&self.root.join("content"), &package, budget)?;
         let audit_sequence = append_audit_event_with_sequence(
             &transaction,
             tender_id.as_str(),
@@ -306,8 +303,8 @@ impl TenderStore {
                 )
                 .map_err(sql_error)?;
         }
-        verify_exact_package_bytes(&self.root.join("content"), &package, budget)?;
         transaction.commit().map_err(sql_error)?;
+        drop(approved_source_locks);
         self.inspect_submission_release(budget)?
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
     }
@@ -597,38 +594,76 @@ fn verify_exact_package_bytes(
     package: &ExactSubmissionPackage,
     budget: BidPackageOperationBudget,
 ) -> Result<(), TenderCommandError> {
-    for item in &package.items {
-        budget.check()?;
-        let bytes = load_exact_submission_package_item_bytes_for_transaction(content_root, item)?;
-        if sha256_hex(&bytes) != item.item.content_sha256
-            || u64::try_from(bytes.len()).ok() != Some(item.item.size_bytes)
-        {
-            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-        }
-    }
-    Ok(())
+    lock_and_load_exact_package_bytes(content_root, package, budget).map(|_| ())
 }
 
-fn load_exact_package_bytes(
+type LockedPackageBytes = (Vec<(super::SubmissionPackageItem, Vec<u8>)>, Vec<fs::File>);
+
+fn lock_and_load_exact_package_bytes(
     content_root: &Path,
     package: &ExactSubmissionPackage,
     budget: BidPackageOperationBudget,
-) -> Result<Vec<(super::SubmissionPackageItem, Vec<u8>)>, TenderCommandError> {
-    package
-        .items
-        .iter()
-        .map(|item| {
-            budget.check()?;
-            let bytes =
-                load_exact_submission_package_item_bytes_for_transaction(content_root, item)?;
-            if sha256_hex(&bytes) != item.item.content_sha256
-                || u64::try_from(bytes.len()).ok() != Some(item.item.size_bytes)
-            {
-                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-            }
-            Ok((item.item.clone(), bytes))
-        })
-        .collect()
+) -> Result<LockedPackageBytes, TenderCommandError> {
+    let mut bytes = Vec::with_capacity(package.items.len());
+    let mut locks = Vec::with_capacity(package.items.len());
+    for item in &package.items {
+        budget.check()?;
+        let path = cacache_content_path(content_root, &item.content_integrity)?;
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let file = open_approval_source(&path)?;
+        FileExt::lock_shared(&file)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let mut content = Vec::with_capacity(item.item.size_bytes as usize);
+        (&file)
+            .take(item.item.size_bytes + 1)
+            .read_to_end(&mut content)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        if u64::try_from(content.len()).ok() != Some(item.item.size_bytes)
+            || sha256_hex(&content) != item.item.content_sha256
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        bytes.push((item.item.clone(), content));
+        locks.push(file);
+    }
+    Ok((bytes, locks))
+}
+
+fn cacache_content_path(
+    content_root: &Path,
+    integrity: &str,
+) -> Result<PathBuf, TenderCommandError> {
+    let integrity = integrity
+        .parse::<cacache::Integrity>()
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let (algorithm, hex) = integrity.to_hex();
+    if hex.len() < 5 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(content_root
+        .join("content-v2")
+        .join(algorithm.to_string())
+        .join(&hex[..2])
+        .join(&hex[2..4])
+        .join(&hex[4..]))
+}
+
+fn open_approval_source(path: &Path) -> Result<fs::File, TenderCommandError> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        options.share_mode(FILE_SHARE_READ);
+    }
+    options
+        .open(path)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
 }
 
 fn load_approved_package_bytes(
