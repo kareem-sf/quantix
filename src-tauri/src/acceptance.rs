@@ -1,13 +1,26 @@
-use std::{collections::BTreeSet, process::Command, time::Instant};
+use std::{
+    collections::BTreeSet,
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
 
 use garde::Validate;
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::Digest;
 use ts_rs::TS;
 
 use crate::{
-    tender_store::{require_setup, TenderCommandError, TenderErrorCode},
+    tender_store::{
+        require_setup, CreatePortableTenderArchiveCommand, CreateTenderCommand,
+        RegisterTenderContentCommand, ReviseTenderCommand, TenderCommandError, TenderErrorCode,
+        TenderIntegrityState, TenderRetentionDecisionCommand,
+    },
     QuantixHost,
 };
 
@@ -37,16 +50,10 @@ const REQUIRED_DETERMINISTIC_AREAS: [&str; 15] = [
 pub struct RunDeterministicAcceptanceCommand {
     #[garde(length(bytes, min = 1, max = 200))]
     pub source_revision: String,
-    #[garde(length(bytes, min = 1, max = 200))]
-    pub application_artifact_sha256: String,
-    #[garde(length(bytes, min = 1, max = 200))]
-    pub dependency_lock_sha256: String,
-    #[garde(length(bytes, min = 1, max = 100))]
-    pub rust_version: String,
-    #[garde(length(bytes, min = 1, max = 100))]
-    pub node_version: String,
-    #[garde(length(bytes, min = 1, max = 100))]
-    pub platform: String,
+    #[garde(length(bytes, min = 1, max = 32767))]
+    pub application_artifact_path: String,
+    #[garde(length(bytes, min = 1, max = 32767))]
+    pub dependency_lock_path: String,
     #[garde(length(min = 1, max = 64))]
     pub checks: Vec<AcceptanceCheckResult>,
     #[garde(length(max = 128))]
@@ -115,6 +122,17 @@ pub struct ProductAcceptanceRun {
     pub hard_gate_failures: Vec<String>,
     pub manifest_sha256: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CandidateAcceptanceProbe {
+    challenge: String,
+    application_version: String,
+    fixture_sha256: String,
+    oracle_sha256: String,
+    tender_schema_version: i64,
+    installation_schema_version: i64,
+    platform: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -246,23 +264,25 @@ impl QuantixHost {
         if command.timings.len() >= 64 {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        let repository_root = self
-            .runtime_layout()
-            .resource_directory()
-            .parent()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-        if !repository_root.join("package.json").is_file() {
-            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
-        }
+        let application_artifact =
+            require_absolute_regular_file(&command.application_artifact_path)?;
+        let dependency_lock = require_absolute_regular_file(&command.dependency_lock_path)?;
+        let connection = self.open_acceptance_database()?;
+        let challenge = installation_identifier(&connection)?;
         let driver_started = Instant::now();
-        let driver_passed = Command::new(if cfg!(windows) { "npm.cmd" } else { "npm" })
-            .arg("test")
-            .current_dir(repository_root)
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
+        let probe = invoke_candidate_probe(&application_artifact, &challenge)?;
+        let candidate_passed = probe.challenge == challenge
+            && probe.application_version == env!("CARGO_PKG_VERSION")
+            && probe.fixture_sha256 == acceptance_fixture_sha256()
+            && probe.oracle_sha256 == acceptance_oracle_sha256()
+            && probe.tender_schema_version == crate::tender_store::TENDER_SCHEMA_VERSION
+            && probe.installation_schema_version == crate::setup::INSTALLATION_SCHEMA_VERSION;
+        let lifecycle = self.drive_deterministic_host_lifecycle();
+        let lifecycle_passed = lifecycle.is_ok();
+        let lifecycle_details = lifecycle.unwrap_or_else(|error| error.into_iter().collect());
         for check in &mut command.checks {
-            check.passed &= driver_passed;
+            check.passed &= candidate_passed && lifecycle_passed;
+            check.detail = format!("measured:{}; {}", lifecycle_details.join(","), check.detail);
         }
         command.timings.push(AcceptanceStageTiming {
             stage: "deterministic_host_command_driver".into(),
@@ -307,7 +327,6 @@ impl QuantixHost {
         }
         hard_gate_failures.sort();
         hard_gate_failures.dedup();
-        let connection = self.open_acceptance_database()?;
         let run_id = installation_identifier(&connection)?;
         let created_at = installation_timestamp(&connection)?;
         let mut run = ProductAcceptanceRun {
@@ -322,13 +341,16 @@ impl QuantixHost {
             fixture_sha256: sha256_hex(FIXTURE_BYTES),
             oracle_sha256: sha256_hex(ORACLE_BYTES),
             application_version: env!("CARGO_PKG_VERSION").into(),
-            application_artifact_sha256: command.application_artifact_sha256,
+            application_artifact_sha256: sha256_file(&application_artifact)?,
             tender_schema_version: crate::tender_store::TENDER_SCHEMA_VERSION,
             installation_schema_version: crate::setup::INSTALLATION_SCHEMA_VERSION,
-            dependency_lock_sha256: command.dependency_lock_sha256,
-            rust_version: command.rust_version,
-            node_version: command.node_version,
-            platform: command.platform,
+            dependency_lock_sha256: sha256_file(&dependency_lock)?,
+            rust_version: command_version("rustc", &["--version"])?,
+            node_version: command_version(
+                if cfg!(windows) { "node.exe" } else { "node" },
+                &["--version"],
+            )?,
+            platform: probe.platform,
             checks: command.checks,
             artifacts: command.artifacts,
             timings: command.timings,
@@ -339,6 +361,65 @@ impl QuantixHost {
         run.manifest_sha256 = manifest_sha256(&run)?;
         persist_run(&connection, &run)?;
         Ok(run)
+    }
+
+    fn drive_deterministic_host_lifecycle(&self) -> Result<Vec<String>, Vec<String>> {
+        let mut completed = Vec::new();
+        let mut failures = Vec::new();
+        let tender = match self.create_tender(CreateTenderCommand {
+            name: "Quantix deterministic acceptance fixture".into(),
+        }) {
+            Ok(tender) => tender,
+            Err(error) => return Err(vec![format!("create_tender:{:?}", error.code)]),
+        };
+        completed.push("empty_setup");
+        let lifecycle = (|| -> Result<(), TenderCommandError> {
+            self.register_tender_content(RegisterTenderContentCommand {
+                tender_id: tender.tender_id.clone(),
+                logical_id: "acceptance-tender-v1".into(),
+                media_type: "application/json".into(),
+                bytes: FIXTURE_BYTES.to_vec(),
+            })?;
+            completed.push("fixture_import");
+            self.revise_tender(ReviseTenderCommand {
+                tender_id: tender.tender_id.clone(),
+                name: "Quantix deterministic acceptance fixture revision".into(),
+            })?;
+            completed.push("lifecycle_revision");
+            let integrity = self.inspect_tender_integrity(&tender.tender_id)?;
+            if integrity.state != TenderIntegrityState::Ready {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            completed.push("integrity");
+            self.create_portable_tender_archive(CreatePortableTenderArchiveCommand {
+                tender_id: tender.tender_id.clone(),
+            })?;
+            completed.push("portable_archive");
+            self.archive_tender(TenderRetentionDecisionCommand {
+                tender_id: tender.tender_id.clone(),
+                rationale: "deterministic acceptance verifies read-only retention".into(),
+            })?;
+            completed.push("archive");
+            self.restore_archived_tender(TenderRetentionDecisionCommand {
+                tender_id: tender.tender_id.clone(),
+                rationale: "deterministic acceptance restores the exact Tender".into(),
+            })?;
+            completed.push("restore");
+            self.trash_tender(TenderRetentionDecisionCommand {
+                tender_id: tender.tender_id,
+                rationale: "deterministic acceptance verifies recoverable Trash".into(),
+            })?;
+            completed.push("trash");
+            Ok(())
+        })();
+        if let Err(error) = lifecycle {
+            failures.push(format!("host_lifecycle:{:?}", error.code));
+        }
+        if failures.is_empty() {
+            Ok(completed.into_iter().map(str::to_owned).collect())
+        } else {
+            Err(failures)
+        }
     }
 
     pub fn inspect_product_acceptance_runs(
@@ -418,6 +499,7 @@ impl QuantixHost {
         Ok(record)
     }
 
+    #[doc(hidden)]
     pub fn record_live_qualification_run(
         &self,
         command: RecordLiveQualificationRunCommand,
@@ -432,6 +514,14 @@ impl QuantixHost {
             || std::env::consts::ARCH != "x86_64"
             || command.fixture_sha256 != acceptance_fixture_sha256()
             || command.oracle_sha256 != acceptance_oracle_sha256()
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        if command
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.name == "release_candidate")
+            .is_none_or(|artifact| artifact.sha256 != command.release_candidate_sha256)
         {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
@@ -683,6 +773,122 @@ pub fn acceptance_fixture_sha256() -> String {
 
 pub fn acceptance_oracle_sha256() -> String {
     sha256_hex(ORACLE_BYTES)
+}
+
+pub fn print_candidate_acceptance_probe(challenge: &str) -> Result<(), TenderCommandError> {
+    if challenge.len() != 32 || !challenge.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let probe = CandidateAcceptanceProbe {
+        challenge: challenge.into(),
+        application_version: env!("CARGO_PKG_VERSION").into(),
+        fixture_sha256: acceptance_fixture_sha256(),
+        oracle_sha256: acceptance_oracle_sha256(),
+        tender_schema_version: crate::tender_store::TENDER_SCHEMA_VERSION,
+        installation_schema_version: crate::setup::INSTALLATION_SCHEMA_VERSION,
+        platform: current_platform_description(),
+    };
+    println!(
+        "{}",
+        serde_json_canonicalizer::to_string(&probe)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
+    );
+    Ok(())
+}
+
+fn require_absolute_regular_file(value: &str) -> Result<PathBuf, TenderCommandError> {
+    let path = PathBuf::from(value);
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+    if !path.is_absolute() || metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    Ok(path)
+}
+
+fn invoke_candidate_probe(
+    application_artifact: &Path,
+    challenge: &str,
+) -> Result<CandidateAcceptanceProbe, TenderCommandError> {
+    let mut child = Command::new(application_artifact)
+        .args(["--quantix-acceptance-probe", challenge])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(10))
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?
+        {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    if !status.success() {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let mut output = Vec::new();
+    child
+        .stdout
+        .take()
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?
+        .take(64 * 1024 + 1)
+        .read_to_end(&mut output)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+    if output.len() > 64 * 1024 {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    serde_json::from_slice(&output)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))
+}
+
+fn sha256_file(path: &Path) -> Result<String, TenderCommandError> {
+    let mut file = fs::File::open(path)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+    let mut digest = sha2::Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+fn command_version(program: &str, arguments: &[&str]) -> Result<String, TenderCommandError> {
+    let output = Command::new(program)
+        .args(arguments)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+    let version = String::from_utf8(output.stdout)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+    if !output.status.success() || version.trim().is_empty() || version.len() > 100 {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    Ok(version.trim().into())
+}
+
+fn current_platform_description() -> String {
+    format!("{}_{}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
 fn persist_run(

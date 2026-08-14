@@ -13,10 +13,11 @@ mod tender_store;
 mod update;
 
 pub use acceptance::{
-    acceptance_fixture_sha256, acceptance_oracle_sha256, AcceptanceArtifactHash,
-    AcceptanceCheckResult, AcceptanceStageTiming, LiveQualificationMetrics, LiveQualificationRun,
-    PrivateQualificationRecord, ProductAcceptanceOutcome, ProductAcceptanceRecord,
-    ProductAcceptanceRun, RecordLiveQualificationRunCommand, RunDeterministicAcceptanceCommand,
+    acceptance_fixture_sha256, acceptance_oracle_sha256, print_candidate_acceptance_probe,
+    AcceptanceArtifactHash, AcceptanceCheckResult, AcceptanceStageTiming, LiveQualificationMetrics,
+    LiveQualificationRun, PrivateQualificationRecord, ProductAcceptanceOutcome,
+    ProductAcceptanceRecord, ProductAcceptanceRun, RecordLiveQualificationRunCommand,
+    RunDeterministicAcceptanceCommand,
 };
 pub use agent_runtime::{
     approve_one_run_access, AccessApproval, AccessRequest, AgentAccessRequestStatus,
@@ -260,28 +261,27 @@ mod tauri_commands {
         PricingWorkspaceInspection, PrivateQualificationRecord, ProductAcceptanceRecord,
         ProductAcceptanceRun, ProductionTaskReviewInspection, ProductionTaskRunResult,
         ProposeBoqCalculationRuleCommand, PublicReleaseGateRecord, QuantixHost,
-        RecordLiveQualificationRunCommand, RecordPackageManualVerificationCommand,
-        RegisterExternalRfiResponseCommand, RequestAgentAccessCommand, ResolveAgentAccessCommand,
+        RecordPackageManualVerificationCommand, RegisterExternalRfiResponseCommand,
+        RequestAgentAccessCommand, ResolveAgentAccessCommand,
         ResolveBidDecisionReturnReworkCommand, ResolveIndeterminateAgentRunCommand,
         ResolveTenderRecoveryCommand, ReviseExternalRfiDraftCommand, ReviseTenderCommand,
         ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand, RunBasisOfEstimateReviewCommand,
         RunBidDecisionPackageReviewCommand, RunBootstrapAgentCommand,
         RunCalculationRuleReviewCommand, RunCostEstimatorBasisCommand,
-        RunCostEstimatorCalculationCommand, RunDeterministicAcceptanceCommand,
-        RunExternalRfiReviewCommand, RunPackageValidationCommand,
-        RunPricedCostBaselineReviewCommand, RunPricingAdjustmentReviewCommand,
-        RunProductionTaskCommand, RunSubmissionSectionReviewCommand,
-        RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, RuntimeReadiness,
-        SearchEvidenceCommand, SelectPricingScenarioCommand, SetupOutcome,
-        SubmissionArtifactContent, SubmissionItemContent, SubmissionPackageVersion,
-        SubmissionReleaseInspection, SubmissionSectionReviewRunResult, TenderBackupRecord,
-        TenderCatalogueEntry, TenderCommandError, TenderErrorCode, TenderIntegrityReport,
-        TenderPackageImportResult, TenderPackageSourceKind, TenderProductionInspection,
-        TenderQuery, TenderQueryPage, TenderRecordAuthority, TenderRecordDecisionResult,
-        TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult,
-        TenderRecoveryRecord, TenderRetentionDecisionCommand, TenderRetentionDecisionRecord,
-        TenderSummary, TrashedTenderDecisionCommand, TrashedTenderRecord,
-        WorkPlanProposalInspection,
+        RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand,
+        RunPackageValidationCommand, RunPricedCostBaselineReviewCommand,
+        RunPricingAdjustmentReviewCommand, RunProductionTaskCommand,
+        RunSubmissionSectionReviewCommand, RunTenderRecordExtractionCommand,
+        RunTenderRecordReviewCommand, RuntimeReadiness, SearchEvidenceCommand,
+        SelectPricingScenarioCommand, SetupOutcome, SubmissionArtifactContent,
+        SubmissionItemContent, SubmissionPackageVersion, SubmissionReleaseInspection,
+        SubmissionSectionReviewRunResult, TenderBackupRecord, TenderCatalogueEntry,
+        TenderCommandError, TenderErrorCode, TenderIntegrityReport, TenderPackageImportResult,
+        TenderPackageSourceKind, TenderProductionInspection, TenderQuery, TenderQueryPage,
+        TenderRecordAuthority, TenderRecordDecisionResult, TenderRecordExtractionResult,
+        TenderRecordPage, TenderRecordReviewResult, TenderRecoveryRecord,
+        TenderRetentionDecisionCommand, TenderRetentionDecisionRecord, TenderSummary,
+        TrashedTenderDecisionCommand, TrashedTenderRecord, WorkPlanProposalInspection,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -571,21 +571,6 @@ mod tauri_commands {
     }
 
     #[tauri::command]
-    pub(super) async fn run_deterministic_product_acceptance(
-        host: tauri::State<'_, QuantixHost>,
-        command: RunDeterministicAcceptanceCommand,
-    ) -> Result<ProductAcceptanceRun, TenderCommandError> {
-        let host = host.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            host.run_deterministic_product_acceptance(command)
-        })
-        .await
-        .map_err(|_| TenderCommandError {
-            code: TenderErrorCode::StoreUnavailable,
-        })?
-    }
-
-    #[tauri::command]
     pub(super) async fn inspect_product_acceptance_runs(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<Vec<ProductAcceptanceRun>, TenderCommandError> {
@@ -610,19 +595,6 @@ mod tauri_commands {
         .map_err(|_| TenderCommandError {
             code: TenderErrorCode::StoreUnavailable,
         })?
-    }
-
-    #[tauri::command]
-    pub(super) async fn record_live_qualification_run(
-        host: tauri::State<'_, QuantixHost>,
-        command: RecordLiveQualificationRunCommand,
-    ) -> Result<LiveQualificationRun, TenderCommandError> {
-        let host = host.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || host.record_live_qualification_run(command))
-            .await
-            .map_err(|_| TenderCommandError {
-                code: TenderErrorCode::StoreUnavailable,
-            })?
     }
 
     #[tauri::command]
@@ -2312,10 +2284,8 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
         .manage(tauri_commands::PendingSignedUpdate::new())
         .invoke_handler(tauri::generate_handler![
             tauri_commands::ensure_quantix_setup,
-            tauri_commands::run_deterministic_product_acceptance,
             tauri_commands::inspect_product_acceptance_runs,
             tauri_commands::aggregate_product_acceptance,
-            tauri_commands::record_live_qualification_run,
             tauri_commands::inspect_live_qualification_runs,
             tauri_commands::qualify_private_v0,
             tauri_commands::evaluate_public_release_gate,

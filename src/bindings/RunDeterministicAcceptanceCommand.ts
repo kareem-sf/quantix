@@ -3,4 +3,4 @@ import type { AcceptanceArtifactHash } from "./AcceptanceArtifactHash";
 import type { AcceptanceCheckResult } from "./AcceptanceCheckResult";
 import type { AcceptanceStageTiming } from "./AcceptanceStageTiming";
 
-export type RunDeterministicAcceptanceCommand = { source_revision: string, application_artifact_sha256: string, dependency_lock_sha256: string, rust_version: string, node_version: string, platform: string, checks: Array<AcceptanceCheckResult>, artifacts: Array<AcceptanceArtifactHash>, timings: Array<AcceptanceStageTiming>, };
+export type RunDeterministicAcceptanceCommand = { source_revision: string, application_artifact_path: string, dependency_lock_path: string, checks: Array<AcceptanceCheckResult>, artifacts: Array<AcceptanceArtifactHash>, timings: Array<AcceptanceStageTiming>, };

@@ -52,17 +52,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         "live" => {
-            let command: RecordLiveQualificationRunCommand =
+            let mut command: RecordLiveQualificationRunCommand =
                 serde_json::from_slice(&fs::read(input)?)?;
             let codex_executable = resource_directory
                 .join("runtime")
                 .join("bin")
                 .join(if cfg!(windows) { "codex.exe" } else { "codex" });
-            let login_status = Command::new(codex_executable)
+            let login_status = Command::new(&codex_executable)
                 .args(["login", "status"])
                 .output()?;
             if !login_status.status.success() {
                 return Err("Codex-managed authentication is not ready".into());
+            }
+            let codex_version = Command::new(&codex_executable).arg("--version").output()?;
+            if !codex_version.status.success() {
+                return Err("Bundled Codex version cannot be measured".into());
+            }
+            command.codex_version = String::from_utf8(codex_version.stdout)?.trim().into();
+            command.platform = exact_windows_platform()?;
+            command.fixture_sha256 = quantix_lib::acceptance_fixture_sha256();
+            command.oracle_sha256 = quantix_lib::acceptance_oracle_sha256();
+            let candidate = command
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.name == "release_candidate")
+                .ok_or("live evidence must include the exact release_candidate artifact")?;
+            if candidate.sha256 != command.release_candidate_sha256 {
+                return Err(
+                    "release candidate artifact does not match the qualification sequence".into(),
+                );
             }
             let run = host.record_live_qualification_run(command)?;
             println!("{}", serde_json_canonicalizer::to_string(&run)?);
@@ -101,4 +119,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => Err("unknown acceptance entry point".into()),
     }
+}
+
+fn exact_windows_platform() -> Result<String, Box<dyn std::error::Error>> {
+    if std::env::consts::OS != "windows" || std::env::consts::ARCH != "x86_64" {
+        return Err("private v0 qualification requires Windows x64".into());
+    }
+    let product_name = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[System.Environment]::OSVersion.Version.ToString()",
+        ])
+        .output()?;
+    let version = String::from_utf8(product_name.stdout)?;
+    if !product_name.status.success() || !version.trim().starts_with("10.0.") {
+        return Err("Windows 11 version could not be established".into());
+    }
+    Ok("windows_11_x64".into())
 }

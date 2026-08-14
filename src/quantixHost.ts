@@ -189,8 +189,6 @@ import type { TrashedTenderRecord } from "./bindings/TrashedTenderRecord";
 import type { DeletionReceipt } from "./bindings/DeletionReceipt";
 import type { ProductAcceptanceRun } from "./bindings/ProductAcceptanceRun";
 import type { ProductAcceptanceRecord } from "./bindings/ProductAcceptanceRecord";
-import type { RunDeterministicAcceptanceCommand } from "./bindings/RunDeterministicAcceptanceCommand";
-import type { RecordLiveQualificationRunCommand } from "./bindings/RecordLiveQualificationRunCommand";
 import type { LiveQualificationRun } from "./bindings/LiveQualificationRun";
 import type { PrivateQualificationRecord } from "./bindings/PrivateQualificationRecord";
 import type { EvaluatePublicReleaseGateCommand } from "./bindings/EvaluatePublicReleaseGateCommand";
@@ -1219,14 +1217,6 @@ export function inspectDeletionReceipts(): Promise<DeletionReceipt[]> {
   return invoke<DeletionReceipt[]>("inspect_deletion_receipts");
 }
 
-export function runDeterministicProductAcceptance(
-  command: RunDeterministicAcceptanceCommand,
-): Promise<ProductAcceptanceRun> {
-  return invoke<ProductAcceptanceRun>("run_deterministic_product_acceptance", {
-    command,
-  });
-}
-
 export function inspectProductAcceptanceRuns(): Promise<
   ProductAcceptanceRun[]
 > {
@@ -1238,14 +1228,6 @@ export function aggregateProductAcceptance(
 ): Promise<ProductAcceptanceRecord> {
   return invoke<ProductAcceptanceRecord>("aggregate_product_acceptance", {
     sourceRevision,
-  });
-}
-
-export function recordLiveQualificationRun(
-  command: RecordLiveQualificationRunCommand,
-): Promise<LiveQualificationRun> {
-  return invoke<LiveQualificationRun>("record_live_qualification_run", {
-    command,
   });
 }
 

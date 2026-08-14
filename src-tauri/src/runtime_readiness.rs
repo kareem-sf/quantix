@@ -60,12 +60,6 @@ impl RuntimeLayout {
             .join(executable_name("codex"))
     }
 
-    pub(crate) fn resource_directory(&self) -> &Path {
-        self.runtime_resources
-            .parent()
-            .expect("the runtime layout is rooted beneath the resource directory")
-    }
-
     fn uv_executable(&self) -> PathBuf {
         self.runtime_resources
             .join("bin")
