@@ -34,12 +34,28 @@ const REQUIRED_NATIVE_CHECKS: [&str; 8] = [
     "uninstall",
 ];
 const CODEX_APP_SERVER_PRODUCTION_SUPPORTED: bool = false;
-const RELEASE_CANDIDATE_DIRECTORIES: [&str; 4] = ["src", "src-tauri/src", "fixtures", "scripts"];
-const RELEASE_CANDIDATE_FILES: [&str; 8] = [
+// A real release key/certificate allowlist is intentionally empty until the
+// legal release process establishes the authorized Quantix signers.
+const AUTHORIZED_WINDOWS_SIGNER_THUMBPRINTS: [&str; 0] = [];
+const AUTHORIZED_MACOS_TEAM_IDENTIFIERS: [&str; 0] = [];
+const AUTHORIZED_LINUX_MINISIGN_KEYS: [&str; 0] = [];
+const RELEASE_CANDIDATE_DIRECTORIES: [&str; 5] = [
+    "src",
+    "src-tauri/src",
+    "src-tauri/capabilities",
+    "fixtures",
+    "scripts",
+];
+const RELEASE_CANDIDATE_FILES: [&str; 13] = [
     "package.json",
     "package-lock.json",
+    "index.html",
+    "tsconfig.json",
+    "tsconfig.node.json",
+    "vite.config.ts",
     "src-tauri/Cargo.toml",
     "src-tauri/Cargo.lock",
+    "src-tauri/build.rs",
     "src-tauri/tauri.conf.json",
     "src-tauri/runtime/runtime-provenance.json",
     "src-tauri/runtime/codex_app_server_protocol.schemas.json",
@@ -573,6 +589,15 @@ impl QuantixHost {
                 )
                 .unwrap_or(false)
         });
+        let native_artifacts_current = record.native_platforms.iter().all(|native| {
+            let path = Path::new(&native.evidence.signed_binary_path);
+            sha256_file(path).as_deref() == Some(&native.evidence.signed_binary_sha256)
+                && verify_native_signature(
+                    path,
+                    Path::new(&native.evidence.signature_path),
+                    Path::new(&native.evidence.signature_public_key_path),
+                )
+        });
         let superseded = record.native_platforms.iter().any(|native| {
             connection
                 .query_row(
@@ -592,6 +617,7 @@ impl QuantixHost {
         });
         if expired
             || !authoritative_records_current
+            || !native_artifacts_current
             || superseded
             || !record.public_production_ready
             || record.outcome != PublicReleaseGateOutcome::Authorized
@@ -740,26 +766,50 @@ fn inspect_exact_native_platform() -> Option<&'static str> {
 
 fn verify_native_signature(path: &Path, signature_path: &Path, public_key_path: &Path) -> bool {
     match std::env::consts::OS {
-        "windows" => Command::new("powershell.exe")
+        "windows" => AUTHORIZED_WINDOWS_SIGNER_THUMBPRINTS.iter().any(|thumbprint| Command::new("powershell.exe")
             .args([
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                "$signature = Get-AuthenticodeSignature -LiteralPath $args[0]; if ($signature.Status -eq 'Valid' -and $null -ne $signature.SignerCertificate) { exit 0 } else { exit 1 }",
+                "$signature = Get-AuthenticodeSignature -LiteralPath $args[0]; if ($signature.Status -eq 'Valid' -and $null -ne $signature.SignerCertificate -and $signature.SignerCertificate.Thumbprint -eq $args[1]) { exit 0 } else { exit 1 }",
                 path.to_string_lossy().as_ref(),
+                thumbprint,
             ])
             .status()
-            .is_ok_and(|status| status.success()),
-        "macos" => Command::new("codesign")
-            .args(["--verify", "--deep", "--strict", "--verbose=2"])
-            .arg(path)
-            .status()
-            .is_ok_and(|status| status.success()),
+            .is_ok_and(|status| status.success())),
+        "macos" => AUTHORIZED_MACOS_TEAM_IDENTIFIERS.iter().any(|team_identifier| {
+            let verified = Command::new("codesign")
+                .args(["--verify", "--deep", "--strict", "--verbose=2"])
+                .arg(path)
+                .status()
+                .is_ok_and(|status| status.success());
+            let authority = Command::new("codesign")
+                .args(["-dv", "--verbose=4"])
+                .arg(path)
+                .output()
+                .ok()
+                .and_then(|output| String::from_utf8(output.stderr).ok())
+                .is_some_and(|output| {
+                    output.lines().any(|line| {
+                        line.trim() == format!("TeamIdentifier={team_identifier}")
+                    })
+                });
+            verified && authority
+        }),
         "linux" => {
             use minisign_verify::{PublicKey, Signature};
             let Ok(public_key) = PublicKey::from_file(public_key_path) else {
                 return false;
             };
+            let Ok(public_key_text) = fs::read_to_string(public_key_path) else {
+                return false;
+            };
+            if !AUTHORIZED_LINUX_MINISIGN_KEYS
+                .iter()
+                .any(|authorized| public_key_text.lines().any(|line| line.trim() == *authorized))
+            {
+                return false;
+            }
             let Ok(signature) = Signature::from_file(signature_path) else {
                 return false;
             };

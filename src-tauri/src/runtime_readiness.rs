@@ -270,6 +270,51 @@ impl Drop for RuntimePreparationGuard {
 }
 
 impl QuantixHost {
+    #[doc(hidden)]
+    pub async fn verify_offline_runtime_for_acceptance(&self) -> bool {
+        self.set_runtime_verified(false);
+        if !matches!(
+            self.ensure_setup().state,
+            SetupState::Ready | SetupState::Warning
+        ) {
+            return false;
+        }
+        let layout = self.runtime_layout();
+        let codex = layout.codex_executable();
+        let uv = layout.uv_executable();
+        if !is_real_file(&codex)
+            || !is_real_file(&uv)
+            || validate_runtime_provenance(layout).is_err()
+            || validate_docling_runtime(self.application_home(), layout).is_err()
+        {
+            return false;
+        }
+        let cancellation = CancellationToken::new();
+        let codex_version = probe_version(
+            self.process_supervisor(),
+            self.application_home(),
+            &codex,
+            cancellation.clone(),
+        )
+        .await;
+        let uv_version = probe_version(
+            self.process_supervisor(),
+            self.application_home(),
+            &uv,
+            cancellation,
+        )
+        .await;
+        let verified = codex_version
+            .as_deref()
+            .is_ok_and(|version| version == CODEX_VERSION)
+            && uv_version
+                .as_deref()
+                .is_ok_and(|version| version == UV_VERSION)
+            && is_real_file(&docling_executable(self.application_home()));
+        self.set_runtime_verified(verified);
+        verified
+    }
+
     pub async fn inspect_runtime_readiness(&self) -> RuntimeReadiness {
         if self.update_installation_is_active() {
             return RuntimeReadiness::state(

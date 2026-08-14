@@ -45,6 +45,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "deterministic" => {
             let command: RunDeterministicAcceptanceCommand =
                 serde_json::from_slice(&fs::read(input)?)?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            if !runtime.block_on(host.verify_offline_runtime_for_acceptance()) {
+                return Err("bundled runtime is not ready for deterministic acceptance".into());
+            }
             let run = host.run_deterministic_product_acceptance(command)?;
             println!("{}", serde_json_canonicalizer::to_string(&run)?);
             if run.hard_gate_failures.is_empty() {
@@ -154,7 +160,16 @@ fn exact_windows_platform() -> Result<String, Box<dyn std::error::Error>> {
         ])
         .output()?;
     let version = String::from_utf8(product_name.stdout)?;
-    if !product_name.status.success() || !version.trim().starts_with("10.0.") {
+    let components = version
+        .trim()
+        .split('.')
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>()?;
+    if !product_name.status.success()
+        || components.get(0) != Some(&10)
+        || components.get(1) != Some(&0)
+        || components.get(2).is_none_or(|build| *build < 22_000)
+    {
         return Err("Windows 11 version could not be established".into());
     }
     Ok("windows_11_x64".into())

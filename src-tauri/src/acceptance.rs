@@ -261,6 +261,9 @@ impl QuantixHost {
         command
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if !self.runtime_is_verified() {
+            return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
+        }
         if command.timings.len() >= 64 {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
@@ -888,7 +891,12 @@ fn command_version(program: &str, arguments: &[&str]) -> Result<String, TenderCo
 }
 
 fn current_platform_description() -> String {
-    format!("{}_{}", std::env::consts::OS, std::env::consts::ARCH)
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => "windows_11_x64".into(),
+        ("macos", "aarch64") => "macos_14_apple_silicon".into(),
+        ("linux", "x86_64") => "ubuntu_24_04_x64".into(),
+        (os, architecture) => format!("{os}_{architecture}"),
+    }
 }
 
 fn persist_run(
@@ -999,9 +1007,15 @@ fn canonical_json<T: Serialize>(value: &T) -> Result<String, TenderCommandError>
 fn parse_record<T: for<'de> Deserialize<'de> + Serialize>(
     value: &str,
 ) -> Result<T, TenderCommandError> {
+    let declared_manifest = serde_json::from_str::<Value>(value)
+        .ok()
+        .and_then(|value| value.get("manifest_sha256")?.as_str().map(str::to_owned));
     let record = serde_json::from_str(value)
         .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-    if canonical_json(&record)? != value {
+    let expected_manifest = manifest_sha256(&record)?;
+    if canonical_json(&record)? != value
+        || declared_manifest.as_deref() != Some(expected_manifest.as_str())
+    {
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
     Ok(record)
