@@ -13,6 +13,7 @@ const host = vi.hoisted(() => ({
   chooseAndImportTenderPackage: vi.fn(),
   inspectManagerWorkspace: vi.fn(),
   recordEngineerWorkspaceMessage: vi.fn(),
+  retryManagerIntake: vi.fn(),
   selectManagerWorkspaceTender: vi.fn(),
   startManagerTender: vi.fn(),
 }));
@@ -56,6 +57,7 @@ const projection: ManagerWorkspaceProjection = {
         kind: "status",
         body: "West Campus MEP workspace is ready.",
         created_at: "2026-08-14T10:00:00Z",
+        references: [],
       },
     ],
   },
@@ -75,8 +77,13 @@ const projection: ManagerWorkspaceProjection = {
     cancelled: 0,
     failed: 0,
   },
-  files: { tender_document_count: 0, quantix_output_count: 0 },
+  files: {
+    tender_document_count: 0,
+    quantix_output_count: 0,
+    tender_documents: [],
+  },
   team: { active_agent_runs: 0, waiting_tasks: 0, needs_engineer: 0 },
+  intake: null,
 };
 
 afterEach(() => {
@@ -118,6 +125,7 @@ describe("ManagerWorkspace", () => {
       kind: "routine" as const,
       body: `Routine note ${index + 1}`,
       created_at: `2026-08-14T10:${String(index + 1).padStart(2, "0")}:00Z`,
+      references: [],
     }));
     host.inspectManagerWorkspace.mockResolvedValue({
       ...projection,
@@ -150,6 +158,7 @@ describe("ManagerWorkspace", () => {
             kind: "routine",
             body: "Check the insurance exclusions first.",
             created_at: "2026-08-14T10:02:00Z",
+            references: [],
           },
         ],
       },
@@ -175,6 +184,128 @@ describe("ManagerWorkspace", () => {
     ).toBeTruthy();
   });
 
+  it("shows the truthful intake stage, exact Manager references, and source provenance", async () => {
+    const intakeProjection: ManagerWorkspaceProjection = {
+      ...projection,
+      conversation: {
+        ...projection.conversation!,
+        latest_meaningful_message_id: "e".repeat(32),
+        messages: [
+          ...projection.conversation!.messages,
+          {
+            message_id: "e".repeat(32),
+            sequence: 2,
+            author: "manager",
+            kind: "question",
+            body: "What is the confirmed bid bond validity period?",
+            created_at: "2026-08-14T10:03:00Z",
+            references: [
+              {
+                kind: "tender_record",
+                reference: "f".repeat(32),
+                version: 2,
+                evidence_ordinal: null,
+                label: "Bid bond validity",
+                detail: "Tender query",
+              },
+              {
+                kind: "source_evidence",
+                reference: "1".repeat(32),
+                version: 1,
+                evidence_ordinal: 7,
+                label: "01 Instructions/ITT.pdf",
+                detail: "Section 4.2 — validity is not stated",
+              },
+            ],
+          },
+        ],
+      },
+      current_action: {
+        kind: "answer_manager_question",
+        title: "Answer the Tendering Manager",
+        summary: "One material detail is missing from the source package.",
+        action_label: "Answer question",
+        requires_engineer: true,
+      },
+      files: {
+        tender_document_count: 1,
+        quantix_output_count: 1,
+        tender_documents: [
+          {
+            artifact_id: "1".repeat(32),
+            version: 1,
+            package_path: "01 Instructions/ITT.pdf",
+            document_type: "pdf_document",
+            media_type: "application/pdf",
+            sha256: "2".repeat(64),
+            size_bytes: 2048n,
+            parse_state: "parsed",
+          },
+        ],
+      },
+      intake: {
+        intake_run_id: "3".repeat(32),
+        stage: "waiting_for_engineer",
+        status: "needs_engineer",
+        label: "Waiting for your answer",
+        summary:
+          "The Tendering Manager found information that is genuinely missing.",
+        parseable_document_count: 1,
+        parsed_document_count: 1,
+        extraction_run_count: 1,
+      },
+    };
+    host.inspectManagerWorkspace.mockResolvedValue(intakeProjection);
+    render(<ManagerWorkspace aiAvailable />);
+
+    expect(await screen.findByText("Waiting for your answer")).toBeTruthy();
+    fireEvent.click(screen.getByText("2 references"));
+    expect(screen.getByText("Bid bond validity")).toBeTruthy();
+    expect(screen.getByText("01 Instructions/ITT.pdf")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Answer question" }));
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: "Message your Tendering Manager" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
+    expect(screen.getByText("01 Instructions/ITT.pdf")).toBeTruthy();
+    fireEvent.click(screen.getByText("Provenance"));
+    expect(screen.getByText("2,048 bytes")).toBeTruthy();
+  });
+
+  it("retries a failed intake through the Host boundary", async () => {
+    host.inspectManagerWorkspace.mockResolvedValue({
+      ...projection,
+      current_action: {
+        kind: "retry_intake",
+        title: "Intake needs attention",
+        summary: "The source package is safe and can be retried.",
+        action_label: "Retry intake",
+        requires_engineer: true,
+      },
+      intake: {
+        intake_run_id: "3".repeat(32),
+        stage: "failed",
+        status: "failed",
+        label: "Intake needs attention",
+        summary: "The local AI runtime stopped before the review completed.",
+        parseable_document_count: 1,
+        parsed_document_count: 1,
+        extraction_run_count: 0,
+      },
+    });
+    host.retryManagerIntake.mockResolvedValue(undefined);
+    render(<ManagerWorkspace aiAvailable />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Retry intake" }),
+    );
+    await waitFor(() => {
+      expect(host.retryManagerIntake).toHaveBeenCalledWith(tenderId);
+    });
+  });
+
   it("shows one primary package-led start when no Tender exists", async () => {
     const empty: ManagerWorkspaceProjection = {
       catalogue: [],
@@ -196,8 +327,13 @@ describe("ManagerWorkspace", () => {
         cancelled: 0,
         failed: 0,
       },
-      files: { tender_document_count: 0, quantix_output_count: 0 },
+      files: {
+        tender_document_count: 0,
+        quantix_output_count: 0,
+        tender_documents: [],
+      },
       team: { active_agent_runs: 0, waiting_tasks: 0, needs_engineer: 0 },
+      intake: null,
     };
     host.inspectManagerWorkspace.mockResolvedValue(empty);
     host.startManagerTender.mockResolvedValue(null);
@@ -213,6 +349,58 @@ describe("ManagerWorkspace", () => {
 
     await waitFor(() => {
       expect(host.startManagerTender).toHaveBeenCalledWith("directory");
+    });
+  });
+
+  it("renders an active intake as paused when the AI office is unavailable", async () => {
+    const pausedProjection: ManagerWorkspaceProjection = {
+      ...projection,
+      current_action: {
+        kind: "observe_intake",
+        title: "Reading Tender documents",
+        summary: "Quantix is deriving exact source evidence.",
+        action_label: "Intake in progress",
+        requires_engineer: false,
+      },
+      intake: {
+        intake_run_id: "3".repeat(32),
+        stage: "reading_documents",
+        status: "working",
+        label: "Reading Tender documents",
+        summary:
+          "Quantix is deriving exact source evidence from the registered documents.",
+        parseable_document_count: 1,
+        parsed_document_count: 0,
+        extraction_run_count: 0,
+      },
+    };
+    host.inspectManagerWorkspace.mockResolvedValue(pausedProjection);
+    host.recordEngineerWorkspaceMessage.mockResolvedValue(pausedProjection);
+    const { container } = render(<ManagerWorkspace aiAvailable={false} />);
+
+    expect(
+      await screen.findByText("Paused — AI office unavailable"),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Tender intake paused" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("Quantix is deriving exact source evidence."),
+    ).toBeNull();
+    expect(
+      container.querySelector(".manager-view__status .is-working"),
+    ).toBeNull();
+    const composer = screen.getByRole("textbox", {
+      name: "Message your Tendering Manager",
+    });
+    expect((composer as HTMLTextAreaElement).disabled).toBe(false);
+    fireEvent.change(composer, { target: { value: "Keep this note queued." } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() => {
+      expect(host.recordEngineerWorkspaceMessage).toHaveBeenCalledWith(
+        tenderId,
+        "Keep this note queued.",
+      );
     });
   });
 });

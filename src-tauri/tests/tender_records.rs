@@ -174,7 +174,7 @@ fn a_new_tender_activates_only_the_restricted_bootstrap_team() {
     assert_eq!(
         team.iter().map(|member| member.role).collect::<Vec<_>>(),
         vec![
-            BootstrapRole::TenderOfficeCoordinator,
+            BootstrapRole::TenderingManager,
             BootstrapRole::DocumentController,
             BootstrapRole::TenderAnalyst,
             BootstrapRole::IndependentReviewer,

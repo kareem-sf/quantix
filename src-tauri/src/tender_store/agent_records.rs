@@ -40,6 +40,10 @@ use super::external_rfis::{
     external_rfi_review_target_is_open, publish_external_rfi_review, ExternalRfiReviewCandidate,
     ExternalRfiReviewPublication,
 };
+use super::manager_intake::{
+    publish_manager_intake_outcome, record_manager_intake_extraction_batch, ManagerIntakeCandidate,
+    MANAGER_INTAKE_CAPABILITY,
+};
 use super::package_validation::{
     publish_submission_section_review, submission_section_review_target_is_open,
     submission_section_review_task, validate_submission_section_review_candidate,
@@ -518,6 +522,7 @@ impl TenderStore {
         let mut tender_record_candidate: Option<TenderRecordCandidateBatch> = None;
         let mut tender_record_review: Option<TenderRecordReviewCandidate> = None;
         let mut bid_package_review: Option<BidDecisionPackageReviewCandidate> = None;
+        let mut manager_intake_outcome: Option<ManagerIntakeCandidate> = None;
         let mut submission_section_review: Option<SubmissionSectionReviewCandidate> = None;
         let mut external_rfi_review: Option<ExternalRfiReviewCandidate> = None;
         let mut calculation_rule_review: Option<CalculationRuleReviewCandidate> = None;
@@ -558,6 +563,43 @@ impl TenderStore {
                     {
                         event.summary =
                             "Candidate Tender Records failed provenance validation".into();
+                    }
+                }
+            }
+        }
+        if execution.state == AgentRunState::Completed
+            && prepared
+                .profile
+                .capabilities
+                .iter()
+                .any(|capability| capability == MANAGER_INTAKE_CAPABILITY)
+        {
+            let validation = execution
+                .candidate_payload_json
+                .as_deref()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                .and_then(|payload| {
+                    self.validate_manager_intake_candidate(&prepared.task, payload)
+                });
+            match validation {
+                Ok(candidate) => manager_intake_outcome = Some(candidate),
+                Err(_) => {
+                    execution.state = AgentRunState::Failed;
+                    execution.failure = Some(ProviderFailure::new(
+                        ProviderFailureCategory::OutputInvalid,
+                        true,
+                        "Run the Tendering Manager intake review again from the exact current records.",
+                        Some("The Manager intake result used an unsupported or inexact reference."),
+                    ));
+                    execution.candidate_payload_json = None;
+                    if let Some(event) = execution
+                        .events
+                        .iter_mut()
+                        .rev()
+                        .find(|event| event.kind == ProviderEventKind::Terminal)
+                    {
+                        event.summary =
+                            "Tendering Manager intake result failed exact validation".into();
                     }
                 }
             }
@@ -1501,6 +1543,12 @@ impl TenderStore {
                 candidate,
                 &completed_at,
             )?;
+            record_manager_intake_extraction_batch(
+                &transaction,
+                &prepared.run_id,
+                &prepared.task,
+                &completed_at,
+            )?;
         }
         if let Some(candidate) = tender_record_review.as_ref() {
             if result_id.is_none() {
@@ -1521,6 +1569,20 @@ impl TenderStore {
                 return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
             }
             publish_bid_decision_package_review(
+                &transaction,
+                tender_id,
+                tender_revision,
+                &prepared.run_id,
+                &prepared.task,
+                candidate,
+                &completed_at,
+            )?;
+        }
+        if let Some(candidate) = manager_intake_outcome.as_ref() {
+            if result_id.is_none() {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            publish_manager_intake_outcome(
                 &transaction,
                 tender_id,
                 tender_revision,
@@ -2597,6 +2659,18 @@ impl TenderStore {
             != 1
         {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        if command.disposition == AgentRunRecoveryDisposition::CloseTask {
+            transaction
+                .execute(
+                    "UPDATE provider_threads
+                     SET status = 'archive_pending'
+                     WHERE thread_ref = (
+                       SELECT provider_thread_ref FROM agent_runs WHERE run_id = ?1
+                     ) AND status = 'active'",
+                    [&command.run_id],
+                )
+                .map_err(sql_error)?;
         }
         let tender_revision: u32 = transaction
             .query_row(

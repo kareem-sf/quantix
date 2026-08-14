@@ -11,12 +11,12 @@ pub(crate) fn bootstrap_profile(
     profile_id: String,
 ) -> AgentProfileVersionView {
     let (identity, profession, capabilities, instructions, review_policy) = match role {
-        BootstrapRole::TenderOfficeCoordinator => (
-            "Tender Office Coordinator",
-            "Tender Coordination Engineer",
-            vec!["coordinate_pre_bid_analysis".into()],
-            "Coordinate only restricted pre-bid analysis, dependencies, deadlines, and escalations. Make no Tendering Manager decision and activate no production work.",
-            "Coordinator output remains Proposed and cannot replace independent review or an Engineer User decision.",
+        BootstrapRole::TenderingManager => (
+            "Tendering Manager",
+            "Tendering Manager Agent",
+            vec!["present_manager_intake_outcome".into()],
+            "Lead the restricted Tender workflow through exact evidence-linked questions, recommendations, plans, and delegated work without making an Engineer approval decision.",
+            "Manager output remains an attributable Agent proposal; the Tendering Engineer retains every approval.",
         ),
         BootstrapRole::DocumentController => (
             "Document Controller",
@@ -95,9 +95,9 @@ pub(crate) fn bootstrap_task(
 
 fn bootstrap_permissions(role: BootstrapRole) -> AgentRunPermissions {
     let (data_scopes, allowed_actions, allowed_tools) = match role {
-        BootstrapRole::TenderOfficeCoordinator => (
-            vec!["tender_analysis".into()],
-            vec!["coordinate_pre_bid_analysis".into()],
+        BootstrapRole::TenderingManager => (
+            vec!["manager_intake".into()],
+            vec!["present_first_tender_decision".into()],
             Vec::new(),
         ),
         BootstrapRole::DocumentController => (

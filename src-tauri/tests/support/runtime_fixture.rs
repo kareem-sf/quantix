@@ -456,6 +456,7 @@ fn run_agent_turn(
     }
     let is_record_scenario = scenario.starts_with("record-extraction")
         || scenario.starts_with("record-review")
+        || scenario.starts_with("manager-intake")
         || scenario.starts_with("bid-package-review")
         || scenario.starts_with("external-rfi-review")
         || scenario.starts_with("calculation-rule-review")
@@ -583,17 +584,24 @@ fn run_agent_turn(
             .ok_or("turn cwd")?,
     );
     let workspace = working.parent().ok_or("Agent Run Workspace")?;
-    let input = workspace
-        .join("inputs")
-        .join(if scenario.starts_with("record-extraction") {
-            "tender-evidence-v1.json"
-        } else if scenario.starts_with("record-review") {
+    let inputs = workspace.join("inputs");
+    let input = inputs.join(if scenario.starts_with("manager-intake") {
+        if inputs.join("manager-intake-v1.json").is_file() {
+            "manager-intake-v1.json"
+        } else if inputs.join("tender-record-review-v1.json").is_file() {
             "tender-record-review-v1.json"
-        } else if scenario.starts_with("bid-package-review") {
-            "bid-decision-package-review-v1.json"
         } else {
-            "tender-metadata-v1.json"
-        });
+            "tender-evidence-v1.json"
+        }
+    } else if scenario.starts_with("record-extraction") {
+        "tender-evidence-v1.json"
+    } else if scenario.starts_with("record-review") {
+        "tender-record-review-v1.json"
+    } else if scenario.starts_with("bid-package-review") {
+        "bid-decision-package-review-v1.json"
+    } else {
+        "tender-metadata-v1.json"
+    });
     let output = workspace.join("outputs");
     if working.file_name().and_then(|name| name.to_str()) != Some("working")
         || turn_request.pointer("/params/sandboxPolicy/writableRoots/0")
@@ -671,6 +679,7 @@ fn run_agent_turn(
         .or_else(|| provider_data_view.pointer("/manifest/package_id"))
         .or_else(|| provider_data_view.pointer("/package/package_id"))
         .or_else(|| provider_data_view.pointer("/external_rfi/rfi_id"))
+        .or_else(|| provider_data_view.pointer("/tender_id"))
         .and_then(serde_json::Value::as_str)
         .ok_or("provider-visible Tender name")?
         .to_owned();
@@ -1336,7 +1345,76 @@ fn run_agent_turn(
             return Err("timed out waiting to release production output".into());
         }
     }
-    let mut candidate = if scenario == "output-invalid" {
+    let mut candidate = if scenario.starts_with("manager-intake") {
+        if provider_data_view.get("evidence").is_some() {
+            let mut candidate = record_extraction_candidate(provider_data_view)?;
+            if scenario == "manager-intake-bid" {
+                candidate["records"] = serde_json::Value::Array(
+                    candidate["records"]
+                        .as_array()
+                        .ok_or("Manager extraction records")?
+                        .iter()
+                        .filter(|record| {
+                            !matches!(
+                                record.get("stable_key").and_then(serde_json::Value::as_str),
+                                Some("submission_deadline" | "crane_capacity")
+                            )
+                        })
+                        .cloned()
+                        .collect(),
+                );
+            }
+            candidate
+        } else if provider_data_view.get("record").is_some() {
+            let is_unverifiable = provider_data_view
+                .pointer("/record/fields")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|fields| {
+                    fields.iter().any(|field| {
+                        matches!(
+                            field.get("basis_kind").and_then(serde_json::Value::as_str),
+                            Some("assumption" | "tender_query")
+                        )
+                    })
+                });
+            if is_unverifiable {
+                serde_json::json!({
+                    "outcome": "rejected",
+                    "rationale": "The proposed fact has no attributable source Evidence and remains an unresolved Engineer gap."
+                })
+            } else {
+                serde_json::json!({
+                    "outcome": "verified",
+                    "rationale": "The current exact record resolves to the supplied source Evidence."
+                })
+            }
+        } else {
+            fs::write(
+                executable.with_extension("manager-output-waiting"),
+                b"waiting",
+            )?;
+            for _ in 0..2_000 {
+                if executable
+                    .with_extension("manager-output-release")
+                    .is_file()
+                {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            if !executable
+                .with_extension("manager-output-release")
+                .is_file()
+            {
+                return Err("timed out waiting to release Manager intake output".into());
+            }
+            if scenario == "manager-intake-bid" {
+                manager_intake_bid_candidate(provider_data_view)?
+            } else {
+                manager_intake_candidate(provider_data_view)?
+            }
+        }
+    } else if scenario == "output-invalid" {
         serde_json::json!({ "summary": "Missing the required next action." })
     } else if scenario == "record-extraction-delayed" {
         fs::write(
@@ -3268,6 +3346,66 @@ fn record_extraction_candidate(
             }));
     }
     Ok(candidate)
+}
+
+fn manager_intake_candidate(
+    data_view: &serde_json::Value,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let records = data_view
+        .get("records")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("Manager intake records")?;
+    let record = records
+        .iter()
+        .find(|record| {
+            record
+                .get("contradictions")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|items| !items.is_empty())
+        })
+        .or_else(|| records.first())
+        .ok_or("Manager intake supporting record")?;
+    let evidence = record
+        .pointer("/contradictions/0/evidence/0")
+        .or_else(|| record.pointer("/fields/0/evidence/0/reference"))
+        .cloned()
+        .ok_or("Manager intake supporting Evidence")?;
+    Ok(serde_json::json!({
+        "kind": "question",
+        "question": "Which submission deadline should Quantix treat as authoritative?",
+        "recommendation": null,
+        "rationale": null,
+        "supporting_records": [{
+            "record_id": record.get("record_id").ok_or("Manager record id")?,
+            "version": record.get("version").ok_or("Manager record version")?
+        }],
+        "supporting_evidence": [evidence]
+    }))
+}
+
+fn manager_intake_bid_candidate(
+    data_view: &serde_json::Value,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let record = data_view
+        .get("records")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|records| records.first())
+        .ok_or("Manager bid supporting record")?;
+    let evidence = record
+        .pointer("/fields/0/evidence/0/reference")
+        .cloned()
+        .ok_or("Manager bid supporting Evidence")?;
+    Ok(serde_json::json!({
+        "kind": "bid_decision",
+        "question": null,
+        "recommendation": "proceed",
+        "rationale": "The independently reviewed current Tender record supports controlled bid planning.",
+        "supporting_records": [{
+            "record_id": record.get("record_id").ok_or("Manager record id")?,
+            "version": record.get("version").ok_or("Manager record version")?
+        }],
+        "supporting_evidence": [evidence]
+    }))
 }
 
 fn read_json_request(

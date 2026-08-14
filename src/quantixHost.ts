@@ -113,6 +113,7 @@ import type { OpenTenderCommand } from "./bindings/OpenTenderCommand";
 import type { ParseSourceArtifactCommand } from "./bindings/ParseSourceArtifactCommand";
 import type { PrepareTenderRecoveryCommand } from "./bindings/PrepareTenderRecoveryCommand";
 import type { RecordEngineerWorkspaceMessageCommand } from "./bindings/RecordEngineerWorkspaceMessageCommand";
+import type { RetryManagerIntakeCommand } from "./bindings/RetryManagerIntakeCommand";
 import type { ReviseTenderCommand } from "./bindings/ReviseTenderCommand";
 import type { ReviseTenderQueryCommand } from "./bindings/ReviseTenderQueryCommand";
 import type { ReviseExternalRfiDraftCommand } from "./bindings/ReviseExternalRfiDraftCommand";
@@ -302,6 +303,15 @@ export function recordEngineerWorkspaceMessage(
     "record_engineer_workspace_message",
     { command },
   );
+}
+
+export function resumeManagerIntakes(): Promise<void> {
+  return invoke<void>("resume_manager_intakes");
+}
+
+export function retryManagerIntake(tenderId: string): Promise<void> {
+  const command: RetryManagerIntakeCommand = { tender_id: tenderId };
+  return invoke<void>("retry_manager_intake", { command });
 }
 
 export function openTender(tenderId: string): Promise<TenderSummary> {

@@ -276,7 +276,7 @@ pub enum VerificationStatus {
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum BootstrapRole {
-    TenderOfficeCoordinator,
+    TenderingManager,
     DocumentController,
     TenderAnalyst,
     IndependentReviewer,
@@ -284,7 +284,12 @@ pub enum BootstrapRole {
 
 impl BootstrapRole {
     pub(crate) const ALL: [Self; 4] = [
-        Self::TenderOfficeCoordinator,
+        Self::TenderingManager,
+        Self::DocumentController,
+        Self::TenderAnalyst,
+        Self::IndependentReviewer,
+    ];
+    pub(crate) const SPECIALISTS: [Self; 3] = [
         Self::DocumentController,
         Self::TenderAnalyst,
         Self::IndependentReviewer,
@@ -292,7 +297,7 @@ impl BootstrapRole {
 
     pub(crate) const fn stable_identity(self) -> &'static str {
         match self {
-            Self::TenderOfficeCoordinator => "quantix.bootstrap.tender-office-coordinator",
+            Self::TenderingManager => "quantix.agent.tendering-manager",
             Self::DocumentController => "quantix.bootstrap.document-controller",
             Self::TenderAnalyst => "quantix.bootstrap.tender-analyst",
             Self::IndependentReviewer => "quantix.bootstrap.independent-reviewer",
@@ -697,6 +702,11 @@ struct ActiveAgentRunGuard {
     lease_id: String,
 }
 
+struct ActiveManagerIntakeGuard {
+    host: QuantixHost,
+    tender_id: String,
+}
+
 type TurnAcceptedCallback = dyn FnOnce(&str) -> Result<(), ProviderFailure> + Send;
 type TurnRequestedCallback = dyn FnOnce() -> Result<(), ProviderFailure> + Send;
 type TurnEventCallback =
@@ -723,7 +733,220 @@ impl Drop for ActiveAgentRunGuard {
     }
 }
 
+impl Drop for ActiveManagerIntakeGuard {
+    fn drop(&mut self) {
+        self.host.finish_manager_intake(&self.tender_id);
+    }
+}
+
 impl QuantixHost {
+    pub(crate) fn start_manager_intake_background(
+        &self,
+        tender_id: String,
+    ) -> Result<(), TenderCommandError> {
+        TenderId::parse(&tender_id)?;
+        if !self.begin_manager_intake(&tender_id)? {
+            return Ok(());
+        }
+        let host = self.clone();
+        tauri::async_runtime::spawn(async move {
+            {
+                let _active = ActiveManagerIntakeGuard {
+                    host: host.clone(),
+                    tender_id: tender_id.clone(),
+                };
+                if host.run_manager_intake_pipeline(&tender_id).await.is_err() {
+                    if let Ok(parsed) = TenderId::parse(&tender_id) {
+                        if let Ok(store) = host.tender_store(&parsed) {
+                            if let Ok(mut store) = store.lock() {
+                                let _ = store.fail_manager_intake(
+                                    &parsed,
+                                    "Quantix could not complete the Tender intake safely. Review the local runtime and retry intake; the registered source package remains unchanged.",
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            if let Ok(parsed) = TenderId::parse(&tender_id) {
+                if let Ok(store) = host.tender_store(&parsed) {
+                    let pending = store
+                        .lock()
+                        .ok()
+                        .and_then(|store| store.current_manager_intake_status().ok().flatten())
+                        .is_some_and(|status| status.stage.is_active());
+                    if pending {
+                        let _ = host.start_manager_intake_background(tender_id);
+                    }
+                }
+            }
+        });
+        Ok(())
+    }
+
+    pub(crate) fn resume_manager_intakes(&self) -> Result<(), TenderCommandError> {
+        for entry in self.list_tenders()? {
+            if entry.summary.is_none() {
+                continue;
+            }
+            let tender_id = TenderId::parse(&entry.tender_id)?;
+            let store = self.tender_store(&tender_id)?;
+            let active = store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                .current_manager_intake_status()?
+                .is_some_and(|status| status.stage.is_active());
+            if active {
+                self.start_manager_intake_background(entry.tender_id)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn retry_manager_intake(&self, tender_id: &str) -> Result<(), TenderCommandError> {
+        self.require_runtime_verified()?;
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let unresolved_run_ids = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .unresolved_manager_intake_run_ids()?;
+        for run_id in unresolved_run_ids {
+            self.resolve_indeterminate_agent_run(ResolveIndeterminateAgentRunCommand {
+                tender_id: tender_id.as_str().into(),
+                run_id,
+                disposition: AgentRunRecoveryDisposition::CloseTask,
+                rationale: "Tendering Engineer closed the uncertain intake turn by explicitly choosing to retry intake.".into(),
+            })?;
+        }
+        store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .queue_manager_intake_retry()?;
+        self.start_manager_intake_background(tender_id.as_str().into())
+    }
+
+    async fn run_manager_intake_pipeline(&self, tender_id: &str) -> Result<(), TenderCommandError> {
+        self.require_runtime_verified()?;
+        require_setup(self)?;
+        let _execution = self.manager_intake_execution_guard().await;
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let stage = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .begin_manager_intake_processing()?;
+        if matches!(
+            stage,
+            crate::tender_store::ManagerIntakeStage::WaitingForEngineer
+                | crate::tender_store::ManagerIntakeStage::BidDecisionReady
+        ) {
+            return Ok(());
+        }
+        let intake_run_id = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .current_manager_intake_status()?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
+            .intake_run_id;
+        let targets = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .manager_intake_parse_targets(&tender_id)?;
+        for target in targets {
+            let result = self.parse_source_artifact(target).await?;
+            if result.state != crate::document_parsing::ParseState::Parsed {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+        }
+        let (batches, authorities) = {
+            let mut store = store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            store.refresh_manager_intake_parse_counts()?;
+            let authorities = store.manager_intake_authority_references()?;
+            let batches = store.manager_intake_evidence_batches(&authorities)?;
+            (batches, authorities)
+        };
+        for evidence in batches {
+            let result = self
+                .run_tender_record_extraction_inner(
+                    RunTenderRecordExtractionCommand {
+                        tender_id: tender_id.as_str().into(),
+                        evidence,
+                        authorities: authorities.clone(),
+                    },
+                    Some(&intake_run_id),
+                )
+                .await?;
+            if result.run.state != AgentRunState::Completed || result.published_record_count == 0 {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                .record_manager_intake_extraction_count()?;
+        }
+        let review_targets = {
+            let mut store = store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            store.begin_manager_intake_reviewing()?;
+            store.manager_intake_review_targets()?
+        };
+        for record in review_targets {
+            let result = self
+                .run_tender_record_review_inner(
+                    RunTenderRecordReviewCommand {
+                        tender_id: tender_id.as_str().into(),
+                        record_id: record.record_id,
+                        version: record.version,
+                    },
+                    Some(&intake_run_id),
+                )
+                .await?;
+            if result.run.state != AgentRunState::Completed {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+        }
+        let run = self.run_manager_intake_outcome(&tender_id).await?;
+        if run.state != AgentRunState::Completed {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    pub async fn run_manager_intake_for_verification(
+        &self,
+        tender_id: &str,
+    ) -> Result<(), TenderCommandError> {
+        self.run_manager_intake_pipeline(tender_id).await
+    }
+
+    async fn run_manager_intake_outcome(
+        &self,
+        tender_id: &TenderId,
+    ) -> Result<AgentRunInspection, TenderCommandError> {
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        let _active = ActiveAgentRunGuard {
+            host: self.clone(),
+            lease_id: lease_id.clone(),
+        };
+        let store = self.tender_store(tender_id)?;
+        let prepared = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .prepare_manager_intake_run(tender_id)?;
+        self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
+        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let mut store = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        store.complete_agent_run(tender_id, &prepared, execution)?;
+        store.inspect_agent_run(&prepared.run_id)
+    }
+
     pub fn inspect_bootstrap_team(
         &self,
         tender_id: &str,
@@ -1004,6 +1227,14 @@ impl QuantixHost {
         &self,
         command: RunTenderRecordExtractionCommand,
     ) -> Result<TenderRecordExtractionResult, TenderCommandError> {
+        self.run_tender_record_extraction_inner(command, None).await
+    }
+
+    async fn run_tender_record_extraction_inner(
+        &self,
+        command: RunTenderRecordExtractionCommand,
+        manager_intake_run_id: Option<&str>,
+    ) -> Result<TenderRecordExtractionResult, TenderCommandError> {
         self.require_runtime_verified()?;
         require_setup(self)?;
         command
@@ -1023,6 +1254,7 @@ impl QuantixHost {
                 &tender_id,
                 &command.evidence,
                 &command.authorities,
+                manager_intake_run_id,
             )?;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
 
@@ -1040,6 +1272,14 @@ impl QuantixHost {
     pub async fn run_tender_record_review(
         &self,
         command: RunTenderRecordReviewCommand,
+    ) -> Result<TenderRecordReviewResult, TenderCommandError> {
+        self.run_tender_record_review_inner(command, None).await
+    }
+
+    async fn run_tender_record_review_inner(
+        &self,
+        command: RunTenderRecordReviewCommand,
+        manager_intake_run_id: Option<&str>,
     ) -> Result<TenderRecordReviewResult, TenderCommandError> {
         self.require_runtime_verified()?;
         require_setup(self)?;
@@ -1059,7 +1299,12 @@ impl QuantixHost {
         let prepared = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-            .prepare_tender_record_review_run(&tender_id, &command.record_id, command.version)?;
+            .prepare_tender_record_review_run(
+                &tender_id,
+                &command.record_id,
+                command.version,
+                manager_intake_run_id,
+            )?;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
         let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
         let mut store = store

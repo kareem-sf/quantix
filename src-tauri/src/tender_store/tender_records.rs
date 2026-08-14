@@ -2,7 +2,7 @@ use std::{collections::HashSet, fs, path::Path};
 
 use garde::Validate;
 use jiff::Timestamp;
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use ts_rs::TS;
@@ -805,12 +805,72 @@ fn record_extraction_output_contract() -> String {
     .expect("static Tender Record output contract is canonical JSON")
 }
 
+pub(super) fn insert_engineer_entry(
+    transaction: &Transaction<'_>,
+    tender_revision: u32,
+    value: &str,
+    description: &str,
+    created_at: &str,
+) -> Result<TenderRecordAuthority, TenderCommandError> {
+    let value = value.trim();
+    let description = description.trim();
+    if value.is_empty()
+        || value.len() > 4_000
+        || description.is_empty()
+        || description.len() > 2_000
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let authority_count: i64 = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM tender_record_authorities",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if usize::try_from(authority_count)
+        .ok()
+        .is_none_or(|count| count >= MAX_RECORD_AUTHORITIES)
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let authority = TenderRecordAuthority {
+        authority_id: random_identifier(transaction)?,
+        kind: TenderRecordAuthorityKind::EngineerEntry,
+        value: value.into(),
+        description: description.into(),
+        manifest_sha256: None,
+        tender_revision,
+        created_by: "engineer_user".into(),
+        created_at: created_at.into(),
+    };
+    transaction
+        .execute(
+            "INSERT INTO tender_record_authorities (
+               authority_id, kind, value, description, manifest_sha256,
+               tender_revision, created_by, created_at
+             ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7)",
+            params![
+                authority.authority_id,
+                authority.kind.as_str(),
+                authority.value,
+                authority.description,
+                authority.tender_revision,
+                authority.created_by,
+                authority.created_at,
+            ],
+        )
+        .map_err(sql_error)?;
+    Ok(authority)
+}
+
 impl TenderStore {
     pub(crate) fn prepare_tender_record_extraction_run(
         &mut self,
         tender_id: &TenderId,
         evidence: &[TenderEvidenceReference],
         authority_references: &[TenderRecordAuthorityReference],
+        manager_intake_run_id: Option<&str>,
     ) -> Result<PreparedAgentRun, TenderCommandError> {
         if !self.active_change_allows_record_extraction(evidence)? {
             self.require_change_intake_writable()?;
@@ -872,13 +932,20 @@ impl TenderStore {
                 .query_row(
                     "SELECT EXISTS(
                        SELECT 1 FROM agent_runs
+                       JOIN tender_tasks ON tender_tasks.task_id = agent_runs.task_id
                        WHERE status = 'indeterminate'
+                         AND (?1 IS NULL OR EXISTS (
+                           SELECT 1 FROM json_each(tender_tasks.exact_inputs_json)
+                           WHERE json_extract(value, '$.kind') = 'manager_intake_run'
+                             AND json_extract(value, '$.reference') = ?1
+                             AND json_extract(value, '$.version') = 1
+                         ))
                          AND NOT EXISTS (
                            SELECT 1 FROM agent_run_recovery_dispositions
                            WHERE agent_run_recovery_dispositions.run_id = agent_runs.run_id
                          )
                      )",
-                    [],
+                    [manager_intake_run_id],
                     |row| row.get(0),
                 )
                 .map_err(sql_error)?;
@@ -937,6 +1004,26 @@ impl TenderStore {
                 task.exact_inputs.push(AgentTaskInputReference {
                     kind: "change_assessment".into(),
                     reference: change_recovery.assessment_id.clone(),
+                    version: 1,
+                });
+            }
+            if let Some(intake_run_id) = manager_intake_run_id {
+                let current: bool = transaction
+                    .query_row(
+                        "SELECT EXISTS(
+                           SELECT 1 FROM manager_intake_runs
+                           WHERE intake_run_id = ?1 AND stage = 'extracting_tender_facts'
+                         )",
+                        [intake_run_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(sql_error)?;
+                if !current {
+                    return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+                }
+                task.exact_inputs.push(AgentTaskInputReference {
+                    kind: "manager_intake_run".into(),
+                    reference: intake_run_id.to_owned(),
                     version: 1,
                 });
             }
@@ -1096,6 +1183,7 @@ impl TenderStore {
         tender_id: &TenderId,
         record_id: &str,
         version: u32,
+        manager_intake_run_id: Option<&str>,
     ) -> Result<PreparedAgentRun, TenderCommandError> {
         if !self.active_change_allows_record_governance(record_id)? {
             self.require_change_intake_writable()?;
@@ -1150,13 +1238,20 @@ impl TenderStore {
                 .query_row(
                     "SELECT EXISTS(
                        SELECT 1 FROM agent_runs
+                       JOIN tender_tasks ON tender_tasks.task_id = agent_runs.task_id
                        WHERE status = 'indeterminate'
+                         AND (?1 IS NULL OR EXISTS (
+                           SELECT 1 FROM json_each(tender_tasks.exact_inputs_json)
+                           WHERE json_extract(value, '$.kind') = 'manager_intake_run'
+                             AND json_extract(value, '$.reference') = ?1
+                             AND json_extract(value, '$.version') = 1
+                         ))
                          AND NOT EXISTS (
                            SELECT 1 FROM agent_run_recovery_dispositions
                            WHERE agent_run_recovery_dispositions.run_id = agent_runs.run_id
                          )
                      )",
-                    [],
+                    [manager_intake_run_id],
                     |row| row.get(0),
                 )
                 .map_err(sql_error)?;
@@ -1204,13 +1299,33 @@ impl TenderStore {
                     |row| row.get(0),
                 )
                 .map_err(sql_error)?;
-            let task = record_review_task(
+            let mut task = record_review_task(
                 random_identifier(&transaction)?,
                 record_id,
                 version,
                 deadline,
                 &profile,
             );
+            if let Some(intake_run_id) = manager_intake_run_id {
+                let current: bool = transaction
+                    .query_row(
+                        "SELECT EXISTS(
+                           SELECT 1 FROM manager_intake_runs
+                           WHERE intake_run_id = ?1 AND stage = 'reviewing_tender_facts'
+                         )",
+                        [intake_run_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(sql_error)?;
+                if !current {
+                    return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+                }
+                task.exact_inputs.push(AgentTaskInputReference {
+                    kind: "manager_intake_run".into(),
+                    reference: intake_run_id.to_owned(),
+                    version: 1,
+                });
+            }
             insert_task(&transaction, &task, &created_at)?;
             let payload = record_review_data_view(&transaction, record_id, version)?;
             let (permission_grant, materialized_workspace) =
@@ -1569,10 +1684,8 @@ impl TenderStore {
         }
         let input = task
             .exact_inputs
-            .as_slice()
-            .first()
-            .filter(|_| task.exact_inputs.len() == 1)
-            .filter(|input| input.kind == "tender_record_version")
+            .iter()
+            .find(|input| input.kind == "tender_record_version")
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
         let (author_profile_id, fields_json): (String, String) = self
             .connection
@@ -1716,19 +1829,6 @@ impl TenderStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_error)?;
-        let authority_count: i64 = transaction
-            .query_row(
-                "SELECT COUNT(*) FROM tender_record_authorities",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(sql_error)?;
-        if usize::try_from(authority_count)
-            .ok()
-            .is_none_or(|count| count >= MAX_RECORD_AUTHORITIES)
-        {
-            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
-        }
         let tender_revision: u32 = transaction
             .query_row(
                 "SELECT current_revision FROM tender WHERE singleton = 1 AND tender_id = ?1",
@@ -1737,34 +1837,13 @@ impl TenderStore {
             )
             .map_err(sql_error)?;
         let created_at = sqlite_timestamp(&transaction)?;
-        let authority = TenderRecordAuthority {
-            authority_id: random_identifier(&transaction)?,
-            kind: TenderRecordAuthorityKind::EngineerEntry,
-            value: command.value.clone(),
-            description: command.description.clone(),
-            manifest_sha256: None,
+        let authority = insert_engineer_entry(
+            &transaction,
             tender_revision,
-            created_by: "engineer_user".into(),
-            created_at,
-        };
-        transaction
-            .execute(
-                "INSERT INTO tender_record_authorities (
-                   authority_id, kind, value, description, manifest_sha256,
-                   tender_revision, created_by, created_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    authority.authority_id,
-                    authority.kind.as_str(),
-                    authority.value,
-                    authority.description,
-                    authority.manifest_sha256,
-                    authority.tender_revision,
-                    authority.created_by,
-                    authority.created_at,
-                ],
-            )
-            .map_err(sql_error)?;
+            &command.value,
+            &command.description,
+            &created_at,
+        )?;
         append_audit_event(
             &transaction,
             tender_id.as_str(),
@@ -2833,9 +2912,8 @@ pub(super) fn publish_tender_record_review(
     }
     let input = task
         .exact_inputs
-        .first()
-        .filter(|_| task.exact_inputs.len() == 1)
-        .filter(|input| input.kind == "tender_record_version")
+        .iter()
+        .find(|input| input.kind == "tender_record_version")
         .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
     let review = insert_record_review(
         transaction,
@@ -2872,9 +2950,8 @@ pub(super) fn tender_record_review_target_is_open(
 ) -> Result<bool, TenderCommandError> {
     let input = task
         .exact_inputs
-        .first()
-        .filter(|_| task.exact_inputs.len() == 1)
-        .filter(|input| input.kind == "tender_record_version")
+        .iter()
+        .find(|input| input.kind == "tender_record_version")
         .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
     connection
         .query_row(

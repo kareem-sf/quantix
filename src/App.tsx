@@ -6,6 +6,7 @@ import { ManagerWorkspace } from "./ManagerWorkspace";
 import {
   ensureQuantixSetup,
   inspectRuntimeReadiness,
+  resumeManagerIntakes,
   validateQuantixUpdateRestart,
 } from "./quantixHost";
 import "./App.css";
@@ -84,12 +85,16 @@ function App() {
         });
         return;
       }
+      const aiAvailable =
+        runtimeResult.status === "fulfilled" &&
+        runtimeResult.value.state === "ready";
       setState({
         kind: "ready",
-        aiAvailable:
-          runtimeResult.status === "fulfilled" &&
-          runtimeResult.value.state === "ready",
+        aiAvailable,
       });
+      if (aiAvailable) {
+        void resumeManagerIntakes().catch(() => undefined);
+      }
     } catch {
       setState({
         kind: "blocked",

@@ -19,6 +19,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -31,6 +32,7 @@ import {
   chooseAndImportTenderPackage,
   inspectManagerWorkspace,
   recordEngineerWorkspaceMessage,
+  retryManagerIntake,
   selectManagerWorkspaceTender,
   startManagerTender,
 } from "./quantixHost";
@@ -104,10 +106,12 @@ function TenderButton({
 
 function StartTender({
   action,
+  aiAvailable,
   busy,
   onStart,
 }: {
   action: WorkspaceCurrentAction;
+  aiAvailable: boolean;
   busy: boolean;
   onStart: (kind: TenderPackageSourceKind) => void;
 }) {
@@ -117,11 +121,15 @@ function StartTender({
         <Folder size={22} />
       </span>
       <h2>{action.title}</h2>
-      <p>{action.summary}</p>
+      <p>
+        {aiAvailable
+          ? action.summary
+          : "The local AI runtime is unavailable. Restore it, then start a Tender."}
+      </p>
       <button
         className="manager-workspace__primary"
         type="button"
-        disabled={busy}
+        disabled={busy || !aiAvailable}
         onClick={() => onStart("directory")}
       >
         {busy ? "Opening package…" : action.action_label}
@@ -141,7 +149,9 @@ function Message({
   const isSystem = message.author === "system";
   return (
     <article
+      id={`manager-message-${message.message_id}`}
       className={`manager-message manager-message--${message.author}${meaningful ? " is-meaningful" : ""}`}
+      tabIndex={-1}
     >
       <div className="manager-message__identity">
         <span className="manager-message__avatar" aria-hidden="true">
@@ -160,6 +170,30 @@ function Message({
         </div>
       </div>
       <p>{message.body}</p>
+      {message.references.length > 0 ? (
+        <details className="manager-message__references">
+          <summary>
+            {message.references.length} reference
+            {message.references.length === 1 ? "" : "s"}
+          </summary>
+          <ul>
+            {message.references.map((reference, index) => (
+              <li
+                key={`${reference.kind}-${reference.reference}-${reference.version}-${reference.evidence_ordinal ?? 0}-${index}`}
+              >
+                <strong>{reference.label}</strong>
+                {reference.detail ? <span>{reference.detail}</span> : null}
+                <code>
+                  {reference.reference} · v{reference.version}
+                  {reference.evidence_ordinal
+                    ? ` · evidence ${reference.evidence_ordinal}`
+                    : ""}
+                </code>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
     </article>
   );
 }
@@ -169,6 +203,7 @@ function ManagerView({
   aiAvailable,
   busy,
   onImport,
+  onRetry,
   onSend,
   onOpenAction,
 }: {
@@ -176,11 +211,13 @@ function ManagerView({
   aiAvailable: boolean;
   busy: boolean;
   onImport: (kind: TenderPackageSourceKind) => void;
+  onRetry: () => Promise<void>;
   onSend: (body: string) => Promise<boolean>;
   onOpenAction: () => void;
 }) {
   const [composer, setComposer] = useState("");
   const [showEarlier, setShowEarlier] = useState(false);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const messages = projection.conversation?.messages ?? [];
   const visibleMessages = useMemo(() => {
     if (showEarlier) return messages;
@@ -207,7 +244,13 @@ function ManagerView({
 
   const send = async () => {
     const body = composer.trim();
-    if (!body || busy) return;
+    if (
+      !body ||
+      busy ||
+      (!aiAvailable &&
+        projection.current_action.kind === "answer_manager_question")
+    )
+      return;
     if (await onSend(body)) setComposer("");
   };
 
@@ -218,23 +261,80 @@ function ManagerView({
     }
   };
 
+  const openCurrentAction = () => {
+    switch (projection.current_action.kind) {
+      case "answer_manager_question":
+        composerRef.current?.focus();
+        break;
+      case "retry_intake":
+        void onRetry();
+        break;
+      case "review_bid_decision": {
+        const messageId = projection.conversation?.latest_meaningful_message_id;
+        const message = messageId
+          ? document.getElementById(`manager-message-${messageId}`)
+          : null;
+        message?.scrollIntoView({ behavior: "smooth", block: "center" });
+        message?.focus({ preventScroll: true });
+        break;
+      }
+      case "add_tender_package":
+        onImport("directory");
+        break;
+      default:
+        onOpenAction();
+    }
+  };
+
+  const hasActionButton = [
+    "add_tender_package",
+    "review_intake",
+    "answer_manager_question",
+    "retry_intake",
+    "review_bid_decision",
+    "review_work",
+  ].includes(projection.current_action.kind);
+  const intakeWorking = aiAvailable && projection.intake?.status === "working";
+  const intakePaused = !aiAvailable && projection.intake?.status === "working";
+  const currentActionTitle = intakePaused
+    ? "Tender intake paused"
+    : projection.current_action.title;
+  const currentActionSummary = intakePaused
+    ? "Your registered Tender and completed work are safe. Restore the local AI runtime to continue this exact stage."
+    : projection.current_action.summary;
+
   return (
     <div className="manager-view">
       <div className="manager-view__status">
         <span
-          className={projection.team.active_agent_runs > 0 ? "is-working" : ""}
+          className={
+            projection.team.active_agent_runs > 0 || intakeWorking
+              ? "is-working"
+              : ""
+          }
         />
         <div>
           <strong>Tendering Manager</strong>
           <small>
-            {projection.team.active_agent_runs > 0
-              ? "Coordinating the Tender team"
-              : aiAvailable
-                ? "Ready"
-                : "AI office unavailable — records remain accessible"}
+            {projection.intake
+              ? intakePaused
+                ? "Paused — AI office unavailable"
+                : projection.intake.label
+              : projection.team.active_agent_runs > 0
+                ? "Coordinating the Tender team"
+                : aiAvailable
+                  ? "Ready"
+                  : "AI office unavailable — records remain accessible"}
           </small>
         </div>
       </div>
+      {projection.intake ? (
+        <p className="manager-view__stage-summary">
+          {intakePaused
+            ? "Your registered Tender and completed work are safe. Quantix will resume this stage after the local AI runtime is restored."
+            : projection.intake.summary}
+        </p>
+      ) : null}
 
       <div className="manager-view__conversation" aria-live="polite">
         {!showEarlier && messages.length > visibleMessages.length ? (
@@ -267,21 +367,23 @@ function ManagerView({
             ? "Your next step"
             : "Current focus"}
         </span>
-        <h2 id="current-action-title">{projection.current_action.title}</h2>
-        <p>{projection.current_action.summary}</p>
-        {["add_tender_package", "review_intake", "review_work"].includes(
-          projection.current_action.kind,
-        ) ? (
+        <h2 id="current-action-title">{currentActionTitle}</h2>
+        <p>{currentActionSummary}</p>
+        {hasActionButton ? (
           <div className="current-action__footer">
             <button
               className="manager-workspace__primary"
               type="button"
-              disabled={busy}
-              onClick={
-                projection.current_action.kind === "add_tender_package"
-                  ? () => onImport("directory")
-                  : onOpenAction
+              disabled={
+                busy ||
+                (!aiAvailable &&
+                  [
+                    "add_tender_package",
+                    "answer_manager_question",
+                    "retry_intake",
+                  ].includes(projection.current_action.kind))
               }
+              onClick={openCurrentAction}
             >
               {projection.current_action.action_label}
             </button>
@@ -291,18 +393,33 @@ function ManagerView({
 
       <div className="manager-composer">
         <textarea
+          ref={composerRef}
           rows={1}
           value={composer}
           aria-label="Message your Tendering Manager"
-          placeholder="Message your Tendering Manager…"
-          disabled={busy}
+          placeholder={
+            !aiAvailable &&
+            projection.current_action.kind === "answer_manager_question"
+              ? "Restore the local AI runtime to answer the Manager"
+              : "Message your Tendering Manager…"
+          }
+          disabled={
+            busy ||
+            (!aiAvailable &&
+              projection.current_action.kind === "answer_manager_question")
+          }
           onChange={(event) => setComposer(event.target.value)}
           onKeyDown={onKeyDown}
         />
         <button
           type="button"
           aria-label="Send message"
-          disabled={busy || !composer.trim()}
+          disabled={
+            busy ||
+            !composer.trim() ||
+            (!aiAvailable &&
+              projection.current_action.kind === "answer_manager_question")
+          }
           onClick={() => void send()}
         >
           <Send size={18} aria-hidden="true" />
@@ -352,13 +469,16 @@ function WorkView({ projection }: { projection: ManagerWorkspaceProjection }) {
 
 function FilesView({
   projection,
+  aiAvailable,
   busy,
   onImport,
 }: {
   projection: ManagerWorkspaceProjection;
+  aiAvailable: boolean;
   busy: boolean;
   onImport: (kind: TenderPackageSourceKind) => void;
 }) {
+  const intakeWorking = projection.intake?.status === "working";
   return (
     <section className="workspace-summary" aria-labelledby="files-title">
       <div className="workspace-summary__heading">
@@ -384,11 +504,56 @@ function FilesView({
           </div>
         </article>
       </div>
+      {projection.files.tender_documents.length > 0 ? (
+        <div className="workspace-documents">
+          <h3>Source package</h3>
+          <ul>
+            {projection.files.tender_documents.map((document) => (
+              <li key={`${document.artifact_id}-${document.version}`}>
+                <FileText size={17} aria-hidden="true" />
+                <div>
+                  <strong>{document.package_path}</strong>
+                  <span>{document.parse_state.replace(/_/g, " ")}</span>
+                  <details>
+                    <summary>Provenance</summary>
+                    <dl>
+                      <div>
+                        <dt>Type</dt>
+                        <dd>{document.document_type.replace(/_/g, " ")}</dd>
+                      </div>
+                      <div>
+                        <dt>Size</dt>
+                        <dd>{document.size_bytes.toLocaleString()} bytes</dd>
+                      </div>
+                      {document.sha256 ? (
+                        <div>
+                          <dt>SHA-256</dt>
+                          <dd>
+                            <code>{document.sha256}</code>
+                          </dd>
+                        </div>
+                      ) : null}
+                      <div>
+                        <dt>Artifact</dt>
+                        <dd>
+                          <code>
+                            {document.artifact_id} · v{document.version}
+                          </code>
+                        </dd>
+                      </div>
+                    </dl>
+                  </details>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       <div className="workspace-files__actions">
         <button
           className="manager-workspace__secondary"
           type="button"
-          disabled={busy}
+          disabled={busy || intakeWorking || !aiAvailable}
           onClick={() => onImport("directory")}
         >
           Add package folder
@@ -396,7 +561,7 @@ function FilesView({
         <button
           className="manager-workspace__text-button"
           type="button"
-          disabled={busy}
+          disabled={busy || intakeWorking || !aiAvailable}
           onClick={() => onImport("zip_archive")}
         >
           Add ZIP
@@ -416,13 +581,18 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
   const [teamOpen, setTeamOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const refreshRunning = useRef(false);
+  const busyRef = useRef(false);
+  const projectionEpoch = useRef(0);
 
   const load = useCallback(async () => {
+    const epoch = ++projectionEpoch.current;
     setError(null);
     try {
-      setProjection(await inspectManagerWorkspace());
+      const next = await inspectManagerWorkspace();
+      if (epoch === projectionEpoch.current) setProjection(next);
     } catch (reason) {
-      setError(readableError(reason));
+      if (epoch === projectionEpoch.current) setError(readableError(reason));
     }
   }, []);
 
@@ -430,7 +600,29 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const refresh = async () => {
+      if (busy || document.hidden || refreshRunning.current) return;
+      refreshRunning.current = true;
+      const epoch = projectionEpoch.current;
+      try {
+        const next = await inspectManagerWorkspace();
+        if (epoch === projectionEpoch.current && !busyRef.current) {
+          setProjection(next);
+        }
+      } catch {
+        // Keep the last canonical projection visible; explicit actions surface errors.
+      } finally {
+        refreshRunning.current = false;
+      }
+    };
+    const timer = window.setInterval(() => void refresh(), 2_500);
+    return () => window.clearInterval(timer);
+  }, [busy]);
+
   const run = useCallback(async <T,>(operation: () => Promise<T>) => {
+    projectionEpoch.current += 1;
+    busyRef.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -439,19 +631,21 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
       setError(readableError(reason));
       return null;
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }, []);
 
   const startTender = useCallback(
     async (kind: TenderPackageSourceKind) => {
+      if (!aiAvailable) return;
       const next = await run(() => startManagerTender(kind));
       if (next) {
         setProjection(next);
         setView("manager");
       }
     },
-    [run],
+    [aiAvailable, run],
   );
 
   const selectTender = useCallback(
@@ -470,6 +664,7 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
 
   const importPackage = useCallback(
     async (kind: TenderPackageSourceKind) => {
+      if (!aiAvailable) return;
       const tenderId = projection?.selected_tender?.tender_id;
       if (!tenderId) return;
       const result = await run(() =>
@@ -477,7 +672,7 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
       );
       if (result) await load();
     },
-    [load, projection?.selected_tender?.tender_id, run],
+    [aiAvailable, load, projection?.selected_tender?.tender_id, run],
   );
 
   const sendMessage = useCallback(
@@ -493,6 +688,17 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
     },
     [projection?.selected_tender?.tender_id, run],
   );
+
+  const retryIntake = useCallback(async () => {
+    if (!aiAvailable) return;
+    const tenderId = projection?.selected_tender?.tender_id;
+    if (!tenderId) return;
+    const succeeded = await run(async () => {
+      await retryManagerIntake(tenderId);
+      return true;
+    });
+    if (succeeded) await load();
+  }, [aiAvailable, load, projection?.selected_tender?.tender_id, run]);
 
   const selected = projection?.selected_tender ?? null;
   const activeCounts = useMemo(() => {
@@ -537,7 +743,7 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
             <button
               type="button"
               aria-label="Start another Tender"
-              disabled={busy}
+              disabled={busy || !aiAvailable}
               onClick={() => void startTender("directory")}
             >
               <Plus size={17} aria-hidden="true" />
@@ -632,6 +838,7 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
                   aiAvailable={aiAvailable}
                   busy={busy}
                   onImport={importPackage}
+                  onRetry={retryIntake}
                   onSend={sendMessage}
                   onOpenAction={() =>
                     setView(
@@ -647,6 +854,7 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
               {view === "files" ? (
                 <FilesView
                   projection={projection}
+                  aiAvailable={aiAvailable}
                   busy={busy}
                   onImport={importPackage}
                 />
@@ -657,6 +865,7 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
           <main className="manager-workspace__empty-main">
             <StartTender
               action={projection.current_action}
+              aiAvailable={aiAvailable}
               busy={busy}
               onStart={startTender}
             />

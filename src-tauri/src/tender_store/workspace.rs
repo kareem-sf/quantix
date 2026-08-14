@@ -10,8 +10,10 @@ use crate::{QuantixHost, TenderPackageSourceKind};
 
 use super::{
     append_audit_event, random_identifier, require_setup, sha256_hex, sql_error, sqlite_timestamp,
-    storage_publication_failpoint, store_unavailable, TenderCommandError, TenderErrorCode,
-    TenderId, TenderLifecyclePhase, TenderStore, MAX_TENDER_NAME_BYTES,
+    storage_publication_failpoint, store_unavailable, tender_records::insert_engineer_entry,
+    ManagerIntakeStage, ManagerIntakeStatus, TenderCommandError, TenderErrorCode, TenderId,
+    TenderLifecyclePhase, TenderStore, WorkspaceMessageReference, WorkspaceTenderDocument,
+    MAX_TENDER_NAME_BYTES,
 };
 
 const MAX_CONVERSATION_MESSAGES: i64 = 100;
@@ -47,6 +49,14 @@ pub struct RecordEngineerWorkspaceMessageCommand {
     pub tender_id: String,
     #[garde(length(bytes, min = 1, max = 4000))]
     pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct RetryManagerIntakeCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -106,6 +116,7 @@ pub struct TenderOfficeMessage {
     pub kind: TenderOfficeMessageKind,
     pub body: String,
     pub created_at: String,
+    pub references: Vec<WorkspaceMessageReference>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -135,6 +146,9 @@ pub enum WorkspaceActionKind {
     StartTender,
     AddTenderPackage,
     ReviewIntake,
+    ObserveIntake,
+    AnswerManagerQuestion,
+    RetryIntake,
     ReviewBidDecision,
     PrepareWorkPlan,
     ReviewWorkPlan,
@@ -172,6 +186,7 @@ pub struct WorkspaceWorkSummary {
 pub struct WorkspaceFilesSummary {
     pub tender_document_count: u32,
     pub quantix_output_count: u32,
+    pub tender_documents: Vec<WorkspaceTenderDocument>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -192,6 +207,7 @@ pub struct ManagerWorkspaceProjection {
     pub work: WorkspaceWorkSummary,
     pub files: WorkspaceFilesSummary,
     pub team: WorkspaceTeamSummary,
+    pub intake: Option<ManagerIntakeStatus>,
 }
 
 pub(super) fn initialize_manager_workspace(
@@ -264,6 +280,47 @@ pub(super) fn append_system_status(
     Ok(message_id)
 }
 
+pub(super) fn append_system_message(
+    transaction: &Transaction<'_>,
+    kind: TenderOfficeMessageKind,
+    body: &str,
+    created_at: &str,
+) -> Result<String, TenderCommandError> {
+    if body.is_empty() || body.len() > MAX_MESSAGE_BYTES || kind == TenderOfficeMessageKind::Routine
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let conversation_id = transaction
+        .query_row(
+            "SELECT conversation_id FROM manager_workspace_state WHERE singleton = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(sql_error)?;
+    let message_id = random_identifier(transaction)?;
+    transaction
+        .execute(
+            "INSERT INTO tender_office_messages (
+               message_id, conversation_id, author, kind, body, created_at
+             ) VALUES (?1, ?2, 'system', ?3, ?4, ?5)",
+            params![
+                message_id,
+                conversation_id,
+                message_kind_value(kind),
+                body,
+                created_at
+            ],
+        )
+        .map_err(sql_error)?;
+    transaction
+        .execute(
+            "UPDATE manager_workspace_state SET last_activity_at = ?1 WHERE singleton = 1",
+            [created_at],
+        )
+        .map_err(sql_error)?;
+    Ok(message_id)
+}
+
 struct WorkspaceSnapshot {
     tender: ManagerWorkspaceTender,
     conversation: ManagerConversation,
@@ -271,6 +328,7 @@ struct WorkspaceSnapshot {
     work: WorkspaceWorkSummary,
     files: WorkspaceFilesSummary,
     team: WorkspaceTeamSummary,
+    intake: Option<ManagerIntakeStatus>,
 }
 
 impl TenderStore {
@@ -287,7 +345,9 @@ impl TenderStore {
         let work = self.workspace_work_summary()?;
         let files = self.workspace_files_summary()?;
         let team = self.workspace_team_summary(&work)?;
-        let current_action = self.workspace_current_action(summary.lifecycle_phase, &work)?;
+        let intake = self.current_manager_intake_status()?;
+        let current_action =
+            self.workspace_current_action(summary.lifecycle_phase, &work, intake.as_ref())?;
         let tender = ManagerWorkspaceTender {
             tender_id: summary.tender_id,
             name: summary.name,
@@ -304,6 +364,7 @@ impl TenderStore {
             work,
             files,
             team,
+            intake,
         })
     }
 
@@ -311,7 +372,7 @@ impl TenderStore {
         &mut self,
         tender_id: &TenderId,
         command: &RecordEngineerWorkspaceMessageCommand,
-    ) -> Result<TenderOfficeMessage, TenderCommandError> {
+    ) -> Result<(), TenderCommandError> {
         self.require_storage_writable()?;
         let body = command.body.trim();
         if body.is_empty() || body.len() > MAX_MESSAGE_BYTES {
@@ -346,7 +407,90 @@ impl TenderStore {
                 params![message_id, conversation_id, body, created_at],
             )
             .map_err(sql_error)?;
-        let sequence = to_u32(transaction.last_insert_rowid())?;
+        let pending_question: Option<(String, String)> = transaction
+            .query_row(
+                "SELECT outcomes.outcome_id, outcomes.question
+                 FROM manager_intake_runs AS intake
+                 JOIN manager_intake_outcomes AS outcomes
+                   ON outcomes.intake_run_id = intake.intake_run_id
+                 WHERE intake.intake_run_id = (
+                   SELECT intake_run_id FROM manager_intake_runs
+                   ORDER BY intake_run_sequence DESC LIMIT 1
+                 )
+                   AND intake.stage = 'waiting_for_engineer'
+                   AND outcomes.kind = 'question'
+                 ORDER BY outcomes.outcome_sequence DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        if let Some((outcome_id, question)) = pending_question {
+            let authority = insert_engineer_entry(
+                &transaction,
+                tender_revision,
+                body,
+                &format!("Engineer answer to Tendering Manager intake question {outcome_id}."),
+                &created_at,
+            )?;
+            let answer_id = random_identifier(&transaction)?;
+            transaction
+                .execute(
+                    "INSERT INTO manager_intake_answers (
+                       answer_id, outcome_id, message_id, authority_id, created_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        answer_id,
+                        outcome_id,
+                        message_id,
+                        authority.authority_id,
+                        created_at
+                    ],
+                )
+                .map_err(sql_error)?;
+            transaction
+                .execute(
+                    "INSERT INTO tender_office_message_references (
+                       message_id, ordinal, kind, reference, version,
+                       evidence_ordinal, label, detail
+                     ) VALUES (?1, 1, 'manager_intake_outcome', ?2, 1, NULL, ?3, ?4)",
+                    params![
+                        message_id,
+                        outcome_id,
+                        "Answered Manager question",
+                        question,
+                    ],
+                )
+                .map_err(sql_error)?;
+            let updated = transaction
+                .execute(
+                    "UPDATE manager_intake_runs
+                     SET stage = 'extracting_tender_facts', current_manager_run_id = NULL,
+                         failure_summary = NULL, completed_at = NULL, updated_at = ?1
+                     WHERE intake_run_id = (
+                       SELECT intake_run_id FROM manager_intake_runs
+                       ORDER BY intake_run_sequence DESC LIMIT 1
+                     ) AND stage = 'waiting_for_engineer'",
+                    params![created_at],
+                )
+                .map_err(sql_error)?;
+            if updated != 1 {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            append_audit_event(
+                &transaction,
+                tender_id.as_str(),
+                "manager_intake_answer_recorded",
+                tender_revision,
+                json!({
+                    "answer_id": answer_id,
+                    "authority_id": authority.authority_id,
+                    "message_id": message_id,
+                    "outcome_id": outcome_id,
+                }),
+                &created_at,
+            )?;
+        }
         transaction
             .execute(
                 "UPDATE manager_workspace_state SET last_activity_at = ?1 WHERE singleton = 1",
@@ -367,14 +511,7 @@ impl TenderStore {
             &created_at,
         )?;
         transaction.commit().map_err(sql_error)?;
-        Ok(TenderOfficeMessage {
-            message_id,
-            sequence,
-            author: TenderOfficeMessageAuthor::Engineer,
-            kind: TenderOfficeMessageKind::Routine,
-            body: body.to_owned(),
-            created_at,
-        })
+        Ok(())
     }
 
     fn manager_conversation(&self) -> Result<ManagerConversation, TenderCommandError> {
@@ -430,9 +567,8 @@ impl TenderStore {
         let mut messages = Vec::new();
         for row in rows {
             let (message_id, sequence, author, kind, body, created_at) = row.map_err(sql_error)?;
-            messages.push(message_from_row(
-                message_id, sequence, author, kind, body, created_at,
-            )?);
+            messages
+                .push(self.message_from_row(message_id, sequence, author, kind, body, created_at)?);
         }
         if let Some(meaningful_id) = latest_meaningful_message_id.as_deref() {
             if !messages
@@ -458,7 +594,7 @@ impl TenderStore {
                         },
                     )
                     .map_err(sql_error)?;
-                messages.push(message_from_row(raw.0, raw.1, raw.2, raw.3, raw.4, raw.5)?);
+                messages.push(self.message_from_row(raw.0, raw.1, raw.2, raw.3, raw.4, raw.5)?);
                 messages.sort_by_key(|message| message.sequence);
             }
         }
@@ -521,6 +657,7 @@ impl TenderStore {
         Ok(WorkspaceFilesSummary {
             tender_document_count: to_u32(counts.0)?,
             quantix_output_count: to_u32(counts.1)?,
+            tender_documents: self.workspace_tender_documents()?,
         })
     }
 
@@ -547,9 +684,54 @@ impl TenderStore {
         &self,
         phase: TenderLifecyclePhase,
         work: &WorkspaceWorkSummary,
+        intake: Option<&ManagerIntakeStatus>,
     ) -> Result<WorkspaceCurrentAction, TenderCommandError> {
         let action = match phase {
             TenderLifecyclePhase::Intake => {
+                if let Some(intake) = intake {
+                    return Ok(match intake.stage {
+                        ManagerIntakeStage::PackageRegistered
+                        | ManagerIntakeStage::ReadingDocuments
+                        | ManagerIntakeStage::ExtractingTenderFacts
+                        | ManagerIntakeStage::ReviewingTenderFacts
+                        | ManagerIntakeStage::PreparingFirstDecision => action(
+                            WorkspaceActionKind::ObserveIntake,
+                            &intake.label,
+                            &intake.summary,
+                            "Intake in progress",
+                            false,
+                        ),
+                        ManagerIntakeStage::WaitingForEngineer => action(
+                            WorkspaceActionKind::AnswerManagerQuestion,
+                            "Answer the Manager's question",
+                            "Your answer will become an attributable Engineer input for the Tender intake.",
+                            "Reply to Manager",
+                            true,
+                        ),
+                        ManagerIntakeStage::BidDecisionReady => action(
+                            WorkspaceActionKind::ReviewBidDecision,
+                            "Review the bid recommendation",
+                            "The Tendering Manager has presented an evidence-linked recommendation.",
+                            "Review recommendation",
+                            true,
+                        ),
+                        ManagerIntakeStage::Failed => action(
+                            WorkspaceActionKind::RetryIntake,
+                            "Tender intake needs attention",
+                            if !self.unresolved_manager_intake_run_ids()?.is_empty() {
+                                "The prior Manager turn ended uncertain. Retrying will close that untrusted outcome and start a fresh exact turn."
+                            } else {
+                                &intake.summary
+                            },
+                            if !self.unresolved_manager_intake_run_ids()?.is_empty() {
+                                "Close uncertain turn and retry"
+                            } else {
+                                "Retry intake"
+                            },
+                            true,
+                        ),
+                    });
+                }
                 let source_count: i64 = self
                     .connection
                     .query_row("SELECT COUNT(*) FROM source_artifact_versions", [], |row| {
@@ -865,10 +1047,8 @@ impl QuantixHost {
         let mut store = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
-        let mut snapshot = store.workspace_snapshot()?;
-        let message = store.record_engineer_message(&tender_id, &command)?;
-        snapshot.tender.last_activity_at = Some(message.created_at.clone());
-        append_projected_message(&mut snapshot.conversation, message);
+        store.record_engineer_message(&tender_id, &command)?;
+        let snapshot = store.workspace_snapshot()?;
         if let Some(catalogue_tender) = catalogue
             .iter_mut()
             .find(|candidate| candidate.tender_id == command.tender_id)
@@ -1090,57 +1270,69 @@ fn projection_from_snapshot(
         work: snapshot.work,
         files: snapshot.files,
         team: snapshot.team,
+        intake: snapshot.intake,
     }
 }
 
-fn append_projected_message(conversation: &mut ManagerConversation, message: TenderOfficeMessage) {
-    conversation.messages.push(message);
-    conversation
-        .messages
-        .sort_by_key(|candidate| candidate.sequence);
-    let meaningful = conversation
-        .latest_meaningful_message_id
-        .as_deref()
-        .and_then(|meaningful_id| {
-            conversation
-                .messages
-                .iter()
-                .find(|candidate| candidate.message_id == meaningful_id)
-                .cloned()
-        });
-    let maximum = MAX_CONVERSATION_MESSAGES as usize;
-    if conversation.messages.len() > maximum {
-        conversation.messages = conversation
-            .messages
-            .split_off(conversation.messages.len() - maximum);
-        if let Some(meaningful) = meaningful {
-            if !conversation
-                .messages
-                .iter()
-                .any(|candidate| candidate.message_id == meaningful.message_id)
-            {
-                conversation.messages.insert(0, meaningful);
-            }
-        }
+impl TenderStore {
+    fn message_from_row(
+        &self,
+        message_id: String,
+        sequence: i64,
+        author: String,
+        kind: String,
+        body: String,
+        created_at: String,
+    ) -> Result<TenderOfficeMessage, TenderCommandError> {
+        let references = self.message_references(&message_id)?;
+        Ok(TenderOfficeMessage {
+            message_id,
+            sequence: to_u32(sequence)?,
+            author: TenderOfficeMessageAuthor::parse(&author)?,
+            kind: TenderOfficeMessageKind::parse(&kind)?,
+            body,
+            created_at,
+            references,
+        })
     }
-}
 
-fn message_from_row(
-    message_id: String,
-    sequence: i64,
-    author: String,
-    kind: String,
-    body: String,
-    created_at: String,
-) -> Result<TenderOfficeMessage, TenderCommandError> {
-    Ok(TenderOfficeMessage {
-        message_id,
-        sequence: to_u32(sequence)?,
-        author: TenderOfficeMessageAuthor::parse(&author)?,
-        kind: TenderOfficeMessageKind::parse(&kind)?,
-        body,
-        created_at,
-    })
+    fn message_references(
+        &self,
+        message_id: &str,
+    ) -> Result<Vec<WorkspaceMessageReference>, TenderCommandError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT kind, reference, version, evidence_ordinal, label, detail
+                 FROM tender_office_message_references WHERE message_id = ?1 ORDER BY ordinal",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([message_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, Option<u32>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                ))
+            })
+            .map_err(sql_error)?;
+        rows.map(|row| {
+            let (kind, reference, version, evidence_ordinal, label, detail) =
+                row.map_err(sql_error)?;
+            Ok(WorkspaceMessageReference {
+                kind: super::WorkspaceMessageReferenceKind::parse(&kind)?,
+                reference,
+                version,
+                evidence_ordinal,
+                label,
+                detail,
+            })
+        })
+        .collect()
+    }
 }
 
 fn empty_projection(catalogue: Vec<ManagerWorkspaceTender>) -> ManagerWorkspaceProjection {
@@ -1158,6 +1350,19 @@ fn empty_projection(catalogue: Vec<ManagerWorkspaceTender>) -> ManagerWorkspaceP
         work: WorkspaceWorkSummary::default(),
         files: WorkspaceFilesSummary::default(),
         team: WorkspaceTeamSummary::default(),
+        intake: None,
+    }
+}
+
+fn message_kind_value(kind: TenderOfficeMessageKind) -> &'static str {
+    match kind {
+        TenderOfficeMessageKind::Routine => "routine",
+        TenderOfficeMessageKind::Status => "status",
+        TenderOfficeMessageKind::Question => "question",
+        TenderOfficeMessageKind::Finding => "finding",
+        TenderOfficeMessageKind::Handoff => "handoff",
+        TenderOfficeMessageKind::Blocker => "blocker",
+        TenderOfficeMessageKind::Output => "output",
     }
 }
 

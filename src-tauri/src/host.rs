@@ -38,6 +38,8 @@ struct QuantixHostInner {
     runtime_preparation: Mutex<Option<ActiveRuntimePreparation>>,
     active_parses: Mutex<HashMap<ParseTargetKey, ActiveParse>>,
     active_agent_runs: Mutex<HashMap<String, ActiveAgentRun>>,
+    active_manager_intakes: Mutex<HashMap<String, OrdinaryWorkLease>>,
+    manager_intake_execution: tokio::sync::Mutex<()>,
     production_schedulers: Mutex<HashMap<String, OrdinaryWorkLease>>,
     agent_provider: tokio::sync::Mutex<Option<CodexProvider>>,
     provider_rate_limit: Mutex<Option<ProviderRateLimit>>,
@@ -169,6 +171,8 @@ impl QuantixHost {
                 runtime_preparation: Mutex::new(None),
                 active_parses: Mutex::new(HashMap::new()),
                 active_agent_runs: Mutex::new(HashMap::new()),
+                active_manager_intakes: Mutex::new(HashMap::new()),
+                manager_intake_execution: tokio::sync::Mutex::new(()),
                 production_schedulers: Mutex::new(HashMap::new()),
                 agent_provider: tokio::sync::Mutex::new(None),
                 provider_rate_limit: Mutex::new(None),
@@ -538,6 +542,32 @@ impl QuantixHost {
             .any(|active| active.tender_id == tender_id && active.run_id.as_deref() == Some(run_id))
     }
 
+    pub(crate) fn begin_manager_intake(&self, tender_id: &str) -> Result<bool, TenderCommandError> {
+        let ordinary_work = self.begin_ordinary_work()?;
+        let mut active = self
+            .inner
+            .active_manager_intakes
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        if active.contains_key(tender_id) {
+            return Ok(false);
+        }
+        active.insert(tender_id.to_owned(), ordinary_work);
+        Ok(true)
+    }
+
+    pub(crate) fn finish_manager_intake(&self, tender_id: &str) {
+        self.inner
+            .active_manager_intakes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(tender_id);
+    }
+
+    pub(crate) async fn manager_intake_execution_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.inner.manager_intake_execution.lock().await
+    }
+
     pub(crate) fn set_runtime_verified(&self, verified: bool) {
         self.inner
             .runtime_verified
@@ -664,6 +694,12 @@ impl QuantixHost {
             && self
                 .inner
                 .active_agent_runs
+                .lock()
+                .map(|active| active.is_empty())
+                .unwrap_or(false)
+            && self
+                .inner
+                .active_manager_intakes
                 .lock()
                 .map(|active| active.is_empty())
                 .unwrap_or(false)

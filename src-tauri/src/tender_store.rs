@@ -42,6 +42,7 @@ mod decision_cockpit;
 mod estimates;
 mod external_rfis;
 mod final_release;
+mod manager_intake;
 mod package_production;
 mod package_validation;
 mod pricing;
@@ -142,6 +143,10 @@ pub use final_release::{
     ApproveSubmissionReleaseCommand, ExportReleaseCopyCommand, ReleaseCopyExport, ReleaseCopyItem,
     SubmissionReleaseApproval, SubmissionReleaseInspection, SubmissionReleaseState,
 };
+pub use manager_intake::{
+    ManagerIntakeStage, ManagerIntakeStatus, ManagerIntakeStatusKind, WorkspaceMessageReference,
+    WorkspaceMessageReferenceKind, WorkspaceTenderDocument,
+};
 pub use package_production::{
     GenerateSubmissionSectionsCommand, GenerationRequirement, GenerationRequirementAvailability,
     GenerationRequirementRecordReference, InspectPackageProductionCommand,
@@ -222,7 +227,7 @@ pub use tender_records::{
 };
 pub use workspace::{
     InspectManagerWorkspaceCommand, ManagerConversation, ManagerWorkspaceProjection,
-    ManagerWorkspaceTender, RecordEngineerWorkspaceMessageCommand,
+    ManagerWorkspaceTender, RecordEngineerWorkspaceMessageCommand, RetryManagerIntakeCommand,
     SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand, TenderOfficeMessage,
     TenderOfficeMessageAuthor, TenderOfficeMessageKind, WorkspaceActionKind,
     WorkspaceCurrentAction, WorkspaceFilesSummary, WorkspaceTeamSummary, WorkspaceWorkSummary,
@@ -234,7 +239,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 27;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 28;
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -267,6 +272,38 @@ CREATE TABLE manager_workspace_state (
   last_activity_at TEXT NOT NULL,
   FOREIGN KEY (conversation_id) REFERENCES tender_office_conversations(conversation_id)
 );
+CREATE TABLE manager_intake_runs (
+  intake_run_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  intake_run_id TEXT NOT NULL UNIQUE CHECK (length(intake_run_id) = 32),
+  package_intake_id TEXT NOT NULL UNIQUE,
+  stage TEXT NOT NULL CHECK (stage IN (
+    'package_registered', 'reading_documents', 'extracting_tender_facts', 'reviewing_tender_facts',
+    'preparing_first_decision', 'waiting_for_engineer',
+    'bid_decision_ready', 'failed'
+  )),
+  parseable_document_count INTEGER NOT NULL DEFAULT 0 CHECK (parseable_document_count >= 0),
+  parsed_document_count INTEGER NOT NULL DEFAULT 0 CHECK (parsed_document_count >= 0),
+  extraction_run_count INTEGER NOT NULL DEFAULT 0 CHECK (extraction_run_count >= 0),
+  current_manager_run_id TEXT,
+  failure_summary TEXT CHECK (
+    failure_summary IS NULL OR length(CAST(failure_summary AS BLOB)) BETWEEN 1 AND 2000
+  ),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT,
+  FOREIGN KEY (package_intake_id) REFERENCES intake_runs(intake_id),
+  FOREIGN KEY (current_manager_run_id) REFERENCES agent_runs(run_id),
+  CHECK (parsed_document_count <= parseable_document_count),
+  CHECK (
+    (stage = 'failed' AND failure_summary IS NOT NULL AND completed_at IS NOT NULL)
+    OR (stage IN ('waiting_for_engineer', 'bid_decision_ready')
+        AND failure_summary IS NULL AND completed_at IS NOT NULL)
+    OR (stage IN (
+          'package_registered', 'reading_documents', 'extracting_tender_facts', 'reviewing_tender_facts',
+          'preparing_first_decision'
+        ) AND failure_summary IS NULL AND completed_at IS NULL)
+  )
+);
 CREATE TABLE tender_office_messages (
   message_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   message_id TEXT NOT NULL UNIQUE CHECK (length(message_id) = 32),
@@ -278,6 +315,67 @@ CREATE TABLE tender_office_messages (
   body TEXT NOT NULL CHECK (length(CAST(body AS BLOB)) BETWEEN 1 AND 4000),
   created_at TEXT NOT NULL,
   FOREIGN KEY (conversation_id) REFERENCES tender_office_conversations(conversation_id)
+);
+CREATE TABLE manager_intake_outcomes (
+  outcome_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  outcome_id TEXT NOT NULL UNIQUE CHECK (length(outcome_id) = 32),
+  intake_run_id TEXT NOT NULL,
+  manager_run_id TEXT NOT NULL UNIQUE,
+  message_id TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL CHECK (kind IN ('question', 'bid_decision')),
+  body TEXT NOT NULL CHECK (length(CAST(body AS BLOB)) BETWEEN 1 AND 4000),
+  question TEXT CHECK (question IS NULL OR length(CAST(question AS BLOB)) BETWEEN 1 AND 4000),
+  recommendation TEXT CHECK (recommendation IN ('proceed', 'hold', 'decline')),
+  supporting_records_json TEXT NOT NULL CHECK (json_valid(supporting_records_json)),
+  supporting_evidence_json TEXT NOT NULL CHECK (json_valid(supporting_evidence_json)),
+  manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+  manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (intake_run_id) REFERENCES manager_intake_runs(intake_run_id),
+  FOREIGN KEY (manager_run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (message_id) REFERENCES tender_office_messages(message_id),
+  CHECK (
+    (kind = 'question' AND question IS NOT NULL AND recommendation IS NULL)
+    OR (kind = 'bid_decision' AND question IS NULL AND recommendation IS NOT NULL)
+  )
+);
+CREATE TABLE manager_intake_answers (
+  answer_id TEXT PRIMARY KEY CHECK (length(answer_id) = 32),
+  outcome_id TEXT NOT NULL UNIQUE,
+  message_id TEXT NOT NULL UNIQUE,
+  authority_id TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (outcome_id) REFERENCES manager_intake_outcomes(outcome_id),
+  FOREIGN KEY (message_id) REFERENCES tender_office_messages(message_id),
+  FOREIGN KEY (authority_id) REFERENCES tender_record_authorities(authority_id)
+);
+CREATE TABLE manager_intake_extraction_batches (
+  intake_run_id TEXT NOT NULL,
+  batch_fingerprint TEXT NOT NULL CHECK (length(batch_fingerprint) = 64),
+  extraction_run_id TEXT NOT NULL UNIQUE,
+  evidence_json TEXT NOT NULL CHECK (json_valid(evidence_json)),
+  completed_at TEXT NOT NULL,
+  PRIMARY KEY (intake_run_id, batch_fingerprint),
+  FOREIGN KEY (intake_run_id) REFERENCES manager_intake_runs(intake_run_id),
+  FOREIGN KEY (extraction_run_id) REFERENCES agent_runs(run_id)
+);
+CREATE TABLE tender_office_message_references (
+  message_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+  kind TEXT NOT NULL CHECK (kind IN (
+    'agent_run', 'manager_intake_outcome', 'tender_record', 'source_evidence'
+  )),
+  reference TEXT NOT NULL CHECK (length(reference) = 32),
+  version INTEGER NOT NULL CHECK (version > 0),
+  evidence_ordinal INTEGER CHECK (evidence_ordinal IS NULL OR evidence_ordinal > 0),
+  label TEXT NOT NULL CHECK (length(CAST(label AS BLOB)) BETWEEN 1 AND 1000),
+  detail TEXT CHECK (detail IS NULL OR length(CAST(detail AS BLOB)) BETWEEN 1 AND 2000),
+  PRIMARY KEY (message_id, ordinal),
+  FOREIGN KEY (message_id) REFERENCES tender_office_messages(message_id),
+  CHECK (
+    (kind = 'source_evidence' AND evidence_ordinal IS NOT NULL)
+    OR (kind != 'source_evidence' AND evidence_ordinal IS NULL)
+  )
 );
 CREATE TRIGGER tender_office_conversations_no_update
 BEFORE UPDATE ON tender_office_conversations
@@ -298,6 +396,46 @@ CREATE TRIGGER tender_office_messages_no_delete
 BEFORE DELETE ON tender_office_messages
 BEGIN
   SELECT RAISE(ABORT, 'Tender Office messages are immutable');
+END;
+CREATE TRIGGER manager_intake_outcomes_no_update
+BEFORE UPDATE ON manager_intake_outcomes
+BEGIN
+  SELECT RAISE(ABORT, 'Manager intake outcomes are immutable');
+END;
+CREATE TRIGGER manager_intake_outcomes_no_delete
+BEFORE DELETE ON manager_intake_outcomes
+BEGIN
+  SELECT RAISE(ABORT, 'Manager intake outcomes are immutable');
+END;
+CREATE TRIGGER manager_intake_answers_no_update
+BEFORE UPDATE ON manager_intake_answers
+BEGIN
+  SELECT RAISE(ABORT, 'Manager intake answers are immutable');
+END;
+CREATE TRIGGER manager_intake_answers_no_delete
+BEFORE DELETE ON manager_intake_answers
+BEGIN
+  SELECT RAISE(ABORT, 'Manager intake answers are immutable');
+END;
+CREATE TRIGGER manager_intake_extraction_batches_no_update
+BEFORE UPDATE ON manager_intake_extraction_batches
+BEGIN
+  SELECT RAISE(ABORT, 'Manager intake extraction batches are immutable');
+END;
+CREATE TRIGGER manager_intake_extraction_batches_no_delete
+BEFORE DELETE ON manager_intake_extraction_batches
+BEGIN
+  SELECT RAISE(ABORT, 'Manager intake extraction batches are immutable');
+END;
+CREATE TRIGGER tender_office_message_references_no_update
+BEFORE UPDATE ON tender_office_message_references
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Office message references are immutable');
+END;
+CREATE TRIGGER tender_office_message_references_no_delete
+BEFORE DELETE ON tender_office_message_references
+BEGIN
+  SELECT RAISE(ABORT, 'Tender Office message references are immutable');
 END;
 CREATE TABLE tender_retention (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -3949,7 +4087,7 @@ impl TenderStore {
             )
             .map_err(sql_error)?;
         workspace::initialize_manager_workspace(&transaction, name, &created_at)?;
-        for role in BootstrapRole::ALL {
+        for role in BootstrapRole::SPECIALISTS {
             let profile = bootstrap_profile(role, random_identifier(&transaction)?);
             agent_records::insert_profile(
                 &transaction,
@@ -3958,6 +4096,7 @@ impl TenderStore {
                 &created_at,
             )?;
         }
+        manager_intake::initialize_manager_profile(&transaction, &created_at)?;
         append_audit_event(
             &transaction,
             tender_id.as_str(),
@@ -4393,6 +4532,9 @@ impl TenderStore {
             return Ok(false);
         }
         if !self.tender_record_manifests_are_valid_with_check(check)? {
+            return Ok(false);
+        }
+        if !self.manager_intake_manifests_are_valid_with_check(check)? {
             return Ok(false);
         }
         if !self.tender_query_manifests_are_valid_with_check(check)? {
@@ -5461,11 +5603,12 @@ impl TenderStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_error)?;
-        let (tender_id, tender_revision): (String, u32) = transaction
+        let (tender_id, tender_revision, lifecycle_phase): (String, u32, String) = transaction
             .query_row(
-                "SELECT tender_id, current_revision FROM tender WHERE singleton = 1",
+                "SELECT tender_id, current_revision, lifecycle_phase
+                 FROM tender WHERE singleton = 1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .map_err(sql_error)?;
         let intake_id = random_identifier(&transaction)?;
@@ -5584,6 +5727,11 @@ impl TenderStore {
             ),
             &created_at,
         )?;
+        let manager_intake_run_id = (lifecycle_phase == "intake")
+            .then(|| {
+                manager_intake::initialize_manager_intake_run(&transaction, &intake_id, &created_at)
+            })
+            .transpose()?;
         append_audit_event(
             &transaction,
             &tender_id,
@@ -5593,6 +5741,7 @@ impl TenderStore {
                 "discovered_count": discovered_count.to_string(),
                 "exception_count": exception_count.to_string(),
                 "intake_id": intake_id,
+                "manager_intake_run_id": manager_intake_run_id,
                 "system_message_id": system_message_id,
                 "registered_count": registered_count.to_string(),
                 "source_kind": prepared.source_kind.as_str(),

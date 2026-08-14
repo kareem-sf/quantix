@@ -1,22 +1,25 @@
 use quantix_lib::{
     AcceptanceArtifactHash, AcceptanceCheckResult, AcceptanceStageTiming,
-    ApproveSubmissionReleaseCommand, CodexProductionAssuranceEvidence,
+    ApproveSubmissionReleaseCommand, BootstrapRole, CodexProductionAssuranceEvidence,
     CreatePortableTenderArchiveCommand, DeletionReceipt, EvaluatePublicReleaseGateCommand,
     ExportReleaseCopyCommand, ImportPortableTenderArchiveCommand, InspectManagerWorkspaceCommand,
     IntegrationTermsDecision, LicenseDistributionReview, LiveQualificationMetrics,
-    LiveQualificationRun, ManagerConversation, ManagerWorkspaceProjection, ManagerWorkspaceTender,
+    LiveQualificationRun, ManagerConversation, ManagerIntakeStage, ManagerIntakeStatus,
+    ManagerIntakeStatusKind, ManagerWorkspaceProjection, ManagerWorkspaceTender,
     NativePlatformQualificationEvidence, NativePlatformQualificationRecord,
     PortableTenderArchiveRecord, PrivateQualificationRecord, ProductAcceptanceOutcome,
     ProductAcceptanceRecord, ProductAcceptanceRun, PublicReleaseGateOutcome,
     PublicReleaseGateRecord, RecordEngineerWorkspaceMessageCommand,
     RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand, ReleaseCopyExport,
-    ReleaseCopyItem, RunDeterministicAcceptanceCommand, SelectManagerWorkspaceTenderCommand,
-    StartManagerTenderCommand, SubmissionReleaseApproval, SubmissionReleaseInspection,
-    SubmissionReleaseState, TechnicalRiskAcceptance, TenderOfficeMessage,
-    TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderRetentionDecisionCommand,
-    TenderRetentionDecisionRecord, TenderRetentionState, TrashedTenderDecisionCommand,
-    TrashedTenderRecord, TrashedTenderState, WorkspaceActionKind, WorkspaceCurrentAction,
-    WorkspaceFilesSummary, WorkspaceTeamSummary, WorkspaceWorkSummary,
+    ReleaseCopyItem, RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand,
+    SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand, SubmissionReleaseApproval,
+    SubmissionReleaseInspection, SubmissionReleaseState, TechnicalRiskAcceptance,
+    TenderOfficeMessage, TenderOfficeMessageAuthor, TenderOfficeMessageKind,
+    TenderRetentionDecisionCommand, TenderRetentionDecisionRecord, TenderRetentionState,
+    TrashedTenderDecisionCommand, TrashedTenderRecord, TrashedTenderState, WorkspaceActionKind,
+    WorkspaceCurrentAction, WorkspaceFilesSummary, WorkspaceMessageReference,
+    WorkspaceMessageReferenceKind, WorkspaceTeamSummary, WorkspaceTenderDocument,
+    WorkspaceWorkSummary,
 };
 use ts_rs::{Config, TS};
 
@@ -65,6 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     StartManagerTenderCommand::export_all(&config)?;
     SelectManagerWorkspaceTenderCommand::export_all(&config)?;
     RecordEngineerWorkspaceMessageCommand::export_all(&config)?;
+    RetryManagerIntakeCommand::export_all(&config)?;
     TenderOfficeMessageAuthor::export_all(&config)?;
     TenderOfficeMessageKind::export_all(&config)?;
     TenderOfficeMessage::export_all(&config)?;
@@ -74,7 +78,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     WorkspaceCurrentAction::export_all(&config)?;
     WorkspaceWorkSummary::export_all(&config)?;
     WorkspaceFilesSummary::export_all(&config)?;
+    WorkspaceTenderDocument::export_all(&config)?;
+    WorkspaceMessageReferenceKind::export_all(&config)?;
+    WorkspaceMessageReference::export_all(&config)?;
     WorkspaceTeamSummary::export_all(&config)?;
+    ManagerIntakeStage::export_all(&config)?;
+    ManagerIntakeStatusKind::export_all(&config)?;
+    ManagerIntakeStatus::export_all(&config)?;
+    BootstrapRole::export_all(&config)?;
     ManagerWorkspaceProjection::export_all(&config)?;
     Ok(())
 }

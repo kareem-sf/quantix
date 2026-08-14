@@ -2421,12 +2421,12 @@ fn compose_profiles(
             )
             .map_err(sql_error)?;
         let (archetype, identity, profession, capability, objective, scope) = match role {
-            BootstrapRole::TenderOfficeCoordinator => (
-                "tender_office_coordinator",
-                "Tender Office Coordinator",
-                "Tender Coordination Engineer",
-                vec!["tender_coordination", "query_rfi_control"],
-                "Coordinate approved Tender production work, dependencies, milestones, and escalation without making Tendering Manager decisions.",
+            BootstrapRole::TenderingManager => (
+                "tendering_manager",
+                "Tendering Manager",
+                "Tendering Manager Agent",
+                vec!["tender_orchestration"],
+                "Coordinate the approved Tender workflow and escalate exact Engineer decisions without taking approval authority.",
                 "tender_coordination",
             ),
             BootstrapRole::DocumentController => (
