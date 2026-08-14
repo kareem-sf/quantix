@@ -197,7 +197,8 @@ impl TenderStore {
             true,
             budget,
         )?;
-        verify_exact_package_bytes(&self.root.join("content"), &package, budget)?;
+        let approved_bytes =
+            load_exact_package_bytes(&self.root.join("content"), &package, budget)?;
         let final_review = load_final_review_for_transaction(&transaction, &package, None, budget)?;
         if !final_review.current
             || !final_review.ready
@@ -284,6 +285,28 @@ impl TenderStore {
                 ],
             )
             .map_err(sql_error)?;
+        for (ordinal, (item, content)) in approved_bytes.iter().enumerate() {
+            transaction
+                .execute(
+                    "INSERT INTO submission_release_items (
+                       approval_id, ordinal, package_path, content_sha256, size_bytes, content
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        approval.approval_id,
+                        u32::try_from(ordinal + 1).map_err(|_| TenderCommandError::new(
+                            TenderErrorCode::IntegrityFailed
+                        ))?,
+                        item.package_path,
+                        item.content_sha256,
+                        i64::try_from(item.size_bytes).map_err(|_| TenderCommandError::new(
+                            TenderErrorCode::IntegrityFailed
+                        ))?,
+                        content,
+                    ],
+                )
+                .map_err(sql_error)?;
+        }
+        verify_exact_package_bytes(&self.root.join("content"), &package, budget)?;
         transaction.commit().map_err(sql_error)?;
         self.inspect_submission_release(budget)?
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
@@ -398,18 +421,7 @@ impl TenderStore {
             true,
             budget,
         )?;
-        let bytes = package
-            .items
-            .iter()
-            .map(|item| {
-                budget.check()?;
-                let content = load_exact_submission_package_item_bytes_for_transaction(
-                    &self.root.join("content"),
-                    item,
-                )?;
-                Ok((item.item.clone(), content))
-            })
-            .collect::<Result<Vec<_>, TenderCommandError>>()?;
+        let bytes = load_approved_package_bytes(&transaction, approval, &package, budget)?;
         transaction.commit().map_err(sql_error)?;
 
         let export_id = random_identifier(&self.connection)?;
@@ -595,6 +607,74 @@ fn verify_exact_package_bytes(
         }
     }
     Ok(())
+}
+
+fn load_exact_package_bytes(
+    content_root: &Path,
+    package: &ExactSubmissionPackage,
+    budget: BidPackageOperationBudget,
+) -> Result<Vec<(super::SubmissionPackageItem, Vec<u8>)>, TenderCommandError> {
+    package
+        .items
+        .iter()
+        .map(|item| {
+            budget.check()?;
+            let bytes =
+                load_exact_submission_package_item_bytes_for_transaction(content_root, item)?;
+            if sha256_hex(&bytes) != item.item.content_sha256
+                || u64::try_from(bytes.len()).ok() != Some(item.item.size_bytes)
+            {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            Ok((item.item.clone(), bytes))
+        })
+        .collect()
+}
+
+fn load_approved_package_bytes(
+    transaction: &Transaction<'_>,
+    approval: &SubmissionReleaseApproval,
+    package: &ExactSubmissionPackage,
+    budget: BidPackageOperationBudget,
+) -> Result<Vec<(super::SubmissionPackageItem, Vec<u8>)>, TenderCommandError> {
+    let mut statement = transaction
+        .prepare(
+            "SELECT package_path, content_sha256, size_bytes, content
+             FROM submission_release_items WHERE approval_id = ?1 ORDER BY ordinal",
+        )
+        .map_err(sql_error)?;
+    let rows = statement
+        .query_map([&approval.approval_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+            ))
+        })
+        .map_err(sql_error)?;
+    let mut bytes = Vec::new();
+    for (index, row) in rows.enumerate() {
+        budget.check()?;
+        let (package_path, content_sha256, size_bytes, content) = row.map_err(sql_error)?;
+        let item = package
+            .items
+            .get(index)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        if package_path != item.item.package_path
+            || content_sha256 != item.item.content_sha256
+            || u64::try_from(size_bytes).ok() != Some(item.item.size_bytes)
+            || u64::try_from(content.len()).ok() != Some(item.item.size_bytes)
+            || sha256_hex(&content) != item.item.content_sha256
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        bytes.push((item.item.clone(), content));
+    }
+    if bytes.len() != package.items.len() {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(bytes)
 }
 
 fn canonical_manifest_root(package: &ExactSubmissionPackage) -> Result<String, TenderCommandError> {

@@ -2435,6 +2435,17 @@ CREATE TABLE submission_release_approvals (
     REFERENCES release_readiness_reports(report_id, version),
   FOREIGN KEY (audit_sequence) REFERENCES audit_events(sequence)
 );
+CREATE TABLE submission_release_items (
+  approval_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+  package_path TEXT NOT NULL CHECK (length(CAST(package_path AS BLOB)) BETWEEN 1 AND 1000),
+  content_sha256 TEXT NOT NULL CHECK (length(content_sha256) = 64),
+  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+  content BLOB NOT NULL CHECK (length(content) = size_bytes),
+  PRIMARY KEY (approval_id, ordinal),
+  UNIQUE (approval_id, package_path),
+  FOREIGN KEY (approval_id) REFERENCES submission_release_approvals(approval_id)
+);
 CREATE TABLE release_copy_exports (
   export_id TEXT PRIMARY KEY CHECK (length(export_id) = 32),
   approval_id TEXT NOT NULL,
@@ -2504,6 +2515,16 @@ CREATE TRIGGER submission_release_approvals_no_delete
 BEFORE DELETE ON submission_release_approvals
 BEGIN
   SELECT RAISE(ABORT, 'Submission Release approvals are immutable');
+END;
+CREATE TRIGGER submission_release_items_no_update
+BEFORE UPDATE ON submission_release_items
+BEGIN
+  SELECT RAISE(ABORT, 'Approved Submission Release bytes are immutable');
+END;
+CREATE TRIGGER submission_release_items_no_delete
+BEFORE DELETE ON submission_release_items
+BEGIN
+  SELECT RAISE(ABORT, 'Approved Submission Release bytes are immutable');
 END;
 CREATE TRIGGER release_copy_exports_no_update
 BEFORE UPDATE ON release_copy_exports
