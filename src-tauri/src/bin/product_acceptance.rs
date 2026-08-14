@@ -1,8 +1,9 @@
 use std::{env, fs, path::PathBuf, process::Command};
 
 use quantix_lib::{
-    EvaluatePublicReleaseGateCommand, QuantixHost, RecordLiveQualificationRunCommand,
-    RecordNativePlatformQualificationCommand, RunDeterministicAcceptanceCommand,
+    CodexReadiness, EvaluatePublicReleaseGateCommand, QuantixHost,
+    RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand,
+    RunDeterministicAcceptanceCommand,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -63,6 +64,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .output()?;
             if !login_status.status.success() {
                 return Err("Codex-managed authentication is not ready".into());
+            }
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            if runtime.block_on(
+                host.inspect_codex_subscription(tokio_util::sync::CancellationToken::new()),
+            ) != CodexReadiness::Ready
+            {
+                return Err("Codex app-server managed-auth handshake is not ready".into());
             }
             let codex_version = Command::new(&codex_executable).arg("--version").output()?;
             if !codex_version.status.success() {

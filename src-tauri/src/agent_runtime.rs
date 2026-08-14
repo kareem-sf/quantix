@@ -1964,7 +1964,8 @@ impl QuantixHost {
         Ok(self.cancel_active_agent_run(tender_id.as_str(), &command.run_id))
     }
 
-    pub(crate) async fn inspect_codex_subscription(
+    #[doc(hidden)]
+    pub async fn inspect_codex_subscription(
         &self,
         cancellation: CancellationToken,
     ) -> CodexReadiness {
@@ -2346,7 +2347,8 @@ fn turn_acceptance_unknown() -> ProviderFailure {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CodexReadiness {
+#[doc(hidden)]
+pub enum CodexReadiness {
     Ready,
     AuthenticationRequired,
     SubscriptionRequired,
