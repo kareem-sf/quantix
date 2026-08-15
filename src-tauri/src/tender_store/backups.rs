@@ -366,6 +366,7 @@ impl TrashedTenderState {
 pub struct TrashedTenderRecord {
     pub deletion_id: String,
     pub tender_id: String,
+    pub tender_name: String,
     pub state: TrashedTenderState,
     pub relative_path: String,
     pub rationale: String,
@@ -446,9 +447,6 @@ struct BackupContentSource {
 
 impl TenderStore {
     pub(super) fn retention_boundary_is_safe(&self) -> Result<bool, TenderCommandError> {
-        if self.archived {
-            return Ok(false);
-        }
         let lifecycle_phase = TenderLifecyclePhase::parse(
             &self
                 .connection
@@ -1759,17 +1757,28 @@ impl QuantixHost {
         if integrity.state != TenderIntegrityState::Ready {
             return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
         }
+        let store = self.tender_store(&tender_id)?;
+        let tender_name = {
+            let store = store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            if !store.retention_boundary_is_safe()? {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            store.summary()?.name
+        };
         let deletion_id = self.installation_identifier()?;
         let created_at = self.installation_timestamp()?;
         let relative_path = format!("{}-{}", tender_id.as_str(), deletion_id);
         let mut record = TrashedTenderRecord {
             deletion_id,
             tender_id: tender_id.as_str().into(),
+            tender_name,
             state: TrashedTenderState::Moving,
             relative_path,
             rationale: command.rationale.trim().into(),
             decided_by: "engineer_user".into(),
-            acting_role: "tendering_manager".into(),
+            acting_role: "tendering_engineer".into(),
             approval_manifest_sha256: String::new(),
             diagnostic_code: None,
             created_at: created_at.clone(),
@@ -1777,11 +1786,13 @@ impl QuantixHost {
         };
         record.approval_manifest_sha256 = manifest_sha256_record(&record)?;
         self.insert_trash_record(&record)?;
-        let store = self.tender_store(&tender_id)?;
         {
             let mut store = store
                 .lock()
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            if !store.retention_boundary_is_safe()? {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
             let transaction = store
                 .connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1815,8 +1826,10 @@ impl QuantixHost {
         match fs::rename(&source, &destination) {
             Ok(()) => {
                 record.state = TrashedTenderState::Trashed;
-                record.updated_at = self.installation_timestamp()?;
-                self.update_trash_record(&record, TrashedTenderState::Moving)?;
+                if let Ok(updated_at) = self.installation_timestamp() {
+                    record.updated_at = updated_at;
+                }
+                let _ = self.update_trash_record(&record, TrashedTenderState::Moving);
                 Ok(record)
             }
             Err(error) => {
@@ -1875,6 +1888,9 @@ impl QuantixHost {
         command
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if command.rationale.trim().is_empty() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
         let mut record = self
             .inspect_trashed_tenders()?
             .into_iter()
@@ -1902,8 +1918,10 @@ impl QuantixHost {
             return Err(store_unavailable(error));
         }
         record.state = TrashedTenderState::Restored;
-        record.updated_at = self.installation_timestamp()?;
-        self.update_trash_record(&record, TrashedTenderState::Restoring)?;
+        if let Ok(updated_at) = self.installation_timestamp() {
+            record.updated_at = updated_at;
+        }
+        let _ = self.update_trash_record(&record, TrashedTenderState::Restoring);
         Ok(record)
     }
 
@@ -2138,7 +2156,7 @@ impl QuantixHost {
             action: "restore".into(),
             rationale: rationale.into(),
             decided_by: "engineer_user".into(),
-            acting_role: "tendering_manager".into(),
+            acting_role: "tendering_engineer".into(),
             created_at: created_at.clone(),
             audit_event_count: None,
             audit_chain_head: None,
@@ -2189,7 +2207,7 @@ impl QuantixHost {
             action: "purge".into(),
             rationale: rationale.into(),
             decided_by: "engineer_user".into(),
-            acting_role: "tendering_manager".into(),
+            acting_role: "tendering_engineer".into(),
             created_at: created_at.clone(),
             audit_event_count: Some(summary.audit_event_count),
             audit_chain_head: Some(summary.audit_chain_head.clone()),

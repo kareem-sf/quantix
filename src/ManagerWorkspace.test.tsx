@@ -5,7 +5,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
 
@@ -17,6 +17,7 @@ const host = vi.hoisted(() => ({
   chooseAndImportTenderPackage: vi.fn(),
   checkQuantixUpdate: vi.fn(),
   inspectManagerWorkspace: vi.fn(),
+  inspectTrashedTenders: vi.fn(),
   inspectRuntimeReadiness: vi.fn(),
   logoutProvider: vi.fn(),
   disconnectAiProvider: vi.fn(),
@@ -26,8 +27,11 @@ const host = vi.hoisted(() => ({
   refreshApplicationSettings: vi.fn(),
   retryManagerIntake: vi.fn(),
   restoreArchivedTender: vi.fn(),
+  restoreTrashedTender: vi.fn(),
   selectManagerWorkspaceTender: vi.fn(),
   startManagerTender: vi.fn(),
+  trashTender: vi.fn(),
+  purgeTrashedTender: vi.fn(),
   startProviderLogin: vi.fn(),
   updateAiExecutionSelection: vi.fn(),
   updateGeneralApplicationPreferences: vi.fn(),
@@ -61,7 +65,7 @@ const applicationFacts = {
   },
   diagnostics: {
     quantix_version: "0.1.0",
-    installation_schema_version: 17,
+    installation_schema_version: 18,
     tender_schema_version: 31,
   },
 };
@@ -76,6 +80,7 @@ const projection: ManagerWorkspaceProjection = {
       needs_engineer: true,
       state: "active" as const,
       can_archive: false,
+      can_delete: false,
       last_activity_at: "2026-08-14T10:00:00Z",
     },
   ],
@@ -87,6 +92,7 @@ const projection: ManagerWorkspaceProjection = {
     needs_engineer: true,
     state: "active" as const,
     can_archive: false,
+    can_delete: false,
     last_activity_at: "2026-08-14T10:00:00Z",
   },
   conversation: {
@@ -129,12 +135,92 @@ const projection: ManagerWorkspaceProjection = {
   intake: null,
 };
 
+beforeEach(() => {
+  host.inspectTrashedTenders.mockResolvedValue([]);
+});
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
 });
 
 describe("ManagerWorkspace", () => {
+  it("moves a safe Tender to recoverable Trash and restores the same identity", async () => {
+    const terminalTender = {
+      ...projection.selected_tender!,
+      name: "Terminal Trash Tender",
+      phase: "declined" as const,
+      needs_engineer: false,
+      can_archive: true,
+      can_delete: true,
+    };
+    const terminalProjection = {
+      ...projection,
+      catalogue: [terminalTender],
+      selected_tender: terminalTender,
+    };
+    const emptyProjection = {
+      ...projection,
+      catalogue: [],
+      selected_tender: null,
+      conversation: null,
+    };
+    const trashedRecord = {
+      deletion_id: "d".repeat(32),
+      tender_id: tenderId,
+      tender_name: terminalTender.name,
+      state: "trashed" as const,
+      relative_path: `${tenderId}-${"d".repeat(32)}`,
+      rationale: "Remove from active work.",
+      decided_by: "engineer_user",
+      acting_role: "tendering_engineer",
+      approval_manifest_sha256: "f".repeat(64),
+      diagnostic_code: null,
+      created_at: "2026-08-15T12:00:00Z",
+      updated_at: "2026-08-15T12:00:00Z",
+    };
+    host.inspectManagerWorkspace
+      .mockResolvedValueOnce(terminalProjection)
+      .mockResolvedValue(emptyProjection);
+    host.inspectTrashedTenders.mockResolvedValue([trashedRecord]);
+    host.trashTender.mockResolvedValue(trashedRecord);
+    host.restoreTrashedTender.mockResolvedValue({
+      ...trashedRecord,
+      state: "restored",
+    });
+    host.selectManagerWorkspaceTender.mockResolvedValue(terminalProjection);
+
+    render(<ManagerWorkspace aiAvailable />);
+    await screen.findByRole("heading", { name: terminalTender.name });
+    fireEvent.click(screen.getByLabelText(`Manage ${terminalTender.name}`));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.change(screen.getByLabelText("Decision rationale"), {
+      target: { value: "Remove from active work." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Move to Trash" }));
+    await waitFor(() => {
+      expect(host.trashTender).toHaveBeenCalledWith(
+        tenderId,
+        "Remove from active work.",
+      );
+    });
+
+    expect(await screen.findByText(terminalTender.name)).toBeTruthy();
+    expect(screen.getByText(/Quantix never purges/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    fireEvent.change(screen.getByLabelText("Decision rationale"), {
+      target: { value: "Return the same Tender." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Restore Tender" }));
+    await waitFor(() => {
+      expect(host.restoreTrashedTender).toHaveBeenCalledWith(
+        trashedRecord.deletion_id,
+        "Return the same Tender.",
+      );
+      expect(host.selectManagerWorkspaceTender).toHaveBeenCalledWith(tenderId);
+    });
+  });
+
   it("archives a Host-qualified Tender and restores its read-only workspace", async () => {
     const terminalTender = {
       ...projection.selected_tender!,
@@ -142,11 +228,13 @@ describe("ManagerWorkspace", () => {
       phase: "declined" as const,
       needs_engineer: false,
       can_archive: true,
+      can_delete: true,
     };
     const archivedTender = {
       ...terminalTender,
       state: "archived" as const,
       can_archive: false,
+      can_delete: true,
     };
     const terminalProjection = {
       ...projection,

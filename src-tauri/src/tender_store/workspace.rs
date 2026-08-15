@@ -157,6 +157,7 @@ pub struct ManagerWorkspaceTender {
     pub needs_engineer: bool,
     pub state: ManagerWorkspaceTenderState,
     pub can_archive: bool,
+    pub can_delete: bool,
     pub last_activity_at: Option<String>,
 }
 
@@ -370,7 +371,7 @@ impl TenderStore {
         let intake = self.current_manager_intake_status()?;
         let current_action =
             self.workspace_current_action(summary.lifecycle_phase, &work, intake.as_ref())?;
-        let can_archive = self.retention_boundary_is_safe()?;
+        let safe_terminal_boundary = self.retention_boundary_is_safe()?;
         let tender = ManagerWorkspaceTender {
             tender_id: summary.tender_id,
             name: summary.name,
@@ -382,7 +383,8 @@ impl TenderStore {
             } else {
                 ManagerWorkspaceTenderState::Active
             },
-            can_archive,
+            can_archive: !self.archived && safe_terminal_boundary,
+            can_delete: safe_terminal_boundary,
             last_activity_at: Some(last_activity_at),
         };
         Ok(WorkspaceSnapshot {
@@ -1137,6 +1139,7 @@ impl QuantixHost {
                     needs_engineer: true,
                     state: ManagerWorkspaceTenderState::RecoveryRequired,
                     can_archive: false,
+                    can_delete: false,
                     last_activity_at: None,
                 });
             }

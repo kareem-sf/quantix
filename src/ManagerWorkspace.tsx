@@ -14,6 +14,7 @@ import {
   Plus,
   Send,
   Settings,
+  Trash2,
   Undo2,
   Users,
   X,
@@ -29,6 +30,7 @@ import {
 
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
 import type { ManagerWorkspaceTender } from "./bindings/ManagerWorkspaceTender";
+import type { TrashedTenderRecord } from "./bindings/TrashedTenderRecord";
 import type { GeneralApplicationPreferences } from "./bindings/GeneralApplicationPreferences";
 import type { TenderOfficeMessage } from "./bindings/TenderOfficeMessage";
 import type { TenderPackageSourceKind } from "./bindings/TenderPackageSourceKind";
@@ -40,17 +42,25 @@ import {
   archiveTender,
   chooseAndImportTenderPackage,
   inspectManagerWorkspace,
+  inspectTrashedTenders,
   rebindManagerIntakeProvider,
   recordEngineerWorkspaceMessage,
   retryManagerIntake,
   restoreArchivedTender,
+  restoreTrashedTender,
   selectManagerWorkspaceTender,
   startManagerTender,
+  trashTender,
+  purgeTrashedTender,
 } from "./quantixHost";
 import "./ManagerWorkspace.css";
 
 type WorkspaceView = "manager" | "work" | "files";
-type RetentionAction = "archive" | "restore" | null;
+type RetentionAction = "archive" | "restore" | "trash" | null;
+type TrashAction = {
+  kind: "restore" | "purge";
+  record: TrashedTenderRecord;
+} | null;
 
 interface ManagerWorkspaceProps {
   aiAvailable: boolean;
@@ -438,12 +448,19 @@ function ManagerView({
 
 function ArchivedTenders({
   tenders,
+  trash,
   busy,
   onSelect,
+  onTrashAction,
 }: {
   tenders: ManagerWorkspaceTender[];
+  trash: TrashedTenderRecord[];
   busy: boolean;
   onSelect: (tenderId: string) => void;
+  onTrashAction: (
+    kind: "restore" | "purge",
+    record: TrashedTenderRecord,
+  ) => void;
 }) {
   return (
     <main className="retention-view">
@@ -476,6 +493,66 @@ function ArchivedTenders({
         ) : (
           <p className="retention-view__empty">No archived Tenders.</p>
         )}
+      </section>
+      <section aria-labelledby="trashed-tenders-title">
+        <div className="retention-view__section-heading">
+          <div>
+            <h2 id="trashed-tenders-title">Trash</h2>
+            <p>
+              Recoverable Tender Stores stay here until you explicitly restore
+              or permanently delete them.
+            </p>
+          </div>
+        </div>
+        {trash.length ? (
+          <div className="retention-view__trash-list">
+            {trash.map((record) => {
+              const ready = record.state === "trashed";
+              return (
+                <article key={record.deletion_id}>
+                  <div>
+                    <strong>{record.tender_name}</strong>
+                    <small>
+                      Deleted {new Date(record.created_at).toLocaleString()}
+                    </small>
+                    {!ready ? (
+                      <span>
+                        {record.state === "failed"
+                          ? "Move needs attention"
+                          : `Deletion state: ${record.state}`}
+                      </span>
+                    ) : null}
+                  </div>
+                  {ready ? (
+                    <div>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onTrashAction("restore", record)}
+                      >
+                        <Undo2 size={16} aria-hidden="true" /> Restore
+                      </button>
+                      <button
+                        className="retention-view__danger"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onTrashAction("purge", record)}
+                      >
+                        <Trash2 size={16} aria-hidden="true" /> Permanent Delete
+                      </button>
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="retention-view__empty">Trash is empty.</p>
+        )}
+        <p className="retention-view__note">
+          Quantix never purges Tender Trash automatically. This is not the
+          operating-system recycle bin.
+        </p>
       </section>
     </main>
   );
@@ -639,6 +716,10 @@ export function ManagerWorkspace({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [retentionOpen, setRetentionOpen] = useState(false);
   const [retentionAction, setRetentionAction] = useState<RetentionAction>(null);
+  const [trashAction, setTrashAction] = useState<TrashAction>(null);
+  const [trashedTenders, setTrashedTenders] = useState<TrashedTenderRecord[]>(
+    [],
+  );
   const [retentionRationale, setRetentionRationale] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(
     () => window.matchMedia("(min-width: 820px)").matches,
@@ -656,16 +737,17 @@ export function ManagerWorkspace({
       : null;
 
   useEffect(() => {
-    if (!retentionAction) return;
+    if (!retentionAction && !trashAction) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !busyRef.current) {
         setRetentionAction(null);
+        setTrashAction(null);
         setRetentionRationale("");
       }
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [retentionAction]);
+  }, [retentionAction, trashAction]);
 
   useEffect(() => {
     const current = new Set(
@@ -698,9 +780,21 @@ export function ManagerWorkspace({
     }
   }, []);
 
+  const loadTrash = useCallback(async () => {
+    try {
+      setTrashedTenders(await inspectTrashedTenders());
+    } catch (reason) {
+      setError(readableError(reason));
+    }
+  }, []);
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (retentionOpen) void loadTrash();
+  }, [loadTrash, retentionOpen]);
 
   useEffect(() => {
     const refresh = async () => {
@@ -827,18 +921,27 @@ export function ManagerWorkspace({
     const tenderId = projection?.selected_tender?.tender_id;
     const rationale = retentionRationale.trim();
     if (!tenderId || !retentionAction || !rationale) return;
-    const result = await run(() =>
-      retentionAction === "archive"
-        ? archiveTender(tenderId, rationale)
-        : restoreArchivedTender(tenderId, rationale),
-    );
+    const result = await run(() => {
+      if (retentionAction === "archive") {
+        return archiveTender(tenderId, rationale);
+      }
+      if (retentionAction === "trash") {
+        return trashTender(tenderId, rationale);
+      }
+      return restoreArchivedTender(tenderId, rationale);
+    });
     if (!result) return;
     setRetentionAction(null);
     setRetentionRationale("");
-    if (retentionAction === "archive") await load();
-    else await selectTender(tenderId);
+    if (retentionAction === "restore") {
+      await selectTender(tenderId);
+    } else {
+      await Promise.all([load(), loadTrash()]);
+      if (retentionAction === "trash") setRetentionOpen(true);
+    }
   }, [
     load,
+    loadTrash,
     projection?.selected_tender?.tender_id,
     retentionAction,
     retentionRationale,
@@ -846,11 +949,33 @@ export function ManagerWorkspace({
     selectTender,
   ]);
 
+  const applyTrashAction = useCallback(async () => {
+    const rationale = retentionRationale.trim();
+    if (!trashAction || !rationale) return;
+    const { kind, record } = trashAction;
+    const result = await run(() =>
+      kind === "restore"
+        ? restoreTrashedTender(record.deletion_id, rationale)
+        : purgeTrashedTender(record.deletion_id, rationale),
+    );
+    if (!result) return;
+    setTrashAction(null);
+    setRetentionRationale("");
+    await loadTrash();
+    if (kind === "restore") {
+      await load();
+      await selectTender(record.tender_id);
+    }
+  }, [load, loadTrash, retentionRationale, run, selectTender, trashAction]);
+
   const selected = projection?.selected_tender ?? null;
   const activeTenders =
     projection?.catalogue.filter((tender) => tender.state !== "archived") ?? [];
   const archivedTenders =
     projection?.catalogue.filter((tender) => tender.state === "archived") ?? [];
+  const visibleTrash = trashedTenders.filter(
+    (record) => !["restored", "purged"].includes(record.state),
+  );
   const activeCounts = useMemo(() => {
     if (!projection) return 0;
     return (
@@ -917,6 +1042,7 @@ export function ManagerWorkspace({
             aria-current={retentionOpen ? "page" : undefined}
             onClick={() => {
               setRetentionOpen(true);
+              void loadTrash();
               setSettingsOpen(false);
               setTeamOpen(false);
               if (window.matchMedia("(max-width: 819px)").matches) {
@@ -926,8 +1052,8 @@ export function ManagerWorkspace({
           >
             <Archive size={17} aria-hidden="true" />
             Archived &amp; Trash
-            {archivedTenders.length ? (
-              <span>{archivedTenders.length}</span>
+            {archivedTenders.length + visibleTrash.length ? (
+              <span>{archivedTenders.length + visibleTrash.length}</span>
             ) : null}
           </button>
           <button
@@ -968,8 +1094,13 @@ export function ManagerWorkspace({
         ) : retentionOpen ? (
           <ArchivedTenders
             tenders={archivedTenders}
+            trash={visibleTrash}
             busy={busy}
             onSelect={(tenderId) => void selectTender(tenderId)}
+            onTrashAction={(kind, record) => {
+              setTrashAction({ kind, record });
+              setRetentionRationale("");
+            }}
           />
         ) : selected && projection ? (
           <>
@@ -979,13 +1110,13 @@ export function ManagerWorkspace({
                 <h1>{selected.name}</h1>
               </div>
               <div className="manager-workspace__heading-actions">
-                {selected.state === "active" ? (
+                {selected.state !== "recovery_required" ? (
                   <details className="manager-workspace__tender-menu">
                     <summary aria-label={`Manage ${selected.name}`}>
                       <MoreHorizontal size={19} aria-hidden="true" />
                     </summary>
                     <div>
-                      {selected.can_archive ? (
+                      {selected.state === "active" && selected.can_archive ? (
                         <button
                           type="button"
                           onClick={(event) => {
@@ -997,12 +1128,27 @@ export function ManagerWorkspace({
                         >
                           <Archive size={16} aria-hidden="true" /> Archive
                         </button>
-                      ) : (
+                      ) : selected.state === "active" &&
+                        !selected.can_delete ? (
                         <p>
-                          Archive becomes available after decline or final
-                          approval, when protected work is finished.
+                          Archive and Delete become available after decline or
+                          final approval, when protected work is finished.
                         </p>
-                      )}
+                      ) : null}
+                      {selected.can_delete ? (
+                        <button
+                          className="manager-workspace__danger-action"
+                          type="button"
+                          onClick={(event) => {
+                            event.currentTarget
+                              .closest("details")
+                              ?.removeAttribute("open");
+                            setRetentionAction("trash");
+                          }}
+                        >
+                          <Trash2 size={16} aria-hidden="true" /> Delete
+                        </button>
+                      ) : null}
                     </div>
                   </details>
                 ) : null}
@@ -1133,12 +1279,16 @@ export function ManagerWorkspace({
               <h2 id="retention-dialog-title">
                 {retentionAction === "archive"
                   ? `Archive ${selected.name}?`
-                  : `Restore ${selected.name}?`}
+                  : retentionAction === "trash"
+                    ? `Delete ${selected.name}?`
+                    : `Restore ${selected.name}?`}
               </h2>
               <p>
                 {retentionAction === "archive"
                   ? "This keeps the complete Tender Store and history in place, but makes the Tender read-only until you restore it."
-                  : "This returns the same Tender and conversation context to active work."}
+                  : retentionAction === "trash"
+                    ? "This moves the complete Tender Store into recoverable Quantix Trash. It disappears from Tenders, but you can restore it until you separately choose Permanent Delete."
+                    : "This returns the same Tender and conversation context to active work."}
               </p>
             </div>
             <label htmlFor="retention-rationale">
@@ -1174,7 +1324,73 @@ export function ManagerWorkspace({
                   ? "Recording decision…"
                   : retentionAction === "archive"
                     ? "Archive Tender"
-                    : "Restore Tender"}
+                    : retentionAction === "trash"
+                      ? "Move to Trash"
+                      : "Restore Tender"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {trashAction ? (
+        <div className="retention-dialog__backdrop">
+          <section
+            className="retention-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="trash-action-dialog-title"
+          >
+            <div>
+              <h2 id="trash-action-dialog-title">
+                {trashAction.kind === "restore"
+                  ? `Restore ${trashAction.record.tender_name}?`
+                  : `Permanently delete ${trashAction.record.tender_name}?`}
+              </h2>
+              <p>
+                {trashAction.kind === "restore"
+                  ? "Quantix verifies and republishes the same Tender Store without merging, overwriting, or changing its identity."
+                  : "This is irreversible. The recoverable Tender Store will be removed and replaced by a minimal Deletion Receipt."}
+              </p>
+            </div>
+            <label htmlFor="trash-action-rationale">
+              Decision rationale
+              <textarea
+                id="trash-action-rationale"
+                autoFocus
+                rows={3}
+                maxLength={4000}
+                value={retentionRationale}
+                disabled={busy}
+                onChange={(event) => setRetentionRationale(event.target.value)}
+              />
+            </label>
+            <div className="retention-dialog__actions">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setTrashAction(null);
+                  setRetentionRationale("");
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className={
+                  trashAction.kind === "purge"
+                    ? "manager-workspace__danger-confirm"
+                    : "manager-workspace__primary"
+                }
+                type="button"
+                disabled={busy || !retentionRationale.trim()}
+                onClick={() => void applyTrashAction()}
+              >
+                {busy
+                  ? "Recording decision…"
+                  : trashAction.kind === "restore"
+                    ? "Restore Tender"
+                    : "Permanent Delete"}
               </button>
             </div>
           </section>

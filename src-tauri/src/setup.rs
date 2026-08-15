@@ -14,7 +14,7 @@ use crate::QuantixHost;
 
 pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 1024 * 1024 * 1024;
 
-pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 17;
+pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 18;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
@@ -30,7 +30,7 @@ const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
 ];
 const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 17)
+           schema_version INTEGER NOT NULL CHECK (schema_version = 18)
          )";
 pub(crate) const APPLICATION_SETTINGS_TABLE_SQL: &str = "CREATE TABLE application_settings (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -156,7 +156,7 @@ const TENDER_TRASH_DECISIONS_TABLE_SQL: &str = "CREATE TABLE tender_trash_decisi
            action TEXT NOT NULL CHECK (action IN ('restore', 'purge')),
            rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
            decided_by TEXT NOT NULL CHECK (decided_by = 'engineer_user'),
-           acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+           acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_engineer'),
            decision_json TEXT NOT NULL CHECK (json_valid(decision_json)),
            manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
            created_at TEXT NOT NULL,
@@ -884,7 +884,7 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_UPDATE_SQL, [])?;
     transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_DELETE_SQL, [])?;
     transaction.execute(
-        "INSERT INTO installation (singleton, schema_version) VALUES (1, 17)",
+        "INSERT INTO installation (singleton, schema_version) VALUES (1, 18)",
         [],
     )?;
     transaction.execute(

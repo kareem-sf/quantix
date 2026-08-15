@@ -9,8 +9,9 @@ use quantix_lib::{
     RecordEngineerWorkspaceMessageCommand, RuntimeLayout, SelectManagerWorkspaceTenderCommand,
     SetupPlatform, SetupState, StartProviderLoginCommand, StoragePermissions, TenderErrorCode,
     TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderRetentionDecisionCommand,
-    TenderRetentionState, UpdateAiExecutionSelectionCommand, WorkspaceActionKind,
-    WorkspaceMessageReferenceKind, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    TenderRetentionState, TrashedTenderDecisionCommand, TrashedTenderState,
+    UpdateAiExecutionSelectionCommand, WorkspaceActionKind, WorkspaceMessageReferenceKind,
+    MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use rusqlite::Connection;
 
@@ -60,6 +61,13 @@ fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_workspace()
             .expect("selected Tender")
             .can_archive
     );
+    let refused_delete = host
+        .trash_tender(TenderRetentionDecisionCommand {
+            tender_id: tender.tender_id.clone(),
+            rationale: "Delete only after the safe terminal boundary.".into(),
+        })
+        .expect_err("active Tender must not move to Trash");
+    assert_eq!(refused_delete.code, TenderErrorCode::InvalidCommand);
     let refused = host
         .archive_tender(TenderRetentionDecisionCommand {
             tender_id: tender.tender_id.clone(),
@@ -89,6 +97,15 @@ fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_workspace()
             .selected_tender
             .expect("selected Tender")
             .can_archive
+    );
+    assert!(
+        host.inspect_manager_workspace(InspectManagerWorkspaceCommand {
+            tender_id: Some(tender.tender_id.clone()),
+        })
+        .expect("inspect terminal delete boundary")
+        .selected_tender
+        .expect("terminal Tender")
+        .can_delete
     );
 
     let decision = host
@@ -131,7 +148,7 @@ fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_workspace()
     .expect("restore archived Tender");
     let restored = host
         .select_manager_workspace_tender(SelectManagerWorkspaceTenderCommand {
-            tender_id: tender.tender_id,
+            tender_id: tender.tender_id.clone(),
         })
         .expect("select restored Tender");
     assert_eq!(
@@ -140,6 +157,51 @@ fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_workspace()
     );
     assert_eq!(
         restored
+            .conversation
+            .expect("restored conversation")
+            .conversation_id,
+        conversation_id
+    );
+
+    let trashed = host
+        .trash_tender(TenderRetentionDecisionCommand {
+            tender_id: tender.tender_id.clone(),
+            rationale: "Move the declined Tender into recoverable Trash.".into(),
+        })
+        .expect("move terminal Tender to Trash");
+    assert_eq!(trashed.state, TrashedTenderState::Trashed);
+    assert_eq!(trashed.tender_id, tender.tender_id);
+    assert_eq!(trashed.tender_name, "Terminal Archive Tender");
+    assert_eq!(trashed.acting_role, "tendering_engineer");
+    assert!(host
+        .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+            tender_id: Some(tender.tender_id.clone()),
+        })
+        .is_err());
+    assert_eq!(
+        host.inspect_trashed_tenders()
+            .expect("inspect recoverable Trash")
+            .into_iter()
+            .find(|record| record.deletion_id == trashed.deletion_id)
+            .expect("exact Trash record")
+            .state,
+        TrashedTenderState::Trashed
+    );
+
+    let restored_from_trash = host
+        .restore_trashed_tender(TrashedTenderDecisionCommand {
+            deletion_id: trashed.deletion_id,
+            rationale: "Restore the same verified Tender Store.".into(),
+        })
+        .expect("restore Tender from Trash");
+    assert_eq!(restored_from_trash.state, TrashedTenderState::Restored);
+    let restored_workspace = host
+        .select_manager_workspace_tender(SelectManagerWorkspaceTenderCommand {
+            tender_id: tender.tender_id,
+        })
+        .expect("select same restored Tender");
+    assert_eq!(
+        restored_workspace
             .conversation
             .expect("restored conversation")
             .conversation_id,

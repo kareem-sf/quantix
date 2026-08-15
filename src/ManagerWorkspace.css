@@ -862,6 +862,82 @@ button {
   font-size: 12px;
 }
 
+.retention-view__section-heading p,
+.retention-view__note {
+  color: #73736e;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.retention-view__trash-list {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid #e1e1dc;
+  border-radius: 12px;
+}
+
+.retention-view__trash-list article {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 78px;
+  padding: 13px 14px;
+  border-bottom: 1px solid #e8e8e3;
+  background: #fff;
+}
+
+.retention-view__trash-list article:last-child {
+  border-bottom: 0;
+}
+
+.retention-view__trash-list article > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.retention-view__trash-list article > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  justify-content: flex-end;
+}
+
+.retention-view__trash-list strong {
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.retention-view__trash-list small,
+.retention-view__trash-list span {
+  color: #73736e;
+  font-size: 12px;
+}
+
+.retention-view__trash-list button {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid #cecec8;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.retention-view__trash-list .retention-view__danger,
+.manager-workspace__tender-menu .manager-workspace__danger-action {
+  color: #a02a2a;
+}
+
+.retention-view__note {
+  margin-top: 11px !important;
+}
+
 .retention-dialog__backdrop {
   position: fixed;
   z-index: 100;
@@ -929,6 +1005,12 @@ button {
   border-radius: 8px;
   background: #fff;
   cursor: pointer;
+}
+
+.retention-dialog__actions .manager-workspace__danger-confirm {
+  border-color: #9d2929;
+  color: #fff;
+  background: #9d2929;
 }
 
 .is-spinning {
@@ -1864,6 +1946,15 @@ button {
   .workspace-files {
     grid-template-columns: 1fr;
   }
+
+  .retention-view__trash-list article {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .retention-view__trash-list article > div:last-child {
+    justify-content: flex-start;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1912,6 +2003,7 @@ html[data-quantix-appearance="dark"] .application-settings select,
 html[data-quantix-appearance="dark"] .application-settings input,
 html[data-quantix-appearance="dark"] .application-settings__facts button,
 html[data-quantix-appearance="dark"] .manager-workspace__archived button,
+html[data-quantix-appearance="dark"] .retention-view__trash-list button,
 html[data-quantix-appearance="dark"] .retention-dialog textarea,
 html[data-quantix-appearance="dark"] .retention-dialog__actions button {
   color: #f2f2ee;
@@ -1927,6 +2019,7 @@ html[data-quantix-appearance="dark"] .application-settings__disclosure,
 html[data-quantix-appearance="dark"] .manager-workspace__tender-menu > div,
 html[data-quantix-appearance="dark"] .manager-workspace__archived,
 html[data-quantix-appearance="dark"] .retention-view__list button,
+html[data-quantix-appearance="dark"] .retention-view__trash-list article,
 html[data-quantix-appearance="dark"] .retention-dialog {
   color: #f2f2ee;
   border-color: #454641;
@@ -1937,6 +2030,13 @@ html[data-quantix-appearance="dark"] .application-settings__active-choice {
   color: #d7eee4;
   border-color: #476b5d;
   background: #243a31;
+}
+
+html[data-quantix-appearance="dark"]
+  .retention-dialog__actions
+  .manager-workspace__danger-confirm {
+  color: #fff;
+  background: #a93636;
 }
 
 html[data-quantix-appearance="dark"] .application-settings__heading,
@@ -1961,6 +2061,7 @@ html[data-quantix-appearance="dark"] .application-settings__provenance {
   html[data-quantix-appearance="system"] .application-settings input,
   html[data-quantix-appearance="system"] .application-settings__facts button,
   html[data-quantix-appearance="system"] .manager-workspace__archived button,
+  html[data-quantix-appearance="system"] .retention-view__trash-list button,
   html[data-quantix-appearance="system"] .retention-dialog textarea,
   html[data-quantix-appearance="system"] .retention-dialog__actions button {
     color: #f2f2ee;
@@ -1978,9 +2079,17 @@ html[data-quantix-appearance="dark"] .application-settings__provenance {
   html[data-quantix-appearance="system"] .manager-workspace__tender-menu > div,
   html[data-quantix-appearance="system"] .manager-workspace__archived,
   html[data-quantix-appearance="system"] .retention-view__list button,
+  html[data-quantix-appearance="system"] .retention-view__trash-list article,
   html[data-quantix-appearance="system"] .retention-dialog {
     color: #f2f2ee;
     border-color: #454641;
     background: #262724;
+  }
+
+  html[data-quantix-appearance="system"]
+    .retention-dialog__actions
+    .manager-workspace__danger-confirm {
+    color: #fff;
+    background: #a93636;
   }
 }

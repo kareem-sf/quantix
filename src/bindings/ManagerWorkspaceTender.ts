@@ -2,4 +2,4 @@
 import type { ManagerWorkspaceTenderState } from "./ManagerWorkspaceTenderState";
 import type { TenderLifecyclePhase } from "./TenderLifecyclePhase";
 
-export type ManagerWorkspaceTender = { tender_id: string, name: string, revision: number, phase: TenderLifecyclePhase, needs_engineer: boolean, state: ManagerWorkspaceTenderState, can_archive: boolean, last_activity_at: string | null, };
+export type ManagerWorkspaceTender = { tender_id: string, name: string, revision: number, phase: TenderLifecyclePhase, needs_engineer: boolean, state: ManagerWorkspaceTenderState, can_archive: boolean, can_delete: boolean, last_activity_at: string | null, };
