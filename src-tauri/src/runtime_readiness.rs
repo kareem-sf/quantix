@@ -66,7 +66,7 @@ impl RuntimeLayout {
             .join(executable_name("uv"))
     }
 
-    fn docling_project(&self) -> PathBuf {
+    pub(crate) fn docling_project(&self) -> PathBuf {
         self.runtime_resources.join("docling")
     }
 
@@ -595,7 +595,7 @@ impl QuantixHost {
                 true,
             );
         }
-        versions.docling = probe_version(
+        versions.docling = probe_docling_version(
             self.process_supervisor(),
             self.application_home(),
             &docling,
@@ -653,6 +653,7 @@ impl QuantixHost {
             &layout.docling_project().join("uv.lock"),
             &layout.docling_project().join(".python-version"),
             &layout.docling_project().join("python-downloads.json"),
+            &layout.docling_project().join("convert_document.py"),
             &layout.readiness_document(),
         ] {
             if !is_real_file(resource) {
@@ -709,7 +710,7 @@ impl QuantixHost {
         if !is_real_file(&docling) || !is_real_file(&python) {
             return Err(RuntimeError::MissingResource);
         }
-        let docling_version = probe_version(
+        let docling_version = probe_docling_version(
             self.process_supervisor(),
             self.application_home(),
             &docling,
@@ -720,21 +721,18 @@ impl QuantixHost {
             return Err(RuntimeError::InvalidOutput);
         }
         runtime_fixture_trace("Docling version verified");
-        let staged_models = tempfile::Builder::new()
-            .prefix(".docling-models-")
-            .tempdir_in(&models_root)
-            .map_err(|_| RuntimeError::PersistenceFailed)?;
+        let staged_models = prepare_model_staging(&models_root, &layout.docling_project())?;
         run_checked(
             self.process_supervisor(),
             ProcessSpec {
-                executable: python,
+                executable: python.clone(),
                 arguments: vec![
                     layout
                         .docling_project()
                         .join("prepare_models.py")
                         .into_os_string(),
                     OsString::from("--output-dir"),
-                    staged_models.path().as_os_str().to_owned(),
+                    staged_models.as_os_str().to_owned(),
                 ],
                 current_directory: Some(runtime_root.clone()),
                 environment: docling_environment(self.application_home()),
@@ -756,31 +754,31 @@ impl QuantixHost {
         run_checked(
             self.process_supervisor(),
             ProcessSpec {
-                executable: docling,
-                arguments: os_arguments(&["convert"])
-                    .into_iter()
-                    .chain([
-                        layout.readiness_document().into_os_string(),
-                        OsString::from("--to"),
-                        OsString::from("json"),
-                        OsString::from("--output"),
-                        smoke.path().as_os_str().to_owned(),
-                        OsString::from("--artifacts-path"),
-                        staged_models.path().as_os_str().to_owned(),
-                        OsString::from("--ocr-engine"),
-                        OsString::from("rapidocr"),
-                        OsString::from("--ocr-mode"),
-                        OsString::from("full_page"),
-                        OsString::from("--ocr-lang"),
-                        OsString::from("ch"),
-                        OsString::from("--no-enable-remote-services"),
-                        OsString::from("--no-allow-external-plugins"),
-                        OsString::from("--abort-on-error"),
-                        OsString::from("--document-timeout"),
-                        OsString::from("120"),
-                        OsString::from("--quiet"),
-                    ])
-                    .collect(),
+                executable: python,
+                arguments: [
+                    layout
+                        .docling_project()
+                        .join("convert_document.py")
+                        .into_os_string(),
+                    OsString::from("--input"),
+                    layout.readiness_document().into_os_string(),
+                    OsString::from("--input-format"),
+                    OsString::from("pdf"),
+                    OsString::from("--output-dir"),
+                    smoke.path().as_os_str().to_owned(),
+                    OsString::from("--artifacts-path"),
+                    staged_models.as_os_str().to_owned(),
+                    OsString::from("--ocr-mode"),
+                    OsString::from("full_page"),
+                    OsString::from("--ocr-lang"),
+                    OsString::from("ch"),
+                    OsString::from("--document-timeout"),
+                    OsString::from("120"),
+                    OsString::from("--num-threads"),
+                    OsString::from("2"),
+                ]
+                .into_iter()
+                .collect(),
                 current_directory: Some(runtime_root),
                 environment: docling_environment(self.application_home())
                     .into_iter()
@@ -802,7 +800,7 @@ impl QuantixHost {
         runtime_fixture_trace("smoke output verified");
 
         let manifest = build_model_manifest(
-            staged_models.path(),
+            &staged_models,
             &environment,
             &layout.docling_project(),
             &codex_version,
@@ -810,8 +808,8 @@ impl QuantixHost {
             &docling_version,
         )?;
         runtime_fixture_trace("runtime manifest built");
-        let staged_models = staged_models.keep();
         promote_model_directory(&models, &staged_models)?;
+        remove_model_staging_marker(&models_root)?;
         publish_model_manifest(self.application_home(), &manifest)?;
         runtime_fixture_trace("runtime readiness published");
         Ok(RuntimeVersions {
@@ -846,7 +844,7 @@ pub(crate) fn docling_executable(application_home: &Path) -> PathBuf {
         .join(executable_name("docling"))
 }
 
-fn python_executable(application_home: &Path) -> PathBuf {
+pub(crate) fn python_executable(application_home: &Path) -> PathBuf {
     application_home
         .join("runtimes")
         .join("docling")
@@ -1121,6 +1119,39 @@ async fn probe_version(
     executable: &Path,
     cancellation: CancellationToken,
 ) -> Result<String, RuntimeError> {
+    probe_version_with_timeout(
+        supervisor,
+        application_home,
+        executable,
+        cancellation,
+        VERSION_TIMEOUT,
+    )
+    .await
+}
+
+async fn probe_docling_version(
+    supervisor: &ProcessSupervisor,
+    application_home: &Path,
+    executable: &Path,
+    cancellation: CancellationToken,
+) -> Result<String, RuntimeError> {
+    probe_version_with_timeout(
+        supervisor,
+        application_home,
+        executable,
+        cancellation,
+        ENVIRONMENT_CHECK_TIMEOUT,
+    )
+    .await
+}
+
+async fn probe_version_with_timeout(
+    supervisor: &ProcessSupervisor,
+    application_home: &Path,
+    executable: &Path,
+    cancellation: CancellationToken,
+    timeout: Duration,
+) -> Result<String, RuntimeError> {
     let output = run_checked(
         supervisor,
         ProcessSpec {
@@ -1130,7 +1161,7 @@ async fn probe_version(
             environment: controlled_environment(application_home),
             inherit_environment: false,
             stdin: Vec::new(),
-            timeout: VERSION_TIMEOUT,
+            timeout,
             stdout_limit: PROBE_OUTPUT_LIMIT,
             stderr_limit: PROBE_OUTPUT_LIMIT,
         },
@@ -1410,6 +1441,43 @@ fn promote_model_directory(models: &Path, staged: &Path) -> Result<(), RuntimeEr
         fs::remove_dir_all(backup).map_err(|_| RuntimeError::PersistenceFailed)?;
     }
     Ok(())
+}
+
+fn prepare_model_staging(
+    models_root: &Path,
+    docling_project: &Path,
+) -> Result<PathBuf, RuntimeError> {
+    let staged = models_root.join(".docling-models-preparation");
+    let marker = models_root.join(".docling-models-preparation.sha256");
+    let expected = file_sha256(&docling_project.join("approved-model-sources.json"))?;
+    let can_resume = fs::read_to_string(&marker).is_ok_and(|value| value == expected)
+        && fs::symlink_metadata(&staged)
+            .is_ok_and(|metadata| metadata.is_dir() && !has_unsafe_link(&metadata));
+    if !can_resume {
+        reset_managed_directory(&staged, models_root)?;
+        fs::write(&marker, &expected).map_err(|_| RuntimeError::PersistenceFailed)?;
+    }
+    if !staged
+        .canonicalize()
+        .map_err(|_| RuntimeError::PersistenceFailed)?
+        .starts_with(
+            models_root
+                .canonicalize()
+                .map_err(|_| RuntimeError::PersistenceFailed)?,
+        )
+    {
+        return Err(RuntimeError::PersistenceFailed);
+    }
+    Ok(staged)
+}
+
+fn remove_model_staging_marker(models_root: &Path) -> Result<(), RuntimeError> {
+    let marker = models_root.join(".docling-models-preparation.sha256");
+    match fs::remove_file(marker) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(RuntimeError::PersistenceFailed),
+    }
 }
 
 fn validate_runtime_provenance(layout: &RuntimeLayout) -> Result<(), RuntimeError> {

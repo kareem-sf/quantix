@@ -70,6 +70,7 @@ impl RuntimeHarness {
             "approved-model-sources.json",
             "python-downloads.json",
             "prepare_models.py",
+            "convert_document.py",
         ] {
             fs::copy(source.join(name), docling_project.join(name)).expect("copy runtime source");
         }

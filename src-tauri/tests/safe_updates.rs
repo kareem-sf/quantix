@@ -1759,7 +1759,7 @@ fn install_docling_fixture(application_home: &Path) {
         .join("runtimes")
         .join("docling")
         .join(if cfg!(windows) { "Scripts" } else { "bin" })
-        .join(executable_name("docling"));
+        .join(executable_name("python"));
     fs::create_dir_all(executable.parent().expect("Docling executable parent"))
         .expect("Docling executable directory");
     fs::copy(

@@ -17,7 +17,7 @@ use unicode_script::{Script, UnicodeScript};
 use crate::{
     host::ParseTargetKey,
     process_supervisor::{ProcessSpec, ProcessTermination},
-    runtime_readiness::{docling_environment, docling_executable},
+    runtime_readiness::{docling_environment, python_executable},
     tender_store::{
         metadata_is_unsafe_storage_link, TenderCommandError, TenderErrorCode, TenderId,
     },
@@ -498,34 +498,28 @@ impl QuantixHost {
 
 fn docling_process_spec(host: &QuantixHost, job: &ParseJob) -> ProcessSpec {
     let arguments = vec![
-        OsString::from("convert"),
+        host.runtime_layout()
+            .docling_project()
+            .join("convert_document.py")
+            .into_os_string(),
+        OsString::from("--input"),
         job.input_path.clone().into_os_string(),
-        OsString::from("--from"),
+        OsString::from("--input-format"),
         OsString::from(&job.input_format),
-        OsString::from("--to"),
-        OsString::from("json"),
-        OsString::from("--image-export-mode"),
-        OsString::from("placeholder"),
+        OsString::from("--output-dir"),
+        job.candidate_directory.clone().into_os_string(),
         OsString::from("--artifacts-path"),
         host.application_home()
             .join("models")
             .join("docling")
             .into_os_string(),
-        OsString::from("--no-enable-remote-services"),
-        OsString::from("--no-allow-external-plugins"),
-        OsString::from("--abort-on-error"),
         OsString::from("--document-timeout"),
         OsString::from(DOCLING_DOCUMENT_TIMEOUT_SECONDS),
         OsString::from("--num-threads"),
         OsString::from("2"),
-        OsString::from("--device"),
-        OsString::from("cpu"),
-        OsString::from("--quiet"),
-        OsString::from("--output"),
-        job.candidate_directory.clone().into_os_string(),
     ];
     ProcessSpec {
-        executable: docling_executable(host.application_home()),
+        executable: python_executable(host.application_home()),
         arguments,
         current_directory: Some(job.staging_root.clone()),
         environment: docling_environment(host.application_home()),

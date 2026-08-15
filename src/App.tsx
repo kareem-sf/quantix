@@ -1,11 +1,12 @@
 import { CircleAlert, LoaderCircle } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { SetupIssue } from "./bindings/SetupIssue";
 import { ManagerWorkspace } from "./ManagerWorkspace";
 import {
   ensureQuantixSetup,
   inspectRuntimeReadiness,
+  repairRuntimeReadiness,
   resumeManagerIntakes,
   validateQuantixUpdateRestart,
 } from "./quantixHost";
@@ -15,6 +16,19 @@ type AppState =
   | { kind: "checking" }
   | { kind: "ready"; aiAvailable: boolean }
   | { kind: "blocked"; title: string; summary: string };
+
+const RUNTIME_PREPARATION_POLL_MS = 500;
+
+async function waitForRuntimePreparation() {
+  let readiness = await inspectRuntimeReadiness();
+  while (readiness.state === "preparing") {
+    await new Promise((resolve) =>
+      window.setTimeout(resolve, RUNTIME_PREPARATION_POLL_MS),
+    );
+    readiness = await inspectRuntimeReadiness();
+  }
+  return readiness;
+}
 
 const setupIssueCopy: Record<SetupIssue, string> = {
   application_home_unavailable: "The local Quantix workspace is unavailable.",
@@ -41,6 +55,7 @@ const setupIssueCopy: Record<SetupIssue, string> = {
 
 function App() {
   const [state, setState] = useState<AppState>({ kind: "checking" });
+  const startupStarted = useRef(false);
 
   const openWorkspace = useCallback(async () => {
     setState({ kind: "checking" });
@@ -85,9 +100,19 @@ function App() {
         });
         return;
       }
-      const aiAvailable =
-        runtimeResult.status === "fulfilled" &&
-        runtimeResult.value.state === "ready";
+      let runtimeReadiness =
+        runtimeResult.status === "fulfilled" ? runtimeResult.value : undefined;
+      if (
+        runtimeReadiness &&
+        runtimeReadiness.state !== "ready" &&
+        runtimeReadiness.repair_available
+      ) {
+        runtimeReadiness = await repairRuntimeReadiness();
+      }
+      if (runtimeReadiness?.state === "preparing") {
+        runtimeReadiness = await waitForRuntimePreparation();
+      }
+      const aiAvailable = runtimeReadiness?.state === "ready";
       setState({
         kind: "ready",
         aiAvailable,
@@ -106,6 +131,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (startupStarted.current) {
+      return;
+    }
+    startupStarted.current = true;
     void openWorkspace();
   }, [openWorkspace]);
 

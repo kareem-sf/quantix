@@ -48,10 +48,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return run_uv(&executable, &arguments);
     }
     if tool == "python" {
-        return run_prepare_models(&arguments);
-    }
-    if tool.contains("docling") {
-        return run_docling(&arguments);
+        return run_python(&arguments);
     }
     Err(format!("unrecognized fixture tool {tool}").into())
 }
@@ -3552,14 +3549,19 @@ fn run_uv(
     Ok(())
 }
 
-fn run_prepare_models(arguments: &[std::ffi::OsString]) -> Result<(), Box<dyn std::error::Error>> {
+fn run_python(arguments: &[std::ffi::OsString]) -> Result<(), Box<dyn std::error::Error>> {
     assert_isolated_python_environment()?;
     let script = arguments
         .first()
         .ok_or("missing model preparation script")?;
-    if Path::new(script).file_name().and_then(|name| name.to_str()) != Some("prepare_models.py") {
-        return Err("unexpected model preparation script".into());
+    match Path::new(script).file_name().and_then(|name| name.to_str()) {
+        Some("prepare_models.py") => run_prepare_models(arguments),
+        Some("convert_document.py") => run_convert_document(arguments),
+        _ => Err("unexpected managed Python script".into()),
     }
+}
+
+fn run_prepare_models(arguments: &[std::ffi::OsString]) -> Result<(), Box<dyn std::error::Error>> {
     let output = argument_value(arguments, "--output-dir")?;
     for profile in [
         "layout",
@@ -3576,16 +3578,11 @@ fn run_prepare_models(arguments: &[std::ffi::OsString]) -> Result<(), Box<dyn st
     Ok(())
 }
 
-fn run_docling(arguments: &[std::ffi::OsString]) -> Result<(), Box<dyn std::error::Error>> {
-    assert_isolated_python_environment()?;
-    if arguments.first().and_then(|value| value.to_str()) != Some("convert") {
-        return Err("unexpected Docling fixture command".into());
-    }
-    let source = arguments
-        .get(1)
-        .map(PathBuf::from)
-        .ok_or("missing staged Docling source")?;
-    let output = argument_value(arguments, "--output")?;
+fn run_convert_document(
+    arguments: &[std::ffi::OsString],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let source = argument_value(arguments, "--input")?;
+    let output = argument_value(arguments, "--output-dir")?;
     let models = argument_value(arguments, "--artifacts-path")?;
     for profile in [
         "layout",
@@ -3601,26 +3598,13 @@ fn run_docling(arguments: &[std::ffi::OsString]) -> Result<(), Box<dyn std::erro
     if source.file_name().and_then(|name| name.to_str()) == Some("readiness.pdf") {
         return run_docling_readiness(arguments, &output);
     }
-    for flag in [
-        "--no-enable-remote-services",
-        "--no-allow-external-plugins",
-        "--abort-on-error",
-        "--quiet",
-    ] {
-        if !arguments.iter().any(|argument| argument == flag) {
-            return Err(format!("missing controlled Docling flag {flag}").into());
-        }
-    }
     let input_format = source
         .extension()
         .and_then(|extension| extension.to_str())
         .ok_or("staged source has no format")?;
-    if argument_value(arguments, "--from")? != Path::new(input_format)
-        || argument_value(arguments, "--to")? != Path::new("json")
-        || argument_value(arguments, "--image-export-mode")? != Path::new("placeholder")
+    if argument_value(arguments, "--input-format")? != Path::new(input_format)
         || argument_value(arguments, "--document-timeout")? != Path::new("840")
         || argument_value(arguments, "--num-threads")? != Path::new("2")
-        || argument_value(arguments, "--device")? != Path::new("cpu")
     {
         return Err("unexpected controlled Docling parse contract".into());
     }
@@ -3727,8 +3711,7 @@ fn run_docling_readiness(
     arguments: &[std::ffi::OsString],
     output: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if argument_value(arguments, "--ocr-engine")? != Path::new("rapidocr")
-        || argument_value(arguments, "--ocr-mode")? != Path::new("full_page")
+    if argument_value(arguments, "--ocr-mode")? != Path::new("full_page")
         || argument_value(arguments, "--ocr-lang")? != Path::new("ch")
     {
         return Err("RapidOCR full-page smoke was not requested".into());
