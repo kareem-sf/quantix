@@ -9,15 +9,15 @@ use quantix_lib::{
     ImportPortableTenderArchiveCommand, InspectManagerWorkspaceCommand, IntegrationTermsDecision,
     LicenseDistributionReview, LiveQualificationMetrics, LiveQualificationRun, ManagerConversation,
     ManagerIntakeStage, ManagerIntakeStatus, ManagerIntakeStatusKind, ManagerWorkspaceProjection,
-    ManagerWorkspaceTender, NativePlatformQualificationEvidence, NativePlatformQualificationRecord,
-    OpenProviderLoginCommand, PortableTenderArchiveRecord, PrivateQualificationRecord,
-    ProductAcceptanceOutcome, ProductAcceptanceRecord, ProductAcceptanceRun,
-    ProviderConnectionStatus, ProviderConnectionView, ProviderLoginMethod, ProviderLoginStatus,
-    ProviderLoginView, ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
-    PublicReleaseGateOutcome, PublicReleaseGateRecord, RebindManagerIntakeProviderCommand,
-    RecordEngineerWorkspaceMessageCommand, RecordLiveQualificationRunCommand,
-    RecordNativePlatformQualificationCommand, ReleaseCopyExport, ReleaseCopyItem,
-    RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand,
+    ManagerWorkspaceTender, ManagerWorkspaceTenderState, NativePlatformQualificationEvidence,
+    NativePlatformQualificationRecord, OpenProviderLoginCommand, PortableTenderArchiveRecord,
+    PrivateQualificationRecord, ProductAcceptanceOutcome, ProductAcceptanceRecord,
+    ProductAcceptanceRun, ProviderConnectionStatus, ProviderConnectionView, ProviderLoginMethod,
+    ProviderLoginStatus, ProviderLoginView, ProviderModelOption, ProviderReasoningOption,
+    ProviderReasoningSelection, PublicReleaseGateOutcome, PublicReleaseGateRecord,
+    RebindManagerIntakeProviderCommand, RecordEngineerWorkspaceMessageCommand,
+    RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand, ReleaseCopyExport,
+    ReleaseCopyItem, RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand,
     SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand, StartProviderLoginCommand,
     SubmissionReleaseApproval, SubmissionReleaseInspection, SubmissionReleaseState,
     TechnicalRiskAcceptance, TenderOfficeMessage, TenderOfficeMessageAuthor,
@@ -82,6 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     TenderOfficeMessage::export_all(&config)?;
     ManagerConversation::export_all(&config)?;
     ManagerWorkspaceTender::export_all(&config)?;
+    ManagerWorkspaceTenderState::export_all(&config)?;
     WorkspaceActionKind::export_all(&config)?;
     WorkspaceCurrentAction::export_all(&config)?;
     WorkspaceWorkSummary::export_all(&config)?;

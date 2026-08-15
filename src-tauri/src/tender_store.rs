@@ -230,7 +230,7 @@ pub use tender_records::{
 };
 pub use workspace::{
     InspectManagerWorkspaceCommand, ManagerConversation, ManagerWorkspaceProjection,
-    ManagerWorkspaceTender, RebindManagerIntakeProviderCommand,
+    ManagerWorkspaceTender, ManagerWorkspaceTenderState, RebindManagerIntakeProviderCommand,
     RecordEngineerWorkspaceMessageCommand, RetryManagerIntakeCommand,
     SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand, TenderOfficeMessage,
     TenderOfficeMessageAuthor, TenderOfficeMessageKind, WorkspaceActionKind,
@@ -243,7 +243,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 30;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 31;
 
 pub(crate) fn record_agent_run_provider_binding(
     transaction: &Transaction<'_>,
@@ -483,7 +483,7 @@ CREATE TABLE tender_retention_decisions (
   state TEXT NOT NULL CHECK (state IN ('active', 'archived')),
   rationale TEXT NOT NULL CHECK (length(CAST(rationale AS BLOB)) BETWEEN 1 AND 4000),
   decided_by TEXT NOT NULL CHECK (decided_by = 'engineer_user'),
-  acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_manager'),
+  acting_role TEXT NOT NULL CHECK (acting_role = 'tendering_engineer'),
   decision_json TEXT NOT NULL CHECK (json_valid(decision_json)),
   manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
   audit_sequence INTEGER NOT NULL UNIQUE CHECK (audit_sequence > 0),

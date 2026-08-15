@@ -4,12 +4,13 @@ use quantix_lib::{
     ensure_quantix_setup, AiProviderKind, CancelProviderLoginCommand, CodexReadiness,
     CreateTenderCommand, DeviceProtection, ImportTenderPackageCommand,
     InspectManagerWorkspaceCommand, ManagerIntakeStage, ManagerIntakeStatusKind,
-    ProviderConnectionStatus, ProviderLoginMethod, ProviderLoginStatus, ProviderReasoningSelection,
-    QuantixHost, RecordEngineerWorkspaceMessageCommand, RuntimeLayout,
-    SelectManagerWorkspaceTenderCommand, SetupPlatform, SetupState, StartProviderLoginCommand,
-    StoragePermissions, TenderOfficeMessageAuthor, TenderOfficeMessageKind,
-    UpdateAiExecutionSelectionCommand, WorkspaceActionKind, WorkspaceMessageReferenceKind,
-    MINIMUM_SETUP_FREE_SPACE_BYTES,
+    ManagerWorkspaceTenderState, ProviderConnectionStatus, ProviderLoginMethod,
+    ProviderLoginStatus, ProviderReasoningSelection, QuantixHost,
+    RecordEngineerWorkspaceMessageCommand, RuntimeLayout, SelectManagerWorkspaceTenderCommand,
+    SetupPlatform, SetupState, StartProviderLoginCommand, StoragePermissions, TenderErrorCode,
+    TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderRetentionDecisionCommand,
+    TenderRetentionState, UpdateAiExecutionSelectionCommand, WorkspaceActionKind,
+    WorkspaceMessageReferenceKind, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use rusqlite::Connection;
 
@@ -31,6 +32,119 @@ impl SetupPlatform for ReadySetupPlatform {
     fn device_protection(&self, _path: &Path) -> DeviceProtection {
         DeviceProtection::Protected
     }
+}
+
+#[test]
+fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_workspace() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let host = QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    let tender = host
+        .create_tender(CreateTenderCommand {
+            name: "Terminal Archive Tender".into(),
+        })
+        .expect("create Tender");
+    let initial = host
+        .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+            tender_id: Some(tender.tender_id.clone()),
+        })
+        .expect("inspect active Tender");
+    let conversation_id = initial
+        .conversation
+        .expect("Manager conversation")
+        .conversation_id;
+    assert!(
+        !initial
+            .selected_tender
+            .expect("selected Tender")
+            .can_archive
+    );
+    let refused = host
+        .archive_tender(TenderRetentionDecisionCommand {
+            tender_id: tender.tender_id.clone(),
+            rationale: "Archive only after the safe terminal boundary.".into(),
+        })
+        .expect_err("active Tender must not archive");
+    assert_eq!(refused.code, TenderErrorCode::InvalidCommand);
+
+    let tender_database = application_home
+        .join("tenders")
+        .join(&tender.tender_id)
+        .join("tender.sqlite");
+    Connection::open(tender_database)
+        .expect("open Tender Store fixture")
+        .execute(
+            "UPDATE tender SET lifecycle_phase = 'declined' WHERE singleton = 1",
+            [],
+        )
+        .expect("establish terminal fixture state");
+    let terminal = host
+        .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+            tender_id: Some(tender.tender_id.clone()),
+        })
+        .expect("inspect terminal Tender");
+    assert!(
+        terminal
+            .selected_tender
+            .expect("selected Tender")
+            .can_archive
+    );
+
+    let decision = host
+        .archive_tender(TenderRetentionDecisionCommand {
+            tender_id: tender.tender_id.clone(),
+            rationale: "Keep the declined Tender available as read-only history.".into(),
+        })
+        .expect("archive terminal Tender");
+    assert_eq!(decision.state, TenderRetentionState::Archived);
+    assert_eq!(decision.decided_by, "engineer_user");
+    assert_eq!(decision.acting_role, "tendering_engineer");
+    let archived = host
+        .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+            tender_id: Some(tender.tender_id.clone()),
+        })
+        .expect("open archived Tender");
+    assert_eq!(
+        archived.selected_tender.expect("archived Tender").state,
+        ManagerWorkspaceTenderState::Archived
+    );
+    assert_eq!(
+        archived
+            .conversation
+            .expect("archived conversation")
+            .conversation_id,
+        conversation_id
+    );
+    let read_only = host
+        .record_engineer_workspace_message(RecordEngineerWorkspaceMessageCommand {
+            tender_id: tender.tender_id.clone(),
+            body: "Do not mutate archived history.".into(),
+        })
+        .expect_err("archived Tender stays read-only");
+    assert_eq!(read_only.code, TenderErrorCode::InvalidCommand);
+
+    host.restore_archived_tender(TenderRetentionDecisionCommand {
+        tender_id: tender.tender_id.clone(),
+        rationale: "Return the same Tender to active use.".into(),
+    })
+    .expect("restore archived Tender");
+    let restored = host
+        .select_manager_workspace_tender(SelectManagerWorkspaceTenderCommand {
+            tender_id: tender.tender_id,
+        })
+        .expect("select restored Tender");
+    assert_eq!(
+        restored.selected_tender.expect("restored Tender").state,
+        ManagerWorkspaceTenderState::Active
+    );
+    assert_eq!(
+        restored
+            .conversation
+            .expect("restored conversation")
+            .conversation_id,
+        conversation_id
+    );
 }
 
 #[test]

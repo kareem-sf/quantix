@@ -138,6 +138,15 @@ pub struct ManagerConversation {
     pub latest_meaningful_message_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ManagerWorkspaceTenderState {
+    Active,
+    Archived,
+    RecoveryRequired,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ManagerWorkspaceTender {
@@ -146,7 +155,8 @@ pub struct ManagerWorkspaceTender {
     pub revision: u32,
     pub phase: TenderLifecyclePhase,
     pub needs_engineer: bool,
-    pub available: bool,
+    pub state: ManagerWorkspaceTenderState,
+    pub can_archive: bool,
     pub last_activity_at: Option<String>,
 }
 
@@ -360,13 +370,19 @@ impl TenderStore {
         let intake = self.current_manager_intake_status()?;
         let current_action =
             self.workspace_current_action(summary.lifecycle_phase, &work, intake.as_ref())?;
+        let can_archive = self.retention_boundary_is_safe()?;
         let tender = ManagerWorkspaceTender {
             tender_id: summary.tender_id,
             name: summary.name,
             revision: summary.revision,
             phase: summary.lifecycle_phase,
             needs_engineer: current_action.requires_engineer || work.needs_engineer > 0,
-            available: !self.archived,
+            state: if self.archived {
+                ManagerWorkspaceTenderState::Archived
+            } else {
+                ManagerWorkspaceTenderState::Active
+            },
+            can_archive,
             last_activity_at: Some(last_activity_at),
         };
         Ok(WorkspaceSnapshot {
@@ -987,7 +1003,7 @@ impl QuantixHost {
                     .iter()
                     .find(|tender| tender.tender_id == requested.as_str())
                     .ok_or_else(|| TenderCommandError::new(TenderErrorCode::NotFound))?;
-                if !selected.available {
+                if selected.state == ManagerWorkspaceTenderState::RecoveryRequired {
                     return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
                 }
                 Some(requested)
@@ -997,13 +1013,15 @@ impl QuantixHost {
                     .0
                     .filter(|persisted| {
                         catalogue.iter().any(|tender| {
-                            tender.available && tender.tender_id == persisted.as_str()
+                            tender.state == ManagerWorkspaceTenderState::Active
+                                && tender.tender_id == persisted.as_str()
                         })
                     })
                     .or_else(|| {
                         persisted_tenders.1.filter(|persisted| {
                             catalogue.iter().any(|tender| {
-                                tender.available && tender.tender_id == persisted.as_str()
+                                tender.state == ManagerWorkspaceTenderState::Active
+                                    && tender.tender_id == persisted.as_str()
                             })
                         })
                     });
@@ -1012,7 +1030,7 @@ impl QuantixHost {
                 } else {
                     catalogue
                         .iter()
-                        .find(|tender| tender.available)
+                        .find(|tender| tender.state == ManagerWorkspaceTenderState::Active)
                         .map(|tender| TenderId::parse(&tender.tender_id))
                         .transpose()?
                 }
@@ -1044,7 +1062,13 @@ impl QuantixHost {
         let projection = self.inspect_manager_workspace(InspectManagerWorkspaceCommand {
             tender_id: Some(command.tender_id),
         })?;
-        self.persist_manager_workspace_selection(&tender_id)?;
+        if projection
+            .selected_tender
+            .as_ref()
+            .is_some_and(|tender| tender.state == ManagerWorkspaceTenderState::Active)
+        {
+            self.persist_manager_workspace_selection(&tender_id)?;
+        }
         Ok(projection)
     }
 
@@ -1065,8 +1089,14 @@ impl QuantixHost {
             .iter()
             .find(|candidate| candidate.tender_id == command.tender_id)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::NotFound))?;
-        if !selected.available {
-            return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
+        match selected.state {
+            ManagerWorkspaceTenderState::Active => {}
+            ManagerWorkspaceTenderState::Archived => {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            ManagerWorkspaceTenderState::RecoveryRequired => {
+                return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
+            }
         }
         self.persist_manager_workspace_selection(&tender_id)?;
         let store = self.tender_store(&tender_id)?;
@@ -1105,7 +1135,8 @@ impl QuantixHost {
                     revision: 0,
                     phase: TenderLifecyclePhase::Intake,
                     needs_engineer: true,
-                    available: false,
+                    state: ManagerWorkspaceTenderState::RecoveryRequired,
+                    can_archive: false,
                     last_activity_at: None,
                 });
             }

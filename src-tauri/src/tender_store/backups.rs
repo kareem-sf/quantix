@@ -445,6 +445,70 @@ struct BackupContentSource {
 }
 
 impl TenderStore {
+    pub(super) fn retention_boundary_is_safe(&self) -> Result<bool, TenderCommandError> {
+        if self.archived {
+            return Ok(false);
+        }
+        let lifecycle_phase = TenderLifecyclePhase::parse(
+            &self
+                .connection
+                .query_row(
+                    "SELECT lifecycle_phase FROM tender WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(sql_error)?,
+        )?;
+        let terminal = match lifecycle_phase {
+            TenderLifecyclePhase::Declined => true,
+            TenderLifecyclePhase::FinalReview => self
+                .connection
+                .query_row(
+                    "SELECT EXISTS(
+                       SELECT 1
+                       FROM submission_package_head AS head
+                       JOIN submission_package_versions AS package
+                         ON package.package_id = head.package_id
+                        AND package.version = head.current_version
+                       JOIN submission_release_approvals AS approval
+                         ON approval.package_id = head.package_id
+                        AND approval.package_version = head.current_version
+                        AND approval.package_manifest_sha256 = package.manifest_sha256
+                       WHERE head.singleton = 1
+                     )",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(sql_error)?,
+            _ => false,
+        };
+        if !terminal {
+            return Ok(false);
+        }
+        let protected_work = self
+            .connection
+            .query_row(
+                "SELECT
+                   EXISTS(SELECT 1 FROM agent_runs WHERE status IN ('running', 'indeterminate'))
+                   OR EXISTS(
+                     SELECT 1 FROM production_tasks
+                     WHERE status NOT IN ('ready_for_integration', 'cancelled')
+                   )
+                   OR EXISTS(
+                     SELECT 1 FROM manager_intake_runs
+                     WHERE stage IN (
+                       'waiting_for_provider', 'package_registered', 'reading_documents',
+                       'extracting_tender_facts', 'reviewing_tender_facts',
+                       'preparing_first_decision'
+                     )
+                   )",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(sql_error)?;
+        Ok(!protected_work)
+    }
+
     fn create_verified_backup(
         &self,
         application_home: &Path,
@@ -1932,6 +1996,9 @@ impl QuantixHost {
         let mut store = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        if state == TenderRetentionState::Archived && !store.retention_boundary_is_safe()? {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
         if (state == TenderRetentionState::Archived && store.archived)
             || (state == TenderRetentionState::Active && !store.archived)
         {
@@ -1950,7 +2017,7 @@ impl QuantixHost {
             state,
             rationale: command.rationale.trim().into(),
             decided_by: "engineer_user".into(),
-            acting_role: "tendering_manager".into(),
+            acting_role: "tendering_engineer".into(),
             manifest_sha256: String::new(),
             decided_at: decided_at.clone(),
         };

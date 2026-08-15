@@ -1,4 +1,5 @@
 import {
+  Archive,
   Bot,
   ChevronLeft,
   ChevronRight,
@@ -9,9 +10,11 @@ import {
   LoaderCircle,
   Menu,
   MessageSquare,
+  MoreHorizontal,
   Plus,
   Send,
   Settings,
+  Undo2,
   Users,
   X,
 } from "lucide-react";
@@ -34,17 +37,20 @@ import { ApplicationSettings } from "./ApplicationSettings";
 import { notifyAttentionRequired } from "./applicationNotifications";
 import { DEFAULT_GENERAL_APPLICATION_PREFERENCES } from "./applicationPreferences";
 import {
+  archiveTender,
   chooseAndImportTenderPackage,
   inspectManagerWorkspace,
   rebindManagerIntakeProvider,
   recordEngineerWorkspaceMessage,
   retryManagerIntake,
+  restoreArchivedTender,
   selectManagerWorkspaceTender,
   startManagerTender,
 } from "./quantixHost";
 import "./ManagerWorkspace.css";
 
 type WorkspaceView = "manager" | "work" | "files";
+type RetentionAction = "archive" | "restore" | null;
 
 interface ManagerWorkspaceProps {
   aiAvailable: boolean;
@@ -95,13 +101,17 @@ function TenderButton({
       className="manager-workspace__tender"
       type="button"
       aria-current={selected ? "page" : undefined}
-      disabled={busy || !tender.available}
+      disabled={busy || tender.state === "recovery_required"}
       onClick={onSelect}
     >
       <span>
         <strong>{tender.name}</strong>
         <small>
-          {tender.available ? phaseLabel[tender.phase] : "Needs recovery"}
+          {tender.state === "recovery_required"
+            ? "Needs recovery"
+            : tender.state === "archived"
+              ? "Archived"
+              : phaseLabel[tender.phase]}
         </small>
       </span>
       {tender.needs_engineer ? (
@@ -215,6 +225,7 @@ function ManagerView({
   onSend,
   onOpenSettings,
   onOpenAction,
+  readOnly,
 }: {
   projection: ManagerWorkspaceProjection;
   aiAvailable: boolean;
@@ -225,6 +236,7 @@ function ManagerView({
   onSend: (body: string) => Promise<boolean>;
   onOpenSettings: () => void;
   onOpenAction: () => void;
+  readOnly: boolean;
 }) {
   const [composer, setComposer] = useState("");
   const [showEarlier, setShowEarlier] = useState(false);
@@ -368,55 +380,104 @@ function ManagerView({
         ))}
       </div>
 
-      <section
-        className="current-action"
-        aria-labelledby="current-action-title"
-      >
-        <span className="current-action__eyebrow">
-          {projection.current_action.requires_engineer
-            ? "Your next step"
-            : "Current focus"}
-        </span>
-        <h2 id="current-action-title">{currentActionTitle}</h2>
-        <p>{currentActionSummary}</p>
-        {hasActionButton ? (
-          <div className="current-action__footer">
-            <button
-              className="manager-workspace__primary"
-              type="button"
+      {!readOnly ? (
+        <>
+          <section
+            className="current-action"
+            aria-labelledby="current-action-title"
+          >
+            <span className="current-action__eyebrow">
+              {projection.current_action.requires_engineer
+                ? "Your next step"
+                : "Current focus"}
+            </span>
+            <h2 id="current-action-title">{currentActionTitle}</h2>
+            <p>{currentActionSummary}</p>
+            {hasActionButton ? (
+              <div className="current-action__footer">
+                <button
+                  className="manager-workspace__primary"
+                  type="button"
+                  disabled={busy}
+                  onClick={openCurrentAction}
+                >
+                  {projection.current_action.kind === "configure_ai_provider" &&
+                  !aiAvailable
+                    ? "Open Settings"
+                    : projection.current_action.action_label}
+                </button>
+              </div>
+            ) : null}
+          </section>
+
+          <div className="manager-composer">
+            <textarea
+              ref={composerRef}
+              rows={1}
+              value={composer}
+              aria-label="Message your Tendering Manager"
+              placeholder="Message your Tendering Manager…"
               disabled={busy}
-              onClick={openCurrentAction}
+              onChange={(event) => setComposer(event.target.value)}
+              onKeyDown={onKeyDown}
+            />
+            <button
+              type="button"
+              aria-label="Send message"
+              disabled={busy || !composer.trim()}
+              onClick={() => void send()}
             >
-              {projection.current_action.kind === "configure_ai_provider" &&
-              !aiAvailable
-                ? "Open Settings"
-                : projection.current_action.action_label}
+              <Send size={18} aria-hidden="true" />
             </button>
           </div>
-        ) : null}
-      </section>
-
-      <div className="manager-composer">
-        <textarea
-          ref={composerRef}
-          rows={1}
-          value={composer}
-          aria-label="Message your Tendering Manager"
-          placeholder="Message your Tendering Manager…"
-          disabled={busy}
-          onChange={(event) => setComposer(event.target.value)}
-          onKeyDown={onKeyDown}
-        />
-        <button
-          type="button"
-          aria-label="Send message"
-          disabled={busy || !composer.trim()}
-          onClick={() => void send()}
-        >
-          <Send size={18} aria-hidden="true" />
-        </button>
-      </div>
+        </>
+      ) : null}
     </div>
+  );
+}
+
+function ArchivedTenders({
+  tenders,
+  busy,
+  onSelect,
+}: {
+  tenders: ManagerWorkspaceTender[];
+  busy: boolean;
+  onSelect: (tenderId: string) => void;
+}) {
+  return (
+    <main className="retention-view">
+      <div className="retention-view__heading">
+        <Archive size={20} aria-hidden="true" />
+        <div>
+          <h1>Archived &amp; Trash</h1>
+          <p>Healthy archived Tenders remain complete and read-only.</p>
+        </div>
+      </div>
+      <section aria-labelledby="archived-tenders-title">
+        <h2 id="archived-tenders-title">Archived</h2>
+        {tenders.length ? (
+          <div className="retention-view__list">
+            {tenders.map((tender) => (
+              <button
+                key={tender.tender_id}
+                type="button"
+                disabled={busy}
+                onClick={() => onSelect(tender.tender_id)}
+              >
+                <span>
+                  <strong>{tender.name}</strong>
+                  <small>{phaseLabel[tender.phase]} · read-only</small>
+                </span>
+                <ChevronRight size={17} aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="retention-view__empty">No archived Tenders.</p>
+        )}
+      </section>
+    </main>
   );
 }
 
@@ -462,10 +523,12 @@ function FilesView({
   projection,
   busy,
   onImport,
+  readOnly,
 }: {
   projection: ManagerWorkspaceProjection;
   busy: boolean;
   onImport: (kind: TenderPackageSourceKind) => void;
+  readOnly: boolean;
 }) {
   const intakeWorking = ["working", "waiting"].includes(
     projection.intake?.status ?? "",
@@ -540,24 +603,26 @@ function FilesView({
           </ul>
         </div>
       ) : null}
-      <div className="workspace-files__actions">
-        <button
-          className="manager-workspace__secondary"
-          type="button"
-          disabled={busy || intakeWorking}
-          onClick={() => onImport("directory")}
-        >
-          Add package folder
-        </button>
-        <button
-          className="manager-workspace__text-button"
-          type="button"
-          disabled={busy || intakeWorking}
-          onClick={() => onImport("zip_archive")}
-        >
-          Add ZIP
-        </button>
-      </div>
+      {!readOnly ? (
+        <div className="workspace-files__actions">
+          <button
+            className="manager-workspace__secondary"
+            type="button"
+            disabled={busy || intakeWorking}
+            onClick={() => onImport("directory")}
+          >
+            Add package folder
+          </button>
+          <button
+            className="manager-workspace__text-button"
+            type="button"
+            disabled={busy || intakeWorking}
+            onClick={() => onImport("zip_archive")}
+          >
+            Add ZIP
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -572,6 +637,9 @@ export function ManagerWorkspace({
     useState<ManagerWorkspaceProjection | null>(null);
   const [view, setView] = useState<WorkspaceView>("manager");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [retentionOpen, setRetentionOpen] = useState(false);
+  const [retentionAction, setRetentionAction] = useState<RetentionAction>(null);
+  const [retentionRationale, setRetentionRationale] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(
     () => window.matchMedia("(min-width: 820px)").matches,
   );
@@ -582,11 +650,27 @@ export function ManagerWorkspace({
   const busyRef = useRef(false);
   const projectionEpoch = useRef(0);
   const previousAttentionTenderIds = useRef<Set<string> | null>(null);
+  const archivedInspectionTenderId =
+    projection?.selected_tender?.state === "archived"
+      ? projection.selected_tender.tender_id
+      : null;
+
+  useEffect(() => {
+    if (!retentionAction) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busyRef.current) {
+        setRetentionAction(null);
+        setRetentionRationale("");
+      }
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [retentionAction]);
 
   useEffect(() => {
     const current = new Set(
       projection?.catalogue
-        .filter((tender) => tender.needs_engineer)
+        .filter((tender) => tender.state === "active" && tender.needs_engineer)
         .map((tender) => tender.tender_id) ?? [],
     );
     const previous = previousAttentionTenderIds.current;
@@ -630,7 +714,7 @@ export function ManagerWorkspace({
       refreshRunning.current = true;
       const epoch = projectionEpoch.current;
       try {
-        const next = await inspectManagerWorkspace();
+        const next = await inspectManagerWorkspace(archivedInspectionTenderId);
         if (epoch === projectionEpoch.current && !busyRef.current) {
           setProjection(next);
         }
@@ -642,7 +726,11 @@ export function ManagerWorkspace({
     };
     const timer = window.setInterval(() => void refresh(), 2_500);
     return () => window.clearInterval(timer);
-  }, [busy, preferences.notify_when_attention_needed]);
+  }, [
+    archivedInspectionTenderId,
+    busy,
+    preferences.notify_when_attention_needed,
+  ]);
 
   const run = useCallback(async <T,>(operation: () => Promise<T>) => {
     projectionEpoch.current += 1;
@@ -667,6 +755,7 @@ export function ManagerWorkspace({
         setProjection(next);
         setView("manager");
         setSettingsOpen(false);
+        setRetentionOpen(false);
       }
     },
     [run],
@@ -679,6 +768,7 @@ export function ManagerWorkspace({
         setProjection(next);
         setView("manager");
         setSettingsOpen(false);
+        setRetentionOpen(false);
         if (window.matchMedia("(max-width: 819px)").matches) {
           setSidebarOpen(false);
         }
@@ -733,7 +823,34 @@ export function ManagerWorkspace({
     if (succeeded) await load();
   }, [load, projection?.selected_tender?.tender_id, run]);
 
+  const applyRetentionAction = useCallback(async () => {
+    const tenderId = projection?.selected_tender?.tender_id;
+    const rationale = retentionRationale.trim();
+    if (!tenderId || !retentionAction || !rationale) return;
+    const result = await run(() =>
+      retentionAction === "archive"
+        ? archiveTender(tenderId, rationale)
+        : restoreArchivedTender(tenderId, rationale),
+    );
+    if (!result) return;
+    setRetentionAction(null);
+    setRetentionRationale("");
+    if (retentionAction === "archive") await load();
+    else await selectTender(tenderId);
+  }, [
+    load,
+    projection?.selected_tender?.tender_id,
+    retentionAction,
+    retentionRationale,
+    run,
+    selectTender,
+  ]);
+
   const selected = projection?.selected_tender ?? null;
+  const activeTenders =
+    projection?.catalogue.filter((tender) => tender.state !== "archived") ?? [];
+  const archivedTenders =
+    projection?.catalogue.filter((tender) => tender.state === "archived") ?? [];
   const activeCounts = useMemo(() => {
     if (!projection) return 0;
     return (
@@ -784,7 +901,7 @@ export function ManagerWorkspace({
           ) : null}
         </div>
         <nav aria-label="Tenders">
-          {projection?.catalogue.map((tender) => (
+          {activeTenders.map((tender) => (
             <TenderButton
               key={tender.tender_id}
               tender={tender}
@@ -797,9 +914,28 @@ export function ManagerWorkspace({
         <div className="manager-workspace__sidebar-footer">
           <button
             type="button"
+            aria-current={retentionOpen ? "page" : undefined}
+            onClick={() => {
+              setRetentionOpen(true);
+              setSettingsOpen(false);
+              setTeamOpen(false);
+              if (window.matchMedia("(max-width: 819px)").matches) {
+                setSidebarOpen(false);
+              }
+            }}
+          >
+            <Archive size={17} aria-hidden="true" />
+            Archived &amp; Trash
+            {archivedTenders.length ? (
+              <span>{archivedTenders.length}</span>
+            ) : null}
+          </button>
+          <button
+            type="button"
             aria-current={settingsOpen ? "page" : undefined}
             onClick={() => {
               setSettingsOpen(true);
+              setRetentionOpen(false);
               setTeamOpen(false);
               if (window.matchMedia("(max-width: 819px)").matches) {
                 setSidebarOpen(false);
@@ -829,6 +965,12 @@ export function ManagerWorkspace({
             onAiAvailabilityChange={setAiAvailable}
             onPreferencesChange={setPreferences}
           />
+        ) : retentionOpen ? (
+          <ArchivedTenders
+            tenders={archivedTenders}
+            busy={busy}
+            onSelect={(tenderId) => void selectTender(tenderId)}
+          />
         ) : selected && projection ? (
           <>
             <div className="manager-workspace__heading">
@@ -836,33 +978,81 @@ export function ManagerWorkspace({
                 <span>{phaseLabel[selected.phase]}</span>
                 <h1>{selected.name}</h1>
               </div>
-              <div className="manager-workspace__team">
-                <button
-                  type="button"
-                  aria-expanded={teamOpen}
-                  onClick={() => setTeamOpen((open) => !open)}
-                >
-                  <Users size={18} aria-hidden="true" />
-                  Team
-                  {activeCounts > 0 ? <span>{activeCounts}</span> : null}
-                </button>
-                {teamOpen ? (
-                  <div className="manager-workspace__team-card">
-                    <button
-                      type="button"
-                      aria-label="Close team summary"
-                      onClick={() => setTeamOpen(false)}
-                    >
-                      <X size={16} />
-                    </button>
-                    <strong>Team activity</strong>
-                    <span>{projection.team.active_agent_runs} working</span>
-                    <span>{projection.team.waiting_tasks} waiting</span>
-                    <span>{projection.team.needs_engineer} need you</span>
-                  </div>
+              <div className="manager-workspace__heading-actions">
+                {selected.state === "active" ? (
+                  <details className="manager-workspace__tender-menu">
+                    <summary aria-label={`Manage ${selected.name}`}>
+                      <MoreHorizontal size={19} aria-hidden="true" />
+                    </summary>
+                    <div>
+                      {selected.can_archive ? (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.currentTarget
+                              .closest("details")
+                              ?.removeAttribute("open");
+                            setRetentionAction("archive");
+                          }}
+                        >
+                          <Archive size={16} aria-hidden="true" /> Archive
+                        </button>
+                      ) : (
+                        <p>
+                          Archive becomes available after decline or final
+                          approval, when protected work is finished.
+                        </p>
+                      )}
+                    </div>
+                  </details>
                 ) : null}
+                <div className="manager-workspace__team">
+                  <button
+                    type="button"
+                    aria-expanded={teamOpen}
+                    onClick={() => setTeamOpen((open) => !open)}
+                  >
+                    <Users size={18} aria-hidden="true" />
+                    Team
+                    {activeCounts > 0 ? <span>{activeCounts}</span> : null}
+                  </button>
+                  {teamOpen ? (
+                    <div className="manager-workspace__team-card">
+                      <button
+                        type="button"
+                        aria-label="Close team summary"
+                        onClick={() => setTeamOpen(false)}
+                      >
+                        <X size={16} />
+                      </button>
+                      <strong>Team activity</strong>
+                      <span>{projection.team.active_agent_runs} working</span>
+                      <span>{projection.team.waiting_tasks} waiting</span>
+                      <span>{projection.team.needs_engineer} need you</span>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
+            {selected.state === "archived" ? (
+              <div className="manager-workspace__archived" role="status">
+                <Archive size={18} aria-hidden="true" />
+                <div>
+                  <strong>Archived · read-only</strong>
+                  <span>
+                    Manager, Work, and Files remain available without changing
+                    this Tender.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setRetentionAction("restore")}
+                >
+                  <Undo2 size={16} aria-hidden="true" /> Restore
+                </button>
+              </div>
+            ) : null}
             <nav
               className="manager-workspace__tabs"
               aria-label="Tender workspace"
@@ -905,6 +1095,7 @@ export function ManagerWorkspace({
                         : "work",
                     )
                   }
+                  readOnly={selected.state === "archived"}
                 />
               ) : null}
               {view === "work" ? <WorkView projection={projection} /> : null}
@@ -913,6 +1104,7 @@ export function ManagerWorkspace({
                   projection={projection}
                   busy={busy}
                   onImport={importPackage}
+                  readOnly={selected.state === "archived"}
                 />
               ) : null}
             </main>
@@ -928,6 +1120,66 @@ export function ManagerWorkspace({
           </main>
         ) : null}
       </div>
+
+      {retentionAction && selected ? (
+        <div className="retention-dialog__backdrop">
+          <section
+            className="retention-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="retention-dialog-title"
+          >
+            <div>
+              <h2 id="retention-dialog-title">
+                {retentionAction === "archive"
+                  ? `Archive ${selected.name}?`
+                  : `Restore ${selected.name}?`}
+              </h2>
+              <p>
+                {retentionAction === "archive"
+                  ? "This keeps the complete Tender Store and history in place, but makes the Tender read-only until you restore it."
+                  : "This returns the same Tender and conversation context to active work."}
+              </p>
+            </div>
+            <label htmlFor="retention-rationale">
+              Decision rationale
+              <textarea
+                id="retention-rationale"
+                autoFocus
+                rows={3}
+                maxLength={4000}
+                value={retentionRationale}
+                disabled={busy}
+                onChange={(event) => setRetentionRationale(event.target.value)}
+              />
+            </label>
+            <div className="retention-dialog__actions">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setRetentionAction(null);
+                  setRetentionRationale("");
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="manager-workspace__primary"
+                type="button"
+                disabled={busy || !retentionRationale.trim()}
+                onClick={() => void applyRetentionAction()}
+              >
+                {busy
+                  ? "Recording decision…"
+                  : retentionAction === "archive"
+                    ? "Archive Tender"
+                    : "Restore Tender"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {busy ? <div className="manager-workspace__progress" /> : null}
       {!sidebarOpen ? (

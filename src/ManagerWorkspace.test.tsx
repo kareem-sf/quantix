@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
 
 const host = vi.hoisted(() => ({
+  archiveTender: vi.fn(),
   cancelProviderLogin: vi.fn(),
   connectAnthropic: vi.fn(),
   connectGemini: vi.fn(),
@@ -24,6 +25,7 @@ const host = vi.hoisted(() => ({
   recordEngineerWorkspaceMessage: vi.fn(),
   refreshApplicationSettings: vi.fn(),
   retryManagerIntake: vi.fn(),
+  restoreArchivedTender: vi.fn(),
   selectManagerWorkspaceTender: vi.fn(),
   startManagerTender: vi.fn(),
   startProviderLogin: vi.fn(),
@@ -60,7 +62,7 @@ const applicationFacts = {
   diagnostics: {
     quantix_version: "0.1.0",
     installation_schema_version: 17,
-    tender_schema_version: 30,
+    tender_schema_version: 31,
   },
 };
 
@@ -72,7 +74,8 @@ const projection: ManagerWorkspaceProjection = {
       revision: 1,
       phase: "intake",
       needs_engineer: true,
-      available: true,
+      state: "active" as const,
+      can_archive: false,
       last_activity_at: "2026-08-14T10:00:00Z",
     },
   ],
@@ -82,7 +85,8 @@ const projection: ManagerWorkspaceProjection = {
     revision: 1,
     phase: "intake",
     needs_engineer: true,
-    available: true,
+    state: "active" as const,
+    can_archive: false,
     last_activity_at: "2026-08-14T10:00:00Z",
   },
   conversation: {
@@ -131,6 +135,98 @@ afterEach(() => {
 });
 
 describe("ManagerWorkspace", () => {
+  it("archives a Host-qualified Tender and restores its read-only workspace", async () => {
+    const terminalTender = {
+      ...projection.selected_tender!,
+      name: "Terminal Archive Tender",
+      phase: "declined" as const,
+      needs_engineer: false,
+      can_archive: true,
+    };
+    const archivedTender = {
+      ...terminalTender,
+      state: "archived" as const,
+      can_archive: false,
+    };
+    const terminalProjection = {
+      ...projection,
+      catalogue: [terminalTender],
+      selected_tender: terminalTender,
+    };
+    const catalogueProjection = {
+      ...projection,
+      catalogue: [archivedTender],
+      selected_tender: null,
+      conversation: null,
+    };
+    const archivedProjection = {
+      ...projection,
+      catalogue: [archivedTender],
+      selected_tender: archivedTender,
+    };
+    host.inspectManagerWorkspace
+      .mockResolvedValueOnce(terminalProjection)
+      .mockResolvedValue(catalogueProjection);
+    host.archiveTender.mockResolvedValue({
+      decision_id: "d".repeat(32),
+      tender_id: tenderId,
+      state: "archived",
+      rationale: "Keep terminal history.",
+      decided_by: "engineer_user",
+      acting_role: "tendering_engineer",
+      manifest_sha256: "f".repeat(64),
+      decided_at: "2026-08-15T12:00:00Z",
+    });
+    host.restoreArchivedTender.mockResolvedValue({
+      decision_id: "e".repeat(32),
+      tender_id: tenderId,
+      state: "active",
+      rationale: "Resume the same Tender.",
+      decided_by: "engineer_user",
+      acting_role: "tendering_engineer",
+      manifest_sha256: "a".repeat(64),
+      decided_at: "2026-08-15T12:05:00Z",
+    });
+    host.selectManagerWorkspaceTender
+      .mockResolvedValueOnce(archivedProjection)
+      .mockResolvedValueOnce(terminalProjection);
+
+    render(<ManagerWorkspace aiAvailable />);
+    await screen.findByRole("heading", { name: "Terminal Archive Tender" });
+    fireEvent.click(screen.getByLabelText("Manage Terminal Archive Tender"));
+    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+    fireEvent.change(screen.getByLabelText("Decision rationale"), {
+      target: { value: "Keep terminal history." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Archive Tender" }));
+    await waitFor(() => {
+      expect(host.archiveTender).toHaveBeenCalledWith(
+        tenderId,
+        "Keep terminal history.",
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Archived & Trash/ }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Terminal Archive Tender/ }),
+    );
+    expect(await screen.findByText("Archived · read-only")).toBeTruthy();
+    expect(
+      screen.queryByRole("textbox", { name: "Message your Tendering Manager" }),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    fireEvent.change(screen.getByLabelText("Decision rationale"), {
+      target: { value: "Resume the same Tender." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Restore Tender" }));
+    await waitFor(() => {
+      expect(host.restoreArchivedTender).toHaveBeenCalledWith(
+        tenderId,
+        "Resume the same Tender.",
+      );
+    });
+  });
+
   it("resumes the Host-selected Tender into the minimal workspace", async () => {
     host.inspectManagerWorkspace.mockResolvedValue(projection);
 
