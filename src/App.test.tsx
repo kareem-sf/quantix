@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const host = vi.hoisted(() => ({
@@ -78,6 +78,48 @@ describe("App runtime startup", () => {
     await waitFor(() => {
       expect(host.resumeManagerIntakes).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("shows truthful first-run runtime feedback while preparation is active", async () => {
+    host.inspectRuntimeReadiness.mockResolvedValue({
+      state: "missing_executable",
+      issues: ["docling_executable_missing"],
+      codex_version: "0.147.0",
+      uv_version: "0.12.2",
+      docling_version: null,
+      repair_available: true,
+    });
+    let finishPreparation: ((value: unknown) => void) | undefined;
+    host.repairRuntimeReadiness.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishPreparation = resolve;
+        }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText("Installing local AI tools")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "First-time setup is downloading and preparing Python and Docling. This can take several minutes.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("list", { name: "Workspace opening progress" }),
+    ).toBeTruthy();
+
+    await act(async () => {
+      finishPreparation?.({
+        state: "ready",
+        issues: [],
+        codex_version: "0.147.0",
+        uv_version: "0.12.2",
+        docling_version: "2.118.0",
+        repair_available: false,
+      });
+    });
+    expect(await screen.findByText("AI office ready")).toBeTruthy();
   });
 
   it("keeps checking until an active runtime preparation finishes", async () => {

@@ -1,4 +1,4 @@
-import { CircleAlert, LoaderCircle } from "lucide-react";
+import { Check, CircleAlert, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { SetupIssue } from "./bindings/SetupIssue";
@@ -19,13 +19,55 @@ import {
 import "./App.css";
 
 type AppState =
-  | { kind: "checking" }
+  | { kind: "checking"; stage: StartupStage }
   | {
       kind: "ready";
       aiAvailable: boolean;
       generalPreferences: GeneralApplicationPreferences;
     }
   | { kind: "blocked"; title: string; summary: string };
+
+type StartupStage =
+  "workspace" | "runtime_check" | "runtime_install" | "providers" | "opening";
+
+const startupStageCopy: Record<
+  StartupStage,
+  { title: string; summary: string; step: number }
+> = {
+  workspace: {
+    title: "Checking workspace",
+    summary: "Verifying local storage and recovery state.",
+    step: 0,
+  },
+  runtime_check: {
+    title: "Checking local AI tools",
+    summary: "Verifying the pinned Codex, Python, and Docling runtime.",
+    step: 1,
+  },
+  runtime_install: {
+    title: "Installing local AI tools",
+    summary:
+      "First-time setup is downloading and preparing Python and Docling. This can take several minutes.",
+    step: 1,
+  },
+  providers: {
+    title: "Checking AI connections",
+    summary: "Loading available providers, models, and reasoning options.",
+    step: 2,
+  },
+  opening: {
+    title: "Opening workspace",
+    summary: "Restoring your last active Tender and Manager conversation.",
+    step: 3,
+  },
+};
+
+const startupSteps = [
+  "Workspace",
+  "Local AI tools",
+  "AI connections",
+  "Workspace ready",
+];
 
 const RUNTIME_PREPARATION_POLL_MS = 500;
 
@@ -64,11 +106,14 @@ const setupIssueCopy: Record<SetupIssue, string> = {
 };
 
 function App() {
-  const [state, setState] = useState<AppState>({ kind: "checking" });
+  const [state, setState] = useState<AppState>({
+    kind: "checking",
+    stage: "workspace",
+  });
   const startupStarted = useRef(false);
 
   const openWorkspace = useCallback(async () => {
-    setState({ kind: "checking" });
+    setState({ kind: "checking", stage: "workspace" });
     try {
       const setup = await ensureQuantixSetup();
       if (setup.state !== "ready" && setup.state !== "warning") {
@@ -82,6 +127,7 @@ function App() {
         return;
       }
 
+      setState({ kind: "checking", stage: "runtime_check" });
       const [runtimeResult, updateResult] = await Promise.allSettled([
         inspectRuntimeReadiness(),
         validateQuantixUpdateRestart(),
@@ -117,11 +163,14 @@ function App() {
         runtimeReadiness.state !== "ready" &&
         runtimeReadiness.repair_available
       ) {
+        setState({ kind: "checking", stage: "runtime_install" });
         runtimeReadiness = await repairRuntimeReadiness();
       }
       if (runtimeReadiness?.state === "preparing") {
+        setState({ kind: "checking", stage: "runtime_install" });
         runtimeReadiness = await waitForRuntimePreparation();
       }
+      setState({ kind: "checking", stage: "providers" });
       const settings = await refreshApplicationSettings().catch(() => null);
       if (settings) {
         applyGeneralApplicationPreferences(settings.general_preferences);
@@ -131,6 +180,10 @@ function App() {
             (connection) => connection.status === "ready",
           )
         : runtimeReadiness?.state === "ready";
+      setState({ kind: "checking", stage: "opening" });
+      await new Promise<void>((resolve) =>
+        window.requestAnimationFrame(() => resolve()),
+      );
       setState({
         kind: "ready",
         aiAvailable,
@@ -160,14 +213,44 @@ function App() {
   }, [openWorkspace]);
 
   if (state.kind === "checking") {
+    const stage = state.stage ?? "runtime_install";
+    const stageCopy = startupStageCopy[stage];
     return (
-      <main className="quantix-startup" aria-live="polite">
+      <main className="quantix-startup" aria-busy="true">
         <span className="quantix-startup__mark">Q</span>
         <h1>Quantix</h1>
-        <p>
+        <div
+          className="quantix-startup__status"
+          role="status"
+          aria-live="polite"
+        >
           <LoaderCircle size={16} aria-hidden="true" />
-          Opening your workspace…
-        </p>
+          <div>
+            <strong>{stageCopy.title}</strong>
+            <span>{stageCopy.summary}</span>
+          </div>
+        </div>
+        <ol
+          className="quantix-startup__steps"
+          aria-label="Workspace opening progress"
+        >
+          {startupSteps.map((label, index) => {
+            const status =
+              index < stageCopy.step
+                ? "complete"
+                : index === stageCopy.step
+                  ? "current"
+                  : "pending";
+            return (
+              <li className={`is-${status}`} key={label}>
+                <span aria-hidden="true">
+                  {status === "complete" ? <Check size={12} /> : index + 1}
+                </span>
+                {label}
+              </li>
+            );
+          })}
+        </ol>
       </main>
     );
   }
