@@ -1,0 +1,63 @@
+name: One-time npm audit repair
+
+on:
+  push:
+    branches:
+      - chore/npm-audit-fix
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out audit branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: chore/npm-audit-fix
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Show current high-severity audit findings
+        run: npm audit --audit-level=high || true
+
+      - name: Apply lockfile-only audit repair
+        shell: bash
+        run: |
+          cp package.json "$RUNNER_TEMP/package.json.before"
+          npm audit fix --package-lock-only
+          cmp --silent package.json "$RUNNER_TEMP/package.json.before" || {
+            echo "npm audit fix changed package.json; refusing an unreviewed manifest change."
+            exit 1
+          }
+
+      - name: Verify repaired dependency graph
+        run: |
+          npm ci
+          npm audit --audit-level=high
+          npm run test:renderer
+          npm run build
+
+      - name: Commit verified lockfile repair
+        shell: bash
+        run: |
+          git add package-lock.json
+          if git diff --cached --quiet; then
+            echo "No lockfile repair was required."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: resolve npm high-severity advisory"
+          git push origin HEAD:chore/npm-audit-fix
