@@ -39,8 +39,9 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Cache Rust dependencies and build output
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      - name: Restore Rust dependencies and build output
+        id: rust-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -49,7 +50,6 @@ jobs:
           key: ${{ runner.os }}-rust-1.97.1-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-rust-1.97.1-
-          save-always: true
 
       - name: Install locked JavaScript dependencies
         run: npm ci
@@ -62,3 +62,13 @@ jobs:
 
       - name: Build renderer
         run: npm run build
+
+      - name: Save Rust dependencies and build output
+        if: always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}

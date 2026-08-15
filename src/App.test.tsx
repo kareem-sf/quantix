@@ -129,9 +129,10 @@ describe("App runtime startup", () => {
       screen.getByRole("list", { name: "Workspace opening progress" }),
     ).toBeTruthy();
     expect(await screen.findByText("Setup details")).toBeTruthy();
-    expect(
-      (await screen.findAllByText("Prepare document models")).length,
-    ).toBe(2);
+    const preparationLabels = await screen.findAllByText(
+      "Prepare document models",
+    );
+    expect(preparationLabels.length).toBe(2);
     expect(await screen.findByText(/47 model files/)).toBeTruthy();
 
     await act(async () => {
