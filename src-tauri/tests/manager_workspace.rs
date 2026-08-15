@@ -1,17 +1,18 @@
-use std::{fs, io, path::Path, sync::Arc};
+use std::{fs, io, path::Path, process::Command, sync::Arc};
 
 use quantix_lib::{
     ensure_quantix_setup, AiProviderKind, CancelProviderLoginCommand, CodexReadiness,
-    CreateTenderCommand, DeviceProtection, ImportTenderPackageCommand,
+    CreatePortableTenderArchiveCommand, CreateTenderBackupCommand, CreateTenderCommand,
+    DeviceProtection, ErasedTenderCopyClass, ImportTenderPackageCommand,
     InspectManagerWorkspaceCommand, ManagerIntakeStage, ManagerIntakeStatusKind,
-    ManagerWorkspaceTenderState, ProviderConnectionStatus, ProviderLoginMethod,
-    ProviderLoginStatus, ProviderReasoningSelection, QuantixHost,
-    RecordEngineerWorkspaceMessageCommand, RuntimeLayout, SelectManagerWorkspaceTenderCommand,
-    SetupPlatform, SetupState, StartProviderLoginCommand, StoragePermissions, TenderErrorCode,
-    TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderRetentionDecisionCommand,
-    TenderRetentionState, TrashedTenderDecisionCommand, TrashedTenderState,
-    UpdateAiExecutionSelectionCommand, WorkspaceActionKind, WorkspaceMessageReferenceKind,
-    MINIMUM_SETUP_FREE_SPACE_BYTES,
+    ManagerWorkspaceTenderState, ProviderCleanupStatus, ProviderConnectionStatus,
+    ProviderLoginMethod, ProviderLoginStatus, ProviderReasoningSelection,
+    PurgeTrashedTenderCommand, QuantixHost, RecordEngineerWorkspaceMessageCommand, RuntimeLayout,
+    SelectManagerWorkspaceTenderCommand, SetupPlatform, SetupState, StartProviderLoginCommand,
+    StoragePermissions, TenderErrorCode, TenderOfficeMessageAuthor, TenderOfficeMessageKind,
+    TenderRetentionDecisionCommand, TenderRetentionState, TrashedTenderDecisionCommand,
+    TrashedTenderState, UpdateAiExecutionSelectionCommand, WorkspaceActionKind,
+    WorkspaceMessageReferenceKind, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use rusqlite::Connection;
 
@@ -33,6 +34,16 @@ impl SetupPlatform for ReadySetupPlatform {
     fn device_protection(&self, _path: &Path) -> DeviceProtection {
         DeviceProtection::Protected
     }
+}
+
+fn run_storage_fixture(application_home: &Path, arguments: &[&str], failpoint: &str) -> bool {
+    Command::new(env!("CARGO_BIN_EXE_quantix-storage-fixture"))
+        .arg(application_home)
+        .args(arguments)
+        .env("QUANTIX_STORAGE_FAILPOINT", failpoint)
+        .status()
+        .expect("run supervised storage fixture")
+        .success()
 }
 
 #[test]
@@ -207,6 +218,167 @@ fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_workspace()
             .conversation_id,
         conversation_id
     );
+
+    let backup = host
+        .create_tender_backup(CreateTenderBackupCommand {
+            tender_id: tender.tender_id.clone(),
+        })
+        .expect("create managed Tender backup");
+    let portable = host
+        .create_portable_tender_archive(CreatePortableTenderArchiveCommand {
+            tender_id: tender.tender_id.clone(),
+        })
+        .expect("create managed Portable Tender Archive");
+    let exports = application_home.join("exports").join(&tender.tender_id);
+    fs::create_dir(&exports).expect("create Tender delivery export root");
+    fs::write(exports.join("delivery.txt"), b"managed export").expect("write managed export");
+    let agent_workspace = application_home.join("staging").join(format!(
+        "agent-{}-{}",
+        tender.tender_id,
+        "1".repeat(32)
+    ));
+    fs::create_dir(&agent_workspace).expect("create Agent workspace fixture");
+    fs::write(agent_workspace.join("context.json"), b"{}").expect("write Agent fixture");
+    let quarantine = application_home.join("staging").join(format!(
+        "quarantine-agent-{}-{}",
+        tender.tender_id,
+        "2".repeat(32)
+    ));
+    fs::create_dir(&quarantine).expect("create quarantine fixture");
+    fs::write(quarantine.join("partial.json"), b"{}").expect("write quarantine fixture");
+    let log = application_home
+        .join("logs")
+        .join(format!("tender-{}.log", tender.tender_id));
+    fs::write(&log, b"Tender-scoped diagnostic").expect("write Tender log fixture");
+
+    let permanently_trashed = host
+        .trash_tender(TenderRetentionDecisionCommand {
+            tender_id: tender.tender_id.clone(),
+            rationale: "Prepare the exact Tender for permanent deletion.".into(),
+        })
+        .expect("move Tender into Trash for permanent deletion");
+    let invalid_confirmation = host
+        .purge_trashed_tender(PurgeTrashedTenderCommand {
+            deletion_id: permanently_trashed.deletion_id.clone(),
+            rationale: "This must not delete without the exact Tender name.".into(),
+            confirmation_tender_name: "Wrong Tender".into(),
+        })
+        .expect_err("reject a mismatched permanent-deletion confirmation");
+    assert_eq!(invalid_confirmation.code, TenderErrorCode::InvalidCommand);
+    assert!(host
+        .inspect_trashed_tenders()
+        .expect("inspect Trash after rejected confirmation")
+        .into_iter()
+        .any(|record| record.deletion_id == permanently_trashed.deletion_id));
+    let receipt = host
+        .purge_trashed_tender(PurgeTrashedTenderCommand {
+            deletion_id: permanently_trashed.deletion_id.clone(),
+            rationale: "Erase every identifiable Quantix-controlled copy.".into(),
+            confirmation_tender_name: "Terminal Archive Tender".into(),
+        })
+        .expect("permanently delete Quantix-controlled Tender copies");
+    assert!(receipt.local_deletion_completed);
+    assert_eq!(
+        receipt.provider_cleanup_status,
+        ProviderCleanupStatus::NotRequired
+    );
+    assert!(receipt
+        .erased_copy_classes
+        .contains(&ErasedTenderCopyClass::TenderStore));
+    assert!(!application_home
+        .join("backups")
+        .join(format!("{}.qtbackup", backup.backup_id))
+        .exists());
+    assert!(!application_home
+        .join("archives")
+        .join(portable.relative_path)
+        .exists());
+    assert!(!exports.exists());
+    assert!(!agent_workspace.exists());
+    assert!(!quarantine.exists());
+    assert!(!log.exists());
+    assert!(host
+        .inspect_trashed_tenders()
+        .expect("inspect empty Trash after deletion")
+        .into_iter()
+        .all(|record| record.deletion_id != permanently_trashed.deletion_id));
+    assert_eq!(
+        host.inspect_deletion_receipts()
+            .expect("inspect content-free Deletion Receipt")
+            .into_iter()
+            .find(|candidate| candidate.receipt_id == receipt.receipt_id)
+            .expect("exact Deletion Receipt"),
+        receipt
+    );
+    let cannot_restore = host
+        .restore_trashed_tender(TrashedTenderDecisionCommand {
+            deletion_id: permanently_trashed.deletion_id,
+            rationale: "A receipt must never restore a Tender.".into(),
+        })
+        .expect_err("permanently deleted Tender cannot be restored");
+    assert_eq!(cannot_restore.code, TenderErrorCode::InvalidCommand);
+}
+
+#[test]
+fn permanent_deletion_reconciles_each_local_publication_boundary_without_tender_content() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    for failpoint in ["purge_after_decision", "purge_after_local_delete"] {
+        let application_home = user_home.path().join(failpoint);
+        let host =
+            QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+        assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+        let tender_name = format!("Confidential deletion fixture {failpoint}");
+        let tender = host
+            .create_tender(CreateTenderCommand {
+                name: tender_name.clone(),
+            })
+            .expect("create deletion fixture Tender");
+        let tender_database = application_home
+            .join("tenders")
+            .join(&tender.tender_id)
+            .join("tender.sqlite");
+        Connection::open(tender_database)
+            .expect("open Tender Store fixture")
+            .execute(
+                "UPDATE tender SET lifecycle_phase = 'declined' WHERE singleton = 1",
+                [],
+            )
+            .expect("establish terminal fixture state");
+        let trashed = host
+            .trash_tender(TenderRetentionDecisionCommand {
+                tender_id: tender.tender_id.clone(),
+                rationale: "Prepare the exact Tender for permanent deletion.".into(),
+            })
+            .expect("move fixture Tender into Trash");
+        drop(host);
+
+        assert!(!run_storage_fixture(
+            &application_home,
+            &["purge-trash", &trashed.deletion_id, &tender_name],
+            failpoint,
+        ));
+
+        let restarted =
+            QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+        assert_eq!(ensure_quantix_setup(&restarted).state, SetupState::Ready);
+        assert!(restarted
+            .inspect_trashed_tenders()
+            .expect("reconcile interrupted permanent deletion")
+            .is_empty());
+        let receipts = restarted
+            .inspect_deletion_receipts()
+            .expect("inspect reconciled Deletion Receipt");
+        assert_eq!(receipts.len(), 1);
+        assert!(receipts[0].local_deletion_completed);
+        let receipt_json: String = Connection::open(application_home.join("installation.sqlite"))
+            .expect("open installation catalogue")
+            .query_row("SELECT receipt_json FROM deletion_receipts", [], |row| {
+                row.get(0)
+            })
+            .expect("read minimal Deletion Receipt");
+        assert!(!receipt_json.contains(&tender_name));
+        assert!(!receipt_json.contains("Prepare the exact Tender"));
+    }
 }
 
 #[test]

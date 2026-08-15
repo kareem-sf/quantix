@@ -42,7 +42,7 @@ describe("App runtime startup", () => {
       },
       diagnostics: {
         quantix_version: "0.1.0",
-        installation_schema_version: 18,
+        installation_schema_version: 19,
         tender_schema_version: 31,
       },
     });

@@ -15,6 +15,7 @@ use ts_rs::TS;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
 use super::*;
+use crate::application_settings::AiProviderKind;
 
 const BACKUP_FORMAT_VERSION: u32 = 1;
 const MAX_BACKUP_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -281,6 +282,18 @@ pub struct TrashedTenderDecisionCommand {
     pub rationale: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Validate, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct PurgeTrashedTenderCommand {
+    #[garde(length(bytes, min = 32, max = 32), ascii)]
+    pub deletion_id: String,
+    #[garde(length(bytes, min = 1, max = 4000))]
+    pub rationale: String,
+    #[garde(length(bytes, min = 1, max = 200))]
+    pub confirmation_tender_name: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -379,6 +392,29 @@ pub struct TrashedTenderRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ErasedTenderCopyClass {
+    TenderStore,
+    TenderBackup,
+    PortableTenderArchive,
+    DeliveryExport,
+    AgentRunWorkspace,
+    StagingItem,
+    QuarantineItem,
+    TenderLog,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ProviderCleanupStatus {
+    NotRequired,
+    Pending,
+    Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct DeletionReceipt {
     pub receipt_id: String,
@@ -386,10 +422,54 @@ pub struct DeletionReceipt {
     pub tender_id: String,
     pub audit_event_count: u64,
     pub audit_chain_head: String,
+    pub local_deletion_completed: bool,
+    pub erased_copy_classes: Vec<ErasedTenderCopyClass>,
+    pub provider_cleanup_status: ProviderCleanupStatus,
+    pub provider_thread_count: u32,
+    pub confirmed_provider_thread_deletions: u32,
+    pub external_copy_exclusions: Vec<String>,
     pub purged_by: String,
     pub acting_role: String,
     pub purged_at: String,
     pub manifest_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct DeletionReceiptRecord {
+    receipt_id: String,
+    deletion_id: String,
+    tender_id: String,
+    audit_event_count: u64,
+    audit_chain_head: String,
+    local_deletion_completed: bool,
+    erased_copy_classes: Vec<ErasedTenderCopyClass>,
+    provider_thread_count: u32,
+    provider_cleanup_manifest_sha256: String,
+    external_copy_exclusions: Vec<String>,
+    purged_by: String,
+    acting_role: String,
+    purged_at: String,
+    manifest_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ProviderCleanupTarget {
+    provider: AiProviderKind,
+    thread_ref: String,
+}
+
+struct PermanentDeletionPlan {
+    erased_copy_classes: Vec<ErasedTenderCopyClass>,
+    backup_ids: Vec<String>,
+    portable_archive_paths: Vec<String>,
+    recovery_ids: Vec<String>,
+    provider_cleanup_targets: Vec<ProviderCleanupTarget>,
+}
+
+struct PendingProviderCleanup {
+    cleanup_id: String,
+    provider: AiProviderKind,
+    thread_ref: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -404,6 +484,11 @@ struct TrashedTenderLifecycleDecision {
     created_at: String,
     audit_event_count: Option<u64>,
     audit_chain_head: Option<String>,
+    erased_copy_classes: Vec<ErasedTenderCopyClass>,
+    backup_ids: Vec<String>,
+    portable_archive_paths: Vec<String>,
+    recovery_ids: Vec<String>,
+    provider_cleanup_targets: Vec<ProviderCleanupTarget>,
     manifest_sha256: String,
 }
 
@@ -1927,7 +2012,7 @@ impl QuantixHost {
 
     pub fn purge_trashed_tender(
         &self,
-        command: TrashedTenderDecisionCommand,
+        command: PurgeTrashedTenderCommand,
     ) -> Result<DeletionReceipt, TenderCommandError> {
         let _ordinary_work = self.begin_ordinary_work()?;
         require_setup(self)?;
@@ -1945,6 +2030,9 @@ impl QuantixHost {
                     && record.state == TrashedTenderState::Trashed
             })
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if command.confirmation_tender_name != record.tender_name {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
         let tender_id = TenderId::parse(&record.tender_id)?;
         let source = self
             .application_home()
@@ -1962,9 +2050,14 @@ impl QuantixHost {
         if purge_root.exists() {
             return Err(TenderCommandError::new(TenderErrorCode::StoreUnavailable));
         }
-        record = self.begin_purge_from_trash(record, command.rationale.trim(), &summary)?;
+        let plan = self.permanent_deletion_plan(&tender_id, &source)?;
+        let (next_record, decision) =
+            self.begin_purge_from_trash(record, command.rationale.trim(), &summary, plan)?;
+        record = next_record;
+        storage_publication_failpoint("purge_after_decision");
         fs::rename(&source, &purge_root).map_err(store_unavailable)?;
-        remove_verified_directory(&self.application_home().join("staging"), &purge_root)?;
+        remove_permanent_deletion_files(self.application_home(), &record, &decision)?;
+        storage_publication_failpoint("purge_after_local_delete");
         self.complete_purge_from_trash(record)
     }
 
@@ -1987,9 +2080,143 @@ impl QuantixHost {
             .map_err(sql_error)?;
         let mut receipts = Vec::new();
         for row in rows {
-            receipts.push(parse_canonical_record(&row.map_err(sql_error)?)?);
+            let record: DeletionReceiptRecord = parse_canonical_record(&row.map_err(sql_error)?)?;
+            if !record.local_deletion_completed
+                || manifest_sha256_record(&record)? != record.manifest_sha256
+            {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            receipts.push(deletion_receipt_view(&connection, &record)?);
         }
         Ok(receipts)
+    }
+
+    pub(crate) async fn retry_pending_provider_cleanup(&self) -> Result<(), TenderCommandError> {
+        let _execution = self.provider_cleanup_execution().lock().await;
+        let pending = self.pending_provider_cleanup_jobs()?;
+        if pending.is_empty() {
+            return Ok(());
+        }
+        if self.runtime_is_verified()
+            && pending
+                .iter()
+                .any(|job| job.provider == AiProviderKind::Codex)
+            && self.agent_provider().lock().await.is_none()
+        {
+            let _ = self
+                .inspect_codex_subscription(tokio_util::sync::CancellationToken::new())
+                .await;
+        }
+        for job in pending {
+            let deleted = match job.provider {
+                AiProviderKind::Anthropic | AiProviderKind::Gemini => true,
+                AiProviderKind::Codex => {
+                    let provider = self.agent_provider().lock().await.as_ref().cloned();
+                    match provider {
+                        Some(provider) => {
+                            provider.delete_thread(job.thread_ref.clone()).await.is_ok()
+                        }
+                        None => false,
+                    }
+                }
+            };
+            self.record_provider_cleanup_attempt(&job, deleted)?;
+        }
+        Ok(())
+    }
+
+    fn pending_provider_cleanup_jobs(
+        &self,
+    ) -> Result<Vec<PendingProviderCleanup>, TenderCommandError> {
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let connection = Connection::open_with_flags(
+            self.application_home().join("installation.sqlite"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(sql_error)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT cleanup_id, provider_kind, thread_ref, target_manifest_sha256
+                 FROM provider_cleanup_jobs WHERE status = 'pending'
+                 ORDER BY deletion_id, target_ordinal",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(sql_error)?;
+        let mut jobs = Vec::new();
+        for row in rows {
+            let (cleanup_id, provider, thread_ref, target_manifest_sha256) =
+                row.map_err(sql_error)?;
+            let provider = match provider.as_str() {
+                "codex" => AiProviderKind::Codex,
+                "anthropic" => AiProviderKind::Anthropic,
+                "gemini" => AiProviderKind::Gemini,
+                _ => return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+            };
+            if manifest_sha256_record(&ProviderCleanupTarget {
+                provider,
+                thread_ref: thread_ref.clone(),
+            })? != target_manifest_sha256
+            {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            jobs.push(PendingProviderCleanup {
+                cleanup_id,
+                provider,
+                thread_ref,
+            });
+        }
+        Ok(jobs)
+    }
+
+    fn record_provider_cleanup_attempt(
+        &self,
+        job: &PendingProviderCleanup,
+        deleted: bool,
+    ) -> Result<(), TenderCommandError> {
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let connection = Connection::open(self.application_home().join("installation.sqlite"))
+            .map_err(sql_error)?;
+        let changed = if deleted {
+            connection.execute(
+                "UPDATE provider_cleanup_jobs
+                 SET status = 'completed', thread_ref = NULL,
+                     attempt_count = attempt_count + 1, diagnostic_code = NULL,
+                     last_attempt_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE cleanup_id = ?1 AND status = 'pending' AND thread_ref = ?2",
+                params![job.cleanup_id, job.thread_ref],
+            )
+        } else {
+            connection.execute(
+                "UPDATE provider_cleanup_jobs
+                 SET attempt_count = attempt_count + 1,
+                     diagnostic_code = 'provider_unavailable',
+                     last_attempt_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE cleanup_id = ?1 AND status = 'pending' AND thread_ref = ?2",
+                params![job.cleanup_id, job.thread_ref],
+            )
+        }
+        .map_err(sql_error)?;
+        if changed != 1 {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        Ok(())
     }
 
     fn set_tender_retention(
@@ -2160,6 +2387,11 @@ impl QuantixHost {
             created_at: created_at.clone(),
             audit_event_count: None,
             audit_chain_head: None,
+            erased_copy_classes: Vec::new(),
+            backup_ids: Vec::new(),
+            portable_archive_paths: Vec::new(),
+            recovery_ids: Vec::new(),
+            provider_cleanup_targets: Vec::new(),
             manifest_sha256: String::new(),
         };
         decision.manifest_sha256 = manifest_sha256_record(&decision)?;
@@ -2180,12 +2412,99 @@ impl QuantixHost {
         Ok(record)
     }
 
+    fn permanent_deletion_plan(
+        &self,
+        tender_id: &TenderId,
+        trashed_root: &Path,
+    ) -> Result<PermanentDeletionPlan, TenderCommandError> {
+        let store_database = Connection::open_with_flags(
+            trashed_root.join("tender.sqlite"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(sql_error)?;
+        let mut provider_statement = store_database
+            .prepare(
+                "SELECT DISTINCT json_extract(bindings.binding_json, '$.provider'),
+                        runs.provider_thread_ref
+                 FROM agent_runs AS runs
+                 JOIN agent_run_provider_bindings AS bindings ON bindings.run_id = runs.run_id
+                 WHERE runs.provider_thread_ref IS NOT NULL
+                 ORDER BY 1, 2",
+            )
+            .map_err(sql_error)?;
+        let provider_rows = provider_statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(sql_error)?;
+        let mut provider_cleanup_targets = Vec::new();
+        for row in provider_rows {
+            let (provider, thread_ref) = row.map_err(sql_error)?;
+            let provider = match provider.as_str() {
+                "codex" => AiProviderKind::Codex,
+                "anthropic" => AiProviderKind::Anthropic,
+                "gemini" => AiProviderKind::Gemini,
+                _ => return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+            };
+            if thread_ref.is_empty() || thread_ref.len() > 1000 {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            provider_cleanup_targets.push(ProviderCleanupTarget {
+                provider,
+                thread_ref,
+            });
+        }
+
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let installation = Connection::open_with_flags(
+            self.application_home().join("installation.sqlite"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(sql_error)?;
+        let backup_ids = load_string_column(
+            &installation,
+            "SELECT backup_id FROM tender_backups WHERE tender_id = ?1 ORDER BY backup_id",
+            tender_id.as_str(),
+        )?;
+        let portable_archive_paths = load_string_column(
+            &installation,
+            "SELECT relative_path FROM portable_tender_archives
+             WHERE tender_id = ?1 ORDER BY relative_path",
+            tender_id.as_str(),
+        )?;
+        let recovery_ids = load_string_column(
+            &installation,
+            "SELECT recovery_id FROM tender_recoveries WHERE tender_id = ?1 ORDER BY recovery_id",
+            tender_id.as_str(),
+        )?;
+        Ok(PermanentDeletionPlan {
+            erased_copy_classes: vec![
+                ErasedTenderCopyClass::TenderStore,
+                ErasedTenderCopyClass::TenderBackup,
+                ErasedTenderCopyClass::PortableTenderArchive,
+                ErasedTenderCopyClass::DeliveryExport,
+                ErasedTenderCopyClass::AgentRunWorkspace,
+                ErasedTenderCopyClass::StagingItem,
+                ErasedTenderCopyClass::QuarantineItem,
+                ErasedTenderCopyClass::TenderLog,
+            ],
+            backup_ids,
+            portable_archive_paths,
+            recovery_ids,
+            provider_cleanup_targets,
+        })
+    }
+
     fn begin_purge_from_trash(
         &self,
         mut record: TrashedTenderRecord,
         rationale: &str,
         summary: &TenderSummary,
-    ) -> Result<TrashedTenderRecord, TenderCommandError> {
+        plan: PermanentDeletionPlan,
+    ) -> Result<(TrashedTenderRecord, TrashedTenderLifecycleDecision), TenderCommandError> {
         let _guard = self
             .catalogue_lock()
             .lock()
@@ -2211,6 +2530,11 @@ impl QuantixHost {
             created_at: created_at.clone(),
             audit_event_count: Some(summary.audit_event_count),
             audit_chain_head: Some(summary.audit_chain_head.clone()),
+            erased_copy_classes: plan.erased_copy_classes,
+            backup_ids: plan.backup_ids,
+            portable_archive_paths: plan.portable_archive_paths,
+            recovery_ids: plan.recovery_ids,
+            provider_cleanup_targets: plan.provider_cleanup_targets,
             manifest_sha256: String::new(),
         };
         decision.manifest_sha256 = manifest_sha256_record(&decision)?;
@@ -2228,7 +2552,39 @@ impl QuantixHost {
         transaction.commit().map_err(sql_error)?;
         record.state = TrashedTenderState::Purging;
         record.updated_at = created_at;
-        Ok(record)
+        Ok((record, decision))
+    }
+
+    fn load_purge_decision(
+        &self,
+        deletion_id: &str,
+    ) -> Result<TrashedTenderLifecycleDecision, TenderCommandError> {
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let connection = Connection::open_with_flags(
+            self.application_home().join("installation.sqlite"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(sql_error)?;
+        let decision_json: String = connection
+            .query_row(
+                "SELECT decision_json FROM tender_trash_decisions
+                 WHERE deletion_id = ?1 AND action = 'purge'
+                 ORDER BY created_at DESC, decision_id DESC LIMIT 1",
+                [deletion_id],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        let decision = parse_canonical_record::<TrashedTenderLifecycleDecision>(&decision_json)?;
+        if decision.deletion_id != deletion_id
+            || decision.action != "purge"
+            || manifest_sha256_record(&decision)? != decision.manifest_sha256
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        Ok(decision)
     }
 
     fn complete_purge_from_trash(
@@ -2266,7 +2622,15 @@ impl QuantixHost {
                 row.get(0)
             })
             .map_err(sql_error)?;
-        let mut receipt = DeletionReceipt {
+        let provider_thread_count = u32::try_from(decision.provider_cleanup_targets.len())
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let provider_target_manifests = decision
+            .provider_cleanup_targets
+            .iter()
+            .map(manifest_sha256_record)
+            .collect::<Result<Vec<_>, _>>()?;
+        let provider_cleanup_manifest_sha256 = manifest_sha256_record(&provider_target_manifests)?;
+        let mut receipt = DeletionReceiptRecord {
             receipt_id: random_identifier(&transaction)?,
             deletion_id: record.deletion_id.clone(),
             tender_id: record.tender_id.clone(),
@@ -2276,8 +2640,20 @@ impl QuantixHost {
             audit_chain_head: decision
                 .audit_chain_head
                 .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
-            purged_by: decision.decided_by,
-            acting_role: decision.acting_role,
+            local_deletion_completed: true,
+            erased_copy_classes: decision.erased_copy_classes.clone(),
+            provider_thread_count,
+            provider_cleanup_manifest_sha256,
+            external_copy_exclusions: vec![
+                "original_source_packages".into(),
+                "user_copied_exports".into(),
+                "third_party_backups".into(),
+                "recipient_copies".into(),
+                "operating_system_backups".into(),
+                "application_provider_credentials".into(),
+            ],
+            purged_by: decision.decided_by.clone(),
+            acting_role: decision.acting_role.clone(),
             purged_at: purged_at.clone(),
             manifest_sha256: String::new(),
         };
@@ -2297,18 +2673,102 @@ impl QuantixHost {
                 ],
             )
             .map_err(sql_error)?;
+        for (target_ordinal, target) in decision.provider_cleanup_targets.iter().enumerate() {
+            let (provider_kind, status, thread_ref) = match target.provider {
+                AiProviderKind::Codex => ("codex", "pending", Some(target.thread_ref.as_str())),
+                AiProviderKind::Anthropic => ("anthropic", "completed", None),
+                AiProviderKind::Gemini => ("gemini", "completed", None),
+            };
+            transaction
+                .execute(
+                    "INSERT INTO provider_cleanup_jobs (
+                       cleanup_id, deletion_id, target_ordinal, provider_kind, thread_ref,
+                       target_manifest_sha256, status,
+                       attempt_count, diagnostic_code, last_attempt_at, created_at, updated_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, NULL, NULL, ?8, ?8)",
+                    params![
+                        random_identifier(&transaction)?,
+                        record.deletion_id,
+                        i64::try_from(target_ordinal).map_err(|_| TenderCommandError::new(
+                            TenderErrorCode::IntegrityFailed
+                        ))?,
+                        provider_kind,
+                        thread_ref,
+                        provider_target_manifests[target_ordinal],
+                        status,
+                        purged_at,
+                    ],
+                )
+                .map_err(sql_error)?;
+        }
+        transaction
+            .execute(
+                "DELETE FROM tender_recovery_decisions
+                 WHERE recovery_id IN (
+                   SELECT recovery_id FROM tender_recoveries WHERE tender_id = ?1
+                 )",
+                [record.tender_id.as_str()],
+            )
+            .map_err(sql_error)?;
+        transaction
+            .execute(
+                "DELETE FROM tender_recoveries WHERE tender_id = ?1",
+                [record.tender_id.as_str()],
+            )
+            .map_err(sql_error)?;
+        transaction
+            .execute(
+                "DELETE FROM portable_tender_archives WHERE tender_id = ?1",
+                [record.tender_id.as_str()],
+            )
+            .map_err(sql_error)?;
+        transaction
+            .execute(
+                "DELETE FROM tender_backups WHERE tender_id = ?1",
+                [record.tender_id.as_str()],
+            )
+            .map_err(sql_error)?;
+        transaction
+            .execute(
+                "DELETE FROM tender_catalogue WHERE tender_id = ?1",
+                [record.tender_id.as_str()],
+            )
+            .map_err(sql_error)?;
+        transaction
+            .execute(
+                "UPDATE manager_workspace_selection
+                 SET selected_tender_id = NULL, selected_at = NULL,
+                     selection_sequence = selection_sequence + 1
+                 WHERE singleton = 1 AND selected_tender_id = ?1",
+                [record.tender_id.as_str()],
+            )
+            .map_err(sql_error)?;
+        transaction
+            .execute(
+                "UPDATE manager_workspace_selection
+                 SET pending_tender_id = NULL, pending_at = NULL
+                 WHERE singleton = 1 AND pending_tender_id = ?1",
+                [record.tender_id.as_str()],
+            )
+            .map_err(sql_error)?;
+        transaction
+            .execute(
+                "DELETE FROM tender_trash_decisions WHERE deletion_id = ?1",
+                [record.deletion_id.as_str()],
+            )
+            .map_err(sql_error)?;
         let changed = transaction
             .execute(
-                "UPDATE tender_trash SET state = 'purged', diagnostic_code = NULL, updated_at = ?2
-                 WHERE deletion_id = ?1 AND state = 'purging'",
-                params![record.deletion_id, purged_at],
+                "DELETE FROM tender_trash WHERE deletion_id = ?1 AND state = 'purging'",
+                [record.deletion_id.as_str()],
             )
             .map_err(sql_error)?;
         if changed != 1 {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
+        let result = deletion_receipt_view(&transaction, &receipt)?;
         transaction.commit().map_err(sql_error)?;
-        Ok(receipt)
+        Ok(result)
     }
 
     fn ensure_tender_identity_available(
@@ -2334,6 +2794,8 @@ impl QuantixHost {
                 "SELECT EXISTS(
                    SELECT 1 FROM tender_trash
                    WHERE tender_id = ?1 AND deletion_id != COALESCE(?2, '')
+                   UNION ALL
+                   SELECT 1 FROM deletion_receipts WHERE tender_id = ?1
                  )",
                 params![tender_id.as_str(), excluded_deletion_id],
                 |row| row.get(0),
@@ -2474,12 +2936,8 @@ impl QuantixHost {
                     if trashed.exists() {
                         fs::rename(&trashed, &purging).map_err(store_unavailable)?;
                     }
-                    if purging.exists() {
-                        remove_verified_directory(
-                            &self.application_home().join("staging"),
-                            &purging,
-                        )?;
-                    }
+                    let decision = self.load_purge_decision(&record.deletion_id)?;
+                    remove_permanent_deletion_files(self.application_home(), &record, &decision)?;
                     self.complete_purge_from_trash(record)?;
                     continue;
                 }
@@ -2895,6 +3353,147 @@ fn remove_operation_staging(parent: &Path, target: &Path) -> Result<(), TenderCo
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(store_unavailable(error)),
     }
+}
+
+fn remove_permanent_deletion_files(
+    application_home: &Path,
+    record: &TrashedTenderRecord,
+    decision: &TrashedTenderLifecycleDecision,
+) -> Result<(), TenderCommandError> {
+    if decision.action != "purge"
+        || decision.deletion_id != record.deletion_id
+        || decision.tender_id != record.tender_id
+        || manifest_sha256_record(decision)? != decision.manifest_sha256
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let backups = application_home.join("backups");
+    for backup_id in &decision.backup_ids {
+        if !valid_identifier(backup_id) {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        remove_operation_file(&backups, &backups.join(format!("{backup_id}.qtbackup")))?;
+    }
+    let archives = application_home.join("archives");
+    for relative_path in &decision.portable_archive_paths {
+        let relative = Path::new(relative_path);
+        if relative
+            .parent()
+            .is_some_and(|parent| parent != Path::new(""))
+            || relative.file_name().and_then(|value| value.to_str()) != Some(relative_path)
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        remove_operation_file(&archives, &archives.join(relative))?;
+    }
+    remove_operation_staging(
+        &application_home.join("exports"),
+        &application_home.join("exports").join(&record.tender_id),
+    )?;
+
+    let mut identifiers = vec![record.tender_id.clone(), record.deletion_id.clone()];
+    identifiers.extend(decision.backup_ids.iter().cloned());
+    identifiers.extend(decision.recovery_ids.iter().cloned());
+    identifiers.extend(decision.portable_archive_paths.iter().cloned());
+    remove_matching_managed_children(&application_home.join("staging"), &identifiers)?;
+    remove_matching_managed_children(&application_home.join("logs"), &identifiers)?;
+    Ok(())
+}
+
+fn remove_matching_managed_children(
+    parent: &Path,
+    identifiers: &[String],
+) -> Result<(), TenderCommandError> {
+    let entries = fs::read_dir(parent).map_err(store_unavailable)?;
+    for entry in entries {
+        let entry = entry.map_err(store_unavailable)?;
+        let name = entry
+            .file_name()
+            .to_str()
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
+            .to_owned();
+        if !identifiers
+            .iter()
+            .any(|identifier| !identifier.is_empty() && name.contains(identifier))
+        {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(entry.path()).map_err(store_unavailable)?;
+        if metadata.is_dir() && !metadata_is_unsafe_storage_link(&metadata) {
+            remove_operation_staging(parent, &entry.path())?;
+        } else if metadata.is_file() && !metadata_is_unsafe_storage_link(&metadata) {
+            remove_operation_file(parent, &entry.path())?;
+        } else {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+    }
+    Ok(())
+}
+
+fn load_string_column(
+    connection: &Connection,
+    sql: &str,
+    parameter: &str,
+) -> Result<Vec<String>, TenderCommandError> {
+    let mut statement = connection.prepare(sql).map_err(sql_error)?;
+    let rows = statement
+        .query_map([parameter], |row| row.get::<_, String>(0))
+        .map_err(sql_error)?;
+    rows.map(|row| row.map_err(sql_error)).collect()
+}
+
+fn deletion_receipt_view(
+    connection: &Connection,
+    record: &DeletionReceiptRecord,
+) -> Result<DeletionReceipt, TenderCommandError> {
+    let target_manifests = load_string_column(
+        connection,
+        "SELECT target_manifest_sha256 FROM provider_cleanup_jobs
+         WHERE deletion_id = ?1 ORDER BY target_ordinal",
+        &record.deletion_id,
+    )?;
+    if manifest_sha256_record(&target_manifests)? != record.provider_cleanup_manifest_sha256 {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let (provider_threads, confirmed): (i64, i64) = connection
+        .query_row(
+            "SELECT COUNT(*), COALESCE(SUM(status = 'completed'), 0)
+             FROM provider_cleanup_jobs WHERE deletion_id = ?1",
+            [record.deletion_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(sql_error)?;
+    let provider_threads = u32::try_from(provider_threads)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let confirmed = u32::try_from(confirmed)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    if provider_threads != record.provider_thread_count || confirmed > provider_threads {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let provider_cleanup_status = if provider_threads == 0 {
+        ProviderCleanupStatus::NotRequired
+    } else if confirmed == provider_threads {
+        ProviderCleanupStatus::Completed
+    } else {
+        ProviderCleanupStatus::Pending
+    };
+    Ok(DeletionReceipt {
+        receipt_id: record.receipt_id.clone(),
+        deletion_id: record.deletion_id.clone(),
+        tender_id: record.tender_id.clone(),
+        audit_event_count: record.audit_event_count,
+        audit_chain_head: record.audit_chain_head.clone(),
+        local_deletion_completed: record.local_deletion_completed,
+        erased_copy_classes: record.erased_copy_classes.clone(),
+        provider_cleanup_status,
+        provider_thread_count: provider_threads,
+        confirmed_provider_thread_deletions: confirmed,
+        external_copy_exclusions: record.external_copy_exclusions.clone(),
+        purged_by: record.purged_by.clone(),
+        acting_role: record.acting_role.clone(),
+        purged_at: record.purged_at.clone(),
+        manifest_sha256: record.manifest_sha256.clone(),
+    })
 }
 
 fn remove_operation_file(parent: &Path, target: &Path) -> Result<(), TenderCommandError> {
@@ -3737,5 +4336,80 @@ mod tests {
         )
         .expect_err("expired queue wait must fail");
         assert_eq!(error.code, TenderErrorCode::OperationTimedOut);
+    }
+
+    #[test]
+    fn deletion_receipt_keeps_provider_cleanup_pending_content_free_and_idempotent() {
+        let connection = Connection::open_in_memory().expect("open cleanup fixture catalogue");
+        connection
+            .execute_batch(
+                "CREATE TABLE provider_cleanup_jobs (
+                   deletion_id TEXT NOT NULL,
+                   target_ordinal INTEGER NOT NULL,
+                   target_manifest_sha256 TEXT NOT NULL,
+                   status TEXT NOT NULL
+                 );",
+            )
+            .expect("create cleanup fixture ledger");
+        let target = ProviderCleanupTarget {
+            provider: AiProviderKind::Codex,
+            thread_ref: "opaque-provider-thread".into(),
+        };
+        let target_manifest = manifest_sha256_record(&target).expect("hash cleanup target");
+        let cleanup_manifest =
+            manifest_sha256_record(&vec![target_manifest.clone()]).expect("hash cleanup ledger");
+        connection
+            .execute(
+                "INSERT INTO provider_cleanup_jobs (
+                   deletion_id, target_ordinal, target_manifest_sha256, status
+                 ) VALUES (?1, 0, ?2, 'pending')",
+                params!["1".repeat(32), target_manifest],
+            )
+            .expect("record pending provider cleanup");
+        let mut receipt = DeletionReceiptRecord {
+            receipt_id: "2".repeat(32),
+            deletion_id: "1".repeat(32),
+            tender_id: "3".repeat(32),
+            audit_event_count: 1,
+            audit_chain_head: "4".repeat(64),
+            local_deletion_completed: true,
+            erased_copy_classes: vec![ErasedTenderCopyClass::TenderStore],
+            provider_thread_count: 1,
+            provider_cleanup_manifest_sha256: cleanup_manifest,
+            external_copy_exclusions: vec!["application_provider_credentials".into()],
+            purged_by: "engineer_user".into(),
+            acting_role: "tendering_engineer".into(),
+            purged_at: "2026-08-15T00:00:00.000Z".into(),
+            manifest_sha256: String::new(),
+        };
+        receipt.manifest_sha256 = manifest_sha256_record(&receipt).expect("hash receipt");
+        let serialized = canonical_json_record(&receipt).expect("serialize receipt");
+        assert!(!serialized.contains("opaque-provider-thread"));
+
+        let pending =
+            deletion_receipt_view(&connection, &receipt).expect("inspect pending cleanup");
+        assert_eq!(
+            pending.provider_cleanup_status,
+            ProviderCleanupStatus::Pending
+        );
+        assert_eq!(pending.confirmed_provider_thread_deletions, 0);
+        connection
+            .execute(
+                "UPDATE provider_cleanup_jobs SET status = 'completed' WHERE deletion_id = ?1",
+                [&receipt.deletion_id],
+            )
+            .expect("confirm provider cleanup");
+        let completed =
+            deletion_receipt_view(&connection, &receipt).expect("inspect completed cleanup");
+        assert_eq!(
+            completed.provider_cleanup_status,
+            ProviderCleanupStatus::Completed
+        );
+        assert_eq!(completed.confirmed_provider_thread_deletions, 1);
+        assert_eq!(
+            deletion_receipt_view(&connection, &receipt)
+                .expect("repeat completed cleanup inspection"),
+            completed
+        );
     }
 }

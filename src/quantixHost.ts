@@ -1338,9 +1338,14 @@ export function restoreTrashedTender(
 export function purgeTrashedTender(
   deletionId: string,
   rationale: string,
+  confirmationTenderName: string,
 ): Promise<DeletionReceipt> {
   return invoke<DeletionReceipt>("purge_trashed_tender", {
-    command: { deletion_id: deletionId, rationale },
+    command: {
+      deletion_id: deletionId,
+      rationale,
+      confirmation_tender_name: confirmationTenderName,
+    },
   });
 }
 

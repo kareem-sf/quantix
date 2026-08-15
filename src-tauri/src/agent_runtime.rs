@@ -129,6 +129,12 @@ impl AgentProvider {
         }
     }
 
+    pub(crate) async fn delete_thread(&self, thread_ref: String) -> Result<(), ProviderFailure> {
+        match self {
+            Self::Codex(provider) => provider.delete_thread(thread_ref).await,
+        }
+    }
+
     async fn run_turn(
         &self,
         prepared: PreparedAgentRun,

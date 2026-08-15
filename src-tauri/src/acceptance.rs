@@ -19,10 +19,10 @@ use ts_rs::TS;
 use crate::{
     tender_store::{
         require_setup, CreatePortableTenderArchiveCommand, CreateTenderBackupCommand,
-        CreateTenderCommand, PrepareTenderRecoveryCommand, RegisterTenderContentCommand,
-        ResolveTenderRecoveryCommand, ReviseTenderCommand, TenderCommandError, TenderErrorCode,
-        TenderIntegrityState, TenderRecoveryDecision, TenderRetentionDecisionCommand,
-        TrashedTenderDecisionCommand,
+        CreateTenderCommand, PrepareTenderRecoveryCommand, PurgeTrashedTenderCommand,
+        RegisterTenderContentCommand, ResolveTenderRecoveryCommand, ReviseTenderCommand,
+        TenderCommandError, TenderErrorCode, TenderIntegrityState, TenderRecoveryDecision,
+        TenderRetentionDecisionCommand, TrashedTenderDecisionCommand,
     },
     QuantixHost, UpdateState,
 };
@@ -625,9 +625,10 @@ impl QuantixHost {
                 tender_id: tender.tender_id,
                 rationale: "deterministic acceptance stages an exact irreversible purge".into(),
             })?;
-            let receipt = self.purge_trashed_tender(TrashedTenderDecisionCommand {
+            let receipt = self.purge_trashed_tender(PurgeTrashedTenderCommand {
                 deletion_id: purged.deletion_id,
                 rationale: "deterministic acceptance confirms the exact deletion identity".into(),
+                confirmation_tender_name: "Quantix deterministic acceptance fixture".into(),
             })?;
             deletion_receipt_manifest = Some(receipt.manifest_sha256);
             completed.push("purge_receipt");

@@ -5,7 +5,6 @@ import type { TrashedTenderRecord } from "./bindings/TrashedTenderRecord";
 import {
   inspectDeletionReceipts,
   inspectTrashedTenders,
-  purgeTrashedTender,
   restoreTrashedTender,
 } from "./quantixHost";
 
@@ -95,18 +94,6 @@ export function TenderTrashPanel({
               }
             >
               Restore without merge
-            </button>
-            <button
-              type="button"
-              className="danger"
-              disabled={busy || !rationale.trim()}
-              onClick={() =>
-                void act(() =>
-                  purgeTrashedTender(record.deletion_id, rationale.trim()),
-                )
-              }
-            >
-              Permanently purge this exact Tender Store
             </button>
           </fieldset>
         );

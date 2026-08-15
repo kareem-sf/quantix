@@ -42,6 +42,7 @@ struct QuantixHostInner {
     manager_intake_execution: tokio::sync::Mutex<()>,
     production_schedulers: Mutex<HashMap<String, OrdinaryWorkLease>>,
     agent_provider: tokio::sync::Mutex<Option<AgentProvider>>,
+    provider_cleanup_execution: tokio::sync::Mutex<()>,
     provider_rate_limit: Mutex<Option<ProviderRateLimit>>,
     runtime_verified: AtomicBool,
     update_installation_active: AtomicBool,
@@ -175,6 +176,7 @@ impl QuantixHost {
                 manager_intake_execution: tokio::sync::Mutex::new(()),
                 production_schedulers: Mutex::new(HashMap::new()),
                 agent_provider: tokio::sync::Mutex::new(None),
+                provider_cleanup_execution: tokio::sync::Mutex::new(()),
                 provider_rate_limit: Mutex::new(None),
                 runtime_verified: AtomicBool::new(false),
                 update_installation_active: AtomicBool::new(false),
@@ -298,6 +300,10 @@ impl QuantixHost {
 
     pub(crate) fn agent_provider(&self) -> &tokio::sync::Mutex<Option<AgentProvider>> {
         &self.inner.agent_provider
+    }
+
+    pub(crate) fn provider_cleanup_execution(&self) -> &tokio::sync::Mutex<()> {
+        &self.inner.provider_cleanup_execution
     }
 
     pub(crate) fn observe_provider_usage(&self, usage: &ProviderUsage) {

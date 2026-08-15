@@ -121,13 +121,14 @@ pub use tender_store::{
     DecisionDependency, DecisionDependencyStatus, DecisionEvidence, DecisionFact, DecisionFactKind,
     DecisionGroupMember, DecisionKind, DecisionLifecycleGate, DecisionResponsible,
     DecisionResponsibleKind, DecisionStatus, DecisionTarget, DecisionTargetKind, DecisionUrgency,
-    DeletionReceipt, DesignateBoqTableCommand, EstimateAggregateCalculationInput,
-    EstimateAggregateCalculationRun, EstimateAllowance, EstimateMaterialAssumption,
-    EstimateQueryObservation, EstimateQueryReference, EstimateQuotation, EstimateQuotationKind,
-    EstimateWorkspaceInspection, ExchangeRateType, ExportApprovedExternalRfiCommand,
-    ExportReleaseCopyCommand, ExternalRfiApproval, ExternalRfiDraft, ExternalRfiEligibleQuery,
-    ExternalRfiEligibleQueryPage, ExternalRfiExportRecord, ExternalRfiFindingSeverity,
-    ExternalRfiPage, ExternalRfiQueryReference, ExternalRfiQuestion, ExternalRfiRecipient,
+    DeletionReceipt, DesignateBoqTableCommand, ErasedTenderCopyClass,
+    EstimateAggregateCalculationInput, EstimateAggregateCalculationRun, EstimateAllowance,
+    EstimateMaterialAssumption, EstimateQueryObservation, EstimateQueryReference,
+    EstimateQuotation, EstimateQuotationKind, EstimateWorkspaceInspection, ExchangeRateType,
+    ExportApprovedExternalRfiCommand, ExportReleaseCopyCommand, ExternalRfiApproval,
+    ExternalRfiDraft, ExternalRfiEligibleQuery, ExternalRfiEligibleQueryPage,
+    ExternalRfiExportRecord, ExternalRfiFindingSeverity, ExternalRfiPage,
+    ExternalRfiQueryReference, ExternalRfiQuestion, ExternalRfiRecipient,
     ExternalRfiResponseCandidatePage, ExternalRfiResponseInterpretation, ExternalRfiResponseLink,
     ExternalRfiReview, ExternalRfiReviewFinding, ExternalRfiReviewOutcome, ExternalRfiReviewResult,
     FinalReviewAssignment, FinalReviewDecisionEvidence, FinalReviewDecisionEvidenceCategory,
@@ -166,30 +167,31 @@ pub use tender_store::{
     ProductionQueryTreatmentApplication, ProductionRemediation, ProductionReview,
     ProductionReviewFinding, ProductionReviewResult, ProductionTaskInspection,
     ProductionTaskReviewInspection, ProductionTaskRunResult, ProductionTaskState,
-    ProposeBoqCalculationRuleCommand, RebindManagerIntakeProviderCommand,
-    RecordEngineerWorkspaceMessageCommand, RecordPackageManualVerificationCommand,
-    RegisterExternalRfiResponseCommand, RegisterTenderContentCommand, ReleaseCopyExport,
-    ReleaseCopyItem, ReleaseReadinessBlocker, ReleaseReadinessBlockerCode,
-    ReleaseReadinessCategorySummary, ReleaseReadinessReport, ResolveBidDecisionReturnReworkCommand,
-    ResolveTenderRecoveryCommand, ResourceImplication, RetryManagerIntakeCommand,
-    ReviewFindingSeverity, ReviseExternalRfiDraftCommand, ReviseTenderCommand,
-    ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand, RunBasisOfEstimateReviewCommand,
-    RunBidDecisionPackageReviewCommand, RunCalculationRuleReviewCommand,
-    RunCostEstimatorBasisCommand, RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand,
-    RunPackageValidationCommand, RunPricedCostBaselineReviewCommand,
-    RunPricingAdjustmentReviewCommand, RunProductionTaskCommand, RunSubmissionSectionReviewCommand,
-    RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand,
-    SelectManagerWorkspaceTenderCommand, SelectPricingScenarioCommand, StartManagerTenderCommand,
-    StartupReconciliationReport, SubmissionArtifactContent, SubmissionArtifactVersion,
-    SubmissionAuthorshipProvenance, SubmissionContributionKind, SubmissionCoverageBlocker,
-    SubmissionCoverageBlockerCode, SubmissionCoverageDisposition, SubmissionCoverageRow,
-    SubmissionGeneratedArtifactReference, SubmissionItemContent, SubmissionItemSource,
-    SubmissionPackageAssessment, SubmissionPackageCurrentnessCode,
-    SubmissionPackageCurrentnessFact, SubmissionPackageDependency, SubmissionPackageDependencyKind,
-    SubmissionPackageItem, SubmissionPackageSection, SubmissionPackageStatus,
-    SubmissionPackageVersion, SubmissionProfileVersionReference, SubmissionReleaseApproval,
-    SubmissionReleaseInspection, SubmissionReleaseState, SubmissionSectionIndependenceContext,
-    SubmissionSectionReview, SubmissionSectionReviewRunResult, SubmissionSectionRiskContext,
+    ProposeBoqCalculationRuleCommand, ProviderCleanupStatus, PurgeTrashedTenderCommand,
+    RebindManagerIntakeProviderCommand, RecordEngineerWorkspaceMessageCommand,
+    RecordPackageManualVerificationCommand, RegisterExternalRfiResponseCommand,
+    RegisterTenderContentCommand, ReleaseCopyExport, ReleaseCopyItem, ReleaseReadinessBlocker,
+    ReleaseReadinessBlockerCode, ReleaseReadinessCategorySummary, ReleaseReadinessReport,
+    ResolveBidDecisionReturnReworkCommand, ResolveTenderRecoveryCommand, ResourceImplication,
+    RetryManagerIntakeCommand, ReviewFindingSeverity, ReviseExternalRfiDraftCommand,
+    ReviseTenderCommand, ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand,
+    RunBasisOfEstimateReviewCommand, RunBidDecisionPackageReviewCommand,
+    RunCalculationRuleReviewCommand, RunCostEstimatorBasisCommand,
+    RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand, RunPackageValidationCommand,
+    RunPricedCostBaselineReviewCommand, RunPricingAdjustmentReviewCommand,
+    RunProductionTaskCommand, RunSubmissionSectionReviewCommand, RunTenderRecordExtractionCommand,
+    RunTenderRecordReviewCommand, SelectManagerWorkspaceTenderCommand,
+    SelectPricingScenarioCommand, StartManagerTenderCommand, StartupReconciliationReport,
+    SubmissionArtifactContent, SubmissionArtifactVersion, SubmissionAuthorshipProvenance,
+    SubmissionContributionKind, SubmissionCoverageBlocker, SubmissionCoverageBlockerCode,
+    SubmissionCoverageDisposition, SubmissionCoverageRow, SubmissionGeneratedArtifactReference,
+    SubmissionItemContent, SubmissionItemSource, SubmissionPackageAssessment,
+    SubmissionPackageCurrentnessCode, SubmissionPackageCurrentnessFact,
+    SubmissionPackageDependency, SubmissionPackageDependencyKind, SubmissionPackageItem,
+    SubmissionPackageSection, SubmissionPackageStatus, SubmissionPackageVersion,
+    SubmissionProfileVersionReference, SubmissionReleaseApproval, SubmissionReleaseInspection,
+    SubmissionReleaseState, SubmissionSectionIndependenceContext, SubmissionSectionReview,
+    SubmissionSectionReviewRunResult, SubmissionSectionRiskContext,
     SubmissionSourceArtifactReference, SubmissionValidationContextInput, SubmissionWorkPlanContext,
     TenderBackupRecord, TenderBackupState, TenderCatalogueEntry, TenderCommandError,
     TenderErrorCode, TenderEvidenceReference, TenderInspection, TenderIntegrityIssue,
@@ -286,9 +288,10 @@ mod tauri_commands {
         PricingAdjustmentVersion, PricingScenarioVersion, PricingWorkspaceInspection,
         PrivateQualificationRecord, ProductAcceptanceRecord, ProductAcceptanceRun,
         ProductionTaskReviewInspection, ProductionTaskRunResult, ProposeBoqCalculationRuleCommand,
-        PublicReleaseGateRecord, QuantixHost, RebindManagerIntakeProviderCommand,
-        RecordEngineerWorkspaceMessageCommand, RecordPackageManualVerificationCommand,
-        RegisterExternalRfiResponseCommand, RequestAgentAccessCommand, ResolveAgentAccessCommand,
+        PublicReleaseGateRecord, PurgeTrashedTenderCommand, QuantixHost,
+        RebindManagerIntakeProviderCommand, RecordEngineerWorkspaceMessageCommand,
+        RecordPackageManualVerificationCommand, RegisterExternalRfiResponseCommand,
+        RequestAgentAccessCommand, ResolveAgentAccessCommand,
         ResolveBidDecisionReturnReworkCommand, ResolveIndeterminateAgentRunCommand,
         ResolveTenderRecoveryCommand, RetryManagerIntakeCommand, ReviseExternalRfiDraftCommand,
         ReviseTenderCommand, ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand,
@@ -300,16 +303,17 @@ mod tauri_commands {
         RunSubmissionSectionReviewCommand, RunTenderRecordExtractionCommand,
         RunTenderRecordReviewCommand, RuntimeReadiness, SearchEvidenceCommand,
         SelectManagerWorkspaceTenderCommand, SelectPricingScenarioCommand, SetupOutcome,
-        StartManagerTenderCommand, StartProviderLoginCommand, SubmissionArtifactContent,
-        SubmissionItemContent, SubmissionPackageVersion, SubmissionReleaseInspection,
-        SubmissionSectionReviewRunResult, TenderBackupRecord, TenderCatalogueEntry,
-        TenderCommandError, TenderErrorCode, TenderIntegrityReport, TenderPackageImportResult,
-        TenderPackageSourceKind, TenderProductionInspection, TenderQuery, TenderQueryPage,
-        TenderRecordAuthority, TenderRecordDecisionResult, TenderRecordExtractionResult,
-        TenderRecordPage, TenderRecordReviewResult, TenderRecoveryRecord,
-        TenderRetentionDecisionCommand, TenderRetentionDecisionRecord, TenderSummary,
-        TrashedTenderDecisionCommand, TrashedTenderRecord, UpdateAiExecutionSelectionCommand,
-        UpdateGeneralApplicationPreferencesCommand, WorkPlanProposalInspection,
+        SetupState, StartManagerTenderCommand, StartProviderLoginCommand,
+        SubmissionArtifactContent, SubmissionItemContent, SubmissionPackageVersion,
+        SubmissionReleaseInspection, SubmissionSectionReviewRunResult, TenderBackupRecord,
+        TenderCatalogueEntry, TenderCommandError, TenderErrorCode, TenderIntegrityReport,
+        TenderPackageImportResult, TenderPackageSourceKind, TenderProductionInspection,
+        TenderQuery, TenderQueryPage, TenderRecordAuthority, TenderRecordDecisionResult,
+        TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult,
+        TenderRecoveryRecord, TenderRetentionDecisionCommand, TenderRetentionDecisionRecord,
+        TenderSummary, TrashedTenderDecisionCommand, TrashedTenderRecord,
+        UpdateAiExecutionSelectionCommand, UpdateGeneralApplicationPreferencesCommand,
+        WorkPlanProposalInspection,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -317,6 +321,12 @@ mod tauri_commands {
         update_id: String,
         public_key: String,
         update: tauri_plugin_updater::Update,
+    }
+
+    fn retry_provider_cleanup_in_background(host: QuantixHost) {
+        tauri::async_runtime::spawn(async move {
+            let _ = host.retry_pending_provider_cleanup().await;
+        });
     }
 
     pub(super) struct PendingSignedUpdate(Mutex<Option<PendingUpdate>>);
@@ -568,9 +578,14 @@ mod tauri_commands {
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<SetupOutcome, &'static str> {
         let host = host.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || ensure_setup(&host))
+        let setup_host = host.clone();
+        let outcome = tauri::async_runtime::spawn_blocking(move || ensure_setup(&setup_host))
             .await
-            .map_err(|_| "Quantix Setup stopped unexpectedly")
+            .map_err(|_| "Quantix Setup stopped unexpectedly")?;
+        if matches!(outcome.state, SetupState::Ready | SetupState::Warning) {
+            retry_provider_cleanup_in_background(host);
+        }
+        Ok(outcome)
     }
 
     #[tauri::command]
@@ -602,7 +617,12 @@ mod tauri_commands {
     pub(super) async fn refresh_application_settings(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        host.inner().refresh_application_settings().await
+        let host = host.inner().clone();
+        let view = host.refresh_application_settings().await?;
+        if host.runtime_is_verified() {
+            retry_provider_cleanup_in_background(host);
+        }
+        Ok(view)
     }
 
     #[tauri::command]
@@ -1084,14 +1104,19 @@ mod tauri_commands {
     #[tauri::command]
     pub(super) async fn purge_trashed_tender(
         host: tauri::State<'_, QuantixHost>,
-        command: TrashedTenderDecisionCommand,
+        command: PurgeTrashedTenderCommand,
     ) -> Result<DeletionReceipt, TenderCommandError> {
         let host = host.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || host.purge_trashed_tender(command))
-            .await
-            .map_err(|_| TenderCommandError {
-                code: TenderErrorCode::StoreUnavailable,
-            })?
+        let deletion_host = host.clone();
+        let receipt = tauri::async_runtime::spawn_blocking(move || {
+            deletion_host.purge_trashed_tender(command)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })??;
+        retry_provider_cleanup_in_background(host);
+        Ok(receipt)
     }
 
     #[tauri::command]
@@ -1099,11 +1124,16 @@ mod tauri_commands {
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<Vec<DeletionReceipt>, TenderCommandError> {
         let host = host.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || host.inspect_deletion_receipts())
-            .await
-            .map_err(|_| TenderCommandError {
-                code: TenderErrorCode::StoreUnavailable,
-            })?
+        let inspection_host = host.clone();
+        let receipts = tauri::async_runtime::spawn_blocking(move || {
+            inspection_host.inspect_deletion_receipts()
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })??;
+        retry_provider_cleanup_in_background(host);
+        Ok(receipts)
     }
 
     #[tauri::command]
@@ -1282,14 +1312,24 @@ mod tauri_commands {
     pub(super) async fn inspect_runtime_readiness(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<RuntimeReadiness, &'static str> {
-        Ok(host.inner().inspect_runtime_readiness().await)
+        let host = host.inner().clone();
+        let readiness = host.inspect_runtime_readiness().await;
+        if host.runtime_is_verified() {
+            retry_provider_cleanup_in_background(host);
+        }
+        Ok(readiness)
     }
 
     #[tauri::command]
     pub(super) async fn repair_runtime_readiness(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<RuntimeReadiness, &'static str> {
-        Ok(host.inner().repair_runtime_readiness().await)
+        let host = host.inner().clone();
+        let readiness = host.repair_runtime_readiness().await;
+        if host.runtime_is_verified() {
+            retry_provider_cleanup_in_background(host);
+        }
+        Ok(readiness)
     }
 
     #[tauri::command]

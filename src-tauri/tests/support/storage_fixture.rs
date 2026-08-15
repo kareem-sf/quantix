@@ -2,9 +2,9 @@ use std::{io, path::Path, sync::Arc};
 
 use quantix_lib::{
     ensure_quantix_setup, CreateTenderBackupCommand, CreateTenderCommand, DeviceProtection,
-    PrepareTenderRecoveryCommand, QuantixHost, RegisterTenderContentCommand,
-    ResolveTenderRecoveryCommand, SetupPlatform, StoragePermissions, TenderRecoveryDecision,
-    MINIMUM_SETUP_FREE_SPACE_BYTES,
+    PrepareTenderRecoveryCommand, PurgeTrashedTenderCommand, QuantixHost,
+    RegisterTenderContentCommand, ResolveTenderRecoveryCommand, SetupPlatform, StoragePermissions,
+    TenderRecoveryDecision, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 struct ReadySetupPlatform;
@@ -75,6 +75,14 @@ fn main() {
                 rationale: "Fixture Engineer approved the verified exact replacement".into(),
             })
             .expect("apply Tender recovery fixture action");
+        }
+        "purge-trash" => {
+            host.purge_trashed_tender(PurgeTrashedTenderCommand {
+                deletion_id: arguments.next().expect("deletion identity argument"),
+                rationale: "Fixture Engineer confirmed permanent deletion".into(),
+                confirmation_tender_name: arguments.next().expect("Tender name argument"),
+            })
+            .expect("purge trashed Tender fixture action");
         }
         _ => panic!("unknown storage fixture action"),
     }

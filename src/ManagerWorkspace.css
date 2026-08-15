@@ -938,6 +938,70 @@ button {
   margin-top: 11px !important;
 }
 
+.retention-view__receipt-list {
+  display: grid;
+  gap: 10px;
+}
+
+.retention-view__receipt-list article {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #e1e1dc;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.retention-view__receipt-list article > div:first-child {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.retention-view__receipt-list small,
+.retention-view__receipt-list summary,
+.retention-view__receipt-list details p {
+  color: #73736e;
+  font-size: 12px;
+}
+
+.retention-view__receipt-list dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.retention-view__receipt-list dl > div {
+  display: grid;
+  gap: 3px;
+  padding: 9px;
+  border-radius: 8px;
+  background: #f5f5f2;
+}
+
+.retention-view__receipt-list dt {
+  color: #73736e;
+  font-size: 11px;
+}
+
+.retention-view__receipt-list dd {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: capitalize;
+}
+
+.retention-view__receipt-list summary {
+  cursor: pointer;
+}
+
+.retention-view__receipt-list details p {
+  margin-top: 7px;
+  line-height: 1.5;
+}
+
 .retention-dialog__backdrop {
   position: fixed;
   z-index: 100;
@@ -986,6 +1050,16 @@ button {
   min-height: 94px;
   padding: 10px;
   resize: vertical;
+  border: 1px solid #cecec8;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 400;
+}
+
+.retention-dialog input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
   border: 1px solid #cecec8;
   border-radius: 8px;
   font: inherit;
@@ -1955,6 +2029,10 @@ button {
   .retention-view__trash-list article > div:last-child {
     justify-content: flex-start;
   }
+
+  .retention-view__receipt-list dl {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2005,6 +2083,7 @@ html[data-quantix-appearance="dark"] .application-settings__facts button,
 html[data-quantix-appearance="dark"] .manager-workspace__archived button,
 html[data-quantix-appearance="dark"] .retention-view__trash-list button,
 html[data-quantix-appearance="dark"] .retention-dialog textarea,
+html[data-quantix-appearance="dark"] .retention-dialog input,
 html[data-quantix-appearance="dark"] .retention-dialog__actions button {
   color: #f2f2ee;
   background: #1d1e1c;
@@ -2020,6 +2099,7 @@ html[data-quantix-appearance="dark"] .manager-workspace__tender-menu > div,
 html[data-quantix-appearance="dark"] .manager-workspace__archived,
 html[data-quantix-appearance="dark"] .retention-view__list button,
 html[data-quantix-appearance="dark"] .retention-view__trash-list article,
+html[data-quantix-appearance="dark"] .retention-view__receipt-list article,
 html[data-quantix-appearance="dark"] .retention-dialog {
   color: #f2f2ee;
   border-color: #454641;
@@ -2030,6 +2110,10 @@ html[data-quantix-appearance="dark"] .application-settings__active-choice {
   color: #d7eee4;
   border-color: #476b5d;
   background: #243a31;
+}
+
+html[data-quantix-appearance="dark"] .retention-view__receipt-list dl > div {
+  background: #1d1e1c;
 }
 
 html[data-quantix-appearance="dark"]
@@ -2063,6 +2147,7 @@ html[data-quantix-appearance="dark"] .application-settings__provenance {
   html[data-quantix-appearance="system"] .manager-workspace__archived button,
   html[data-quantix-appearance="system"] .retention-view__trash-list button,
   html[data-quantix-appearance="system"] .retention-dialog textarea,
+  html[data-quantix-appearance="system"] .retention-dialog input,
   html[data-quantix-appearance="system"] .retention-dialog__actions button {
     color: #f2f2ee;
     background: #1d1e1c;
@@ -2080,6 +2165,7 @@ html[data-quantix-appearance="dark"] .application-settings__provenance {
   html[data-quantix-appearance="system"] .manager-workspace__archived,
   html[data-quantix-appearance="system"] .retention-view__list button,
   html[data-quantix-appearance="system"] .retention-view__trash-list article,
+  html[data-quantix-appearance="system"] .retention-view__receipt-list article,
   html[data-quantix-appearance="system"] .retention-dialog {
     color: #f2f2ee;
     border-color: #454641;
@@ -2091,5 +2177,12 @@ html[data-quantix-appearance="dark"] .application-settings__provenance {
     .manager-workspace__danger-confirm {
     color: #fff;
     background: #a93636;
+  }
+
+  html[data-quantix-appearance="system"]
+    .retention-view__receipt-list
+    dl
+    > div {
+    background: #1d1e1c;
   }
 }

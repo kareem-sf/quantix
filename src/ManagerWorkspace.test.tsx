@@ -17,6 +17,7 @@ const host = vi.hoisted(() => ({
   chooseAndImportTenderPackage: vi.fn(),
   checkQuantixUpdate: vi.fn(),
   inspectManagerWorkspace: vi.fn(),
+  inspectDeletionReceipts: vi.fn(),
   inspectTrashedTenders: vi.fn(),
   inspectRuntimeReadiness: vi.fn(),
   logoutProvider: vi.fn(),
@@ -65,7 +66,7 @@ const applicationFacts = {
   },
   diagnostics: {
     quantix_version: "0.1.0",
-    installation_schema_version: 18,
+    installation_schema_version: 19,
     tender_schema_version: 31,
   },
 };
@@ -137,6 +138,7 @@ const projection: ManagerWorkspaceProjection = {
 
 beforeEach(() => {
   host.inspectTrashedTenders.mockResolvedValue([]);
+  host.inspectDeletionReceipts.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -145,6 +147,90 @@ afterEach(() => {
 });
 
 describe("ManagerWorkspace", () => {
+  it("requires exact confirmation and shows a content-free permanent deletion receipt", async () => {
+    const trashedRecord = {
+      deletion_id: "d".repeat(32),
+      tender_id: tenderId,
+      tender_name: "Permanent Delete Tender",
+      state: "trashed" as const,
+      relative_path: `${tenderId}-${"d".repeat(32)}`,
+      rationale: "Delete locally.",
+      decided_by: "engineer_user",
+      acting_role: "tendering_engineer",
+      approval_manifest_sha256: "f".repeat(64),
+      diagnostic_code: null,
+      created_at: "2026-08-15T12:00:00Z",
+      updated_at: "2026-08-15T12:00:00Z",
+    };
+    const receipt = {
+      receipt_id: "e".repeat(32),
+      deletion_id: trashedRecord.deletion_id,
+      tender_id: tenderId,
+      audit_event_count: 12n,
+      audit_chain_head: "a".repeat(64),
+      local_deletion_completed: true,
+      erased_copy_classes: [
+        "tender_store",
+        "tender_backup",
+        "portable_tender_archive",
+        "delivery_export",
+      ],
+      provider_cleanup_status: "pending" as const,
+      provider_thread_count: 1,
+      confirmed_provider_thread_deletions: 0,
+      external_copy_exclusions: [
+        "original_source_packages",
+        "application_provider_credentials",
+      ],
+      purged_by: "engineer_user",
+      acting_role: "tendering_engineer",
+      purged_at: "2026-08-15T12:10:00Z",
+      manifest_sha256: "b".repeat(64),
+    };
+    let purged = false;
+    host.inspectManagerWorkspace.mockResolvedValue(projection);
+    host.inspectTrashedTenders.mockImplementation(() =>
+      Promise.resolve(purged ? [] : [trashedRecord]),
+    );
+    host.inspectDeletionReceipts.mockImplementation(() =>
+      Promise.resolve(purged ? [receipt] : []),
+    );
+    host.purgeTrashedTender.mockImplementation(() => {
+      purged = true;
+      return Promise.resolve(receipt);
+    });
+
+    render(<ManagerWorkspace aiAvailable />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Archived & Trash/ }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Permanent Delete" }),
+    );
+    fireEvent.change(screen.getByLabelText("Decision rationale"), {
+      target: { value: "Erase every Quantix-controlled copy." },
+    });
+    const confirm = screen.getByLabelText(
+      `Type ${trashedRecord.tender_name} to confirm`,
+    );
+    expect(
+      screen.getByRole("button", { name: "Permanent Delete" }),
+    ).toBeDisabled();
+    fireEvent.change(confirm, { target: { value: trashedRecord.tender_name } });
+    fireEvent.click(screen.getByRole("button", { name: "Permanent Delete" }));
+
+    await waitFor(() => {
+      expect(host.purgeTrashedTender).toHaveBeenCalledWith(
+        trashedRecord.deletion_id,
+        "Erase every Quantix-controlled copy.",
+        trashedRecord.tender_name,
+      );
+    });
+    expect(await screen.findByText("Provider cleanup")).toBeTruthy();
+    expect(screen.getByText("0/1")).toBeTruthy();
+    expect(document.body.textContent).not.toContain(trashedRecord.tender_name);
+  });
+
   it("moves a safe Tender to recoverable Trash and restores the same identity", async () => {
     const terminalTender = {
       ...projection.selected_tender!,

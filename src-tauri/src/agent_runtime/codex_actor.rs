@@ -144,6 +144,18 @@ impl CodexProvider {
         receiver.await.map_err(|_| process_failure(false))?
     }
 
+    pub(crate) async fn delete_thread(&self, thread_ref: String) -> Result<(), ProviderFailure> {
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .send(ProviderCommand::DeleteThread {
+                thread_ref,
+                response,
+            })
+            .await
+            .map_err(|_| process_failure(false))?;
+        receiver.await.map_err(|_| process_failure(false))?
+    }
+
     pub(super) async fn run_turn(
         &self,
         prepared: PreparedAgentRun,
@@ -224,6 +236,10 @@ enum ProviderCommand {
     Logout {
         response: oneshot::Sender<Result<ProviderConnectionView, ProviderFailure>>,
     },
+    DeleteThread {
+        thread_ref: String,
+        response: oneshot::Sender<Result<(), ProviderFailure>>,
+    },
     Shutdown {
         response: oneshot::Sender<Result<(), ProcessError>>,
     },
@@ -296,6 +312,17 @@ enum PendingRpc {
     },
     Logout {
         response: oneshot::Sender<Result<ProviderConnectionView, ProviderFailure>>,
+    },
+    DeleteThread {
+        thread_ref: String,
+        response: oneshot::Sender<Result<(), ProviderFailure>>,
+    },
+    DeleteConfirm {
+        thread_ref: String,
+        archived: bool,
+        page: u32,
+        delete_failure: ProviderFailure,
+        response: oneshot::Sender<Result<(), ProviderFailure>>,
     },
 }
 
@@ -542,6 +569,74 @@ async fn run_actor(
                         }
                         pending.insert(id, PendingRpc::Logout { response });
                     }
+                    ProviderCommand::DeleteThread {
+                        thread_ref,
+                        response,
+                    } => {
+                        if thread_ref.is_empty()
+                            || thread_ref.len() > 1000
+                            || !runs.is_empty()
+                            || !pending.is_empty()
+                            || active_login_id.is_some()
+                            || connection
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .status
+                                != ProviderConnectionStatus::Ready
+                        {
+                            let _ = response.send(Err(permission_failure()));
+                            continue;
+                        }
+                        if let Err(failure) = process.conversation_mut().and_then(|conversation| {
+                            conversation
+                                .begin_operation(
+                                    ACCOUNT_OPERATION_TIMEOUT,
+                                    ACTOR_OUTPUT_LIMIT,
+                                    ACTOR_OUTPUT_LIMIT,
+                                )
+                                .map_err(|_| process_failure(false))
+                        }) {
+                            let _ = response.send(Err(failure));
+                            continue;
+                        }
+                        let id = match allocate_id(&mut next_rpc_id) {
+                            Ok(id) => id,
+                            Err(failure) => {
+                                let _ = response.send(Err(failure));
+                                continue;
+                            }
+                        };
+                        if write_rpc(
+                            process.conversation_mut().expect("provider conversation is active"),
+                            &json!({
+                                "method": "thread/delete",
+                                "id": id,
+                                "params": { "threadId": thread_ref.clone() }
+                            }),
+                        )
+                        .await
+                        .is_err()
+                        {
+                            let failure = process_failure(false);
+                            let _ = response.send(Err(failure.clone()));
+                            terminate_actor(
+                                &mut process,
+                                &mut commands,
+                                &mut runs,
+                                &alive,
+                                failure,
+                            )
+                            .await;
+                            return;
+                        }
+                        pending.insert(
+                            id,
+                            PendingRpc::DeleteThread {
+                                thread_ref,
+                                response,
+                            },
+                        );
+                    }
                     ProviderCommand::Run(command) => {
                         let ProviderRunCommand {
                             prepared,
@@ -556,6 +651,8 @@ async fn run_actor(
                                 PendingRpc::LoginStart { .. }
                                     | PendingRpc::LoginCancel { .. }
                                     | PendingRpc::Logout { .. }
+                                    | PendingRpc::DeleteThread { .. }
+                                    | PendingRpc::DeleteConfirm { .. }
                             )
                         });
                         let connection_ready = connection
@@ -842,6 +939,50 @@ async fn send_archive_confirmation(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn send_delete_confirmation(
+    process: &mut CodexProviderProcess,
+    pending: &mut HashMap<u64, PendingRpc>,
+    next_rpc_id: &mut u64,
+    thread_ref: String,
+    archived: bool,
+    cursor: Option<&str>,
+    page: u32,
+    delete_failure: ProviderFailure,
+    response: oneshot::Sender<Result<(), ProviderFailure>>,
+) -> Result<(), ProviderFailure> {
+    if page > ARCHIVE_CONFIRMATION_PAGE_LIMIT {
+        let _ = response.send(Err(delete_failure));
+        return Ok(());
+    }
+    let id = allocate_id(next_rpc_id)?;
+    write_rpc(
+        process.conversation_mut()?,
+        &json!({
+            "method": "thread/list",
+            "id": id,
+            "params": {
+                "archived": archived,
+                "cursor": cursor,
+                "limit": 100
+            }
+        }),
+    )
+    .await
+    .map_err(|_| process_failure(false))?;
+    pending.insert(
+        id,
+        PendingRpc::DeleteConfirm {
+            thread_ref,
+            archived,
+            page,
+            delete_failure,
+            response,
+        },
+    );
+    Ok(())
+}
+
 async fn checkpoint_archived_and_send_thread(
     process: &mut CodexProviderProcess,
     runs: &mut HashMap<String, ActorRun>,
@@ -1070,11 +1211,7 @@ async fn handle_message(
         let Some(expected_login_id) = active_login_id.as_deref() else {
             return Ok(());
         };
-        if params
-            .get("loginId")
-            .and_then(Value::as_str)
-            != Some(expected_login_id)
-        {
+        if params.get("loginId").and_then(Value::as_str) != Some(expected_login_id) {
             return Err(protocol_failure(false));
         }
         let success = params
@@ -1213,8 +1350,7 @@ async fn handle_response(
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .as_ref()
                 .is_some_and(|current| {
-                    current.login_id == login_id
-                        && current.status == ProviderLoginStatus::Completed
+                    current.login_id == login_id && current.status == ProviderLoginStatus::Completed
                 });
             if completion_won {
                 refresh_connection_after_login(process, connection, login).await?;
@@ -1254,6 +1390,80 @@ async fn handle_response(
             let _ = response.send(Ok(updated));
             return Ok(());
         }
+        PendingRpc::DeleteThread {
+            thread_ref,
+            response,
+        } => match response_result(&message, "v2/ThreadDeleteResponse", false) {
+            Ok(_) => {
+                let _ = response.send(Ok(()));
+                return Ok(());
+            }
+            Err(delete_failure) => {
+                return send_delete_confirmation(
+                    process,
+                    pending,
+                    next_rpc_id,
+                    thread_ref,
+                    false,
+                    None,
+                    1,
+                    delete_failure,
+                    response,
+                )
+                .await;
+            }
+        },
+        PendingRpc::DeleteConfirm {
+            thread_ref,
+            archived,
+            page,
+            delete_failure,
+            response,
+        } => {
+            let result = response_result(&message, "v2/ThreadListResponse", false)?;
+            let present = result
+                .get("data")
+                .and_then(Value::as_array)
+                .ok_or_else(|| protocol_failure(false))?
+                .iter()
+                .any(|thread| {
+                    thread.get("id").and_then(Value::as_str) == Some(thread_ref.as_str())
+                });
+            if present {
+                let _ = response.send(Err(delete_failure));
+                return Ok(());
+            }
+            if let Some(cursor) = result.get("nextCursor").and_then(Value::as_str) {
+                return send_delete_confirmation(
+                    process,
+                    pending,
+                    next_rpc_id,
+                    thread_ref,
+                    archived,
+                    Some(cursor),
+                    page.saturating_add(1),
+                    delete_failure,
+                    response,
+                )
+                .await;
+            }
+            if !archived {
+                return send_delete_confirmation(
+                    process,
+                    pending,
+                    next_rpc_id,
+                    thread_ref,
+                    true,
+                    None,
+                    1,
+                    delete_failure,
+                    response,
+                )
+                .await;
+            }
+            let _ = response.send(Ok(()));
+            return Ok(());
+        }
         other => other,
     };
     let run_id = match &operation {
@@ -1264,7 +1474,11 @@ async fn handle_response(
         | PendingRpc::Interrupt(run_id) => run_id.clone(),
         PendingRpc::LoginStart { .. }
         | PendingRpc::LoginCancel { .. }
-        | PendingRpc::Logout { .. } => unreachable!("login responses return above"),
+        | PendingRpc::Logout { .. }
+        | PendingRpc::DeleteThread { .. }
+        | PendingRpc::DeleteConfirm { .. } => {
+            unreachable!("account and cleanup responses return above")
+        }
     };
     if !runs.contains_key(&run_id) {
         return Ok(());
@@ -1370,7 +1584,11 @@ async fn handle_response(
         }
         PendingRpc::LoginStart { .. }
         | PendingRpc::LoginCancel { .. }
-        | PendingRpc::Logout { .. } => unreachable!("login responses return above"),
+        | PendingRpc::Logout { .. }
+        | PendingRpc::DeleteThread { .. }
+        | PendingRpc::DeleteConfirm { .. } => {
+            unreachable!("account and cleanup responses return above")
+        }
     }
 }
 

@@ -14,7 +14,7 @@ use crate::QuantixHost;
 
 pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 1024 * 1024 * 1024;
 
-pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 18;
+pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 19;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
@@ -30,7 +30,7 @@ const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
 ];
 const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 18)
+           schema_version INTEGER NOT NULL CHECK (schema_version = 19)
          )";
 pub(crate) const APPLICATION_SETTINGS_TABLE_SQL: &str = "CREATE TABLE application_settings (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -119,6 +119,11 @@ const TENDER_RECOVERY_DECISIONS_NO_UPDATE_SQL: &str =
 const TENDER_RECOVERY_DECISIONS_NO_DELETE_SQL: &str =
     "CREATE TRIGGER tender_recovery_decisions_no_delete
          BEFORE DELETE ON tender_recovery_decisions
+         WHEN NOT EXISTS (
+           SELECT 1 FROM tender_recoveries AS recovery
+           JOIN tender_trash AS trash ON trash.tender_id = recovery.tender_id
+           WHERE recovery.recovery_id = OLD.recovery_id AND trash.state = 'purging'
+         )
          BEGIN
            SELECT RAISE(ABORT, 'Tender Recovery decisions are immutable');
          END";
@@ -167,6 +172,10 @@ const TENDER_TRASH_DECISIONS_NO_UPDATE_SQL: &str = "CREATE TRIGGER tender_trash_
          BEGIN SELECT RAISE(ABORT, 'Tender Trash decisions are immutable'); END";
 const TENDER_TRASH_DECISIONS_NO_DELETE_SQL: &str = "CREATE TRIGGER tender_trash_decisions_no_delete
          BEFORE DELETE ON tender_trash_decisions
+         WHEN NOT EXISTS (
+           SELECT 1 FROM tender_trash
+           WHERE deletion_id = OLD.deletion_id AND state = 'purging'
+         )
          BEGIN SELECT RAISE(ABORT, 'Tender Trash decisions are immutable'); END";
 const DELETION_RECEIPTS_TABLE_SQL: &str = "CREATE TABLE deletion_receipts (
            receipt_id TEXT PRIMARY KEY CHECK (length(receipt_id) = 32),
@@ -174,9 +183,36 @@ const DELETION_RECEIPTS_TABLE_SQL: &str = "CREATE TABLE deletion_receipts (
            deletion_id TEXT NOT NULL UNIQUE CHECK (length(deletion_id) = 32),
            receipt_json TEXT NOT NULL CHECK (json_valid(receipt_json)),
            manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
-           created_at TEXT NOT NULL,
-           FOREIGN KEY (deletion_id) REFERENCES tender_trash(deletion_id)
+           created_at TEXT NOT NULL
          )";
+const PROVIDER_CLEANUP_JOBS_TABLE_SQL: &str = "CREATE TABLE provider_cleanup_jobs (
+           cleanup_id TEXT PRIMARY KEY CHECK (length(cleanup_id) = 32),
+           deletion_id TEXT NOT NULL CHECK (length(deletion_id) = 32),
+           target_ordinal INTEGER NOT NULL CHECK (target_ordinal >= 0),
+           provider_kind TEXT NOT NULL CHECK (provider_kind IN ('codex', 'anthropic', 'gemini')),
+           thread_ref TEXT CHECK (thread_ref IS NULL OR length(CAST(thread_ref AS BLOB)) BETWEEN 1 AND 1000),
+           target_manifest_sha256 TEXT NOT NULL CHECK (length(target_manifest_sha256) = 64),
+           status TEXT NOT NULL CHECK (status IN ('pending', 'completed')),
+           attempt_count INTEGER NOT NULL CHECK (attempt_count >= 0),
+           diagnostic_code TEXT CHECK (diagnostic_code IS NULL OR length(CAST(diagnostic_code AS BLOB)) BETWEEN 1 AND 100),
+           last_attempt_at TEXT,
+           created_at TEXT NOT NULL,
+           updated_at TEXT NOT NULL,
+           FOREIGN KEY (deletion_id) REFERENCES deletion_receipts(deletion_id),
+           UNIQUE (deletion_id, target_ordinal),
+           CHECK (
+             (status = 'pending' AND thread_ref IS NOT NULL)
+             OR (status = 'completed' AND thread_ref IS NULL AND diagnostic_code IS NULL)
+           )
+         )";
+const PROVIDER_CLEANUP_JOBS_IDENTITY_NO_UPDATE_SQL: &str =
+    "CREATE TRIGGER provider_cleanup_jobs_identity_no_update
+         BEFORE UPDATE OF cleanup_id, deletion_id, target_ordinal, provider_kind,
+                          target_manifest_sha256 ON provider_cleanup_jobs
+         BEGIN SELECT RAISE(ABORT, 'Provider cleanup identities are immutable'); END";
+const PROVIDER_CLEANUP_JOBS_NO_DELETE_SQL: &str = "CREATE TRIGGER provider_cleanup_jobs_no_delete
+         BEFORE DELETE ON provider_cleanup_jobs
+         BEGIN SELECT RAISE(ABORT, 'Provider cleanup records are immutable'); END";
 const PORTABLE_TENDER_ARCHIVES_NO_UPDATE_SQL: &str =
     "CREATE TRIGGER portable_tender_archives_no_update
          BEFORE UPDATE ON portable_tender_archives
@@ -184,6 +220,10 @@ const PORTABLE_TENDER_ARCHIVES_NO_UPDATE_SQL: &str =
 const PORTABLE_TENDER_ARCHIVES_NO_DELETE_SQL: &str =
     "CREATE TRIGGER portable_tender_archives_no_delete
          BEFORE DELETE ON portable_tender_archives
+         WHEN NOT EXISTS (
+           SELECT 1 FROM tender_trash
+           WHERE tender_id = OLD.tender_id AND state = 'purging'
+         )
          BEGIN SELECT RAISE(ABORT, 'Portable Tender Archive records are immutable'); END";
 const DELETION_RECEIPTS_NO_UPDATE_SQL: &str = "CREATE TRIGGER deletion_receipts_no_update
          BEFORE UPDATE ON deletion_receipts
@@ -846,6 +886,7 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     transaction.execute(TENDER_TRASH_TABLE_SQL, [])?;
     transaction.execute(TENDER_TRASH_DECISIONS_TABLE_SQL, [])?;
     transaction.execute(DELETION_RECEIPTS_TABLE_SQL, [])?;
+    transaction.execute(PROVIDER_CLEANUP_JOBS_TABLE_SQL, [])?;
     transaction.execute(PRODUCT_ACCEPTANCE_RUNS_TABLE_SQL, [])?;
     transaction.execute(PRODUCT_ACCEPTANCE_RECORDS_TABLE_SQL, [])?;
     transaction.execute(LIVE_QUALIFICATION_RUNS_TABLE_SQL, [])?;
@@ -869,6 +910,8 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     transaction.execute(PORTABLE_TENDER_ARCHIVES_NO_DELETE_SQL, [])?;
     transaction.execute(DELETION_RECEIPTS_NO_UPDATE_SQL, [])?;
     transaction.execute(DELETION_RECEIPTS_NO_DELETE_SQL, [])?;
+    transaction.execute(PROVIDER_CLEANUP_JOBS_IDENTITY_NO_UPDATE_SQL, [])?;
+    transaction.execute(PROVIDER_CLEANUP_JOBS_NO_DELETE_SQL, [])?;
     transaction.execute(TENDER_TRASH_DECISIONS_NO_UPDATE_SQL, [])?;
     transaction.execute(TENDER_TRASH_DECISIONS_NO_DELETE_SQL, [])?;
     transaction.execute(PRODUCT_ACCEPTANCE_RUNS_NO_UPDATE_SQL, [])?;
@@ -884,7 +927,7 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_UPDATE_SQL, [])?;
     transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_DELETE_SQL, [])?;
     transaction.execute(
-        "INSERT INTO installation (singleton, schema_version) VALUES (1, 18)",
+        "INSERT INTO installation (singleton, schema_version) VALUES (1, 19)",
         [],
     )?;
     transaction.execute(
@@ -1048,6 +1091,11 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
         schema_object("table", "deletion_receipts", DELETION_RECEIPTS_TABLE_SQL),
         schema_object(
             "table",
+            "provider_cleanup_jobs",
+            PROVIDER_CLEANUP_JOBS_TABLE_SQL,
+        ),
+        schema_object(
+            "table",
             "product_acceptance_runs",
             PRODUCT_ACCEPTANCE_RUNS_TABLE_SQL,
         ),
@@ -1148,6 +1196,16 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
             "trigger",
             "deletion_receipts",
             DELETION_RECEIPTS_NO_DELETE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "provider_cleanup_jobs",
+            PROVIDER_CLEANUP_JOBS_IDENTITY_NO_UPDATE_SQL,
+        ),
+        schema_object(
+            "trigger",
+            "provider_cleanup_jobs",
+            PROVIDER_CLEANUP_JOBS_NO_DELETE_SQL,
         ),
         schema_object(
             "trigger",

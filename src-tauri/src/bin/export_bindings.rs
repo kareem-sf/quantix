@@ -5,19 +5,21 @@ use quantix_lib::{
     ApproveSubmissionReleaseCommand, BootstrapRole, CancelProviderLoginCommand,
     CodexProductionAssuranceEvidence, ConnectAnthropicCommand, ConnectGeminiCommand,
     CreatePortableTenderArchiveCommand, DeletionReceipt, DisconnectAiProviderCommand,
-    EvaluatePublicReleaseGateCommand, ExportReleaseCopyCommand, GeneralApplicationPreferences,
-    ImportPortableTenderArchiveCommand, InspectManagerWorkspaceCommand, IntegrationTermsDecision,
-    LicenseDistributionReview, LiveQualificationMetrics, LiveQualificationRun, ManagerConversation,
-    ManagerIntakeStage, ManagerIntakeStatus, ManagerIntakeStatusKind, ManagerWorkspaceProjection,
+    ErasedTenderCopyClass, EvaluatePublicReleaseGateCommand, ExportReleaseCopyCommand,
+    GeneralApplicationPreferences, ImportPortableTenderArchiveCommand,
+    InspectManagerWorkspaceCommand, IntegrationTermsDecision, LicenseDistributionReview,
+    LiveQualificationMetrics, LiveQualificationRun, ManagerConversation, ManagerIntakeStage,
+    ManagerIntakeStatus, ManagerIntakeStatusKind, ManagerWorkspaceProjection,
     ManagerWorkspaceTender, ManagerWorkspaceTenderState, NativePlatformQualificationEvidence,
     NativePlatformQualificationRecord, OpenProviderLoginCommand, PortableTenderArchiveRecord,
     PrivateQualificationRecord, ProductAcceptanceOutcome, ProductAcceptanceRecord,
-    ProductAcceptanceRun, ProviderConnectionStatus, ProviderConnectionView, ProviderLoginMethod,
-    ProviderLoginStatus, ProviderLoginView, ProviderModelOption, ProviderReasoningOption,
-    ProviderReasoningSelection, PublicReleaseGateOutcome, PublicReleaseGateRecord,
-    RebindManagerIntakeProviderCommand, RecordEngineerWorkspaceMessageCommand,
-    RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand, ReleaseCopyExport,
-    ReleaseCopyItem, RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand,
+    ProductAcceptanceRun, ProviderCleanupStatus, ProviderConnectionStatus, ProviderConnectionView,
+    ProviderLoginMethod, ProviderLoginStatus, ProviderLoginView, ProviderModelOption,
+    ProviderReasoningOption, ProviderReasoningSelection, PublicReleaseGateOutcome,
+    PublicReleaseGateRecord, PurgeTrashedTenderCommand, RebindManagerIntakeProviderCommand,
+    RecordEngineerWorkspaceMessageCommand, RecordLiveQualificationRunCommand,
+    RecordNativePlatformQualificationCommand, ReleaseCopyExport, ReleaseCopyItem,
+    RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand,
     SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand, StartProviderLoginCommand,
     SubmissionReleaseApproval, SubmissionReleaseInspection, SubmissionReleaseState,
     TechnicalRiskAcceptance, TenderOfficeMessage, TenderOfficeMessageAuthor,
@@ -42,12 +44,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     SubmissionReleaseState::export_all(&config)?;
     CreatePortableTenderArchiveCommand::export_all(&config)?;
     DeletionReceipt::export_all(&config)?;
+    ErasedTenderCopyClass::export_all(&config)?;
+    ProviderCleanupStatus::export_all(&config)?;
     ImportPortableTenderArchiveCommand::export_all(&config)?;
     PortableTenderArchiveRecord::export_all(&config)?;
     TenderRetentionDecisionCommand::export_all(&config)?;
     TenderRetentionDecisionRecord::export_all(&config)?;
     TenderRetentionState::export_all(&config)?;
     TrashedTenderDecisionCommand::export_all(&config)?;
+    PurgeTrashedTenderCommand::export_all(&config)?;
     TrashedTenderRecord::export_all(&config)?;
     TrashedTenderState::export_all(&config)?;
     AcceptanceArtifactHash::export_all(&config)?;

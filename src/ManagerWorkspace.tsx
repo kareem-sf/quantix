@@ -30,6 +30,7 @@ import {
 
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
 import type { ManagerWorkspaceTender } from "./bindings/ManagerWorkspaceTender";
+import type { DeletionReceipt } from "./bindings/DeletionReceipt";
 import type { TrashedTenderRecord } from "./bindings/TrashedTenderRecord";
 import type { GeneralApplicationPreferences } from "./bindings/GeneralApplicationPreferences";
 import type { TenderOfficeMessage } from "./bindings/TenderOfficeMessage";
@@ -42,6 +43,7 @@ import {
   archiveTender,
   chooseAndImportTenderPackage,
   inspectManagerWorkspace,
+  inspectDeletionReceipts,
   inspectTrashedTenders,
   rebindManagerIntakeProvider,
   recordEngineerWorkspaceMessage,
@@ -449,12 +451,14 @@ function ManagerView({
 function ArchivedTenders({
   tenders,
   trash,
+  receipts,
   busy,
   onSelect,
   onTrashAction,
 }: {
   tenders: ManagerWorkspaceTender[];
   trash: TrashedTenderRecord[];
+  receipts: DeletionReceipt[];
   busy: boolean;
   onSelect: (tenderId: string) => void;
   onTrashAction: (
@@ -553,6 +557,73 @@ function ArchivedTenders({
           Quantix never purges Tender Trash automatically. This is not the
           operating-system recycle bin.
         </p>
+      </section>
+      <section aria-labelledby="deletion-receipts-title">
+        <div className="retention-view__section-heading">
+          <div>
+            <h2 id="deletion-receipts-title">Deletion Receipts</h2>
+            <p>
+              Minimal proof of completed local deletion. Receipts contain no
+              Tender content and cannot restore a Tender.
+            </p>
+          </div>
+        </div>
+        {receipts.length ? (
+          <div className="retention-view__receipt-list">
+            {receipts.map((receipt) => (
+              <article key={receipt.receipt_id}>
+                <div>
+                  <strong>
+                    Deleted Tender {receipt.tender_id.slice(0, 8)}
+                  </strong>
+                  <small>{new Date(receipt.purged_at).toLocaleString()}</small>
+                </div>
+                <dl>
+                  <div>
+                    <dt>Local copies</dt>
+                    <dd>
+                      {receipt.local_deletion_completed ? "Deleted" : "Pending"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Provider cleanup</dt>
+                    <dd>
+                      {receipt.provider_cleanup_status.replaceAll("_", " ")}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Threads</dt>
+                    <dd>
+                      {receipt.confirmed_provider_thread_deletions}/
+                      {receipt.provider_thread_count}
+                    </dd>
+                  </div>
+                </dl>
+                <details>
+                  <summary>Deletion scope</summary>
+                  <p>
+                    Checked:{" "}
+                    {receipt.erased_copy_classes
+                      .join(", ")
+                      .replaceAll("_", " ")}
+                    .
+                  </p>
+                  <p>
+                    Outside Quantix control:{" "}
+                    {receipt.external_copy_exclusions
+                      .join(", ")
+                      .replaceAll("_", " ")}
+                    .
+                  </p>
+                </details>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="retention-view__empty">
+            No permanent deletion receipts.
+          </p>
+        )}
       </section>
     </main>
   );
@@ -720,6 +791,11 @@ export function ManagerWorkspace({
   const [trashedTenders, setTrashedTenders] = useState<TrashedTenderRecord[]>(
     [],
   );
+  const [deletionReceipts, setDeletionReceipts] = useState<DeletionReceipt[]>(
+    [],
+  );
+  const [permanentDeleteConfirmation, setPermanentDeleteConfirmation] =
+    useState("");
   const [retentionRationale, setRetentionRationale] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(
     () => window.matchMedia("(min-width: 820px)").matches,
@@ -743,6 +819,7 @@ export function ManagerWorkspace({
         setRetentionAction(null);
         setTrashAction(null);
         setRetentionRationale("");
+        setPermanentDeleteConfirmation("");
       }
     };
     window.addEventListener("keydown", closeOnEscape);
@@ -782,7 +859,12 @@ export function ManagerWorkspace({
 
   const loadTrash = useCallback(async () => {
     try {
-      setTrashedTenders(await inspectTrashedTenders());
+      const [trash, receipts] = await Promise.all([
+        inspectTrashedTenders(),
+        inspectDeletionReceipts(),
+      ]);
+      setTrashedTenders(trash);
+      setDeletionReceipts(receipts);
     } catch (reason) {
       setError(readableError(reason));
     }
@@ -795,6 +877,19 @@ export function ManagerWorkspace({
   useEffect(() => {
     if (retentionOpen) void loadTrash();
   }, [loadTrash, retentionOpen]);
+
+  useEffect(() => {
+    if (
+      !retentionOpen ||
+      !deletionReceipts.some(
+        (receipt) => receipt.provider_cleanup_status === "pending",
+      )
+    ) {
+      return;
+    }
+    const timer = window.setInterval(() => void loadTrash(), 5_000);
+    return () => window.clearInterval(timer);
+  }, [deletionReceipts, loadTrash, retentionOpen]);
 
   useEffect(() => {
     const refresh = async () => {
@@ -951,22 +1046,42 @@ export function ManagerWorkspace({
 
   const applyTrashAction = useCallback(async () => {
     const rationale = retentionRationale.trim();
-    if (!trashAction || !rationale) return;
+    if (
+      !trashAction ||
+      !rationale ||
+      (trashAction.kind === "purge" &&
+        permanentDeleteConfirmation !== trashAction.record.tender_name)
+    ) {
+      return;
+    }
     const { kind, record } = trashAction;
     const result = await run(() =>
       kind === "restore"
         ? restoreTrashedTender(record.deletion_id, rationale)
-        : purgeTrashedTender(record.deletion_id, rationale),
+        : purgeTrashedTender(
+            record.deletion_id,
+            rationale,
+            permanentDeleteConfirmation,
+          ),
     );
     if (!result) return;
     setTrashAction(null);
     setRetentionRationale("");
+    setPermanentDeleteConfirmation("");
     await loadTrash();
     if (kind === "restore") {
       await load();
       await selectTender(record.tender_id);
     }
-  }, [load, loadTrash, retentionRationale, run, selectTender, trashAction]);
+  }, [
+    load,
+    loadTrash,
+    permanentDeleteConfirmation,
+    retentionRationale,
+    run,
+    selectTender,
+    trashAction,
+  ]);
 
   const selected = projection?.selected_tender ?? null;
   const activeTenders =
@@ -1095,11 +1210,13 @@ export function ManagerWorkspace({
           <ArchivedTenders
             tenders={archivedTenders}
             trash={visibleTrash}
+            receipts={deletionReceipts}
             busy={busy}
             onSelect={(tenderId) => void selectTender(tenderId)}
             onTrashAction={(kind, record) => {
               setTrashAction({ kind, record });
               setRetentionRationale("");
+              setPermanentDeleteConfirmation("");
             }}
           />
         ) : selected && projection ? (
@@ -1350,8 +1467,17 @@ export function ManagerWorkspace({
               <p>
                 {trashAction.kind === "restore"
                   ? "Quantix verifies and republishes the same Tender Store without merging, overwriting, or changing its identity."
-                  : "This is irreversible. The recoverable Tender Store will be removed and replaced by a minimal Deletion Receipt."}
+                  : "This is irreversible. Quantix deletes the Tender Store and every identifiable Tender backup, Portable Tender Archive, delivery export, Agent workspace, staging or quarantine item, and Tender-specific log it controls."}
               </p>
+              {trashAction.kind === "purge" ? (
+                <p>
+                  Original source packages, copies made outside Quantix,
+                  recipient copies, operating-system or third-party backups, and
+                  application-wide Provider Credentials are outside this
+                  deletion. Provider-thread cleanup is tracked separately and
+                  cannot hold local deletion open.
+                </p>
+              ) : null}
             </div>
             <label htmlFor="trash-action-rationale">
               Decision rationale
@@ -1365,6 +1491,20 @@ export function ManagerWorkspace({
                 onChange={(event) => setRetentionRationale(event.target.value)}
               />
             </label>
+            {trashAction.kind === "purge" ? (
+              <label htmlFor="permanent-delete-confirmation">
+                Type {trashAction.record.tender_name} to confirm
+                <input
+                  id="permanent-delete-confirmation"
+                  value={permanentDeleteConfirmation}
+                  disabled={busy}
+                  autoComplete="off"
+                  onChange={(event) =>
+                    setPermanentDeleteConfirmation(event.target.value)
+                  }
+                />
+              </label>
+            ) : null}
             <div className="retention-dialog__actions">
               <button
                 type="button"
@@ -1372,6 +1512,7 @@ export function ManagerWorkspace({
                 onClick={() => {
                   setTrashAction(null);
                   setRetentionRationale("");
+                  setPermanentDeleteConfirmation("");
                 }}
               >
                 Cancel
@@ -1383,7 +1524,13 @@ export function ManagerWorkspace({
                     : "manager-workspace__primary"
                 }
                 type="button"
-                disabled={busy || !retentionRationale.trim()}
+                disabled={
+                  busy ||
+                  !retentionRationale.trim() ||
+                  (trashAction.kind === "purge" &&
+                    permanentDeleteConfirmation !==
+                      trashAction.record.tender_name)
+                }
                 onClick={() => void applyTrashAction()}
               >
                 {busy

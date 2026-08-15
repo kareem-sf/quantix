@@ -60,7 +60,8 @@ pub(crate) use coordinated_baselines::exact_approved_coordinated_baseline_is_cur
 
 pub use backups::{
     CreatePortableTenderArchiveCommand, CreateTenderBackupCommand, DeletionReceipt,
-    ImportPortableTenderArchiveCommand, PortableTenderArchiveRecord, PrepareTenderRecoveryCommand,
+    ErasedTenderCopyClass, ImportPortableTenderArchiveCommand, PortableTenderArchiveRecord,
+    PrepareTenderRecoveryCommand, ProviderCleanupStatus, PurgeTrashedTenderCommand,
     ResolveTenderRecoveryCommand, TenderBackupRecord, TenderBackupState, TenderRecoveryDecision,
     TenderRecoveryDecisionRecord, TenderRecoveryRecord, TenderRecoveryState,
     TenderRetentionDecisionCommand, TenderRetentionDecisionRecord, TenderRetentionState,
