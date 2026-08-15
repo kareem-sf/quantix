@@ -2,6 +2,11 @@ import { CircleAlert, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { SetupIssue } from "./bindings/SetupIssue";
+import type { GeneralApplicationPreferences } from "./bindings/GeneralApplicationPreferences";
+import {
+  applyGeneralApplicationPreferences,
+  DEFAULT_GENERAL_APPLICATION_PREFERENCES,
+} from "./applicationPreferences";
 import { ManagerWorkspace } from "./ManagerWorkspace";
 import {
   ensureQuantixSetup,
@@ -15,7 +20,11 @@ import "./App.css";
 
 type AppState =
   | { kind: "checking" }
-  | { kind: "ready"; aiAvailable: boolean }
+  | {
+      kind: "ready";
+      aiAvailable: boolean;
+      generalPreferences: GeneralApplicationPreferences;
+    }
   | { kind: "blocked"; title: string; summary: string };
 
 const RUNTIME_PREPARATION_POLL_MS = 500;
@@ -114,6 +123,9 @@ function App() {
         runtimeReadiness = await waitForRuntimePreparation();
       }
       const settings = await refreshApplicationSettings().catch(() => null);
+      if (settings) {
+        applyGeneralApplicationPreferences(settings.general_preferences);
+      }
       const aiAvailable = settings
         ? settings.provider_connections.some(
             (connection) => connection.status === "ready",
@@ -122,6 +134,9 @@ function App() {
       setState({
         kind: "ready",
         aiAvailable,
+        generalPreferences:
+          settings?.general_preferences ??
+          DEFAULT_GENERAL_APPLICATION_PREFERENCES,
       });
       if (aiAvailable) {
         void resumeManagerIntakes().catch(() => undefined);
@@ -170,7 +185,12 @@ function App() {
     );
   }
 
-  return <ManagerWorkspace aiAvailable={state.aiAvailable} />;
+  return (
+    <ManagerWorkspace
+      aiAvailable={state.aiAvailable}
+      initialPreferences={state.generalPreferences}
+    />
+  );
 }
 
 export default App;

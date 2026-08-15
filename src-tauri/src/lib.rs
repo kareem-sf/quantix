@@ -39,12 +39,14 @@ pub use agent_runtime::{
     VerificationStatus,
 };
 pub use application_settings::{
-    AiExecutionSelection, AiProviderKind, ApplicationSettingsView, CancelProviderLoginCommand,
+    AiExecutionSelection, AiProviderKind, AppearancePreference, ApplicationDiagnostics,
+    ApplicationSettingsView, ApplicationStorageFacts, CancelProviderLoginCommand,
     ConnectAnthropicCommand, ConnectGeminiCommand, DisconnectAiProviderCommand,
-    OpenProviderLoginCommand, ProviderConnectionStatus, ProviderConnectionView,
-    ProviderLoginMethod, ProviderLoginStatus, ProviderLoginView, ProviderModelOption,
-    ProviderReasoningOption, ProviderReasoningSelection, StartProviderLoginCommand,
-    UpdateAiExecutionSelectionCommand,
+    GeneralApplicationPreferences, OpenProviderLoginCommand, ProviderConnectionStatus,
+    ProviderConnectionView, ProviderLoginMethod, ProviderLoginStatus, ProviderLoginView,
+    ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
+    StartProviderLoginCommand, UpdateAiExecutionSelectionCommand,
+    UpdateGeneralApplicationPreferencesCommand,
 };
 pub use document_parsing::{
     DocumentParseResult, EvidenceBoundingBox, EvidenceDocument, EvidenceLanguage, EvidenceLocation,
@@ -306,7 +308,7 @@ mod tauri_commands {
         TenderRecordPage, TenderRecordReviewResult, TenderRecoveryRecord,
         TenderRetentionDecisionCommand, TenderRetentionDecisionRecord, TenderSummary,
         TrashedTenderDecisionCommand, TrashedTenderRecord, UpdateAiExecutionSelectionCommand,
-        WorkPlanProposalInspection,
+        UpdateGeneralApplicationPreferencesCommand, WorkPlanProposalInspection,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -608,6 +610,16 @@ mod tauri_commands {
         command: UpdateAiExecutionSelectionCommand,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
         host.inner().update_ai_execution_selection(command).await
+    }
+
+    #[tauri::command]
+    pub(super) async fn update_general_application_preferences(
+        host: tauri::State<'_, QuantixHost>,
+        command: UpdateGeneralApplicationPreferencesCommand,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        host.inner()
+            .update_general_application_preferences(command)
+            .await
     }
 
     #[tauri::command]
@@ -2516,6 +2528,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::create_tender,
             tauri_commands::list_tenders,
             tauri_commands::refresh_application_settings,
+            tauri_commands::update_general_application_preferences,
             tauri_commands::update_ai_execution_selection,
             tauri_commands::start_provider_login,
             tauri_commands::cancel_provider_login,
@@ -2659,6 +2672,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
 pub fn run() {
     configure_tauri_builder(tauri::Builder::default())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("main") {

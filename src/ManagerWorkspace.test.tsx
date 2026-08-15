@@ -14,7 +14,9 @@ const host = vi.hoisted(() => ({
   connectAnthropic: vi.fn(),
   connectGemini: vi.fn(),
   chooseAndImportTenderPackage: vi.fn(),
+  checkQuantixUpdate: vi.fn(),
   inspectManagerWorkspace: vi.fn(),
+  inspectRuntimeReadiness: vi.fn(),
   logoutProvider: vi.fn(),
   disconnectAiProvider: vi.fn(),
   openProviderLogin: vi.fn(),
@@ -26,14 +28,41 @@ const host = vi.hoisted(() => ({
   startManagerTender: vi.fn(),
   startProviderLogin: vi.fn(),
   updateAiExecutionSelection: vi.fn(),
+  updateGeneralApplicationPreferences: vi.fn(),
+  validateQuantixUpdateRestart: vi.fn(),
+}));
+
+const notifications = vi.hoisted(() => ({
+  enableAttentionNotifications: vi.fn(),
+  notifyAttentionRequired: vi.fn(),
 }));
 
 vi.mock("./quantixHost", () => host);
+vi.mock("./applicationNotifications", () => notifications);
 
 import { ManagerWorkspace } from "./ManagerWorkspace";
 
 const tenderId = "a".repeat(32);
 const messageId = "b".repeat(32);
+const applicationFacts = {
+  general_preferences: {
+    appearance: "system" as const,
+    reduced_motion: false,
+    high_contrast: false,
+    larger_text: false,
+    notify_when_attention_needed: false,
+  },
+  storage: {
+    application_home: "A:\\Quantix-test",
+    tender_backups_are_preserved: true,
+    trash_requires_explicit_purge: true,
+  },
+  diagnostics: {
+    quantix_version: "0.1.0",
+    installation_schema_version: 17,
+    tender_schema_version: 30,
+  },
+};
 
 const projection: ManagerWorkspaceProjection = {
   catalogue: [
@@ -130,6 +159,7 @@ describe("ManagerWorkspace", () => {
   it("opens application Settings and saves a live provider selection atomically", async () => {
     host.inspectManagerWorkspace.mockResolvedValue(projection);
     const settings = {
+      ...applicationFacts,
       ai_execution_selection: {
         connection_id: "codex_chatgpt",
         provider: "codex",
@@ -194,6 +224,13 @@ describe("ManagerWorkspace", () => {
         reasoning: { kind: "codex_effort", value: "high" },
       },
     });
+    host.updateGeneralApplicationPreferences.mockImplementation(
+      async ({ preferences }) => ({
+        ...settings,
+        general_preferences: preferences,
+      }),
+    );
+    notifications.enableAttentionNotifications.mockResolvedValue(true);
 
     render(<ManagerWorkspace aiAvailable />);
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
@@ -203,6 +240,39 @@ describe("ManagerWorkspace", () => {
     ).toBeTruthy();
     expect(screen.getByRole("option", { name: "Live model A" })).toBeTruthy();
     expect(screen.getByRole("option", { name: "Live model B" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "AI & Models" })).toBeTruthy();
+    expect(screen.getByText("Data & Storage")).toBeTruthy();
+    expect(screen.getByText("Updates")).toBeTruthy();
+    expect(screen.getByText("About & Diagnostics")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Appearance"), {
+      target: { value: "dark" },
+    });
+    await waitFor(() => {
+      expect(host.updateGeneralApplicationPreferences).toHaveBeenCalledWith({
+        preferences: {
+          ...settings.general_preferences,
+          appearance: "dark",
+        },
+      });
+    });
+    expect(document.documentElement.dataset.quantixAppearance).toBe("dark");
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /Notify when I am needed/ }),
+    );
+    await waitFor(() => {
+      expect(notifications.enableAttentionNotifications).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(host.updateGeneralApplicationPreferences).toHaveBeenLastCalledWith(
+        {
+          preferences: {
+            ...settings.general_preferences,
+            appearance: "dark",
+            notify_when_attention_needed: true,
+          },
+        },
+      );
+    });
     fireEvent.change(screen.getByLabelText("Model"), {
       target: { value: "gpt-live-b" },
     });
@@ -221,6 +291,7 @@ describe("ManagerWorkspace", () => {
   it("projects Codex-managed device login without exposing credentials", async () => {
     host.inspectManagerWorkspace.mockResolvedValue(projection);
     const disconnected = {
+      ...applicationFacts,
       ai_execution_selection: null,
       active_provider_login: null,
       provider_connections: [
@@ -274,6 +345,7 @@ describe("ManagerWorkspace", () => {
   it("submits an Anthropic key once and renders only credential-free state", async () => {
     host.inspectManagerWorkspace.mockResolvedValue(projection);
     const disconnected = {
+      ...applicationFacts,
       ai_execution_selection: null,
       active_provider_login: null,
       provider_connections: [

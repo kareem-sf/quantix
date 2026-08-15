@@ -25,9 +25,26 @@ describe("App runtime startup", () => {
     host.validateQuantixUpdateRestart.mockResolvedValue({ state: "idle" });
     host.resumeManagerIntakes.mockResolvedValue(undefined);
     host.refreshApplicationSettings.mockResolvedValue({
+      general_preferences: {
+        appearance: "system",
+        reduced_motion: false,
+        high_contrast: false,
+        larger_text: false,
+        notify_when_attention_needed: false,
+      },
       ai_execution_selection: null,
       provider_connections: [{ status: "ready" }],
       active_provider_login: null,
+      storage: {
+        application_home: "A:\\Quantix-test",
+        tender_backups_are_preserved: true,
+        trash_requires_explicit_purge: true,
+      },
+      diagnostics: {
+        quantix_version: "0.1.0",
+        installation_schema_version: 17,
+        tender_schema_version: 30,
+      },
     });
   });
 

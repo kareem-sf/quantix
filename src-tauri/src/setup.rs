@@ -14,7 +14,7 @@ use crate::QuantixHost;
 
 pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 1024 * 1024 * 1024;
 
-pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 16;
+pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 17;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
@@ -30,7 +30,7 @@ const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
 ];
 const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 16)
+           schema_version INTEGER NOT NULL CHECK (schema_version = 17)
          )";
 pub(crate) const APPLICATION_SETTINGS_TABLE_SQL: &str = "CREATE TABLE application_settings (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -884,12 +884,12 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_UPDATE_SQL, [])?;
     transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_DELETE_SQL, [])?;
     transaction.execute(
-        "INSERT INTO installation (singleton, schema_version) VALUES (1, 16)",
+        "INSERT INTO installation (singleton, schema_version) VALUES (1, 17)",
         [],
     )?;
     transaction.execute(
         "INSERT INTO application_settings (singleton, settings_json, updated_at)
-         VALUES (1, '{\"ai_execution_selection\":null}', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+         VALUES (1, '{\"general_preferences\":{\"appearance\":\"system\",\"reduced_motion\":false,\"high_contrast\":false,\"larger_text\":false,\"notify_when_attention_needed\":false},\"ai_execution_selection\":null}', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
         [],
     )?;
     transaction.execute(

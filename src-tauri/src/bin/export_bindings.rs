@@ -1,13 +1,14 @@
 use quantix_lib::{
     AcceptanceArtifactHash, AcceptanceCheckResult, AcceptanceStageTiming, AgentRunInspection,
-    AgentRunSummary, AiExecutionSelection, AiProviderKind, ApplicationSettingsView,
+    AgentRunSummary, AiExecutionSelection, AiProviderKind, AppearancePreference,
+    ApplicationDiagnostics, ApplicationSettingsView, ApplicationStorageFacts,
     ApproveSubmissionReleaseCommand, BootstrapRole, CancelProviderLoginCommand,
     CodexProductionAssuranceEvidence, ConnectAnthropicCommand, ConnectGeminiCommand,
     CreatePortableTenderArchiveCommand, DeletionReceipt, DisconnectAiProviderCommand,
-    EvaluatePublicReleaseGateCommand, ExportReleaseCopyCommand, ImportPortableTenderArchiveCommand,
-    InspectManagerWorkspaceCommand, IntegrationTermsDecision, LicenseDistributionReview,
-    LiveQualificationMetrics, LiveQualificationRun, ManagerConversation, ManagerIntakeStage,
-    ManagerIntakeStatus, ManagerIntakeStatusKind, ManagerWorkspaceProjection,
+    EvaluatePublicReleaseGateCommand, ExportReleaseCopyCommand, GeneralApplicationPreferences,
+    ImportPortableTenderArchiveCommand, InspectManagerWorkspaceCommand, IntegrationTermsDecision,
+    LicenseDistributionReview, LiveQualificationMetrics, LiveQualificationRun, ManagerConversation,
+    ManagerIntakeStage, ManagerIntakeStatus, ManagerIntakeStatusKind, ManagerWorkspaceProjection,
     ManagerWorkspaceTender, NativePlatformQualificationEvidence, NativePlatformQualificationRecord,
     OpenProviderLoginCommand, PortableTenderArchiveRecord, PrivateQualificationRecord,
     ProductAcceptanceOutcome, ProductAcceptanceRecord, ProductAcceptanceRun,
@@ -22,9 +23,10 @@ use quantix_lib::{
     TechnicalRiskAcceptance, TenderOfficeMessage, TenderOfficeMessageAuthor,
     TenderOfficeMessageKind, TenderRetentionDecisionCommand, TenderRetentionDecisionRecord,
     TenderRetentionState, TrashedTenderDecisionCommand, TrashedTenderRecord, TrashedTenderState,
-    UpdateAiExecutionSelectionCommand, WorkspaceActionKind, WorkspaceCurrentAction,
-    WorkspaceFilesSummary, WorkspaceMessageReference, WorkspaceMessageReferenceKind,
-    WorkspaceTeamSummary, WorkspaceTenderDocument, WorkspaceWorkSummary,
+    UpdateAiExecutionSelectionCommand, UpdateGeneralApplicationPreferencesCommand,
+    WorkspaceActionKind, WorkspaceCurrentAction, WorkspaceFilesSummary, WorkspaceMessageReference,
+    WorkspaceMessageReferenceKind, WorkspaceTeamSummary, WorkspaceTenderDocument,
+    WorkspaceWorkSummary,
 };
 use ts_rs::{Config, TS};
 
@@ -104,6 +106,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ProviderLoginView::export_all(&config)?;
     AiExecutionSelection::export_all(&config)?;
     ApplicationSettingsView::export_all(&config)?;
+    AppearancePreference::export_all(&config)?;
+    GeneralApplicationPreferences::export_all(&config)?;
+    ApplicationStorageFacts::export_all(&config)?;
+    ApplicationDiagnostics::export_all(&config)?;
+    UpdateGeneralApplicationPreferencesCommand::export_all(&config)?;
     UpdateAiExecutionSelectionCommand::export_all(&config)?;
     StartProviderLoginCommand::export_all(&config)?;
     CancelProviderLoginCommand::export_all(&config)?;

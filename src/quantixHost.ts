@@ -108,6 +108,7 @@ import type { InspectComplianceMatrixCommand } from "./bindings/InspectComplianc
 import type { InspectProductionTaskReviewCommand } from "./bindings/InspectProductionTaskReviewCommand";
 import type { InspectManagerWorkspaceCommand } from "./bindings/InspectManagerWorkspaceCommand";
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
+import type { UpdateGeneralApplicationPreferencesCommand } from "./bindings/UpdateGeneralApplicationPreferencesCommand";
 import type { CancelProviderLoginCommand } from "./bindings/CancelProviderLoginCommand";
 import type { ConnectAnthropicCommand } from "./bindings/ConnectAnthropicCommand";
 import type { ConnectGeminiCommand } from "./bindings/ConnectGeminiCommand";
@@ -275,6 +276,15 @@ export function listTenders(): Promise<TenderCatalogueEntry[]> {
 
 export function refreshApplicationSettings(): Promise<ApplicationSettingsView> {
   return invoke<ApplicationSettingsView>("refresh_application_settings");
+}
+
+export function updateGeneralApplicationPreferences(
+  command: UpdateGeneralApplicationPreferencesCommand,
+): Promise<ApplicationSettingsView> {
+  return invoke<ApplicationSettingsView>(
+    "update_general_application_preferences",
+    { command },
+  );
 }
 
 export function updateAiExecutionSelection(

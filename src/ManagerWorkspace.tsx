@@ -26,10 +26,13 @@ import {
 
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
 import type { ManagerWorkspaceTender } from "./bindings/ManagerWorkspaceTender";
+import type { GeneralApplicationPreferences } from "./bindings/GeneralApplicationPreferences";
 import type { TenderOfficeMessage } from "./bindings/TenderOfficeMessage";
 import type { TenderPackageSourceKind } from "./bindings/TenderPackageSourceKind";
 import type { WorkspaceCurrentAction } from "./bindings/WorkspaceCurrentAction";
 import { ApplicationSettings } from "./ApplicationSettings";
+import { notifyAttentionRequired } from "./applicationNotifications";
+import { DEFAULT_GENERAL_APPLICATION_PREFERENCES } from "./applicationPreferences";
 import {
   chooseAndImportTenderPackage,
   inspectManagerWorkspace,
@@ -45,6 +48,7 @@ type WorkspaceView = "manager" | "work" | "files";
 
 interface ManagerWorkspaceProps {
   aiAvailable: boolean;
+  initialPreferences?: GeneralApplicationPreferences;
 }
 
 const phaseLabel: Record<ManagerWorkspaceTender["phase"], string> = {
@@ -560,8 +564,10 @@ function FilesView({
 
 export function ManagerWorkspace({
   aiAvailable: initialAiAvailable,
+  initialPreferences = DEFAULT_GENERAL_APPLICATION_PREFERENCES,
 }: ManagerWorkspaceProps) {
   const [aiAvailable, setAiAvailable] = useState(initialAiAvailable);
+  const [preferences, setPreferences] = useState(initialPreferences);
   const [projection, setProjection] =
     useState<ManagerWorkspaceProjection | null>(null);
   const [view, setView] = useState<WorkspaceView>("manager");
@@ -575,6 +581,27 @@ export function ManagerWorkspace({
   const refreshRunning = useRef(false);
   const busyRef = useRef(false);
   const projectionEpoch = useRef(0);
+  const previousAttentionTenderIds = useRef<Set<string> | null>(null);
+
+  useEffect(() => {
+    const current = new Set(
+      projection?.catalogue
+        .filter((tender) => tender.needs_engineer)
+        .map((tender) => tender.tender_id) ?? [],
+    );
+    const previous = previousAttentionTenderIds.current;
+    previousAttentionTenderIds.current = current;
+    if (
+      !previous ||
+      !preferences.notify_when_attention_needed ||
+      document.hasFocus()
+    ) {
+      return;
+    }
+    if ([...current].some((tenderId) => !previous.has(tenderId))) {
+      void notifyAttentionRequired().catch(() => undefined);
+    }
+  }, [preferences.notify_when_attention_needed, projection?.catalogue]);
 
   const load = useCallback(async () => {
     const epoch = ++projectionEpoch.current;
@@ -593,7 +620,13 @@ export function ManagerWorkspace({
 
   useEffect(() => {
     const refresh = async () => {
-      if (busy || document.hidden || refreshRunning.current) return;
+      if (
+        busy ||
+        (document.hidden && !preferences.notify_when_attention_needed) ||
+        refreshRunning.current
+      ) {
+        return;
+      }
       refreshRunning.current = true;
       const epoch = projectionEpoch.current;
       try {
@@ -609,7 +642,7 @@ export function ManagerWorkspace({
     };
     const timer = window.setInterval(() => void refresh(), 2_500);
     return () => window.clearInterval(timer);
-  }, [busy]);
+  }, [busy, preferences.notify_when_attention_needed]);
 
   const run = useCallback(async <T,>(operation: () => Promise<T>) => {
     projectionEpoch.current += 1;
@@ -794,6 +827,7 @@ export function ManagerWorkspace({
           <ApplicationSettings
             aiAvailable={aiAvailable}
             onAiAvailabilityChange={setAiAvailable}
+            onPreferencesChange={setPreferences}
           />
         ) : selected && projection ? (
           <>

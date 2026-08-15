@@ -10,7 +10,8 @@ use crate::{
         inspect_anthropic_connection, inspect_gemini_connection, valid_login_url, AgentProvider,
         ProviderFailure, ProviderFailureCategory, CODEX_VERSION,
     },
-    tender_store::{TenderCommandError, TenderErrorCode},
+    setup::INSTALLATION_SCHEMA_VERSION,
+    tender_store::{TenderCommandError, TenderErrorCode, TENDER_SCHEMA_VERSION},
     QuantixHost,
 };
 
@@ -112,13 +113,74 @@ pub struct AiExecutionSelection {
     pub adapter_version: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum AppearancePreference {
+    System,
+    Light,
+    Dark,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct GeneralApplicationPreferences {
+    pub appearance: AppearancePreference,
+    pub reduced_motion: bool,
+    pub high_contrast: bool,
+    pub larger_text: bool,
+    pub notify_when_attention_needed: bool,
+}
+
+impl Default for GeneralApplicationPreferences {
+    fn default() -> Self {
+        Self {
+            appearance: AppearancePreference::System,
+            reduced_motion: false,
+            high_contrast: false,
+            larger_text: false,
+            notify_when_attention_needed: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ApplicationStorageFacts {
+    pub application_home: String,
+    pub tender_backups_are_preserved: bool,
+    pub trash_requires_explicit_purge: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ApplicationDiagnostics {
+    pub quantix_version: String,
+    pub installation_schema_version: i64,
+    pub tender_schema_version: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 #[ts(export)]
 pub struct ApplicationSettingsView {
+    pub general_preferences: GeneralApplicationPreferences,
     pub ai_execution_selection: Option<AiExecutionSelection>,
     pub provider_connections: Vec<ProviderConnectionView>,
     pub active_provider_login: Option<ProviderLoginView>,
+    pub storage: ApplicationStorageFacts,
+    pub diagnostics: ApplicationDiagnostics,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct UpdateGeneralApplicationPreferencesCommand {
+    #[garde(skip)]
+    pub preferences: GeneralApplicationPreferences,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -218,10 +280,38 @@ pub struct UpdateAiExecutionSelectionCommand {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredApplicationSettings {
+    general_preferences: GeneralApplicationPreferences,
     ai_execution_selection: Option<AiExecutionSelection>,
 }
 
 impl QuantixHost {
+    pub async fn update_general_application_preferences(
+        &self,
+        command: UpdateGeneralApplicationPreferencesCommand,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        {
+            let mut database = settings_connection(self.application_home())?;
+            let transaction = database
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(settings_store_error)?;
+            let mut stored = load_stored_settings(&transaction)?;
+            stored.general_preferences = command.preferences;
+            store_application_settings(&transaction, &stored)?;
+            transaction.commit().map_err(settings_store_error)?;
+        }
+        let mut view = load_application_settings(self.application_home())?;
+        view.active_provider_login = self
+            .agent_provider()
+            .lock()
+            .await
+            .as_ref()
+            .and_then(AgentProvider::login_snapshot);
+        Ok(view)
+    }
+
     pub async fn refresh_application_settings(
         &self,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
@@ -998,9 +1088,15 @@ fn store_selection(
     transaction: &rusqlite::Transaction<'_>,
     selection: &AiExecutionSelection,
 ) -> Result<(), TenderCommandError> {
-    let stored = StoredApplicationSettings {
-        ai_execution_selection: Some(selection.clone()),
-    };
+    let mut stored = load_stored_settings(transaction)?;
+    stored.ai_execution_selection = Some(selection.clone());
+    store_application_settings(transaction, &stored)
+}
+
+fn store_application_settings(
+    transaction: &rusqlite::Transaction<'_>,
+    stored: &StoredApplicationSettings,
+) -> Result<(), TenderCommandError> {
     let settings_json = serde_json::to_string(&stored).map_err(settings_json_error)?;
     transaction
         .execute(
@@ -1051,9 +1147,20 @@ fn load_application_settings(
         ));
     }
     Ok(ApplicationSettingsView {
+        general_preferences: settings.general_preferences,
         ai_execution_selection: settings.ai_execution_selection,
         provider_connections,
         active_provider_login: None,
+        storage: ApplicationStorageFacts {
+            application_home: application_home.to_string_lossy().into_owned(),
+            tender_backups_are_preserved: true,
+            trash_requires_explicit_purge: true,
+        },
+        diagnostics: ApplicationDiagnostics {
+            quantix_version: env!("CARGO_PKG_VERSION").to_owned(),
+            installation_schema_version: INSTALLATION_SCHEMA_VERSION,
+            tender_schema_version: TENDER_SCHEMA_VERSION,
+        },
     })
 }
 
@@ -1150,15 +1257,7 @@ fn clear_selection_for_connection(
         .is_some_and(|selection| selection.connection_id == connection_id)
     {
         stored.ai_execution_selection = None;
-        let settings_json = serde_json::to_string(&stored).map_err(settings_json_error)?;
-        transaction
-            .execute(
-                "UPDATE application_settings
-                 SET settings_json = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                 WHERE singleton = 1",
-                [settings_json],
-            )
-            .map_err(settings_store_error)?;
+        store_application_settings(&transaction, &stored)?;
     }
     transaction.commit().map_err(settings_store_error)
 }
