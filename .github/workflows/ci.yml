@@ -49,6 +49,7 @@ jobs:
           key: ${{ runner.os }}-rust-1.97.1-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-rust-1.97.1-
+          save-always: true
 
       - name: Install locked JavaScript dependencies
         run: npm ci

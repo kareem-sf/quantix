@@ -9,8 +9,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const host = vi.hoisted(() => ({
   approvePackageFindingException: vi.fn(),
+  approveSubmissionRelease: vi.fn(),
+  exportReleaseCopy: vi.fn(),
   inspectCurrentSubmissionPackage: vi.fn(),
   inspectFinalReview: vi.fn(),
+  inspectSubmissionRelease: vi.fn(),
   recordPackageManualVerification: vi.fn(),
   runPackageValidation: vi.fn(),
   runSubmissionSectionReview: vi.fn(),
@@ -169,6 +172,7 @@ describe("FinalReviewPanel", () => {
   it("shows exact readiness evidence and sends exact manual and review targets", async () => {
     host.inspectCurrentSubmissionPackage.mockResolvedValue(submissionPackage);
     host.inspectFinalReview.mockResolvedValue(inspection);
+    host.inspectSubmissionRelease.mockResolvedValue(null);
     host.recordPackageManualVerification.mockResolvedValue({
       ...inspection,
       manual_verifications: [
