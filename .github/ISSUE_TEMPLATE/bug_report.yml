@@ -2,7 +2,7 @@ name: Bug report
 description: Report reproducible incorrect Quantix behavior
 title: "bug: "
 labels:
-  - needs-triage
+  - bug
 body:
   - type: markdown
     attributes:

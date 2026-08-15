@@ -2,7 +2,7 @@ name: Change request
 description: Propose a product, workflow, architecture, or developer-experience change
 title: "change: "
 labels:
-  - needs-triage
+  - enhancement
 body:
   - type: textarea
     id: problem
