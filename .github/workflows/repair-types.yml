@@ -1,0 +1,163 @@
+name: One-time TypeScript repair
+
+on:
+  push:
+    branches:
+      - chore/github-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out setup branch
+        uses: actions/checkout@v7
+        with:
+          ref: chore/github-foundation
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Apply narrow TypeScript repairs
+        shell: pwsh
+        run: |
+          function Read-Normalized([string]$Path) {
+            return [System.IO.File]::ReadAllText($Path).Replace("`r`n", "`n")
+          }
+
+          function Write-Utf8NoBom([string]$Path, [string]$Content) {
+            [System.IO.File]::WriteAllText(
+              $Path,
+              $Content,
+              [System.Text.UTF8Encoding]::new($false)
+            )
+          }
+
+          $settingsPath = "src/ApplicationSettings.tsx"
+          $settings = Read-Normalized $settingsPath
+          $settingsOld = 'connection.provider !== "codex" && canDisconnect'
+          if (-not $settings.Contains($settingsOld)) {
+            throw "Expected provider-disconnect narrowing expression was not found."
+          }
+          $settings = $settings.Replace($settingsOld, "canDisconnect")
+          Write-Utf8NoBom $settingsPath $settings
+
+          $managerPath = "src/ManagerWorkspace.tsx"
+          $manager = Read-Normalized $managerPath
+          $replaceAllToken = '.replaceAll("_", " ")'
+          $replaceAllCount = [regex]::Matches(
+            $manager,
+            [regex]::Escape($replaceAllToken)
+          ).Count
+          if ($replaceAllCount -ne 5) {
+            throw "Expected 5 replaceAll compatibility calls, found $replaceAllCount."
+          }
+          $manager = $manager.Replace($replaceAllToken, '.replace(/_/g, " ")')
+
+          $oldRetention = @'
+    const result = await run(() => {
+      if (retentionAction === "archive") {
+        return archiveTender(tenderId, rationale);
+      }
+      if (retentionAction === "trash") {
+        return trashTender(tenderId, rationale);
+      }
+      return restoreArchivedTender(tenderId, rationale);
+    });
+'@.Replace("`r`n", "`n")
+          $newRetention = @'
+    const result = await run(async () => {
+      if (retentionAction === "archive") {
+        return await archiveTender(tenderId, rationale);
+      }
+      if (retentionAction === "trash") {
+        return await trashTender(tenderId, rationale);
+      }
+      return await restoreArchivedTender(tenderId, rationale);
+    });
+'@.Replace("`r`n", "`n")
+          if (-not $manager.Contains($oldRetention)) {
+            throw "Expected retention operation block was not found."
+          }
+          $manager = $manager.Replace($oldRetention, $newRetention)
+
+          $oldTrash = @'
+    const result = await run(() =>
+      kind === "restore"
+        ? restoreTrashedTender(record.deletion_id, rationale)
+        : purgeTrashedTender(
+            record.deletion_id,
+            rationale,
+            permanentDeleteConfirmation,
+          ),
+    );
+'@.Replace("`r`n", "`n")
+          $newTrash = @'
+    const result = await run(async () => {
+      if (kind === "restore") {
+        return await restoreTrashedTender(record.deletion_id, rationale);
+      }
+      return await purgeTrashedTender(
+        record.deletion_id,
+        rationale,
+        permanentDeleteConfirmation,
+      );
+    });
+'@.Replace("`r`n", "`n")
+          if (-not $manager.Contains($oldTrash)) {
+            throw "Expected Trash operation block was not found."
+          }
+          $manager = $manager.Replace($oldTrash, $newTrash)
+          Write-Utf8NoBom $managerPath $manager
+
+          $testPath = "src/ManagerWorkspace.test.tsx"
+          $test = Read-Normalized $testPath
+          $oldAssertion = @'
+    expect(
+      screen.getByRole("button", { name: "Permanent Delete" }),
+    ).toBeDisabled();
+'@.Replace("`r`n", "`n")
+          $newAssertion = @'
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Permanent Delete",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+'@.Replace("`r`n", "`n")
+          if (-not $test.Contains($oldAssertion)) {
+            throw "Expected disabled-button assertion was not found."
+          }
+          $test = $test.Replace($oldAssertion, $newAssertion)
+          Write-Utf8NoBom $testPath $test
+
+      - name: Format and type-check repairs
+        run: |
+          npm run format
+          npx tsc --noEmit
+
+      - name: Commit verified repairs
+        shell: pwsh
+        run: |
+          git add src/ApplicationSettings.tsx src/ManagerWorkspace.tsx src/ManagerWorkspace.test.tsx
+          $staged = git diff --cached --name-only
+          if (-not $staged) {
+            Write-Host "No TypeScript repairs were required."
+            exit 0
+          }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: satisfy TypeScript repository gates"
+          git push origin HEAD:chore/github-foundation
