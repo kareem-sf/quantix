@@ -40,7 +40,8 @@ pub use agent_runtime::{
 };
 pub use application_settings::{
     AiExecutionSelection, AiProviderKind, ApplicationSettingsView, CancelProviderLoginCommand,
-    ConnectAnthropicCommand, DisconnectAiProviderCommand, OpenProviderLoginCommand,
+    ConnectAnthropicCommand, ConnectGeminiCommand, DisconnectAiProviderCommand,
+    OpenProviderLoginCommand,
     ProviderConnectionStatus, ProviderConnectionView, ProviderLoginMethod, ProviderLoginStatus,
     ProviderLoginView, ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
     StartProviderLoginCommand, UpdateAiExecutionSelectionCommand,
@@ -247,7 +248,8 @@ mod tauri_commands {
         CalculationWorkspaceInspection, CancelProviderLoginCommand, ChangeAssessment,
         ChangeAssessmentPage, ChooseTenderPackageCommand, CommercialStrategy, ComplianceMatrixPage,
         ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand, ConnectAnthropicCommand,
-        ControlledBoqCalculationRun, CoordinatedBidBaseline, CoordinatedBidBaselinePage,
+        ConnectGeminiCommand, ControlledBoqCalculationRun, CoordinatedBidBaselinePage,
+        CoordinatedBidBaseline,
         CostEstimatorBasisResult, CostEstimatorCalculationResult, CreateBidDecisionPackageCommand,
         CreateCalculationScenarioCommand, CreateCommercialStrategyCommand,
         CreateExternalRfiDraftCommand, CreatePortableTenderArchiveCommand,
@@ -654,6 +656,14 @@ mod tauri_commands {
         command: DisconnectAiProviderCommand,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
         host.inner().disconnect_ai_provider(command).await
+    }
+
+    #[tauri::command]
+    pub(super) async fn connect_gemini(
+        host: tauri::State<'_, QuantixHost>,
+        command: ConnectGeminiCommand,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        host.inner().connect_gemini(command).await
     }
 
     #[tauri::command]
@@ -2501,6 +2511,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::logout_provider,
             tauri_commands::connect_anthropic,
             tauri_commands::disconnect_ai_provider,
+            tauri_commands::connect_gemini,
             tauri_commands::inspect_manager_workspace,
             tauri_commands::start_manager_tender,
             tauri_commands::resume_manager_intakes,

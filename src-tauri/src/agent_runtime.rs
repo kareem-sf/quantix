@@ -16,10 +16,10 @@ use ts_rs::TS;
 use crate::{
     application_settings::{
         codex_connection_version, codex_failure_connection_status, load_anthropic_api_key,
-        save_codex_connection_status, save_live_connection, AiExecutionSelection, AiProviderKind,
-        ProviderConnectionStatus, ProviderConnectionView, ProviderLoginMethod, ProviderLoginView,
-        ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
-        CODEX_CONNECTION_ID,
+        load_gemini_api_key, save_codex_connection_status, save_live_connection,
+        AiExecutionSelection, AiProviderKind, ProviderConnectionStatus, ProviderConnectionView,
+        ProviderLoginMethod, ProviderLoginView, ProviderModelOption, ProviderReasoningOption,
+        ProviderReasoningSelection, CODEX_CONNECTION_ID,
     },
     process_supervisor::{ProcessError, ProcessSpec, ProcessTermination, SupervisedConversation},
     tender_store::{
@@ -51,6 +51,7 @@ mod anthropic;
 mod bootstrap_profile;
 mod codex_actor;
 mod codex_protocol;
+mod gemini;
 pub(crate) mod permissions;
 pub(crate) use bootstrap_profile::{bootstrap_profile, bootstrap_task};
 pub(crate) use codex_actor::{valid_login_url, CodexProvider};
@@ -64,6 +65,12 @@ pub(crate) async fn inspect_anthropic_connection(
     api_key: &str,
 ) -> Result<ProviderConnectionView, ProviderFailure> {
     anthropic::fetch_connection(api_key).await
+}
+
+pub(crate) async fn inspect_gemini_connection(
+    api_key: &str,
+) -> Result<ProviderConnectionView, ProviderFailure> {
+    gemini::fetch_connection(api_key).await
 }
 
 #[derive(Clone)]
@@ -2615,7 +2622,20 @@ async fn execute_provider_turn(
             )
             .await
         }
-        AiProviderKind::Gemini => return failed_execution(protocol_failure(false), started),
+        AiProviderKind::Gemini => {
+            let api_key = match load_gemini_api_key() {
+                Ok(api_key) => api_key,
+                Err(failure) => return failed_execution(failure, started),
+            };
+            gemini::run_turn(
+                api_key,
+                prepared.clone(),
+                operation_limit,
+                cancellation,
+                callbacks,
+            )
+            .await
+        }
     };
     host.observe_provider_usage(&execution.usage);
     execution.usage.elapsed_milliseconds =

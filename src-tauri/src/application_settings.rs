@@ -7,8 +7,8 @@ use ts_rs::TS;
 
 use crate::{
     agent_runtime::{
-        inspect_anthropic_connection, valid_login_url, AgentProvider, ProviderFailure,
-        ProviderFailureCategory, CODEX_VERSION,
+        inspect_anthropic_connection, inspect_gemini_connection, valid_login_url, AgentProvider,
+        ProviderFailure, ProviderFailureCategory, CODEX_VERSION,
     },
     tender_store::{TenderCommandError, TenderErrorCode},
     QuantixHost,
@@ -17,8 +17,11 @@ use crate::{
 pub(crate) const CODEX_CONNECTION_ID: &str = "codex_chatgpt";
 pub(crate) const ANTHROPIC_CONNECTION_ID: &str = "anthropic_byok";
 pub(crate) const ANTHROPIC_ADAPTER_VERSION: &str = "anthropic-messages-v1";
+pub(crate) const GEMINI_CONNECTION_ID: &str = "gemini_byok";
+pub(crate) const GEMINI_ADAPTER_VERSION: &str = "gemini-generate-content-v1beta";
 const CREDENTIAL_SERVICE: &str = "com.quantix.ai-provider";
 const ANTHROPIC_CREDENTIAL_ACCOUNT: &str = "anthropic_api_key";
+const GEMINI_CREDENTIAL_ACCOUNT: &str = "gemini_api_key";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -184,6 +187,14 @@ pub struct ConnectAnthropicCommand {
     pub api_key: String,
 }
 
+#[derive(Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ConnectGeminiCommand {
+    #[garde(length(bytes, min = 1, max = 500))]
+    pub api_key: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
 #[serde(deny_unknown_fields)]
 #[ts(export)]
@@ -221,6 +232,16 @@ impl QuantixHost {
                     self.application_home(),
                     provider_failure_status(failure.category),
                     "Anthropic is unavailable. The key remains only in the system credential vault.",
+                )?,
+            }
+        }
+        if let Ok(api_key) = load_gemini_api_key() {
+            match inspect_gemini_connection(&api_key).await {
+                Ok(connection) => save_live_connection(self.application_home(), &connection)?,
+                Err(failure) => save_gemini_connection_status(
+                    self.application_home(),
+                    provider_failure_status(failure.category),
+                    "Gemini is unavailable. The key remains only in the system credential vault.",
                 )?,
             }
         }
@@ -333,6 +354,17 @@ impl QuantixHost {
             self.set_runtime_verified(true);
             return load_application_settings(self.application_home());
         }
+        if command.connection_id == GEMINI_CONNECTION_ID {
+            let api_key = load_gemini_api_key()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+            let connection = inspect_gemini_connection(&api_key)
+                .await
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+            let selection = selection_from_command(&connection, &command)?;
+            save_connection_and_selection(self.application_home(), &connection, &selection)?;
+            self.set_runtime_verified(true);
+            return load_application_settings(self.application_home());
+        }
         if command.connection_id != CODEX_CONNECTION_ID {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
@@ -405,19 +437,31 @@ impl QuantixHost {
         command
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-        if command.connection_id != ANTHROPIC_CONNECTION_ID
-            || !self.update_environment_is_quiescent()
-        {
+        if !self.update_environment_is_quiescent() {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        delete_anthropic_api_key()
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
-        save_anthropic_connection_status(
-            self.application_home(),
-            ProviderConnectionStatus::AuthenticationRequired,
-            "Add an Anthropic API key to connect. Revoke externally created keys in the Anthropic Console.",
-        )?;
-        clear_selection_for_connection(self.application_home(), ANTHROPIC_CONNECTION_ID)?;
+        match command.connection_id.as_str() {
+            ANTHROPIC_CONNECTION_ID => {
+                delete_anthropic_api_key()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+                save_anthropic_connection_status(
+                    self.application_home(),
+                    ProviderConnectionStatus::AuthenticationRequired,
+                    "Add an Anthropic API key to connect. Revoke externally created keys in the Anthropic Console.",
+                )?;
+            }
+            GEMINI_CONNECTION_ID => {
+                delete_gemini_api_key()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+                save_gemini_connection_status(
+                    self.application_home(),
+                    ProviderConnectionStatus::AuthenticationRequired,
+                    "Add a Gemini API key to connect. Revoke externally created keys in Google AI Studio or Google Cloud.",
+                )?;
+            }
+            _ => return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand)),
+        }
+        clear_selection_for_connection(self.application_home(), &command.connection_id)?;
         let view = load_application_settings(self.application_home())?;
         self.set_runtime_verified(
             view.provider_connections
@@ -425,6 +469,47 @@ impl QuantixHost {
                 .any(|connection| connection.status == ProviderConnectionStatus::Ready),
         );
         Ok(view)
+    }
+
+    pub async fn connect_gemini(
+        &self,
+        command: ConnectGeminiCommand,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if !self.update_environment_is_quiescent() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let api_key = command.api_key.trim().to_owned();
+        if api_key.is_empty() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let connection =
+            inspect_gemini_connection(&api_key)
+                .await
+                .map_err(|failure| match failure.category {
+                    ProviderFailureCategory::AuthenticationRequired => {
+                        TenderCommandError::new(TenderErrorCode::InvalidCommand)
+                    }
+                    _ => TenderCommandError::new(TenderErrorCode::RuntimeRequired),
+                })?;
+        let previous = read_gemini_api_key().ok();
+        write_gemini_api_key(&api_key)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        if let Err(error) = save_live_connection(self.application_home(), &connection) {
+            match previous {
+                Some(previous) => {
+                    let _ = write_gemini_api_key(&previous);
+                }
+                None => {
+                    let _ = delete_gemini_api_key();
+                }
+            }
+            return Err(error);
+        }
+        self.set_runtime_verified(true);
+        load_application_settings(self.application_home())
     }
 
     pub async fn start_provider_login(
@@ -872,6 +957,15 @@ fn load_application_settings(
             "Add an Anthropic API key to connect.",
         ));
     }
+    if !provider_connections
+        .iter()
+        .any(|connection| connection.connection_id == GEMINI_CONNECTION_ID)
+    {
+        provider_connections.push(gemini_connection_without_catalog(
+            ProviderConnectionStatus::AuthenticationRequired,
+            "Add a Gemini API key to connect.",
+        ));
+    }
     Ok(ApplicationSettingsView {
         ai_execution_selection: settings.ai_execution_selection,
         provider_connections,
@@ -909,6 +1003,24 @@ fn anthropic_connection_without_catalog(
     }
 }
 
+fn gemini_connection_without_catalog(
+    status: ProviderConnectionStatus,
+    summary: &str,
+) -> ProviderConnectionView {
+    ProviderConnectionView {
+        connection_id: GEMINI_CONNECTION_ID.to_owned(),
+        provider: AiProviderKind::Gemini,
+        display_name: "Google Gemini API key".to_owned(),
+        status,
+        account_label: None,
+        account_plan: None,
+        models: Vec::new(),
+        catalogue_fetched_at: None,
+        adapter_version: GEMINI_ADAPTER_VERSION.to_owned(),
+        status_summary: summary.to_owned(),
+    }
+}
+
 fn save_anthropic_connection_status(
     application_home: &Path,
     status: ProviderConnectionStatus,
@@ -920,6 +1032,22 @@ fn save_anthropic_connection_status(
         .map_err(settings_store_error)?;
     let connection = anthropic_connection_without_catalog(status, summary);
     upsert_connection(&transaction, &connection)?;
+    transaction.commit().map_err(settings_store_error)
+}
+
+fn save_gemini_connection_status(
+    application_home: &Path,
+    status: ProviderConnectionStatus,
+    summary: &str,
+) -> Result<(), TenderCommandError> {
+    let mut database = settings_connection(application_home)?;
+    let transaction = database
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(settings_store_error)?;
+    upsert_connection(
+        &transaction,
+        &gemini_connection_without_catalog(status, summary),
+    )?;
     transaction.commit().map_err(settings_store_error)
 }
 
@@ -955,6 +1083,10 @@ fn anthropic_credential_entry() -> Result<keyring::v1::Entry, keyring::v1::Error
     keyring::v1::Entry::new(CREDENTIAL_SERVICE, ANTHROPIC_CREDENTIAL_ACCOUNT)
 }
 
+fn gemini_credential_entry() -> Result<keyring::v1::Entry, keyring::v1::Error> {
+    keyring::v1::Entry::new(CREDENTIAL_SERVICE, GEMINI_CREDENTIAL_ACCOUNT)
+}
+
 fn read_anthropic_api_key() -> Result<String, keyring::v1::Error> {
     anthropic_credential_entry()?.get_password()
 }
@@ -965,6 +1097,21 @@ fn write_anthropic_api_key(api_key: &str) -> Result<(), keyring::v1::Error> {
 
 fn delete_anthropic_api_key() -> Result<(), keyring::v1::Error> {
     match anthropic_credential_entry()?.delete_credential() {
+        Ok(()) | Err(keyring::v1::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn read_gemini_api_key() -> Result<String, keyring::v1::Error> {
+    gemini_credential_entry()?.get_password()
+}
+
+fn write_gemini_api_key(api_key: &str) -> Result<(), keyring::v1::Error> {
+    gemini_credential_entry()?.set_password(api_key)
+}
+
+fn delete_gemini_api_key() -> Result<(), keyring::v1::Error> {
+    match gemini_credential_entry()?.delete_credential() {
         Ok(()) | Err(keyring::v1::Error::NoEntry) => Ok(()),
         Err(error) => Err(error),
     }
@@ -984,6 +1131,24 @@ pub(crate) fn load_anthropic_api_key() -> Result<String, ProviderFailure> {
             true,
             "Unlock or repair the operating-system credential vault before retrying.",
             Some("Quantix could not read the Anthropic credential from the system vault."),
+        )),
+    }
+}
+
+pub(crate) fn load_gemini_api_key() -> Result<String, ProviderFailure> {
+    match read_gemini_api_key() {
+        Ok(api_key) if !api_key.trim().is_empty() => Ok(api_key),
+        Ok(_) | Err(keyring::v1::Error::NoEntry) => Err(ProviderFailure::new(
+            ProviderFailureCategory::AuthenticationRequired,
+            true,
+            "Add a Gemini API key in Settings before retrying.",
+            Some("No Gemini credential is available in the system credential vault."),
+        )),
+        Err(_) => Err(ProviderFailure::new(
+            ProviderFailureCategory::ProcessFailed,
+            true,
+            "Unlock or repair the operating-system credential vault before retrying.",
+            Some("Quantix could not read the Gemini credential from the system vault."),
         )),
     }
 }

@@ -13,6 +13,7 @@ import type { ProviderReasoningSelection } from "./bindings/ProviderReasoningSel
 import {
   cancelProviderLogin,
   connectAnthropic,
+  connectGemini,
   disconnectAiProvider,
   logoutProvider,
   openProviderLogin,
@@ -56,6 +57,7 @@ export function ApplicationSettings({
   const [error, setError] = useState<string | null>(null);
   const [connectionId, setConnectionId] = useState<string | null>(null);
   const [anthropicKey, setAnthropicKey] = useState("");
+  const [geminiKey, setGeminiKey] = useState("");
 
   const acceptSettings = useCallback(
     (view: ApplicationSettingsView) => {
@@ -217,6 +219,36 @@ export function ApplicationSettings({
     try {
       acceptSettings(
         await disconnectAiProvider({ connection_id: "anthropic_byok" }),
+      );
+    } catch (reason) {
+      setError(settingsError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }, [acceptSettings]);
+
+  const saveGeminiKey = useCallback(async () => {
+    const apiKey = geminiKey.trim();
+    if (!apiKey) return;
+    setBusy(true);
+    setError(null);
+    try {
+      acceptSettings(await connectGemini({ api_key: apiKey }));
+      setGeminiKey("");
+      setConnectionId("gemini_byok");
+    } catch (reason) {
+      setError(settingsError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }, [acceptSettings, geminiKey]);
+
+  const disconnectGemini = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      acceptSettings(
+        await disconnectAiProvider({ connection_id: "gemini_byok" }),
       );
     } catch (reason) {
       setError(settingsError(reason));
@@ -462,6 +494,55 @@ export function ApplicationSettings({
                   </button>
                   <small>
                     Revoke externally created keys separately in the Anthropic Console.
+                  </small>
+                </div>
+              )
+            ) : connection.provider === "gemini" ? (
+              connection.status === "authentication_required" ? (
+                <form
+                  className="application-settings__login"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void saveGeminiKey();
+                  }}
+                >
+                  <label>
+                    <span>Gemini API key</span>
+                    <input
+                      type="password"
+                      value={geminiKey}
+                      autoComplete="off"
+                      disabled={busy}
+                      onChange={(event) => setGeminiKey(event.target.value)}
+                    />
+                    <small>
+                      Stored only in your operating system credential vault.
+                    </small>
+                  </label>
+                  <button type="submit" disabled={busy || !geminiKey.trim()}>
+                    Connect Gemini
+                  </button>
+                  <button
+                    type="button"
+                    className="application-settings__logout"
+                    disabled={busy}
+                    onClick={() => void disconnectGemini()}
+                  >
+                    Remove any stored key
+                  </button>
+                </form>
+              ) : (
+                <div className="application-settings__login-actions">
+                  <button
+                    type="button"
+                    className="application-settings__logout"
+                    disabled={busy}
+                    onClick={() => void disconnectGemini()}
+                  >
+                    <LogOut size={15} /> Remove local key
+                  </button>
+                  <small>
+                    Revoke externally created keys separately in Google AI Studio or Google Cloud.
                   </small>
                 </div>
               )

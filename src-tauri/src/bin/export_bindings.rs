@@ -2,8 +2,9 @@ use quantix_lib::{
     AcceptanceArtifactHash, AcceptanceCheckResult, AcceptanceStageTiming, AgentRunInspection,
     AgentRunSummary, AiExecutionSelection, AiProviderKind, ApplicationSettingsView,
     ApproveSubmissionReleaseCommand, BootstrapRole, CancelProviderLoginCommand,
-    CodexProductionAssuranceEvidence, ConnectAnthropicCommand, CreatePortableTenderArchiveCommand,
-    DeletionReceipt, DisconnectAiProviderCommand, EvaluatePublicReleaseGateCommand,
+    CodexProductionAssuranceEvidence, ConnectAnthropicCommand, ConnectGeminiCommand,
+    CreatePortableTenderArchiveCommand, DeletionReceipt, DisconnectAiProviderCommand,
+    EvaluatePublicReleaseGateCommand,
     ExportReleaseCopyCommand, ImportPortableTenderArchiveCommand, InspectManagerWorkspaceCommand,
     IntegrationTermsDecision, LicenseDistributionReview, LiveQualificationMetrics,
     LiveQualificationRun, ManagerConversation, ManagerIntakeStage, ManagerIntakeStatus,
@@ -107,6 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     CancelProviderLoginCommand::export_all(&config)?;
     OpenProviderLoginCommand::export_all(&config)?;
     ConnectAnthropicCommand::export_all(&config)?;
+    ConnectGeminiCommand::export_all(&config)?;
     DisconnectAiProviderCommand::export_all(&config)?;
     AgentRunInspection::export_all(&config)?;
     AgentRunSummary::export_all(&config)?;

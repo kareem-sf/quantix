@@ -12,6 +12,7 @@ import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProj
 const host = vi.hoisted(() => ({
   cancelProviderLogin: vi.fn(),
   connectAnthropic: vi.fn(),
+  connectGemini: vi.fn(),
   chooseAndImportTenderPackage: vi.fn(),
   inspectManagerWorkspace: vi.fn(),
   logoutProvider: vi.fn(),

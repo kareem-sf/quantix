@@ -110,6 +110,7 @@ import type { InspectManagerWorkspaceCommand } from "./bindings/InspectManagerWo
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
 import type { CancelProviderLoginCommand } from "./bindings/CancelProviderLoginCommand";
 import type { ConnectAnthropicCommand } from "./bindings/ConnectAnthropicCommand";
+import type { ConnectGeminiCommand } from "./bindings/ConnectGeminiCommand";
 import type { DisconnectAiProviderCommand } from "./bindings/DisconnectAiProviderCommand";
 import type { OpenProviderLoginCommand } from "./bindings/OpenProviderLoginCommand";
 import type { StartProviderLoginCommand } from "./bindings/StartProviderLoginCommand";
@@ -309,6 +310,12 @@ export function connectAnthropic(
   command: ConnectAnthropicCommand,
 ): Promise<ApplicationSettingsView> {
   return invoke<ApplicationSettingsView>("connect_anthropic", { command });
+}
+
+export function connectGemini(
+  command: ConnectGeminiCommand,
+): Promise<ApplicationSettingsView> {
+  return invoke<ApplicationSettingsView>("connect_gemini", { command });
 }
 
 export function disconnectAiProvider(
