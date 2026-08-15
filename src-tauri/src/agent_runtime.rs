@@ -3037,8 +3037,8 @@ impl CodexProviderProcess {
         application_home: &Path,
         cancellation: CancellationToken,
     ) -> Result<Self, ProviderFailure> {
-        let (process_directory, environment) = controlled_codex_environment(application_home)
-            .map_err(|_| process_failure(false))?;
+        let (process_directory, environment) =
+            controlled_codex_environment(application_home).map_err(|_| process_failure(false))?;
         let mut conversation = supervisor
             .start_conversation(
                 ProcessSpec {

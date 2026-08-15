@@ -450,7 +450,9 @@ fn run_managed_login_codex(
                 }
             }
             "account/login/cancel" => {
-                if request.pointer("/params/loginId").and_then(serde_json::Value::as_str)
+                if request
+                    .pointer("/params/loginId")
+                    .and_then(serde_json::Value::as_str)
                     != Some("fixture-device-login")
                 {
                     return Err("managed login cancellation id mismatch".into());
