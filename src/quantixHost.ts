@@ -132,6 +132,7 @@ import type { ResolveIndeterminateAgentRunCommand } from "./bindings/ResolveInde
 import type { ResolveBidDecisionReturnReworkCommand } from "./bindings/ResolveBidDecisionReturnReworkCommand";
 import type { ResolveTenderRecoveryCommand } from "./bindings/ResolveTenderRecoveryCommand";
 import type { RuntimeReadiness } from "./bindings/RuntimeReadiness";
+import type { RuntimePreparationProgress } from "./bindings/RuntimePreparationProgress";
 import type { RunBootstrapAgentCommand } from "./bindings/RunBootstrapAgentCommand";
 import type { RunProductionTaskCommand } from "./bindings/RunProductionTaskCommand";
 import type { ProductionTaskRunResult } from "./bindings/ProductionTaskRunResult";
@@ -259,6 +260,12 @@ export function inspectRuntimeReadiness(): Promise<RuntimeReadiness> {
 
 export function repairRuntimeReadiness(): Promise<RuntimeReadiness> {
   return invoke<RuntimeReadiness>("repair_runtime_readiness");
+}
+
+export function inspectRuntimePreparationProgress(): Promise<RuntimePreparationProgress> {
+  return invoke<RuntimePreparationProgress>(
+    "inspect_runtime_preparation_progress",
+  );
 }
 
 export function cancelRuntimePreparation(): Promise<boolean> {

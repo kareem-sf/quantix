@@ -63,7 +63,9 @@ pub use release_gate::{
     TechnicalRiskAcceptance,
 };
 pub use runtime_readiness::{
-    RuntimeLayout, RuntimeReadiness, RuntimeReadinessIssue, RuntimeReadinessState,
+    RuntimeLayout, RuntimePreparationActivity, RuntimePreparationActivityStatus,
+    RuntimePreparationProgress, RuntimePreparationStatus, RuntimePreparationStep, RuntimeReadiness,
+    RuntimeReadinessIssue, RuntimeReadinessState,
 };
 pub use setup::{
     ensure_quantix_setup, DeviceProtection, SetupIssue, SetupOutcome, SetupPlatform, SetupState,
@@ -301,9 +303,9 @@ mod tauri_commands {
         RunPackageValidationCommand, RunPricedCostBaselineReviewCommand,
         RunPricingAdjustmentReviewCommand, RunProductionTaskCommand,
         RunSubmissionSectionReviewCommand, RunTenderRecordExtractionCommand,
-        RunTenderRecordReviewCommand, RuntimeReadiness, SearchEvidenceCommand,
-        SelectManagerWorkspaceTenderCommand, SelectPricingScenarioCommand, SetupOutcome,
-        SetupState, StartManagerTenderCommand, StartProviderLoginCommand,
+        RunTenderRecordReviewCommand, RuntimePreparationProgress, RuntimeReadiness,
+        SearchEvidenceCommand, SelectManagerWorkspaceTenderCommand, SelectPricingScenarioCommand,
+        SetupOutcome, SetupState, StartManagerTenderCommand, StartProviderLoginCommand,
         SubmissionArtifactContent, SubmissionItemContent, SubmissionPackageVersion,
         SubmissionReleaseInspection, SubmissionSectionReviewRunResult, TenderBackupRecord,
         TenderCatalogueEntry, TenderCommandError, TenderErrorCode, TenderIntegrityReport,
@@ -1330,6 +1332,13 @@ mod tauri_commands {
             retry_provider_cleanup_in_background(host);
         }
         Ok(readiness)
+    }
+
+    #[tauri::command]
+    pub(super) fn inspect_runtime_preparation_progress(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> RuntimePreparationProgress {
+        host.inner().inspect_runtime_preparation_progress()
     }
 
     #[tauri::command]
@@ -2614,6 +2623,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::search_evidence,
             tauri_commands::inspect_runtime_readiness,
             tauri_commands::repair_runtime_readiness,
+            tauri_commands::inspect_runtime_preparation_progress,
             tauri_commands::cancel_runtime_preparation,
             tauri_commands::run_bootstrap_agent,
             tauri_commands::run_tender_record_extraction,

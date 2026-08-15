@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const host = vi.hoisted(() => ({
   ensureQuantixSetup: vi.fn(),
+  inspectRuntimePreparationProgress: vi.fn(),
   inspectRuntimeReadiness: vi.fn(),
   refreshApplicationSettings: vi.fn(),
   repairRuntimeReadiness: vi.fn(),
@@ -23,6 +24,24 @@ describe("App runtime startup", () => {
   beforeEach(() => {
     host.ensureQuantixSetup.mockResolvedValue({ state: "ready", issues: [] });
     host.validateQuantixUpdateRestart.mockResolvedValue({ state: "idle" });
+    host.inspectRuntimePreparationProgress.mockResolvedValue({
+      status: "preparing",
+      started_at_epoch_ms: 1,
+      updated_at_epoch_ms: 1,
+      model_files_written: 47,
+      model_bytes_written: 488471536,
+      activities: [
+        {
+          step: "prepare_document_models",
+          title: "Prepare document models",
+          detail:
+            "Downloading and validating the local models used to read Tender documents.",
+          status: "active",
+          started_at_epoch_ms: 1,
+          finished_at_epoch_ms: null,
+        },
+      ],
+    });
     host.resumeManagerIntakes.mockResolvedValue(undefined);
     host.refreshApplicationSettings.mockResolvedValue({
       general_preferences: {
@@ -99,15 +118,19 @@ describe("App runtime startup", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("Installing local AI tools")).toBeTruthy();
-    expect(
-      screen.getByText(
-        "First-time setup is preparing Python, Docling, and local document models. This can take several minutes.",
-      ),
-    ).toBeTruthy();
+    const runtimeStatus = await screen.findByRole("status");
+    await waitFor(() => {
+      expect(runtimeStatus.textContent).toContain("Prepare document models");
+      expect(runtimeStatus.textContent).toContain(
+        "Downloading and validating the local models used to read Tender documents.",
+      );
+    });
     expect(
       screen.getByRole("list", { name: "Workspace opening progress" }),
     ).toBeTruthy();
+    expect(await screen.findByText("Setup details")).toBeTruthy();
+    expect(await screen.findByText("Prepare document models")).toBeTruthy();
+    expect(await screen.findByText(/47 model files/)).toBeTruthy();
 
     await act(async () => {
       finishPreparation?.({

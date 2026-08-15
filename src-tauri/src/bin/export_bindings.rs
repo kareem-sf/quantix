@@ -19,16 +19,17 @@ use quantix_lib::{
     PublicReleaseGateRecord, PurgeTrashedTenderCommand, RebindManagerIntakeProviderCommand,
     RecordEngineerWorkspaceMessageCommand, RecordLiveQualificationRunCommand,
     RecordNativePlatformQualificationCommand, ReleaseCopyExport, ReleaseCopyItem,
-    RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand,
-    SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand, StartProviderLoginCommand,
-    SubmissionReleaseApproval, SubmissionReleaseInspection, SubmissionReleaseState,
-    TechnicalRiskAcceptance, TenderOfficeMessage, TenderOfficeMessageAuthor,
-    TenderOfficeMessageKind, TenderRetentionDecisionCommand, TenderRetentionDecisionRecord,
-    TenderRetentionState, TrashedTenderDecisionCommand, TrashedTenderRecord, TrashedTenderState,
-    UpdateAiExecutionSelectionCommand, UpdateGeneralApplicationPreferencesCommand,
-    WorkspaceActionKind, WorkspaceCurrentAction, WorkspaceFilesSummary, WorkspaceMessageReference,
-    WorkspaceMessageReferenceKind, WorkspaceTeamSummary, WorkspaceTenderDocument,
-    WorkspaceWorkSummary,
+    RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand, RuntimePreparationActivity,
+    RuntimePreparationActivityStatus, RuntimePreparationProgress, RuntimePreparationStatus,
+    RuntimePreparationStep, SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand,
+    StartProviderLoginCommand, SubmissionReleaseApproval, SubmissionReleaseInspection,
+    SubmissionReleaseState, TechnicalRiskAcceptance, TenderOfficeMessage,
+    TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderRetentionDecisionCommand,
+    TenderRetentionDecisionRecord, TenderRetentionState, TrashedTenderDecisionCommand,
+    TrashedTenderRecord, TrashedTenderState, UpdateAiExecutionSelectionCommand,
+    UpdateGeneralApplicationPreferencesCommand, WorkspaceActionKind, WorkspaceCurrentAction,
+    WorkspaceFilesSummary, WorkspaceMessageReference, WorkspaceMessageReferenceKind,
+    WorkspaceTeamSummary, WorkspaceTenderDocument, WorkspaceWorkSummary,
 };
 use ts_rs::{Config, TS};
 
@@ -126,5 +127,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     DisconnectAiProviderCommand::export_all(&config)?;
     AgentRunInspection::export_all(&config)?;
     AgentRunSummary::export_all(&config)?;
+    RuntimePreparationActivity::export_all(&config)?;
+    RuntimePreparationActivityStatus::export_all(&config)?;
+    RuntimePreparationProgress::export_all(&config)?;
+    RuntimePreparationStatus::export_all(&config)?;
+    RuntimePreparationStep::export_all(&config)?;
     Ok(())
 }

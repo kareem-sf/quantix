@@ -14,7 +14,7 @@ use crate::agent_runtime::{
     AgentProvider, ProviderRateLimit, ProviderRateLimitState, ProviderUsage,
 };
 use crate::process_supervisor::ProcessSupervisor;
-use crate::runtime_readiness::RuntimeLayout;
+use crate::runtime_readiness::{RuntimeLayout, RuntimePreparationProgress, RuntimePreparationStep};
 use crate::setup::{ensure_application_home, SetupOutcome, SetupPlatform, SystemSetupPlatform};
 use crate::tender_store::{
     OpenTenderStores, StartupReconciliationReport, TenderCommandError, TenderErrorCode, TenderId,
@@ -36,6 +36,7 @@ struct QuantixHostInner {
     ordinary_work: Arc<RwLock<()>>,
     update_installation_lease: Mutex<Option<OwnedRwLockWriteGuard<()>>>,
     runtime_preparation: Mutex<Option<ActiveRuntimePreparation>>,
+    runtime_preparation_progress: Mutex<RuntimePreparationProgress>,
     active_parses: Mutex<HashMap<ParseTargetKey, ActiveParse>>,
     active_agent_runs: Mutex<HashMap<String, ActiveAgentRun>>,
     active_manager_intakes: Mutex<HashMap<String, OrdinaryWorkLease>>,
@@ -170,6 +171,7 @@ impl QuantixHost {
                 ordinary_work,
                 update_installation_lease: Mutex::new(None),
                 runtime_preparation: Mutex::new(None),
+                runtime_preparation_progress: Mutex::new(RuntimePreparationProgress::idle()),
                 active_parses: Mutex::new(HashMap::new()),
                 active_agent_runs: Mutex::new(HashMap::new()),
                 active_manager_intakes: Mutex::new(HashMap::new()),
@@ -403,6 +405,39 @@ impl QuantixHost {
             .runtime_preparation
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+
+    pub(crate) fn begin_runtime_preparation_progress(&self) {
+        self.inner
+            .runtime_preparation_progress
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .begin();
+    }
+
+    pub(crate) fn activate_runtime_preparation_step(&self, step: RuntimePreparationStep) {
+        self.inner
+            .runtime_preparation_progress
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .activate(step);
+    }
+
+    pub(crate) fn finish_runtime_preparation_progress(&self, succeeded: bool) {
+        self.inner
+            .runtime_preparation_progress
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .finish(succeeded);
+    }
+
+    pub fn inspect_runtime_preparation_progress(&self) -> RuntimePreparationProgress {
+        self.inner
+            .runtime_preparation_progress
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+            .observe_model_files(&self.inner.application_home)
     }
 
     pub(crate) fn cancel_active_runtime_preparation(&self) -> bool {

@@ -2,7 +2,7 @@ use std::{
     ffi::OsString,
     fs,
     path::{Component, Path, PathBuf},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use rusqlite::{params, Connection, TransactionBehavior};
@@ -129,6 +129,221 @@ pub struct RuntimeReadiness {
     pub uv_version: Option<String>,
     pub docling_version: Option<String>,
     pub repair_available: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum RuntimePreparationActivityStatus {
+    Pending,
+    Active,
+    Complete,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum RuntimePreparationStatus {
+    Idle,
+    Preparing,
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum RuntimePreparationStep {
+    ValidateResources,
+    VerifyBundledTools,
+    ResetEnvironment,
+    SynchronizeEnvironment,
+    VerifyDocling,
+    PrepareDocumentModels,
+    RunDocumentCheck,
+    PublishRuntime,
+    FinalRuntimeCheck,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct RuntimePreparationActivity {
+    pub step: RuntimePreparationStep,
+    pub title: String,
+    pub detail: String,
+    pub status: RuntimePreparationActivityStatus,
+    pub started_at_epoch_ms: Option<u64>,
+    pub finished_at_epoch_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct RuntimePreparationProgress {
+    pub status: RuntimePreparationStatus,
+    pub activities: Vec<RuntimePreparationActivity>,
+    pub started_at_epoch_ms: Option<u64>,
+    pub updated_at_epoch_ms: Option<u64>,
+    pub model_files_written: Option<u64>,
+    pub model_bytes_written: Option<u64>,
+}
+
+impl RuntimePreparationProgress {
+    pub(crate) fn idle() -> Self {
+        Self {
+            status: RuntimePreparationStatus::Idle,
+            activities: runtime_preparation_activities(),
+            started_at_epoch_ms: None,
+            updated_at_epoch_ms: None,
+            model_files_written: None,
+            model_bytes_written: None,
+        }
+    }
+
+    pub(crate) fn begin(&mut self) {
+        let now = epoch_milliseconds();
+        *self = Self {
+            status: RuntimePreparationStatus::Preparing,
+            activities: runtime_preparation_activities(),
+            started_at_epoch_ms: Some(now),
+            updated_at_epoch_ms: Some(now),
+            model_files_written: None,
+            model_bytes_written: None,
+        };
+    }
+
+    pub(crate) fn activate(&mut self, step: RuntimePreparationStep) {
+        let now = epoch_milliseconds();
+        for activity in &mut self.activities {
+            if activity.status == RuntimePreparationActivityStatus::Active {
+                activity.status = RuntimePreparationActivityStatus::Complete;
+                activity.finished_at_epoch_ms = Some(now);
+            }
+            if activity.step == step {
+                activity.status = RuntimePreparationActivityStatus::Active;
+                activity.started_at_epoch_ms.get_or_insert(now);
+                activity.finished_at_epoch_ms = None;
+            }
+        }
+        self.updated_at_epoch_ms = Some(now);
+    }
+
+    pub(crate) fn finish(&mut self, succeeded: bool) {
+        let now = epoch_milliseconds();
+        for activity in &mut self.activities {
+            if activity.status == RuntimePreparationActivityStatus::Active {
+                activity.status = if succeeded {
+                    RuntimePreparationActivityStatus::Complete
+                } else {
+                    RuntimePreparationActivityStatus::Failed
+                };
+                activity.finished_at_epoch_ms = Some(now);
+            }
+        }
+        self.status = if succeeded {
+            RuntimePreparationStatus::Ready
+        } else {
+            RuntimePreparationStatus::Failed
+        };
+        self.updated_at_epoch_ms = Some(now);
+    }
+
+    pub(crate) fn observe_model_files(mut self, application_home: &Path) -> Self {
+        if !self.activities.iter().any(|activity| {
+            activity.step == RuntimePreparationStep::PrepareDocumentModels
+                && activity.status == RuntimePreparationActivityStatus::Active
+        }) {
+            return self;
+        }
+        let staged_models = application_home
+            .join("models")
+            .join(".docling-models-preparation");
+        let mut file_count = 0_u64;
+        let mut byte_count = 0_u64;
+        for entry in WalkDir::new(staged_models)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
+            if entry.file_type().is_file() {
+                file_count = file_count.saturating_add(1);
+                byte_count = byte_count
+                    .saturating_add(entry.metadata().map_or(0, |metadata| metadata.len()));
+            }
+        }
+        self.model_files_written = Some(file_count);
+        self.model_bytes_written = Some(byte_count);
+        self
+    }
+}
+
+fn runtime_preparation_activities() -> Vec<RuntimePreparationActivity> {
+    [
+        (
+            RuntimePreparationStep::ValidateResources,
+            "Validate bundled resources",
+            "Checking the signed runtime manifest and required local files.",
+        ),
+        (
+            RuntimePreparationStep::VerifyBundledTools,
+            "Verify bundled AI tools",
+            "Checking the exact Codex and uv executable versions.",
+        ),
+        (
+            RuntimePreparationStep::ResetEnvironment,
+            "Prepare managed directories",
+            "Creating a clean, Quantix-managed Python and Docling environment.",
+        ),
+        (
+            RuntimePreparationStep::SynchronizeEnvironment,
+            "Install Python and Docling",
+            "Synchronizing the locked Python environment and Docling dependencies.",
+        ),
+        (
+            RuntimePreparationStep::VerifyDocling,
+            "Verify Docling",
+            "Checking the installed Docling executable and exact version.",
+        ),
+        (
+            RuntimePreparationStep::PrepareDocumentModels,
+            "Prepare document models",
+            "Downloading and validating the local models used to read Tender documents.",
+        ),
+        (
+            RuntimePreparationStep::RunDocumentCheck,
+            "Run document self-check",
+            "Converting a bundled sample document entirely with the local runtime.",
+        ),
+        (
+            RuntimePreparationStep::PublishRuntime,
+            "Publish verified runtime",
+            "Validating model files and atomically publishing the runtime manifest.",
+        ),
+        (
+            RuntimePreparationStep::FinalRuntimeCheck,
+            "Complete readiness check",
+            "Rechecking installed tools, models, and the configured AI connection.",
+        ),
+    ]
+    .into_iter()
+    .map(|(step, title, detail)| RuntimePreparationActivity {
+        step,
+        title: title.to_owned(),
+        detail: detail.to_owned(),
+        status: RuntimePreparationActivityStatus::Pending,
+        started_at_epoch_ms: None,
+        finished_at_epoch_ms: None,
+    })
+    .collect()
+}
+
+fn epoch_milliseconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 impl RuntimeReadiness {
@@ -426,6 +641,7 @@ impl QuantixHost {
             }
         };
         let preparation = RuntimePreparationGuard::new(self.clone(), cancellation);
+        self.begin_runtime_preparation_progress();
         if write_preparation(
             self.application_home(),
             PersistedPreparationState::Preparing,
@@ -433,6 +649,7 @@ impl QuantixHost {
         )
         .is_err()
         {
+            self.finish_runtime_preparation_progress(false);
             return RuntimeReadiness::state(
                 RuntimeReadinessState::RepairRequired,
                 RuntimeReadinessIssue::RuntimePreparationFailed,
@@ -446,6 +663,7 @@ impl QuantixHost {
                 if cancellation.is_cancelled() {
                     return self.fail_runtime_preparation();
                 }
+                self.activate_runtime_preparation_step(RuntimePreparationStep::FinalRuntimeCheck);
                 let readiness = self.probe_runtime(cancellation.clone()).await;
                 if cancellation.is_cancelled() {
                     return self.fail_runtime_preparation();
@@ -464,6 +682,10 @@ impl QuantixHost {
                     return self.fail_runtime_preparation();
                 }
                 self.set_runtime_verified(readiness.state == RuntimeReadinessState::Ready);
+                self.finish_runtime_preparation_progress(matches!(
+                    readiness.state,
+                    RuntimeReadinessState::Ready | RuntimeReadinessState::AuthenticationRequired
+                ));
                 readiness
             }
             Err(_) => self.fail_runtime_preparation(),
@@ -476,6 +698,7 @@ impl QuantixHost {
 
     fn fail_runtime_preparation(&self) -> RuntimeReadiness {
         self.set_runtime_verified(false);
+        self.finish_runtime_preparation_progress(false);
         let _ = write_preparation(
             self.application_home(),
             PersistedPreparationState::Failed,
@@ -643,6 +866,7 @@ impl QuantixHost {
         &self,
         cancellation: CancellationToken,
     ) -> Result<RuntimeVersions, RuntimeError> {
+        self.activate_runtime_preparation_step(RuntimePreparationStep::ValidateResources);
         let layout = self.runtime_layout();
         let codex = layout.codex_executable();
         let uv = layout.uv_executable();
@@ -661,6 +885,7 @@ impl QuantixHost {
             }
         }
         validate_runtime_provenance(layout)?;
+        self.activate_runtime_preparation_step(RuntimePreparationStep::VerifyBundledTools);
         let codex_version = probe_version(
             self.process_supervisor(),
             self.application_home(),
@@ -691,12 +916,14 @@ impl QuantixHost {
         for directory in [&runtime_root, &uv_cache, &models_root] {
             fs::create_dir_all(directory).map_err(|_| RuntimeError::PersistenceFailed)?;
         }
+        self.activate_runtime_preparation_step(RuntimePreparationStep::ResetEnvironment);
         runtime_fixture_trace("resetting managed Docling environment");
         reset_managed_directory(&environment, self.application_home())?;
         runtime_fixture_trace("resetting managed Python environment");
         reset_managed_directory(&python, self.application_home())?;
         runtime_fixture_trace("managed directories reset");
 
+        self.activate_runtime_preparation_step(RuntimePreparationStep::SynchronizeEnvironment);
         run_checked(
             self.process_supervisor(),
             docling_sync_spec(layout, self.application_home(), &uv, false),
@@ -710,6 +937,7 @@ impl QuantixHost {
         if !is_real_file(&docling) || !is_real_file(&python) {
             return Err(RuntimeError::MissingResource);
         }
+        self.activate_runtime_preparation_step(RuntimePreparationStep::VerifyDocling);
         let docling_version = probe_docling_version(
             self.process_supervisor(),
             self.application_home(),
@@ -722,6 +950,7 @@ impl QuantixHost {
         }
         runtime_fixture_trace("Docling version verified");
         let staged_models = prepare_model_staging(&models_root, &layout.docling_project())?;
+        self.activate_runtime_preparation_step(RuntimePreparationStep::PrepareDocumentModels);
         run_checked(
             self.process_supervisor(),
             ProcessSpec {
@@ -747,6 +976,7 @@ impl QuantixHost {
         .await?;
         runtime_fixture_trace("models prepared");
 
+        self.activate_runtime_preparation_step(RuntimePreparationStep::RunDocumentCheck);
         let smoke = tempfile::Builder::new()
             .prefix("runtime-readiness-")
             .tempdir_in(self.application_home().join("staging"))
@@ -799,6 +1029,7 @@ impl QuantixHost {
         validate_smoke_output(smoke.path())?;
         runtime_fixture_trace("smoke output verified");
 
+        self.activate_runtime_preparation_step(RuntimePreparationStep::PublishRuntime);
         let manifest = build_model_manifest(
             &staged_models,
             &environment,

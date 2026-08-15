@@ -1,8 +1,17 @@
-import { Check, CircleAlert, LoaderCircle } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Circle,
+  CircleAlert,
+  CircleX,
+  LoaderCircle,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { SetupIssue } from "./bindings/SetupIssue";
 import type { GeneralApplicationPreferences } from "./bindings/GeneralApplicationPreferences";
+import type { RuntimePreparationActivity } from "./bindings/RuntimePreparationActivity";
+import type { RuntimePreparationProgress } from "./bindings/RuntimePreparationProgress";
 import {
   applyGeneralApplicationPreferences,
   DEFAULT_GENERAL_APPLICATION_PREFERENCES,
@@ -10,6 +19,7 @@ import {
 import { ManagerWorkspace } from "./ManagerWorkspace";
 import {
   ensureQuantixSetup,
+  inspectRuntimePreparationProgress,
   inspectRuntimeReadiness,
   refreshApplicationSettings,
   repairRuntimeReadiness,
@@ -19,7 +29,11 @@ import {
 import "./App.css";
 
 type AppState =
-  | { kind: "checking"; stage: StartupStage }
+  | {
+      kind: "checking";
+      stage: StartupStage;
+      runtimeProgress?: RuntimePreparationProgress;
+    }
   | {
       kind: "ready";
       aiAvailable: boolean;
@@ -71,15 +85,103 @@ const startupSteps = [
 
 const RUNTIME_PREPARATION_POLL_MS = 500;
 
-async function waitForRuntimePreparation() {
+const waitForPoll = () =>
+  new Promise<void>((resolve) =>
+    window.setTimeout(resolve, RUNTIME_PREPARATION_POLL_MS),
+  );
+
+async function readRuntimeProgress(
+  accept: (progress: RuntimePreparationProgress) => void,
+) {
+  try {
+    accept(await inspectRuntimePreparationProgress());
+  } catch {
+    // The readiness command remains authoritative if progress inspection is
+    // momentarily unavailable during a development Host restart.
+  }
+}
+
+async function repairRuntimeWithProgress(
+  accept: (progress: RuntimePreparationProgress) => void,
+) {
+  let settled = false;
+  const repair = repairRuntimeReadiness();
+  const settlement = repair.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  while (!settled) {
+    await readRuntimeProgress(accept);
+    if (!settled) {
+      await Promise.race([waitForPoll(), settlement]);
+    }
+  }
+  await readRuntimeProgress(accept);
+  return repair;
+}
+
+async function waitForRuntimePreparation(
+  accept: (progress: RuntimePreparationProgress) => void,
+) {
   let readiness = await inspectRuntimeReadiness();
   while (readiness.state === "preparing") {
-    await new Promise((resolve) =>
-      window.setTimeout(resolve, RUNTIME_PREPARATION_POLL_MS),
-    );
+    await readRuntimeProgress(accept);
+    await waitForPoll();
     readiness = await inspectRuntimeReadiness();
   }
+  await readRuntimeProgress(accept);
   return readiness;
+}
+
+function formatElapsed(
+  startedAt: number | bigint | null,
+  endedAt: number | bigint | null,
+  now: number,
+) {
+  if (startedAt === null) {
+    return null;
+  }
+  const startedAtNumber = Number(startedAt);
+  const endedAtNumber = endedAt === null ? now : Number(endedAt);
+  const elapsedSeconds = Math.max(
+    0,
+    Math.floor((endedAtNumber - startedAtNumber) / 1000),
+  );
+  if (elapsedSeconds < 60) {
+    return `${elapsedSeconds}s`;
+  }
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = elapsedSeconds % 60;
+  return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+}
+
+function formatBytes(bytes: number | bigint) {
+  const bytesNumber = Number(bytes);
+  if (bytesNumber < 1024 * 1024) {
+    return `${Math.max(0, Math.round(bytesNumber / 1024))} KB`;
+  }
+  return `${(bytesNumber / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function RuntimeActivityIcon({
+  activity,
+}: {
+  activity: RuntimePreparationActivity;
+}) {
+  if (activity.status === "complete") {
+    return <Check size={12} aria-hidden="true" />;
+  }
+  if (activity.status === "active") {
+    return <LoaderCircle size={13} aria-hidden="true" />;
+  }
+  if (activity.status === "failed") {
+    return <CircleX size={13} aria-hidden="true" />;
+  }
+  return <Circle size={10} aria-hidden="true" />;
 }
 
 const setupIssueCopy: Record<SetupIssue, string> = {
@@ -111,6 +213,19 @@ function App() {
     stage: "workspace",
   });
   const startupStarted = useRef(false);
+  const [clock, setClock] = useState(() => Date.now());
+  const runtimeProgressActive =
+    state.kind === "checking" &&
+    state.stage === "runtime_install" &&
+    state.runtimeProgress?.status === "preparing";
+
+  useEffect(() => {
+    if (!runtimeProgressActive) {
+      return;
+    }
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [runtimeProgressActive]);
 
   const openWorkspace = useCallback(async () => {
     setState({ kind: "checking", stage: "workspace" });
@@ -164,11 +279,23 @@ function App() {
         runtimeReadiness.repair_available
       ) {
         setState({ kind: "checking", stage: "runtime_install" });
-        runtimeReadiness = await repairRuntimeReadiness();
+        runtimeReadiness = await repairRuntimeWithProgress((runtimeProgress) =>
+          setState({
+            kind: "checking",
+            stage: "runtime_install",
+            runtimeProgress,
+          }),
+        );
       }
       if (runtimeReadiness?.state === "preparing") {
         setState({ kind: "checking", stage: "runtime_install" });
-        runtimeReadiness = await waitForRuntimePreparation();
+        runtimeReadiness = await waitForRuntimePreparation((runtimeProgress) =>
+          setState({
+            kind: "checking",
+            stage: "runtime_install",
+            runtimeProgress,
+          }),
+        );
       }
       setState({ kind: "checking", stage: "providers" });
       const settings = await refreshApplicationSettings().catch(() => null);
@@ -215,6 +342,19 @@ function App() {
   if (state.kind === "checking") {
     const stage = state.stage ?? "runtime_install";
     const stageCopy = startupStageCopy[stage];
+    const runtimeProgress = state.runtimeProgress;
+    const activeRuntimeActivity = runtimeProgress?.activities.find(
+      (activity) => activity.status === "active",
+    );
+    const totalElapsed = runtimeProgress
+      ? formatElapsed(
+          runtimeProgress.started_at_epoch_ms,
+          runtimeProgress.status === "preparing"
+            ? null
+            : runtimeProgress.updated_at_epoch_ms,
+          clock,
+        )
+      : null;
     return (
       <main className="quantix-startup" aria-busy="true">
         <span className="quantix-startup__mark">Q</span>
@@ -226,8 +366,8 @@ function App() {
         >
           <LoaderCircle size={16} aria-hidden="true" />
           <div>
-            <strong>{stageCopy.title}</strong>
-            <span>{stageCopy.summary}</span>
+            <strong>{activeRuntimeActivity?.title ?? stageCopy.title}</strong>
+            <span>{activeRuntimeActivity?.detail ?? stageCopy.summary}</span>
           </div>
         </div>
         <ol
@@ -251,6 +391,60 @@ function App() {
             );
           })}
         </ol>
+        {stage === "runtime_install" ? (
+          <details className="quantix-startup__details" open>
+            <summary>
+              <span>
+                Setup details
+                {totalElapsed ? <small>{totalElapsed} elapsed</small> : null}
+              </span>
+              <ChevronDown size={15} aria-hidden="true" />
+            </summary>
+            {runtimeProgress ? (
+              <>
+                {runtimeProgress.model_files_written !== null &&
+                runtimeProgress.model_bytes_written !== null ? (
+                  <output className="quantix-startup__live-observation">
+                    <LoaderCircle size={12} aria-hidden="true" />
+                    {runtimeProgress.model_files_written.toLocaleString()} model
+                    files · {formatBytes(runtimeProgress.model_bytes_written)}
+                    written
+                  </output>
+                ) : null}
+                <ol aria-label="Local AI setup activity">
+                  {runtimeProgress.activities.map((activity) => {
+                    const activityElapsed = formatElapsed(
+                      activity.started_at_epoch_ms,
+                      activity.finished_at_epoch_ms,
+                      clock,
+                    );
+                    return (
+                      <li
+                        className={`is-${activity.status}`}
+                        key={activity.step}
+                      >
+                        <span className="quantix-startup__activity-icon">
+                          <RuntimeActivityIcon activity={activity} />
+                        </span>
+                        <div>
+                          <strong>{activity.title}</strong>
+                          <p>{activity.detail}</p>
+                        </div>
+                        {activityElapsed ? (
+                          <time>{activityElapsed}</time>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ol>
+              </>
+            ) : (
+              <p className="quantix-startup__details-waiting">
+                Waiting for the local Host to report its first operation...
+              </p>
+            )}
+          </details>
+        ) : null}
       </main>
     );
   }
