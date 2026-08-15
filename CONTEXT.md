@@ -17,40 +17,56 @@ The open-source tender operating system defined by this repository.
 _Avoid_: Context (obsolete working name)
 
 **Quantix Application Home**:
-The Engineer User's single local `~/.quantix` root containing every Quantix-managed Tender Store, setting, workspace, backup, archive, and operational record. Connected Tender Packages and Codex-managed credentials, configuration, and thread storage remain outside it.
-_Avoid_: Codex home, connected project directory, arbitrary application-data folders
+The Tendering Engineer's single local `~/.quantix` root containing every Quantix-managed Tender Store, non-secret setting, workspace, backup, archive, and operational record. Connected Tender Packages, provider-managed authentication stores, and Provider Credentials held by the operating-system credential vault remain outside it.
+_Avoid_: Provider credential store, connected project directory, arbitrary application-data folders
 
 **Quantix Setup**:
-The first-run operation that establishes the Quantix Application Home and verifies the local capabilities required to begin Tender work. It does not take ownership of Codex credentials or depend on unverified system runtimes.
+The first-run operation that establishes the Quantix Application Home and verifies the local capabilities required to begin Tender work. It neither copies Provider Credentials into the Quantix Application Home nor depends on unverified system runtimes.
 _Avoid_: Tender intake, provider login, installer
 
-**Tendering Manager**:
-The contractor-side decision authority accountable for approving the tender office's plans, commitments, exceptions, and final outputs. In the single-user v0, the authenticated Engineer User fills this role. The Tendering Manager does not perform routine analysis, drafting, document control, or production work.
-_Avoid_: Tender analyst, proposal writer, chatbot operator
+**Application Settings**:
+The application-wide, non-secret preferences and operational facts governing Quantix appearance, accessibility, notifications, AI Provider Connections, AI Execution Selection, data and storage, updates, and diagnostics independently of any one Tender. Changes save immediately, but a provider-selection change affects only future Agent Runs.
+_Avoid_: Tender setting, Provider Credential, hidden configuration file
 
-**Engineer User**:
-The authenticated human engineer who operates Quantix, acts as the Tendering Manager in v0, and is the sole authority for every formal approval.
-_Avoid_: AI engineer, Agent Profile, passive observer
+**Tendering Engineer**:
+The authenticated human engineer who operates Quantix and is the sole authority for every formal approval, commitment, exception, and final output in v0.
+_Avoid_: Engineer User, Tendering Manager, AI engineer, Agent Profile, passive observer
 
 **Engineer-in-the-Loop (EITL)**:
-The control principle requiring an explicit, attributable Engineer User decision for every formal approval. AI agents may prepare, review, validate, and recommend, but cannot approve, infer approval from silence, or retain approval after a material change.
+The control principle requiring an explicit, attributable Tendering Engineer decision for every formal approval. AI agents may prepare, review, validate, and recommend, but cannot approve, infer approval from silence, or retain approval after a material change.
 _Avoid_: Human-on-the-loop, automatic approval, agent approval
 
 **Tender Office**:
-The temporary organization assembled for one Tender, comprising the specialist roles needed to analyze, plan, price, review, control, and produce its submission under the Tendering Manager's decisions.
+The temporary organization assembled for one Tender, comprising the specialist roles needed to analyze, plan, price, review, control, and produce its submission under the Tendering Engineer's decisions.
 _Avoid_: Chatbot, fixed agent list
 
-**Tender Office Coordinator**:
-The AI role that coordinates the Tender Office's daily work, dependencies, deadlines, consolidation, and escalation without taking decisions reserved for the Tendering Manager.
-_Avoid_: Tendering Manager Agent, autonomous manager
+**Tender Office Conversation**:
+An attributable, Engineer-visible sequence of messages within one Tender, comprising the durable Tendering Manager conversation, the shared team room, and focused task or review threads. Each message identifies its participant and time and may link exact Tender Tasks, Agent Runs, inputs, handoffs, Evidence, and outputs; conversation never grants authority, replaces a canonical record, exposes secrets or raw provider traffic, or claims to reveal hidden model reasoning.
+_Avoid_: Provider Thread, approval record, raw event stream, chain of thought
+
+**Tendering Manager Agent**:
+The Tender-scoped lead AI Agent Profile that plans, delegates, and coordinates the Tender Office's work, dependencies, milestones, reviews, consolidation, questions, and escalation within an approved Work Plan. It cannot approve, expand its own authority, commit externally, or take decisions reserved for the Tendering Engineer.
+_Avoid_: Tender Office Coordinator, approval authority, autonomous approver
 
 **AI Provider**:
 A connected AI execution service that performs bounded Agent Profile work and returns operational results to Quantix. It supplies intelligence but owns no Tender state, permission, workflow transition, decision, or approval authority.
 _Avoid_: Tender Office, workflow engine, system of record
 
 **Provider Connection**:
-The credential-free Quantix view of one configured AI Provider, including its identity, readiness, authentication state, and compatibility with required capabilities. In v0 it represents only Codex using the Engineer User's Codex-managed ChatGPT subscription session.
-_Avoid_: API key configuration, provider account, model router
+The credential-free Quantix view of one configured AI Provider, including its stable identity, authentication method, readiness, account label when available, live capability state, and compatibility with required capabilities. Quantix initially supports one OpenAI account connection through Codex-managed ChatGPT login, one Anthropic BYOK connection, and one Gemini BYOK connection; connecting several does not create automatic routing or fallback.
+_Avoid_: Provider Credential, model router, fallback chain
+
+**Provider Credential**:
+A Secret authenticating one Provider Connection. Codex-managed ChatGPT credentials remain owned by the supervised Codex runtime, while Anthropic and Gemini BYOK secrets remain in the operating-system credential vault; no Provider Credential enters Application Settings, a Tender Store, provider-visible context, logs, diagnostics, or exports.
+_Avoid_: Provider Connection, API key record, Tender data
+
+**Provider Capability Catalogue**:
+The credential-free model and capability facts reported by one ready Provider Connection, including provider-qualified model identities and only the reasoning choices the provider reports for each model. A cached catalogue may explain an unavailable prior choice, but only a current live catalogue may authorize a new Agent Run; absence of an exact machine-readable capability means Quantix does not offer that control.
+_Avoid_: Hard-coded model list, compatibility table, stale authorization
+
+**AI Execution Selection**:
+The application-wide choice of one ready Provider Connection, one provider-qualified model, and one provider-native reasoning setting for future Agent Runs. Every new Agent Run captures the effective selection and its Provider Capability Catalogue provenance; changing the default never rewrites active, queued, interrupted, or indeterminate work, and Quantix never silently substitutes another provider, model, or reasoning setting.
+_Avoid_: Bare model name, automatic fallback, per-Agent provider routing
 
 **AI Provider Contract**:
 The versioned Quantix definition of the mandatory lifecycle, execution, tool, sandbox, event, usage, interruption, and failure capabilities an AI Provider must satisfy. Provider-specific protocols remain behind the contract, and incompatibility blocks provider work rather than weakening a requirement.
@@ -65,7 +81,7 @@ One bounded AI Provider execution for exactly one Agent Run on a Provider Thread
 _Avoid_: Tender Task, hidden retry, whole provider thread
 
 **Provider Turn Request**:
-The immutable execution envelope binding a Provider Turn to its Agent Run, Provider Thread, exact Agent Profile Version instructions, Tender Task objective, Data Views, output contract, Typed Tools, Permission Grant-derived constraints, resource budget, and required language.
+The immutable execution envelope binding a Provider Turn to its Agent Run, exact Provider Connection, provider-qualified model, provider-native reasoning setting, Provider Thread, exact Agent Profile Version instructions, Tender Task objective, Data Views, output contract, Typed Tools, Permission Grant-derived constraints, resource budget, and required language.
 _Avoid_: Free-form prompt, provider thread memory, mutable run configuration
 
 **Provider Instruction Bundle**:
@@ -87,6 +103,10 @@ _Avoid_: Audit Event, chat transcript, raw provider payload
 **Provider Failure**:
 The normalized explanation of why a Provider Connection or Provider Turn could not proceed, including its stable category, retry safety, required user action, and redacted provider detail. Quantix workflow never depends directly on a provider-specific error code.
 _Avoid_: Raw exception, agent explanation, Review Finding
+
+**Waiting for AI Provider**:
+The non-failure work state used when an exact selected Provider Connection, model, reasoning setting, credential, quota, or mandatory capability is temporarily unavailable before a Provider Turn is accepted. Tender records remain usable, Quantix may resume automatically when the same selection becomes ready, and changing the bound selection requires an explicit Tendering Engineer decision.
+_Avoid_: Failed Agent Run, silent fallback, unavailable Tender
 
 **Indeterminate Agent Run**:
 An Agent Run whose Provider Turn outcome cannot be established after connection loss or failed interruption. Its workspace and partial outputs remain quarantined and its Tender Task remains Blocked until an attributable recovery decision starts a separate run or closes the uncertainty.
@@ -145,7 +165,7 @@ The EITL decision granting one exact, expiring access expansion within an alread
 _Avoid_: Permanent exception, secret disclosure
 
 **Prohibited Action**:
-An invariant operation no Agent Profile can receive, including access to Secret data, direct Tender Store or security-control mutation, cross-workspace access, untrusted code execution, autonomous external action, approval, or concealment of audit history. The Engineer User may perform separately authorized workflow actions but cannot convert a Prohibited Action into agent authority.
+An invariant operation no Agent Profile can receive, including access to Secret data, direct Tender Store or security-control mutation, cross-workspace access, untrusted code execution, autonomous external action, approval, or concealment of audit history. The Tendering Engineer may perform separately authorized workflow actions but cannot convert a Prohibited Action into agent authority.
 _Avoid_: Overridable deny, high-risk permission
 
 **Data Scope**:
@@ -177,7 +197,7 @@ A versioned, host-controlled operation with defined Capability, input and output
 _Avoid_: Unrestricted shell, arbitrary MCP tool, prompt-defined function
 
 **Safety Limit**:
-A non-overridable bound on input size, expansion, nesting, duration, memory, output, or storage consumption that protects the Tender and Engineer User's device from unsafe work. Crossing it blocks the operation and cannot be converted into permission or approval.
+A non-overridable bound on input size, expansion, nesting, duration, memory, output, or storage consumption that protects the Tender and Tendering Engineer's device from unsafe work. Crossing it blocks the operation and cannot be converted into permission or approval.
 _Avoid_: Resource budget, Permission Grant, manager override
 
 **Team Composer**:
@@ -185,7 +205,7 @@ The controlled composition authority that maps verified Project Fingerprint sign
 _Avoid_: Autonomous staffing agent, fixed team list
 
 **Bootstrap Team**:
-The fixed restricted set of Tender Office Coordinator, Document Controller, Tender Analyst, and Independent Reviewer Agent Profiles authorized when the Engineer User creates a Tender. It may register and analyze the Tender Package, open the Query Register, and propose the Bid Decision Package and full Work Plan, but cannot perform Active Production or external actions.
+The fixed restricted set of Tendering Manager Agent, Document Controller, Tender Analyst, and Independent Reviewer Agent Profiles authorized when the Tendering Engineer creates a Tender. It may register and analyze the Tender Package, open the Query Register, and propose the Bid Decision Package and full Work Plan, but cannot perform Active Production or external actions.
 _Avoid_: Full Tender Office, approved Work Plan
 
 **Document Controller**:
@@ -194,7 +214,7 @@ _Avoid_: File uploader, technical reviewer
 
 **Tender Analyst**:
 The Agent Profile responsible for evidence-linked Tender requirements, deadlines, evaluation criteria, compliance conditions, information gaps, and Project Fingerprint inputs. It analyzes and proposes but does not make Tender Decisions or approve compliance.
-_Avoid_: Tendering Manager, general-purpose analyst
+_Avoid_: Tendering Manager Agent, general-purpose analyst
 
 **Cost Estimator**:
 The Agent Profile responsible for developing evidence-linked quantities, rate inputs, quotations, cost build-ups, and Calculation Scenarios through the Calculation Engine. It cannot approve its own estimate, choose margin, or determine the Approved Tender Price.
@@ -241,15 +261,23 @@ A verified, self-contained transfer copy of one complete Tender Store that can b
 _Avoid_: Tender Backup, Submission Package, Delivery Export, compressed Tender Package
 
 **Archived Tender**:
-A complete Tender placed in a reversible read-only lifecycle state after active work ends. Its Tender Store and history remain intact and it may return to active use through an attributable Engineer User decision.
+A complete Tender placed in a reversible read-only lifecycle state after protected work reaches a safe terminal boundary. Its Tender Store and history remain intact, it opens through the ordinary Manager, Work, and Files surfaces with an Archived status, and it may return to active use through an attributable Tendering Engineer decision.
 _Avoid_: Tender Backup, Portable Tender Archive, deleted Tender
 
 **Tender Trash**:
-The recoverable holding state for a complete Tender Store after an approved deletion request. Restoration and permanent purge are separate attributable Engineer User decisions, and no automatic purge occurs.
+The recoverable holding state for a complete Tender Store after an approved deletion request at a safe terminal boundary. Restoration and Permanent Tender Deletion are separate attributable Tendering Engineer decisions, and no automatic purge occurs.
 _Avoid_: Archived Tender, operating-system recycle bin, permanent deletion
 
+**Permanent Tender Deletion**:
+The irreversible Tendering Engineer decision available only for a Tender in Tender Trash that removes every identifiable Tender-associated copy controlled by Quantix, including its Store, backups, portable archives, exports, run workspaces, staging, quarantine, and Tender-specific logs, while retaining only a Deletion Receipt. It neither claims to erase copies outside Quantix's control nor waits for provider-side context deletion before completing local deletion.
+_Avoid_: Archive, move to Tender Trash, external-copy erasure promise
+
+**Provider Cleanup Pending**:
+The post-deletion status recorded when Permanent Tender Deletion has completed locally but deletion of one or more opaque Provider Threads has not yet been confirmed. Quantix retries that cleanup automatically without retaining Tender content or blocking the local deletion result.
+_Avoid_: Recoverable Tender, failed local purge, credential revocation
+
 **Deletion Receipt**:
-The minimal installation-level record proving that an identified Tender was permanently purged through an attributable Engineer User decision, without retaining the Tender's confidential content.
+The minimal installation-level record proving that an identified Tender underwent Permanent Tender Deletion through an attributable Tendering Engineer decision, including whether provider cleanup remains pending but none of the Tender's confidential content.
 _Avoid_: Tender Backup, Audit Event, recoverable tombstone
 
 **Source Artifact**:
@@ -269,7 +297,7 @@ Mutable, disposable material inside an Agent Run Workspace that has not passed a
 _Avoid_: Artifact Version, approved draft, system-of-record file
 
 **Recovery Quarantine**:
-The protected holding state for an indeterminate or failed Agent Run's workspace and candidate outputs until the Engineer User resolves their disposition. Quarantined material is not canonical and cannot support downstream work or approval.
+The protected holding state for an indeterminate or failed Agent Run's workspace and candidate outputs until the Tendering Engineer resolves their disposition. Quarantined material is not canonical and cannot support downstream work or approval.
 _Avoid_: Tender Store, completed Agent Run, automatic retry queue
 
 **Artifact**:
@@ -281,7 +309,7 @@ An immutable, hashed version of an Artifact registered after validating its Tend
 _Avoid_: Working Artifact, mutable draft, latest file
 
 **Agent Run**:
-The immutable execution trace connecting one Tender Task and Agent Profile version to its Permission Grant, registered inputs and Data Views, exactly one Provider Turn, provider thread and exposure, approved instructions, workspace manifest, Typed Tool calls, usage, outcome, errors, and produced Artifact Versions. It preserves auditable user-visible activity but not secrets or hidden model reasoning.
+The immutable execution trace connecting one Tender Task and Agent Profile version to its Permission Grant, registered inputs and Data Views, captured AI Execution Selection and catalogue provenance, exactly one Provider Turn, provider thread and exposure, approved instructions, attributable messages and handoffs, workspace manifest, Typed Tool calls, usage, outcome, errors, and produced Artifact Versions. It preserves auditable user-visible activity but not secrets, raw provider traffic, or hidden model reasoning.
 _Avoid_: Chat as system of record, chain of thought
 
 **Audit Event**:
@@ -309,7 +337,7 @@ The first Tender state, in which Quantix inventories the connected Tender Packag
 _Avoid_: File upload
 
 **Bid Decision**:
-The mandatory Approval Gate at which the Tendering Manager chooses Proceed, Hold, or Decline before the full Tender Office begins production work.
+The mandatory Approval Gate at which the Tendering Engineer chooses Proceed, Hold, or Decline before the full Tender Office begins production work.
 _Avoid_: Agent go/no-go decision
 
 **Project Fingerprint**:
@@ -317,19 +345,19 @@ The structured description of the Construction Project, procurement context, dis
 _Avoid_: Tender summary, Agent Profile
 
 **Bid Decision Package**:
-The versioned, evidence-linked information presented to the Tendering Manager for a Bid Decision, including compliance, exposure, capacity, deadline viability, specialist needs, information gaps, and a recommendation.
+The versioned, evidence-linked information presented to the Tendering Engineer for a Bid Decision, including compliance, exposure, capacity, deadline viability, specialist needs, information gaps, and a recommendation.
 _Avoid_: Agent recommendation alone
 
 **Work Plan**:
-The versioned organization of Agent Profiles, Workstreams, Tender Tasks, responsibilities, internal milestones, reviews, resource budgets, and data scopes approved by the Tendering Manager for one Tender.
+The versioned organization of Agent Profiles, Workstreams, Tender Tasks, responsibilities, internal milestones, reviews, resource budgets, and data scopes approved by the Tendering Engineer for one Tender.
 _Avoid_: Chat plan, agent-generated to-do list
 
 **Work Plan Proposal**:
-A versioned candidate Work Plan that the Engineer User may add to, remove from, split, combine, rename, or adjust within Quantix invariants before approval. Each edit produces a newly validated proposal version and has no production authority until Work Plan Approval.
+A versioned candidate Work Plan that the Tendering Engineer may add to, remove from, split, combine, rename, or adjust within Quantix invariants before approval. Each edit produces a newly validated proposal version and has no production authority until Work Plan Approval.
 _Avoid_: Partially approved team, mutable approved plan
 
 **Work Plan Approval**:
-The Approval Gate after a Proceed Bid Decision at which the Tendering Manager approves, returns, or holds one exact Work Plan version. Only an approved version may activate the full production team and authorize Active Production.
+The Approval Gate after a Proceed Bid Decision at which the Tendering Engineer approves, returns, or holds one exact Work Plan version. Only an approved version may activate the full production team and authorize Active Production.
 _Avoid_: Partial team activation, agent staffing decision
 
 **Work Plan Amendment**:
@@ -361,7 +389,7 @@ An immutable, hashed execution of an exact Calculation Rule version against exac
 _Avoid_: Recalculated cell, overwritten result, LLM arithmetic
 
 **Calculation Input**:
-A typed numeric value admitted from a Verified canonical record, EITL-approved Assumption, non-Stale Calculation Run, approved scenario parameter, or attributable Engineer User entry. Missing, blank, unavailable, not-applicable, and explicit zero remain distinct.
+A typed numeric value admitted from a Verified canonical record, EITL-approved Assumption, non-Stale Calculation Run, approved scenario parameter, or attributable Tendering Engineer entry. Missing, blank, unavailable, not-applicable, and explicit zero remain distinct.
 _Avoid_: Prompt number, implicit zero, unsourced spreadsheet value
 
 **Calculation Rule**:
@@ -421,11 +449,11 @@ The controlled hierarchy linking Tender requirements and scope to work packages,
 _Avoid_: Unmapped spreadsheet rows, employer BOQ alone
 
 **Priced Cost Baseline**:
-The independently reviewed and Engineer User-approved expected cost of delivering the Construction Project, including direct costs, indirect costs, explicit allowances, and approved risk provisions, bound to an exact Calculation Manifest before final commercial pricing decisions.
+The independently reviewed and Tendering Engineer-approved expected cost of delivering the Construction Project, including direct costs, indirect costs, explicit allowances, and approved risk provisions, bound to an exact Calculation Manifest before final commercial pricing decisions.
 _Avoid_: Tender Price, unreviewed estimate
 
 **Approved Tender Price**:
-The immutable, versioned customer-facing price and Calculation Manifest approved by the Engineer User after considering the Priced Cost Baseline, risk provision, overhead, financing, profit, discounts, and commercial adjustments.
+The immutable, versioned customer-facing price and Calculation Manifest approved by the Tendering Engineer after considering the Priced Cost Baseline, risk provision, overhead, financing, profit, discounts, and commercial adjustments.
 _Avoid_: Expected cost, agent-selected price, editable total
 
 **Ready for Integration**:
@@ -441,7 +469,7 @@ An immutable problem statement raised by a Review, classified as Critical, Major
 _Avoid_: Editable feedback, author self-closure
 
 **Exception Approval**:
-The Approval Gate through which the Tendering Manager knowingly accepts a Major Review Finding or another explicit departure that the workflow permits to continue.
+The Approval Gate through which the Tendering Engineer knowingly accepts a Major Review Finding or another explicit departure that the workflow permits to continue.
 _Avoid_: Silent waiver, agent acceptance
 
 **Coordinated Bid Baseline**:
@@ -449,7 +477,7 @@ The versioned, reconciled set of technical, programme, commercial, procurement, 
 _Avoid_: Collection of latest drafts, unreviewed bid
 
 **Baseline Approval**:
-The Approval Gate at which the Tendering Manager accepts the Coordinated Bid Baseline after Integrated Review.
+The Approval Gate at which the Tendering Engineer accepts the Coordinated Bid Baseline after Integrated Review.
 _Avoid_: Workstream completion, agent consolidation
 
 **Package Production**:
@@ -465,11 +493,11 @@ The versioned assignment of independent, qualified reviewers and exact review sc
 _Avoid_: One generic sign-off, producer self-review, informal review request
 
 **Release Readiness Report**:
-The evidence-linked decision view presented to the Tendering Manager for Final Approval, identifying the exact package and manifest hashes, approved baselines, coverage, validations, execution, query treatments, assumptions, qualifications, exclusions, departures, findings, exceptions, information-boundary results, deadline, and changes since the reviewed version. It summarizes but does not replace its underlying records.
+The evidence-linked decision view presented to the Tendering Engineer for Final Approval, identifying the exact package and manifest hashes, approved baselines, coverage, validations, execution, query treatments, assumptions, qualifications, exclusions, departures, findings, exceptions, information-boundary results, deadline, and changes since the reviewed version. It summarizes but does not replace its underlying records.
 _Avoid_: Agent recommendation, unlinked dashboard score, approval record
 
 **Final Approval**:
-The atomic Approval Gate at which the Tendering Manager reviews the Release Readiness Report and either returns the Submission Package for correction or freezes one exact immutable package version and manifest with zero open Critical Review Findings, only permitted Major Exception Approvals, and disclosed Minor findings. The transaction rechecks identity, deadline, addenda, staleness, hashes, validation, independent review, and exceptions; any later content change creates a new version, revokes approval, and requires Final Review again.
+The atomic Approval Gate at which the Tendering Engineer reviews the Release Readiness Report and either returns the Submission Package for correction or freezes one exact immutable package version and manifest with zero open Critical Review Findings, only permitted Major Exception Approvals, and disclosed Minor findings. The transaction rechecks identity, deadline, addenda, staleness, hashes, validation, independent review, and exceptions; any later content change creates a new version, revokes approval, and requires Final Review again.
 _Avoid_: External submission, editable approval, agent release decision
 
 **Evidence**:
@@ -481,11 +509,11 @@ A first-class record of an unproven proposition needed for Tender work, includin
 _Avoid_: Hidden premise, unsupported Evidence, approved fact
 
 **Tender Decision**:
-The canonical record of a formal Engineer User judgment, including the question, options, outcome, rationale, Evidence, affected exact records, conditions, expiry, identity, timestamp, and any superseded decision.
+The canonical record of a formal Tendering Engineer judgment, including the question, options, outcome, rationale, Evidence, affected exact records, conditions, expiry, identity, timestamp, and any superseded decision.
 _Avoid_: Chat answer, agent recommendation, Audit Event
 
 **Approval Record**:
-The immutable result of an Approval Gate, binding an explicit Engineer User outcome to exact record revisions, artifact versions, hashes, Evidence, conditions, and exceptions. Material dependency changes invalidate rather than erase it.
+The immutable result of an Approval Gate, binding an explicit Tendering Engineer outcome to exact record revisions, artifact versions, hashes, Evidence, conditions, and exceptions. Material dependency changes invalidate rather than erase it.
 _Avoid_: Chat confirmation, approval of latest, editable sign-off
 
 **Submission Package**:
@@ -513,7 +541,7 @@ The versioned proof that every mandatory requirement, deliverable, addendum inst
 _Avoid_: Informal checklist, percentage-only completeness score, silent omission
 
 **Manual Verification**:
-A controlled verification of one exact file hash against a versioned checklist by the Engineer User or a qualified independent reviewer when automated inspection cannot establish a required property. It records verifier identity, capability, checks, Evidence, result, limitations, and timestamp; it is not an exception and cannot make an unverifiable mandatory file releasable.
+A controlled verification of one exact file hash against a versioned checklist by the Tendering Engineer or a qualified independent reviewer when automated inspection cannot establish a required property. It records verifier identity, capability, checks, Evidence, result, limitations, and timestamp; it is not an exception and cannot make an unverifiable mandatory file releasable.
 _Avoid_: Visual glance, blanket waiver, self-attested agent output
 
 **Package Validation Policy**:
@@ -553,19 +581,19 @@ The additional product gate that blocks public Quantix distribution until the sa
 _Avoid_: Private v0 Qualification, Tender Final Approval, assumed entitlement
 
 **Approval Gate**:
-A workflow boundary that cannot advance until the authenticated Engineer User, acting as Tendering Manager in v0, explicitly accepts, returns, or rejects the specified proposal, commitment, exception, or output. The approval records the engineer identity, timestamp, decision, object versions and hashes, evidence, comments, conditions, exceptions, and history.
+A workflow boundary that cannot advance until the authenticated Tendering Engineer explicitly accepts, returns, or rejects the specified proposal, commitment, exception, or output. The approval records the engineer identity, timestamp, decision, object versions and hashes, evidence, comments, conditions, exceptions, and history.
 _Avoid_: Agent self-approval, informal chat confirmation
 
 **Ready for Submission**:
-The successful terminal Tender state reached when the validated Submission Package has received the Tendering Manager's final approval.
+The successful terminal Tender state reached when the validated Submission Package has received the Tendering Engineer's final approval.
 _Avoid_: Submitted, complete
 
 **Declined**:
-The terminal Tender state produced when the Tendering Manager chooses Decline at the Bid Decision.
+The terminal Tender state produced when the Tendering Engineer chooses Decline at the Bid Decision.
 _Avoid_: Failed, cancelled
 
 **Withdrawn**:
-The terminal Tender state produced when the Tendering Manager stops a Tender after previously choosing Proceed.
+The terminal Tender state produced when the Tendering Engineer stops a Tender after previously choosing Proceed.
 _Avoid_: Declined, failed
 
 **Expired**:

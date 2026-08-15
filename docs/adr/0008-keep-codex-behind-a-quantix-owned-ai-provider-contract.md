@@ -1,3 +1,8 @@
+---
+status: superseded
+superseded_by: 0012-connect-provider-neutral-ai-without-silent-fallback
+---
+
 # Keep Codex behind a Quantix-owned AI Provider contract
 
 Quantix v0 routes AI execution through one versioned, Quantix-owned semantic AI Provider Contract and one built-in Codex adapter using the Engineer User's Codex-managed ChatGPT subscription session. We chose this over exposing app-server throughout the domain or building speculative multi-provider machinery so Quantix retains workflow, permission, evidence, and EITL authority while provider protocols remain replaceable at one narrow boundary.

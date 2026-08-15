@@ -2,6 +2,8 @@
 
 Status: accepted; desktop runtime revised on 2026-08-07 by explicit Engineer User decision.
 
+The Codex-only authentication, credential, and BYOK consequences in this decision are superseded by ADR 0012. The whole-Tender retention and permanent-purge consequences are revised by ADR 0013. Its remaining desktop Host, storage, process-supervision, recovery, update, and release-qualification consequences remain accepted.
+
 Quantix v0 is a Tauri 2 desktop application with one React/TypeScript renderer and one genuine Rust Quantix Host in Tauri's Core process. There is no Electron implementation, Node Host sidecar, local web server, runtime selector, or shared shell abstraction. The Rust Host is the only writer for the Engineer User's `~/.quantix` application home and owns domain commands, EITL enforcement, persistence, process supervision, recovery, and updates.
 
 The earlier Electron/TypeScript Host choice was reconsidered through primary-source research. That research found Tauri/Rust feasible but warned that it adds Rust-to-TypeScript binding coordination, explicit process-tree supervision, and more Quantix-owned transition code. The Engineer User explicitly accepted those costs, cancelled the packaged comparison, and selected Tauri/Rust for the durable cross-platform architecture. This is a product-owner constraint, not a claim that Tauri won an unperformed benchmark.
