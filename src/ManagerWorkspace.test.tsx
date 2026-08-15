@@ -10,13 +10,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
 
 const host = vi.hoisted(() => ({
+  cancelProviderLogin: vi.fn(),
   chooseAndImportTenderPackage: vi.fn(),
   inspectManagerWorkspace: vi.fn(),
+  logoutProvider: vi.fn(),
+  openProviderLogin: vi.fn(),
   recordEngineerWorkspaceMessage: vi.fn(),
   refreshApplicationSettings: vi.fn(),
   retryManagerIntake: vi.fn(),
   selectManagerWorkspaceTender: vi.fn(),
   startManagerTender: vi.fn(),
+  startProviderLogin: vi.fn(),
   updateAiExecutionSelection: vi.fn(),
 }));
 
@@ -175,6 +179,7 @@ describe("ManagerWorkspace", () => {
           status_summary: "Ready to run Tender work.",
         },
       ],
+      active_provider_login: null,
     };
     host.refreshApplicationSettings.mockResolvedValue(settings);
     host.updateAiExecutionSelection.mockResolvedValue({
@@ -207,6 +212,57 @@ describe("ManagerWorkspace", () => {
     });
     expect(screen.getByRole("navigation", { name: "Tenders" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Manager" })).toBeNull();
+  });
+
+  it("projects Codex-managed device login without exposing credentials", async () => {
+    host.inspectManagerWorkspace.mockResolvedValue(projection);
+    const disconnected = {
+      ai_execution_selection: null,
+      active_provider_login: null,
+      provider_connections: [
+        {
+          connection_id: "codex_chatgpt",
+          provider: "codex",
+          display_name: "OpenAI account via Codex",
+          status: "authentication_required",
+          account_label: null,
+          account_plan: null,
+          models: [],
+          catalogue_fetched_at: null,
+          adapter_version: "0.147.0",
+          status_summary: "Connect an OpenAI account.",
+        },
+      ],
+    };
+    host.refreshApplicationSettings.mockResolvedValue(disconnected);
+    host.startProviderLogin.mockResolvedValue({
+      ...disconnected,
+      active_provider_login: {
+        connection_id: "codex_chatgpt",
+        login_id: "login-1",
+        method: "device_code",
+        status: "awaiting_user",
+        authorization_url: "https://auth.openai.com/codex/device",
+        user_code: "ABCD-EFGH",
+        status_summary: "Enter the one-time code.",
+      },
+    });
+
+    render(<ManagerWorkspace aiAvailable={false} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use device code" }),
+    );
+
+    expect(await screen.findByText("ABCD-EFGH")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Continue in browser" }),
+    );
+    expect(host.openProviderLogin).toHaveBeenCalledWith({ login_id: "login-1" });
+    expect(host.startProviderLogin).toHaveBeenCalledWith({
+      method: "device_code",
+    });
+    expect(document.body.textContent).not.toContain("accessToken");
   });
 
   it("keeps the Host-designated meaningful message visible after routine chatter", async () => {

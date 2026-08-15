@@ -17,8 +17,8 @@ use crate::{
     application_settings::{
         codex_connection_version, codex_failure_connection_status, save_codex_connection_status,
         save_live_connection, AiExecutionSelection, AiProviderKind, ProviderConnectionStatus,
-        ProviderConnectionView, ProviderModelOption, ProviderReasoningOption,
-        ProviderReasoningSelection, CODEX_CONNECTION_ID,
+        ProviderConnectionView, ProviderLoginMethod, ProviderLoginView, ProviderModelOption,
+        ProviderReasoningOption, ProviderReasoningSelection, CODEX_CONNECTION_ID,
     },
     process_supervisor::{ProcessError, ProcessSpec, ProcessTermination, SupervisedConversation},
     tender_store::{
@@ -51,7 +51,7 @@ mod codex_actor;
 mod codex_protocol;
 pub(crate) mod permissions;
 pub(crate) use bootstrap_profile::{bootstrap_profile, bootstrap_task};
-pub(crate) use codex_actor::CodexProvider;
+pub(crate) use codex_actor::{valid_login_url, CodexProvider};
 use codex_protocol::{
     execute_typed_tool, outcome_unknown, process_failure, protocol_failure, read_expected_response,
     typed_tool_arguments_are_valid, typed_tool_is_known, write_rpc,
@@ -87,6 +87,33 @@ impl AgentProvider {
         }
     }
 
+    pub(crate) fn login_snapshot(&self) -> Option<ProviderLoginView> {
+        match self {
+            Self::Codex(provider) => provider.login_snapshot(),
+        }
+    }
+
+    pub(crate) async fn start_login(
+        &self,
+        method: ProviderLoginMethod,
+    ) -> Result<ProviderLoginView, ProviderFailure> {
+        match self {
+            Self::Codex(provider) => provider.start_login(method).await,
+        }
+    }
+
+    pub(crate) async fn cancel_login(&self, login_id: String) -> Result<(), ProviderFailure> {
+        match self {
+            Self::Codex(provider) => provider.cancel_login(login_id).await,
+        }
+    }
+
+    pub(crate) async fn logout(&self) -> Result<ProviderConnectionView, ProviderFailure> {
+        match self {
+            Self::Codex(provider) => provider.logout().await,
+        }
+    }
+
     async fn run_turn(
         &self,
         prepared: PreparedAgentRun,
@@ -109,7 +136,7 @@ impl AgentProvider {
         }
     }
 
-    fn is_closed(&self) -> bool {
+    pub(crate) fn is_closed(&self) -> bool {
         match self {
             Self::Codex(provider) => provider.is_closed(),
         }
@@ -2369,10 +2396,11 @@ impl QuantixHost {
                 return Err(readiness_interruption_failure());
             }
             let provider = provider?;
-            save_live_connection(self.application_home(), &provider.connection_snapshot())
+            let connection = provider.connection_snapshot();
+            save_live_connection(self.application_home(), &connection)
                 .map_err(|_| process_failure(false))?;
             *provider_slot = Some(provider);
-            return Ok(());
+            return provider_connection_readiness(&connection);
         }
         let provider = provider_slot
             .as_ref()
@@ -2384,16 +2412,29 @@ impl QuantixHost {
             _ = cancellation.cancelled() => Err(readiness_interruption_failure()),
             readiness = provider.refresh_readiness() => readiness,
         };
-        if readiness.is_err() {
+        if let Err(failure) = readiness {
             let mut provider_slot = self.agent_provider().lock().await;
             *provider_slot = None;
             drop(provider_slot);
             let _ = provider.shutdown().await;
-        } else {
-            save_live_connection(self.application_home(), &provider.connection_snapshot())
-                .map_err(|_| process_failure(false))?;
+            return Err(failure);
         }
-        readiness.map(|_| ())
+        let connection = provider.connection_snapshot();
+        save_live_connection(self.application_home(), &connection)
+            .map_err(|_| process_failure(false))?;
+        provider_connection_readiness(&connection)
+    }
+}
+
+fn provider_connection_readiness(
+    connection: &ProviderConnectionView,
+) -> Result<(), ProviderFailure> {
+    match connection.status {
+        ProviderConnectionStatus::Ready => Ok(()),
+        ProviderConnectionStatus::AuthenticationRequired => Err(authentication_failure()),
+        ProviderConnectionStatus::SubscriptionRequired => Err(subscription_failure()),
+        ProviderConnectionStatus::Incompatible => Err(protocol_failure(false)),
+        ProviderConnectionStatus::TemporarilyUnavailable => Err(process_failure(false)),
     }
 }
 
@@ -2885,6 +2926,10 @@ impl CodexProviderProcess {
         self.connection.clone()
     }
 
+    pub(super) fn replace_connection(&mut self, connection: ProviderConnectionView) {
+        self.connection = connection;
+    }
+
     async fn initialize(
         conversation: &mut SupervisedConversation,
     ) -> Result<ProviderConnectionView, ProviderFailure> {
@@ -2944,15 +2989,56 @@ impl CodexProviderProcess {
         )
         .await
         .map_err(|_| process_failure(false))?;
-        let account =
-            read_expected_response(conversation, &json!(1), "v2/GetAccountResponse").await?;
+        let account = match read_expected_response(
+            conversation,
+            &json!(1),
+            "v2/GetAccountResponse",
+        )
+        .await
+        {
+            Ok(account) => account,
+            Err(failure)
+                if failure.category == ProviderFailureCategory::AuthenticationRequired =>
+            {
+                return Ok(codex_connection_without_catalog(
+                    ProviderConnectionStatus::AuthenticationRequired,
+                    None,
+                    None,
+                    "Connect an OpenAI account to use Codex intelligence.",
+                ));
+            }
+            Err(failure)
+                if failure.category == ProviderFailureCategory::SubscriptionRequired =>
+            {
+                return Ok(codex_connection_without_catalog(
+                    ProviderConnectionStatus::SubscriptionRequired,
+                    None,
+                    None,
+                    "The connected OpenAI account does not provide an eligible Codex subscription.",
+                ));
+            }
+            Err(failure) => return Err(failure),
+        };
         let account_type = account.pointer("/account/type").and_then(Value::as_str);
         if account_type.is_none() {
-            return Err(authentication_failure());
+            return Ok(codex_connection_without_catalog(
+                ProviderConnectionStatus::AuthenticationRequired,
+                None,
+                None,
+                "Connect an OpenAI account to use Codex intelligence.",
+            ));
         }
         let plan_type = account.pointer("/account/planType").and_then(Value::as_str);
         if !chatgpt_subscription_is_supported(account_type, plan_type) {
-            return Err(subscription_failure());
+            return Ok(codex_connection_without_catalog(
+                ProviderConnectionStatus::SubscriptionRequired,
+                account
+                    .pointer("/account/email")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                plan_type.map(str::to_owned),
+                "The connected OpenAI account does not provide an eligible Codex subscription.",
+            ));
         }
         let account_label = account
             .pointer("/account/email")
@@ -3045,6 +3131,26 @@ impl CodexProviderProcess {
         self.conversation
             .as_mut()
             .ok_or_else(|| process_failure(false))
+    }
+}
+
+fn codex_connection_without_catalog(
+    status: ProviderConnectionStatus,
+    account_label: Option<String>,
+    account_plan: Option<String>,
+    status_summary: &str,
+) -> ProviderConnectionView {
+    ProviderConnectionView {
+        connection_id: CODEX_CONNECTION_ID.to_owned(),
+        provider: AiProviderKind::Codex,
+        display_name: "OpenAI account via Codex".to_owned(),
+        status,
+        account_label,
+        account_plan,
+        models: Vec::new(),
+        catalogue_fetched_at: None,
+        adapter_version: codex_connection_version(),
+        status_summary: status_summary.to_owned(),
     }
 }
 

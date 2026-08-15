@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::{
-    agent_runtime::{AgentProvider, ProviderFailure, ProviderFailureCategory, CODEX_VERSION},
+    agent_runtime::{
+        valid_login_url, AgentProvider, ProviderFailure, ProviderFailureCategory, CODEX_VERSION,
+    },
     tender_store::{TenderCommandError, TenderErrorCode},
     QuantixHost,
 };
@@ -108,6 +110,65 @@ pub struct AiExecutionSelection {
 pub struct ApplicationSettingsView {
     pub ai_execution_selection: Option<AiExecutionSelection>,
     pub provider_connections: Vec<ProviderConnectionView>,
+    pub active_provider_login: Option<ProviderLoginView>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ProviderLoginMethod {
+    Browser,
+    DeviceCode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ProviderLoginStatus {
+    AwaitingUser,
+    Cancelling,
+    Cancelled,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ProviderLoginView {
+    pub connection_id: String,
+    pub login_id: String,
+    pub method: ProviderLoginMethod,
+    pub status: ProviderLoginStatus,
+    #[serde(skip_serializing)]
+    #[ts(skip)]
+    pub authorization_url: String,
+    pub user_code: Option<String>,
+    pub status_summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct StartProviderLoginCommand {
+    #[garde(skip)]
+    pub method: ProviderLoginMethod,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct CancelProviderLoginCommand {
+    #[garde(length(bytes, min = 1, max = 200))]
+    pub login_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct OpenProviderLoginCommand {
+    #[garde(length(bytes, min = 1, max = 200))]
+    pub login_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
@@ -132,7 +193,25 @@ impl QuantixHost {
     pub async fn refresh_application_settings(
         &self,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        if !self.runtime_is_verified() {
+        let mut current_provider = self.agent_provider().lock().await.as_ref().cloned();
+        if current_provider
+            .as_ref()
+            .is_some_and(AgentProvider::is_closed)
+        {
+            if let Some(provider) = current_provider.take() {
+                let failure = ProviderFailure::new(
+                    ProviderFailureCategory::ProcessFailed,
+                    true,
+                    "Retry the provider connection.",
+                    None,
+                );
+                self.retire_failed_provider(&provider, &failure).await?;
+            }
+        }
+        let Some(provider) = current_provider else {
+            if self.runtime_is_verified() {
+                self.invalidate_missing_provider()?;
+            }
             let mut view = load_application_settings(self.application_home())?;
             for connection in &mut view.provider_connections {
                 if connection.status == ProviderConnectionStatus::Ready {
@@ -143,13 +222,20 @@ impl QuantixHost {
                 }
             }
             return Ok(view);
-        }
-
-        let provider = self.agent_provider().lock().await.as_ref().cloned();
-        let Some(provider) = provider else {
-            self.invalidate_missing_provider()?;
-            return load_application_settings(self.application_home());
         };
+        let login_snapshot = provider.login_snapshot();
+        if login_snapshot.as_ref().is_some_and(|login| {
+            matches!(
+                login.status,
+                ProviderLoginStatus::AwaitingUser | ProviderLoginStatus::Cancelling
+            )
+        }) {
+            let connection = provider.connection_snapshot();
+            save_live_connection(self.application_home(), &connection)?;
+            let mut view = load_application_settings(self.application_home())?;
+            view.active_provider_login = login_snapshot;
+            return Ok(view);
+        }
         let refreshed = match provider.refresh_readiness().await {
             Ok(refreshed) => refreshed,
             Err(failure) => {
@@ -159,6 +245,10 @@ impl QuantixHost {
         };
         if !refreshed {
             let mut view = load_application_settings(self.application_home())?;
+            view.active_provider_login = provider.login_snapshot();
+            if view.active_provider_login.is_some() {
+                return Ok(view);
+            }
             if let Some(connection) = view
                 .provider_connections
                 .iter_mut()
@@ -173,7 +263,10 @@ impl QuantixHost {
         }
         let connection = provider.connection_snapshot();
         save_live_connection(self.application_home(), &connection)?;
-        load_application_settings(self.application_home())
+        self.set_runtime_verified(connection.status == ProviderConnectionStatus::Ready);
+        let mut view = load_application_settings(self.application_home())?;
+        view.active_provider_login = provider.login_snapshot();
+        Ok(view)
     }
 
     pub async fn update_ai_execution_selection(
@@ -208,6 +301,126 @@ impl QuantixHost {
         load_application_settings(self.application_home())
     }
 
+    pub async fn start_provider_login(
+        &self,
+        command: StartProviderLoginCommand,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if !self.update_environment_is_quiescent() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let provider = self
+            .agent_provider()
+            .lock()
+            .await
+            .as_ref()
+            .filter(|provider| !provider.is_closed())
+            .cloned()
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+        let login = match provider.start_login(command.method).await {
+            Ok(login) => login,
+            Err(failure) if failure.category == ProviderFailureCategory::PermissionDenied => {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            Err(failure) => {
+                self.retire_failed_provider(&provider, &failure).await?;
+                return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
+            }
+        };
+        self.set_runtime_verified(false);
+        let mut view = load_application_settings(self.application_home())?;
+        view.active_provider_login = Some(login);
+        Ok(view)
+    }
+
+    pub async fn open_provider_login(
+        &self,
+        command: OpenProviderLoginCommand,
+    ) -> Result<(), TenderCommandError> {
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let provider = self
+            .agent_provider()
+            .lock()
+            .await
+            .as_ref()
+            .filter(|provider| !provider.is_closed())
+            .cloned()
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+        let login = provider
+            .login_snapshot()
+            .filter(|login| {
+                login.login_id == command.login_id
+                    && login.status == ProviderLoginStatus::AwaitingUser
+                    && valid_login_url(login.method, &login.authorization_url)
+            })
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        tokio::task::spawn_blocking(move || webbrowser::open(&login.authorization_url))
+            .await
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))
+    }
+
+    pub async fn cancel_provider_login(
+        &self,
+        command: CancelProviderLoginCommand,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let provider = self
+            .agent_provider()
+            .lock()
+            .await
+            .as_ref()
+            .filter(|provider| !provider.is_closed())
+            .cloned()
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+        match provider.cancel_login(command.login_id).await {
+            Ok(()) => {}
+            Err(failure) if failure.category == ProviderFailureCategory::PermissionDenied => {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            Err(failure) => {
+                self.retire_failed_provider(&provider, &failure).await?;
+                return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
+            }
+        }
+        let mut view = load_application_settings(self.application_home())?;
+        view.active_provider_login = provider.login_snapshot();
+        Ok(view)
+    }
+
+    pub async fn logout_provider(&self) -> Result<ApplicationSettingsView, TenderCommandError> {
+        if !self.update_environment_is_quiescent() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let provider = self
+            .agent_provider()
+            .lock()
+            .await
+            .as_ref()
+            .filter(|provider| !provider.is_closed())
+            .cloned()
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+        let connection = match provider.logout().await {
+            Ok(connection) => connection,
+            Err(failure) if failure.category == ProviderFailureCategory::PermissionDenied => {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            Err(failure) => {
+                self.retire_failed_provider(&provider, &failure).await?;
+                return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
+            }
+        };
+        self.set_runtime_verified(false);
+        save_live_connection(self.application_home(), &connection)?;
+        load_application_settings(self.application_home())
+    }
+
     async fn retire_failed_provider(
         &self,
         provider: &AgentProvider,
@@ -227,8 +440,18 @@ impl QuantixHost {
         };
         if retired {
             self.set_runtime_verified(false);
-            let (status, summary) = codex_failure_connection_status(failure.category);
-            save_codex_connection_status(self.application_home(), status, summary)?;
+            let snapshot = provider.connection_snapshot();
+            if matches!(
+                snapshot.status,
+                ProviderConnectionStatus::AuthenticationRequired
+                    | ProviderConnectionStatus::SubscriptionRequired
+                    | ProviderConnectionStatus::Incompatible
+            ) {
+                save_live_connection(self.application_home(), &snapshot)?;
+            } else {
+                let (status, summary) = codex_failure_connection_status(failure.category);
+                save_codex_connection_status(self.application_home(), status, summary)?;
+            }
         }
         Ok(())
     }
@@ -369,11 +592,12 @@ pub(crate) fn save_live_connection(
             store_selection(&transaction, &rebound)?;
         }
         Some(_) => {}
-        None => {
+        None if connection.status == ProviderConnectionStatus::Ready => {
             let selection = default_selection(connection)
                 .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
             store_selection(&transaction, &selection)?;
         }
+        None => {}
     }
     transaction.commit().map_err(settings_store_error)
 }
@@ -511,6 +735,7 @@ fn load_application_settings(
     Ok(ApplicationSettingsView {
         ai_execution_selection: settings.ai_execution_selection,
         provider_connections,
+        active_provider_login: None,
     })
 }
 

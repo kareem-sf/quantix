@@ -291,7 +291,7 @@ fn run_agent_codex(
         return Ok(());
     }
     let account = match scenario {
-        "signed-out" => serde_json::Value::Null,
+        "managed-login" | "signed-out" => serde_json::Value::Null,
         "api-key" => serde_json::json!({ "type": "apiKey" }),
         _ => serde_json::json!({
             "type": "chatgpt",
@@ -306,6 +306,9 @@ fn run_agent_codex(
             "requiresOpenaiAuth": true
         }
     }))?;
+    if scenario == "managed-login" {
+        return run_managed_login_codex(&mut requests);
+    }
     if matches!(scenario, "signed-out" | "api-key") {
         for request in requests {
             request?;
@@ -390,6 +393,130 @@ fn run_agent_codex(
             return Ok(());
         }
     }
+}
+
+fn run_managed_login_codex(
+    requests: &mut impl Iterator<Item = io::Result<String>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut authenticated = false;
+    for request in requests {
+        let request: serde_json::Value = serde_json::from_str(&request?)?;
+        let method = request
+            .get("method")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("managed login request method")?;
+        let id = request
+            .get("id")
+            .cloned()
+            .ok_or("managed login request id")?;
+        match method {
+            "account/login/start" => {
+                let login_type = request
+                    .pointer("/params/type")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or("managed login type")?;
+                match login_type {
+                    "chatgpt" => {
+                        write_json(&serde_json::json!({
+                            "id": id,
+                            "result": {
+                                "type": "chatgpt",
+                                "loginId": "fixture-browser-login",
+                                "authUrl": "https://chatgpt.com/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"
+                            }
+                        }))?;
+                        authenticated = true;
+                        write_json(&serde_json::json!({
+                            "method": "account/login/completed",
+                            "params": {
+                                "loginId": "fixture-browser-login",
+                                "success": true,
+                                "error": null
+                            }
+                        }))?;
+                    }
+                    "chatgptDeviceCode" => {
+                        write_json(&serde_json::json!({
+                            "id": id,
+                            "result": {
+                                "type": "chatgptDeviceCode",
+                                "loginId": "fixture-device-login",
+                                "verificationUrl": "https://auth.openai.com/codex/device",
+                                "userCode": "ABCD-EFGH"
+                            }
+                        }))?;
+                    }
+                    _ => return Err("unexpected managed login type".into()),
+                }
+            }
+            "account/login/cancel" => {
+                if request.pointer("/params/loginId").and_then(serde_json::Value::as_str)
+                    != Some("fixture-device-login")
+                {
+                    return Err("managed login cancellation id mismatch".into());
+                }
+                write_json(&serde_json::json!({
+                    "id": id,
+                    "result": { "status": "canceled" }
+                }))?;
+                write_json(&serde_json::json!({
+                    "method": "account/login/completed",
+                    "params": {
+                        "loginId": "fixture-device-login",
+                        "success": false,
+                        "error": "cancelled"
+                    }
+                }))?;
+            }
+            "account/read" => {
+                let account = if authenticated {
+                    serde_json::json!({
+                        "type": "chatgpt",
+                        "email": "engineer@example.com",
+                        "planType": "plus"
+                    })
+                } else {
+                    serde_json::Value::Null
+                };
+                write_json(&serde_json::json!({
+                    "id": id,
+                    "result": {
+                        "account": account,
+                        "requiresOpenaiAuth": true
+                    }
+                }))?;
+            }
+            "model/list" if authenticated => {
+                write_json(&serde_json::json!({
+                    "id": id,
+                    "result": {
+                        "data": [{
+                            "id": "gpt-5.6-terra",
+                            "model": "gpt-5.6-terra",
+                            "displayName": "GPT-5.6 Terra",
+                            "description": "Fixture Codex model",
+                            "hidden": false,
+                            "defaultReasoningEffort": "medium",
+                            "supportedReasoningEfforts": [{
+                                "reasoningEffort": "medium",
+                                "description": "Fixture reasoning effort"
+                            }],
+                            "inputModalities": ["text"],
+                            "supportsPersonality": true,
+                            "isDefault": true
+                        }],
+                        "nextCursor": null
+                    }
+                }))?;
+            }
+            "account/logout" if authenticated => {
+                authenticated = false;
+                write_json(&serde_json::json!({ "id": id, "result": {} }))?;
+            }
+            _ => return Err(format!("unexpected managed login request {method}").into()),
+        }
+    }
+    Ok(())
 }
 
 fn run_agent_turn(

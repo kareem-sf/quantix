@@ -1,15 +1,27 @@
-import { LoaderCircle, RefreshCw, Settings2 } from "lucide-react";
+import {
+  Copy,
+  ExternalLink,
+  LoaderCircle,
+  LogOut,
+  RefreshCw,
+  Settings2,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
 import type { ProviderReasoningSelection } from "./bindings/ProviderReasoningSelection";
 import {
+  cancelProviderLogin,
+  logoutProvider,
+  openProviderLogin,
   refreshApplicationSettings,
+  startProviderLogin,
   updateAiExecutionSelection,
 } from "./quantixHost";
 
 interface ApplicationSettingsProps {
   aiAvailable: boolean;
+  onAiAvailabilityChange: (available: boolean) => void;
 }
 
 function settingsError(reason: unknown): string {
@@ -18,7 +30,10 @@ function settingsError(reason: unknown): string {
       return "The AI runtime is unavailable. Your last valid selection is preserved.";
     }
     if (reason.code === "invalid_command") {
-      return "That model or reasoning option is no longer offered by the provider.";
+      return "Finish current AI work or refresh the provider state, then try again.";
+    }
+    if (reason.code === "store_unavailable") {
+      return "Quantix could not open the default browser. Cancel and use the device-code option instead.";
     }
   }
   return "Quantix could not load AI settings.";
@@ -28,28 +43,66 @@ function reasoningKey(selection: ProviderReasoningSelection): string {
   return JSON.stringify(selection);
 }
 
-export function ApplicationSettings({ aiAvailable }: ApplicationSettingsProps) {
+export function ApplicationSettings({
+  aiAvailable,
+  onAiAvailabilityChange,
+}: ApplicationSettingsProps) {
   const [settings, setSettings] = useState<ApplicationSettingsView | null>(
     null,
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const acceptSettings = useCallback(
+    (view: ApplicationSettingsView) => {
+      setSettings(view);
+      onAiAvailabilityChange(
+        view.provider_connections.some(
+          (connection) => connection.status === "ready",
+        ),
+      );
+      return view;
+    },
+    [onAiAvailabilityChange],
+  );
+
   const load = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
-      setSettings(await refreshApplicationSettings());
+      acceptSettings(await refreshApplicationSettings());
     } catch (reason) {
       setError(settingsError(reason));
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [acceptSettings]);
 
   useEffect(() => {
     void load();
   }, [aiAvailable, load]);
+
+  const login = settings?.active_provider_login;
+  useEffect(() => {
+    const completedCataloguePending =
+      login?.status === "completed" &&
+      !settings?.provider_connections.some(
+        (connection) => connection.status === "ready",
+      );
+    if (
+      !login ||
+      (!completedCataloguePending &&
+        !["awaiting_user", "cancelling"].includes(login.status))
+    ) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void refreshApplicationSettings()
+        .then(acceptSettings)
+        .catch((reason) => setError(settingsError(reason)));
+    }, 1_200);
+    return () => window.clearInterval(timer);
+  }, [acceptSettings, login, settings?.provider_connections]);
 
   const connection = settings?.provider_connections.find(
     (candidate) => candidate.connection_id === "codex_chatgpt",
@@ -79,7 +132,7 @@ export function ApplicationSettings({ aiAvailable }: ApplicationSettingsProps) {
       setBusy(true);
       setError(null);
       try {
-        setSettings(
+        acceptSettings(
           await updateAiExecutionSelection({
             connection_id: connection.connection_id,
             model_id: modelId,
@@ -92,8 +145,60 @@ export function ApplicationSettings({ aiAvailable }: ApplicationSettingsProps) {
         setBusy(false);
       }
     },
-    [aiAvailable, connection],
+    [acceptSettings, aiAvailable, connection],
   );
+
+  const beginLogin = useCallback(async (method: "browser" | "device_code") => {
+    setBusy(true);
+    setError(null);
+    try {
+      acceptSettings(await startProviderLogin({ method }));
+    } catch (reason) {
+      setError(settingsError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }, [acceptSettings]);
+
+  const cancelLogin = useCallback(async () => {
+    if (!login) return;
+    setBusy(true);
+    setError(null);
+    try {
+      acceptSettings(await cancelProviderLogin({ login_id: login.login_id }));
+    } catch (reason) {
+      setError(settingsError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }, [acceptSettings, login]);
+
+  const disconnect = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      acceptSettings(await logoutProvider());
+    } catch (reason) {
+      setError(settingsError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }, [acceptSettings]);
+
+  const openLogin = useCallback(async () => {
+    if (!login) return;
+    setError(null);
+    try {
+      await openProviderLogin({ login_id: login.login_id });
+    } catch (reason) {
+      setError(settingsError(reason));
+    }
+  }, [login]);
+
+  const canConnect = connection?.status === "authentication_required";
+  const canDisconnect =
+    connection?.status === "ready" ||
+    connection?.status === "subscription_required";
 
   return (
     <main className="application-settings">
@@ -140,7 +245,11 @@ export function ApplicationSettings({ aiAvailable }: ApplicationSettingsProps) {
               <div>
                 <strong>{connection.display_name}</strong>
                 <span>
-                  {connection.account_label ?? "No account details available"}
+                  {connection.account_label ??
+                    (canDisconnect ? "Connected account" : "Not connected")}
+                  {connection.account_plan
+                    ? ` / ${connection.account_plan.replace(/_/g, " ")} plan`
+                    : ""}
                 </span>
               </div>
               <span data-status={connection.status}>
@@ -148,6 +257,106 @@ export function ApplicationSettings({ aiAvailable }: ApplicationSettingsProps) {
               </span>
             </div>
             <p>{connection.status_summary}</p>
+
+            {login ? (
+              <div className="application-settings__login" data-status={login.status}>
+                <strong>{login.status_summary}</strong>
+                {login.status === "awaiting_user" ? (
+                  <>
+                    {login.user_code ? (
+                      <div className="application-settings__device-code">
+                        <code>{login.user_code}</code>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void navigator.clipboard.writeText(login.user_code ?? "")
+                          }
+                        >
+                          <Copy size={15} /> Copy code
+                        </button>
+                      </div>
+                    ) : null}
+                    <div className="application-settings__login-actions">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void openLogin()}
+                      >
+                        <ExternalLink size={15} /> Continue in browser
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void cancelLogin()}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                ) : null}
+                {["cancelled", "failed"].includes(login.status) && canConnect ? (
+                  <div className="application-settings__login-actions">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void beginLogin("browser")}
+                    >
+                      Try browser login
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void beginLogin("device_code")}
+                    >
+                      Use device code
+                    </button>
+                  </div>
+                ) : null}
+                {login.status === "completed" && canDisconnect ? (
+                  <div className="application-settings__login-actions">
+                    <button
+                      type="button"
+                      className="application-settings__logout"
+                      disabled={busy}
+                      onClick={() => void disconnect()}
+                    >
+                      <LogOut size={15} /> Disconnect
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="application-settings__login-actions">
+                {canConnect ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void beginLogin("browser")}
+                    >
+                      Connect in browser
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void beginLogin("device_code")}
+                    >
+                      Use device code
+                    </button>
+                  </>
+                ) : null}
+                {canDisconnect ? (
+                  <button
+                    type="button"
+                    className="application-settings__logout"
+                    disabled={busy}
+                    onClick={() => void disconnect()}
+                  >
+                    <LogOut size={15} /> Disconnect
+                  </button>
+                ) : null}
+              </div>
+            )}
 
             <label>
               <span>Model</span>

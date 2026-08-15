@@ -573,7 +573,10 @@ function FilesView({
   );
 }
 
-export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
+export function ManagerWorkspace({
+  aiAvailable: initialAiAvailable,
+}: ManagerWorkspaceProps) {
+  const [aiAvailable, setAiAvailable] = useState(initialAiAvailable);
   const [projection, setProjection] =
     useState<ManagerWorkspaceProjection | null>(null);
   const [view, setView] = useState<WorkspaceView>("manager");
@@ -796,7 +799,10 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
         ) : null}
 
         {settingsOpen ? (
-          <ApplicationSettings aiAvailable={aiAvailable} />
+          <ApplicationSettings
+            aiAvailable={aiAvailable}
+            onAiAvailabilityChange={setAiAvailable}
+          />
         ) : selected && projection ? (
           <>
             <div className="manager-workspace__heading">

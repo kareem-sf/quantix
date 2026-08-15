@@ -1,25 +1,26 @@
 use quantix_lib::{
     AcceptanceArtifactHash, AcceptanceCheckResult, AcceptanceStageTiming, AgentRunInspection,
     AgentRunSummary, AiExecutionSelection, AiProviderKind, ApplicationSettingsView,
-    ApproveSubmissionReleaseCommand, BootstrapRole, CodexProductionAssuranceEvidence,
-    CreatePortableTenderArchiveCommand, DeletionReceipt, EvaluatePublicReleaseGateCommand,
-    ExportReleaseCopyCommand, ImportPortableTenderArchiveCommand, InspectManagerWorkspaceCommand,
-    IntegrationTermsDecision, LicenseDistributionReview, LiveQualificationMetrics,
-    LiveQualificationRun, ManagerConversation, ManagerIntakeStage, ManagerIntakeStatus,
-    ManagerIntakeStatusKind, ManagerWorkspaceProjection, ManagerWorkspaceTender,
-    NativePlatformQualificationEvidence, NativePlatformQualificationRecord,
+    ApproveSubmissionReleaseCommand, BootstrapRole, CancelProviderLoginCommand,
+    CodexProductionAssuranceEvidence, CreatePortableTenderArchiveCommand, DeletionReceipt,
+    EvaluatePublicReleaseGateCommand, ExportReleaseCopyCommand, ImportPortableTenderArchiveCommand,
+    InspectManagerWorkspaceCommand, IntegrationTermsDecision, LicenseDistributionReview,
+    LiveQualificationMetrics, LiveQualificationRun, ManagerConversation, ManagerIntakeStage,
+    ManagerIntakeStatus, ManagerIntakeStatusKind, ManagerWorkspaceProjection,
+    ManagerWorkspaceTender, NativePlatformQualificationEvidence, NativePlatformQualificationRecord,
     PortableTenderArchiveRecord, PrivateQualificationRecord, ProductAcceptanceOutcome,
     ProductAcceptanceRecord, ProductAcceptanceRun, ProviderConnectionStatus,
-    ProviderConnectionView, ProviderModelOption, ProviderReasoningOption,
-    ProviderReasoningSelection, PublicReleaseGateOutcome, PublicReleaseGateRecord,
-    RecordEngineerWorkspaceMessageCommand, RecordLiveQualificationRunCommand,
-    RecordNativePlatformQualificationCommand, ReleaseCopyExport, ReleaseCopyItem,
-    RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand,
-    SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand, SubmissionReleaseApproval,
-    SubmissionReleaseInspection, SubmissionReleaseState, TechnicalRiskAcceptance,
-    TenderOfficeMessage, TenderOfficeMessageAuthor, TenderOfficeMessageKind,
-    TenderRetentionDecisionCommand, TenderRetentionDecisionRecord, TenderRetentionState,
-    TrashedTenderDecisionCommand, TrashedTenderRecord, TrashedTenderState,
+    OpenProviderLoginCommand, ProviderConnectionView, ProviderLoginMethod, ProviderLoginStatus,
+    ProviderLoginView,
+    ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
+    PublicReleaseGateOutcome, PublicReleaseGateRecord, RecordEngineerWorkspaceMessageCommand,
+    RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand, ReleaseCopyExport,
+    ReleaseCopyItem, RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand,
+    SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand, StartProviderLoginCommand,
+    SubmissionReleaseApproval, SubmissionReleaseInspection, SubmissionReleaseState,
+    TechnicalRiskAcceptance, TenderOfficeMessage, TenderOfficeMessageAuthor,
+    TenderOfficeMessageKind, TenderRetentionDecisionCommand, TenderRetentionDecisionRecord,
+    TenderRetentionState, TrashedTenderDecisionCommand, TrashedTenderRecord, TrashedTenderState,
     UpdateAiExecutionSelectionCommand, WorkspaceActionKind, WorkspaceCurrentAction,
     WorkspaceFilesSummary, WorkspaceMessageReference, WorkspaceMessageReferenceKind,
     WorkspaceTeamSummary, WorkspaceTenderDocument, WorkspaceWorkSummary,
@@ -96,9 +97,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ProviderReasoningOption::export_all(&config)?;
     ProviderModelOption::export_all(&config)?;
     ProviderConnectionView::export_all(&config)?;
+    ProviderLoginMethod::export_all(&config)?;
+    ProviderLoginStatus::export_all(&config)?;
+    ProviderLoginView::export_all(&config)?;
     AiExecutionSelection::export_all(&config)?;
     ApplicationSettingsView::export_all(&config)?;
     UpdateAiExecutionSelectionCommand::export_all(&config)?;
+    StartProviderLoginCommand::export_all(&config)?;
+    CancelProviderLoginCommand::export_all(&config)?;
+    OpenProviderLoginCommand::export_all(&config)?;
     AgentRunInspection::export_all(&config)?;
     AgentRunSummary::export_all(&config)?;
     Ok(())

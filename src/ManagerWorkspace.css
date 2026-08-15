@@ -357,6 +357,61 @@ button {
   background: #dcece4;
 }
 
+.application-settings__login {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #deded8;
+  border-radius: 10px;
+  background: #fff;
+  font-size: 13px;
+}
+
+.application-settings__login[data-status="failed"] {
+  border-color: #e6c7c2;
+  background: #fff9f8;
+}
+
+.application-settings__login-actions,
+.application-settings__device-code {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.application-settings__login-actions button,
+.application-settings__login-actions a,
+.application-settings__device-code button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 11px;
+  border: 1px solid #d5d5d0;
+  border-radius: 8px;
+  color: #30302d;
+  background: #fff;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.application-settings__device-code code {
+  padding: 8px 11px;
+  border-radius: 7px;
+  color: #213f34;
+  background: #edf4f0;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.application-settings__login-actions .application-settings__logout {
+  margin-left: auto;
+  color: #792d27;
+}
+
 .application-settings select {
   min-height: 42px;
   padding: 0 11px;

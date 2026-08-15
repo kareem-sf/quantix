@@ -108,6 +108,9 @@ import type { InspectComplianceMatrixCommand } from "./bindings/InspectComplianc
 import type { InspectProductionTaskReviewCommand } from "./bindings/InspectProductionTaskReviewCommand";
 import type { InspectManagerWorkspaceCommand } from "./bindings/InspectManagerWorkspaceCommand";
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
+import type { CancelProviderLoginCommand } from "./bindings/CancelProviderLoginCommand";
+import type { OpenProviderLoginCommand } from "./bindings/OpenProviderLoginCommand";
+import type { StartProviderLoginCommand } from "./bindings/StartProviderLoginCommand";
 import type { UpdateAiExecutionSelectionCommand } from "./bindings/UpdateAiExecutionSelectionCommand";
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
 import type { ManagerCapabilityDemandInput } from "./bindings/ManagerCapabilityDemandInput";
@@ -276,6 +279,28 @@ export function updateAiExecutionSelection(
   return invoke<ApplicationSettingsView>("update_ai_execution_selection", {
     command,
   });
+}
+
+export function startProviderLogin(
+  command: StartProviderLoginCommand,
+): Promise<ApplicationSettingsView> {
+  return invoke<ApplicationSettingsView>("start_provider_login", { command });
+}
+
+export function cancelProviderLogin(
+  command: CancelProviderLoginCommand,
+): Promise<ApplicationSettingsView> {
+  return invoke<ApplicationSettingsView>("cancel_provider_login", { command });
+}
+
+export function openProviderLogin(
+  command: OpenProviderLoginCommand,
+): Promise<void> {
+  return invoke<void>("open_provider_login", { command });
+}
+
+export function logoutProvider(): Promise<ApplicationSettingsView> {
+  return invoke<ApplicationSettingsView>("logout_provider");
 }
 
 export function inspectManagerWorkspace(
