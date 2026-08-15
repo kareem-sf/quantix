@@ -81,3 +81,19 @@ release = replaceOnce(
   "final text byte length",
 );
 writeFileSync(releasePath, release, "utf8");
+
+const managerWorkspaceTestPath = "src-tauri/tests/manager_workspace.rs";
+let managerWorkspaceTest = readNormalized(managerWorkspaceTestPath);
+managerWorkspaceTest = replaceOnce(
+  managerWorkspaceTest,
+  `        .select_manager_workspace_tender(SelectManagerWorkspaceTenderCommand {
+            tender_id: tender.tender_id,
+        })
+        .expect("select same restored Tender");`,
+  `        .select_manager_workspace_tender(SelectManagerWorkspaceTenderCommand {
+            tender_id: tender.tender_id.clone(),
+        })
+        .expect("select same restored Tender");`,
+  "restored Tender ID ownership boundary",
+);
+writeFileSync(managerWorkspaceTestPath, managerWorkspaceTest, "utf8");
