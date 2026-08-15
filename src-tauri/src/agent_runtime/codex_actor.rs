@@ -1144,6 +1144,7 @@ async fn send_interrupt(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_message(
     process: &mut CodexProviderProcess,
     runs: &mut HashMap<String, ActorRun>,
@@ -1354,17 +1355,17 @@ async fn handle_response(
                 });
             if completion_won {
                 refresh_connection_after_login(process, connection, login).await?;
-            } else if result.get("status").and_then(Value::as_str) != Some("canceled") {
-                if active_login_id.as_deref() == Some(login_id.as_str()) {
-                    if let Some(current) = login
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .as_mut()
-                    {
-                        current.status = ProviderLoginStatus::Cancelling;
-                        current.status_summary =
-                            "Waiting for Codex to report the final login state.".to_owned();
-                    }
+            } else if result.get("status").and_then(Value::as_str) != Some("canceled")
+                && active_login_id.as_deref() == Some(login_id.as_str())
+            {
+                if let Some(current) = login
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .as_mut()
+                {
+                    current.status = ProviderLoginStatus::Cancelling;
+                    current.status_summary =
+                        "Waiting for Codex to report the final login state.".to_owned();
                 }
             }
             let _ = response.send(Ok(()));

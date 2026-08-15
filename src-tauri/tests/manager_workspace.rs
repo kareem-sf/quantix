@@ -208,7 +208,7 @@ fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_workspace()
     assert_eq!(restored_from_trash.state, TrashedTenderState::Restored);
     let restored_workspace = host
         .select_manager_workspace_tender(SelectManagerWorkspaceTenderCommand {
-            tender_id: tender.tender_id,
+            tender_id: tender.tender_id.clone(),
         })
         .expect("select same restored Tender");
     assert_eq!(

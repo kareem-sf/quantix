@@ -156,7 +156,7 @@ fn exact_windows_platform() -> Result<String, Box<dyn std::error::Error>> {
         .map(str::parse::<u32>)
         .collect::<Result<Vec<_>, _>>()?;
     if !product_name.status.success()
-        || components.get(0) != Some(&10)
+        || components.first() != Some(&10)
         || components.get(1) != Some(&0)
         || components.get(2).is_none_or(|build| *build < 22_000)
     {
