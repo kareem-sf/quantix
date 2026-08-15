@@ -15,10 +15,11 @@ use ts_rs::TS;
 
 use crate::{
     application_settings::{
-        codex_connection_version, codex_failure_connection_status, save_codex_connection_status,
-        save_live_connection, AiExecutionSelection, AiProviderKind, ProviderConnectionStatus,
-        ProviderConnectionView, ProviderLoginMethod, ProviderLoginView, ProviderModelOption,
-        ProviderReasoningOption, ProviderReasoningSelection, CODEX_CONNECTION_ID,
+        codex_connection_version, codex_failure_connection_status, load_anthropic_api_key,
+        save_codex_connection_status, save_live_connection, AiExecutionSelection, AiProviderKind,
+        ProviderConnectionStatus, ProviderConnectionView, ProviderLoginMethod, ProviderLoginView,
+        ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
+        CODEX_CONNECTION_ID,
     },
     process_supervisor::{ProcessError, ProcessSpec, ProcessTermination, SupervisedConversation},
     tender_store::{
@@ -46,6 +47,7 @@ use crate::{
     QuantixHost,
 };
 
+mod anthropic;
 mod bootstrap_profile;
 mod codex_actor;
 mod codex_protocol;
@@ -57,6 +59,12 @@ use codex_protocol::{
     typed_tool_arguments_are_valid, typed_tool_is_known, write_rpc,
 };
 use permissions::permission_duration;
+
+pub(crate) async fn inspect_anthropic_connection(
+    api_key: &str,
+) -> Result<ProviderConnectionView, ProviderFailure> {
+    anthropic::fetch_connection(api_key).await
+}
 
 #[derive(Clone)]
 pub(crate) enum AgentProvider {
@@ -2448,7 +2456,11 @@ async fn execute_provider_turn(
     if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
         return execution;
     }
-    let provider = {
+    let operation_limit = match permission_duration(&prepared.permission_grant, Timestamp::now()) {
+        Ok(duration) if !duration.is_zero() => duration,
+        _ => return failed_execution(permission_failure(), started),
+    };
+    let provider = if prepared.provider_selection.provider == AiProviderKind::Codex {
         let mut provider_slot = host.agent_provider().lock().await;
         if provider_slot.is_none() {
             let provider = match AgentProvider::codex_readiness(
@@ -2464,18 +2476,18 @@ async fn execute_provider_turn(
             };
             *provider_slot = Some(provider);
         }
-        provider_slot
-            .as_ref()
-            .expect("provider initialized above")
-            .clone()
+        Some(
+            provider_slot
+                .as_ref()
+                .expect("provider initialized above")
+                .clone(),
+        )
+    } else {
+        None
     };
     if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
         return execution;
     }
-    let operation_limit = match permission_duration(&prepared.permission_grant, Timestamp::now()) {
-        Ok(duration) if !duration.is_zero() => duration,
-        _ => return failed_execution(permission_failure(), started),
-    };
     let archive_store = Arc::clone(store);
     let archive_prepared = prepared.clone();
     let thread_store = Arc::clone(store);
@@ -2492,106 +2504,123 @@ async fn execute_provider_turn(
     let denial_run_id = prepared.run_id.clone();
     let tool_run_id = prepared.run_id.clone();
     let tool_prepared = prepared.clone();
-    let mut execution = provider
-        .run_turn(
-            prepared.clone(),
-            operation_limit,
-            cancellation,
-            RunCallbacks {
-                on_thread_archived: Box::new(move |thread_ref| {
-                    archive_store
-                        .lock()
-                        .map_err(|_| process_failure(false))?
-                        .checkpoint_provider_thread_archived(&archive_prepared, thread_ref)
-                        .map_err(|_| process_failure(false))
-                }),
-                on_thread_established: Box::new(move |thread_ref, resumed| {
-                    thread_store
-                        .lock()
-                        .map_err(|_| process_failure(false))?
-                        .checkpoint_agent_thread(&thread_prepared, thread_ref, resumed)
-                        .map_err(|_| process_failure(false))
-                }),
-                on_requested: Box::new(move || {
-                    requested_store
-                        .lock()
-                        .map_err(|_| process_failure(false))?
-                        .checkpoint_agent_turn_requested(&requested_run_id)
-                        .map_err(|_| process_failure(false))
-                }),
-                on_accepted: Box::new(move |turn_ref| {
-                    checkpoint_store
+    let callbacks = RunCallbacks {
+        on_thread_archived: Box::new(move |thread_ref| {
+            archive_store
+                .lock()
+                .map_err(|_| process_failure(false))?
+                .checkpoint_provider_thread_archived(&archive_prepared, thread_ref)
+                .map_err(|_| process_failure(false))
+        }),
+        on_thread_established: Box::new(move |thread_ref, resumed| {
+            thread_store
+                .lock()
+                .map_err(|_| process_failure(false))?
+                .checkpoint_agent_thread(&thread_prepared, thread_ref, resumed)
+                .map_err(|_| process_failure(false))
+        }),
+        on_requested: Box::new(move || {
+            requested_store
+                .lock()
+                .map_err(|_| process_failure(false))?
+                .checkpoint_agent_turn_requested(&requested_run_id)
+                .map_err(|_| process_failure(false))
+        }),
+        on_accepted: Box::new(move |turn_ref| {
+            checkpoint_store
+                .lock()
+                .map_err(|_| outcome_unknown())?
+                .checkpoint_agent_turn(&run_id, turn_ref)
+                .map_err(|_| outcome_unknown())
+        }),
+        on_event: Box::new(move |event, usage| {
+            event_host.observe_provider_usage(usage);
+            event_store
+                .lock()
+                .map_err(|_| outcome_unknown())?
+                .checkpoint_agent_provider_event(&event_run_id, event, usage)
+                .map_err(|_| outcome_unknown())
+        }),
+        on_denied: Box::new(move |event| {
+            denial_store
+                .lock()
+                .map_err(|_| outcome_unknown())?
+                .checkpoint_agent_control_denial(&denial_run_id, event)
+                .map_err(|_| outcome_unknown())
+        }),
+        on_tool_call: Box::new(move |correlation_id, tool_name, arguments| {
+            if !typed_tool_is_known(tool_name) {
+                return Ok(None);
+            }
+            if !typed_tool_arguments_are_valid(tool_name, arguments)? {
+                return Ok(None);
+            }
+            let authorized = tool_store
+                .lock()
+                .map_err(|_| outcome_unknown())?
+                .authorize_agent_typed_tool(&tool_run_id, correlation_id, tool_name)
+                .map_err(|_| outcome_unknown())?;
+            if !authorized {
+                return Ok(None);
+            }
+            match execute_typed_tool(&tool_prepared, tool_name, arguments) {
+                Ok(output) => {
+                    tool_store
                         .lock()
                         .map_err(|_| outcome_unknown())?
-                        .checkpoint_agent_turn(&run_id, turn_ref)
-                        .map_err(|_| outcome_unknown())
-                }),
-                on_event: Box::new(move |event, usage| {
-                    event_host.observe_provider_usage(usage);
-                    event_store
-                        .lock()
-                        .map_err(|_| outcome_unknown())?
-                        .checkpoint_agent_provider_event(&event_run_id, event, usage)
-                        .map_err(|_| outcome_unknown())
-                }),
-                on_denied: Box::new(move |event| {
-                    denial_store
-                        .lock()
-                        .map_err(|_| outcome_unknown())?
-                        .checkpoint_agent_control_denial(&denial_run_id, event)
-                        .map_err(|_| outcome_unknown())
-                }),
-                on_tool_call: Box::new(move |correlation_id, tool_name, arguments| {
-                    if !typed_tool_is_known(tool_name) {
-                        return Ok(None);
-                    }
-                    if !typed_tool_arguments_are_valid(tool_name, arguments)? {
-                        return Ok(None);
-                    }
-                    let authorized = tool_store
-                        .lock()
-                        .map_err(|_| outcome_unknown())?
-                        .authorize_agent_typed_tool(&tool_run_id, correlation_id, tool_name)
+                        .record_agent_typed_tool_execution(
+                            &tool_run_id,
+                            correlation_id,
+                            tool_name,
+                            true,
+                        )
                         .map_err(|_| outcome_unknown())?;
-                    if !authorized {
-                        return Ok(None);
-                    }
-                    match execute_typed_tool(&tool_prepared, tool_name, arguments) {
-                        Ok(output) => {
-                            tool_store
-                                .lock()
-                                .map_err(|_| outcome_unknown())?
-                                .record_agent_typed_tool_execution(
-                                    &tool_run_id,
-                                    correlation_id,
-                                    tool_name,
-                                    true,
-                                )
-                                .map_err(|_| outcome_unknown())?;
-                            Ok(Some(output))
-                        }
-                        Err(failure) => {
-                            tool_store
-                                .lock()
-                                .map_err(|_| outcome_unknown())?
-                                .record_agent_typed_tool_execution(
-                                    &tool_run_id,
-                                    correlation_id,
-                                    tool_name,
-                                    false,
-                                )
-                                .map_err(|_| outcome_unknown())?;
-                            Err(failure)
-                        }
-                    }
-                }),
-            },
-        )
-        .await;
+                    Ok(Some(output))
+                }
+                Err(failure) => {
+                    tool_store
+                        .lock()
+                        .map_err(|_| outcome_unknown())?
+                        .record_agent_typed_tool_execution(
+                            &tool_run_id,
+                            correlation_id,
+                            tool_name,
+                            false,
+                        )
+                        .map_err(|_| outcome_unknown())?;
+                    Err(failure)
+                }
+            }
+        }),
+    };
+    let mut execution = match prepared.provider_selection.provider {
+        AiProviderKind::Codex => {
+            provider
+                .as_ref()
+                .expect("Codex provider initialized above")
+                .run_turn(prepared.clone(), operation_limit, cancellation, callbacks)
+                .await
+        }
+        AiProviderKind::Anthropic => {
+            let api_key = match load_anthropic_api_key() {
+                Ok(api_key) => api_key,
+                Err(failure) => return failed_execution(failure, started),
+            };
+            anthropic::run_turn(
+                api_key,
+                prepared.clone(),
+                operation_limit,
+                cancellation,
+                callbacks,
+            )
+            .await
+        }
+        AiProviderKind::Gemini => return failed_execution(protocol_failure(false), started),
+    };
     host.observe_provider_usage(&execution.usage);
     execution.usage.elapsed_milliseconds =
         Some(started.elapsed().as_millis().try_into().unwrap_or(u64::MAX));
-    if provider.is_closed() {
+    if let Some(provider) = provider.filter(AgentProvider::is_closed) {
         let mut provider_slot = host.agent_provider().lock().await;
         let removed = provider_slot
             .as_ref()

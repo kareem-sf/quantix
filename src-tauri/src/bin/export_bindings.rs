@@ -2,17 +2,17 @@ use quantix_lib::{
     AcceptanceArtifactHash, AcceptanceCheckResult, AcceptanceStageTiming, AgentRunInspection,
     AgentRunSummary, AiExecutionSelection, AiProviderKind, ApplicationSettingsView,
     ApproveSubmissionReleaseCommand, BootstrapRole, CancelProviderLoginCommand,
-    CodexProductionAssuranceEvidence, CreatePortableTenderArchiveCommand, DeletionReceipt,
-    EvaluatePublicReleaseGateCommand, ExportReleaseCopyCommand, ImportPortableTenderArchiveCommand,
-    InspectManagerWorkspaceCommand, IntegrationTermsDecision, LicenseDistributionReview,
-    LiveQualificationMetrics, LiveQualificationRun, ManagerConversation, ManagerIntakeStage,
-    ManagerIntakeStatus, ManagerIntakeStatusKind, ManagerWorkspaceProjection,
-    ManagerWorkspaceTender, NativePlatformQualificationEvidence, NativePlatformQualificationRecord,
-    PortableTenderArchiveRecord, PrivateQualificationRecord, ProductAcceptanceOutcome,
-    ProductAcceptanceRecord, ProductAcceptanceRun, ProviderConnectionStatus,
-    OpenProviderLoginCommand, ProviderConnectionView, ProviderLoginMethod, ProviderLoginStatus,
-    ProviderLoginView,
-    ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
+    CodexProductionAssuranceEvidence, ConnectAnthropicCommand, CreatePortableTenderArchiveCommand,
+    DeletionReceipt, DisconnectAiProviderCommand, EvaluatePublicReleaseGateCommand,
+    ExportReleaseCopyCommand, ImportPortableTenderArchiveCommand, InspectManagerWorkspaceCommand,
+    IntegrationTermsDecision, LicenseDistributionReview, LiveQualificationMetrics,
+    LiveQualificationRun, ManagerConversation, ManagerIntakeStage, ManagerIntakeStatus,
+    ManagerIntakeStatusKind, ManagerWorkspaceProjection, ManagerWorkspaceTender,
+    NativePlatformQualificationEvidence, NativePlatformQualificationRecord,
+    OpenProviderLoginCommand, PortableTenderArchiveRecord, PrivateQualificationRecord,
+    ProductAcceptanceOutcome, ProductAcceptanceRecord, ProductAcceptanceRun,
+    ProviderConnectionStatus, ProviderConnectionView, ProviderLoginMethod, ProviderLoginStatus,
+    ProviderLoginView, ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
     PublicReleaseGateOutcome, PublicReleaseGateRecord, RecordEngineerWorkspaceMessageCommand,
     RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand, ReleaseCopyExport,
     ReleaseCopyItem, RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand,
@@ -106,6 +106,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     StartProviderLoginCommand::export_all(&config)?;
     CancelProviderLoginCommand::export_all(&config)?;
     OpenProviderLoginCommand::export_all(&config)?;
+    ConnectAnthropicCommand::export_all(&config)?;
+    DisconnectAiProviderCommand::export_all(&config)?;
     AgentRunInspection::export_all(&config)?;
     AgentRunSummary::export_all(&config)?;
     Ok(())

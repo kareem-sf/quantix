@@ -7,13 +7,18 @@ use ts_rs::TS;
 
 use crate::{
     agent_runtime::{
-        valid_login_url, AgentProvider, ProviderFailure, ProviderFailureCategory, CODEX_VERSION,
+        inspect_anthropic_connection, valid_login_url, AgentProvider, ProviderFailure,
+        ProviderFailureCategory, CODEX_VERSION,
     },
     tender_store::{TenderCommandError, TenderErrorCode},
     QuantixHost,
 };
 
 pub(crate) const CODEX_CONNECTION_ID: &str = "codex_chatgpt";
+pub(crate) const ANTHROPIC_CONNECTION_ID: &str = "anthropic_byok";
+pub(crate) const ANTHROPIC_ADAPTER_VERSION: &str = "anthropic-messages-v1";
+const CREDENTIAL_SERVICE: &str = "com.quantix.ai-provider";
+const ANTHROPIC_CREDENTIAL_ACCOUNT: &str = "anthropic_api_key";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -171,6 +176,22 @@ pub struct OpenProviderLoginCommand {
     pub login_id: String,
 }
 
+#[derive(Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ConnectAnthropicCommand {
+    #[garde(length(bytes, min = 1, max = 500))]
+    pub api_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct DisconnectAiProviderCommand {
+    #[garde(length(bytes, min = 1, max = 100))]
+    pub connection_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
 #[serde(deny_unknown_fields)]
 #[ts(export)]
@@ -193,6 +214,16 @@ impl QuantixHost {
     pub async fn refresh_application_settings(
         &self,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        if let Ok(api_key) = load_anthropic_api_key() {
+            match inspect_anthropic_connection(&api_key).await {
+                Ok(connection) => save_live_connection(self.application_home(), &connection)?,
+                Err(failure) => save_anthropic_connection_status(
+                    self.application_home(),
+                    provider_failure_status(failure.category),
+                    "Anthropic is unavailable. The key remains only in the system credential vault.",
+                )?,
+            }
+        }
         let mut current_provider = self.agent_provider().lock().await.as_ref().cloned();
         if current_provider
             .as_ref()
@@ -214,13 +245,20 @@ impl QuantixHost {
             }
             let mut view = load_application_settings(self.application_home())?;
             for connection in &mut view.provider_connections {
-                if connection.status == ProviderConnectionStatus::Ready {
+                if connection.connection_id == CODEX_CONNECTION_ID
+                    && connection.status == ProviderConnectionStatus::Ready
+                {
                     connection.status = ProviderConnectionStatus::TemporarilyUnavailable;
                     connection.status_summary =
                         "The local AI runtime is unavailable. Tender records remain accessible."
                             .to_owned();
                 }
             }
+            self.set_runtime_verified(
+                view.provider_connections
+                    .iter()
+                    .any(|connection| connection.status == ProviderConnectionStatus::Ready),
+            );
             return Ok(view);
         };
         let login_snapshot = provider.login_snapshot();
@@ -263,7 +301,15 @@ impl QuantixHost {
         }
         let connection = provider.connection_snapshot();
         save_live_connection(self.application_home(), &connection)?;
-        self.set_runtime_verified(connection.status == ProviderConnectionStatus::Ready);
+        let ready = connection.status == ProviderConnectionStatus::Ready
+            || load_application_settings(self.application_home())?
+                .provider_connections
+                .iter()
+                .any(|candidate| {
+                    candidate.connection_id != CODEX_CONNECTION_ID
+                        && candidate.status == ProviderConnectionStatus::Ready
+                });
+        self.set_runtime_verified(ready);
         let mut view = load_application_settings(self.application_home())?;
         view.active_provider_login = provider.login_snapshot();
         Ok(view)
@@ -276,6 +322,17 @@ impl QuantixHost {
         command
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if command.connection_id == ANTHROPIC_CONNECTION_ID {
+            let api_key = load_anthropic_api_key()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+            let connection = inspect_anthropic_connection(&api_key)
+                .await
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+            let selection = selection_from_command(&connection, &command)?;
+            save_connection_and_selection(self.application_home(), &connection, &selection)?;
+            self.set_runtime_verified(true);
+            return load_application_settings(self.application_home());
+        }
         if command.connection_id != CODEX_CONNECTION_ID {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
@@ -299,6 +356,75 @@ impl QuantixHost {
         let selection = selection_from_command(&connection, &command)?;
         save_connection_and_selection(self.application_home(), &connection, &selection)?;
         load_application_settings(self.application_home())
+    }
+
+    pub async fn connect_anthropic(
+        &self,
+        command: ConnectAnthropicCommand,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if !self.update_environment_is_quiescent() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let api_key = command.api_key.trim().to_owned();
+        if api_key.is_empty() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let connection = inspect_anthropic_connection(&api_key)
+            .await
+            .map_err(|failure| match failure.category {
+                ProviderFailureCategory::AuthenticationRequired => {
+                    TenderCommandError::new(TenderErrorCode::InvalidCommand)
+                }
+                _ => TenderCommandError::new(TenderErrorCode::RuntimeRequired),
+            })?;
+        let previous = read_anthropic_api_key().ok();
+        write_anthropic_api_key(&api_key)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        if let Err(error) = save_live_connection(self.application_home(), &connection) {
+            match previous {
+                Some(previous) => {
+                    let _ = write_anthropic_api_key(&previous);
+                }
+                None => {
+                    let _ = delete_anthropic_api_key();
+                }
+            }
+            return Err(error);
+        }
+        self.set_runtime_verified(true);
+        load_application_settings(self.application_home())
+    }
+
+    pub async fn disconnect_ai_provider(
+        &self,
+        command: DisconnectAiProviderCommand,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if command.connection_id != ANTHROPIC_CONNECTION_ID
+            || !self.update_environment_is_quiescent()
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        delete_anthropic_api_key()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        save_anthropic_connection_status(
+            self.application_home(),
+            ProviderConnectionStatus::AuthenticationRequired,
+            "Add an Anthropic API key to connect. Revoke externally created keys in the Anthropic Console.",
+        )?;
+        clear_selection_for_connection(self.application_home(), ANTHROPIC_CONNECTION_ID)?;
+        let view = load_application_settings(self.application_home())?;
+        self.set_runtime_verified(
+            view.provider_connections
+                .iter()
+                .any(|connection| connection.status == ProviderConnectionStatus::Ready),
+        );
+        Ok(view)
     }
 
     pub async fn start_provider_login(
@@ -416,9 +542,14 @@ impl QuantixHost {
                 return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
             }
         };
-        self.set_runtime_verified(false);
         save_live_connection(self.application_home(), &connection)?;
-        load_application_settings(self.application_home())
+        let view = load_application_settings(self.application_home())?;
+        self.set_runtime_verified(
+            view.provider_connections
+                .iter()
+                .any(|candidate| candidate.status == ProviderConnectionStatus::Ready),
+        );
+        Ok(view)
     }
 
     async fn retire_failed_provider(
@@ -593,9 +724,9 @@ pub(crate) fn save_live_connection(
         }
         Some(_) => {}
         None if connection.status == ProviderConnectionStatus::Ready => {
-            let selection = default_selection(connection)
-                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
-            store_selection(&transaction, &selection)?;
+            if let Some(selection) = default_selection(connection) {
+                store_selection(&transaction, &selection)?;
+            }
         }
         None => {}
     }
@@ -724,7 +855,7 @@ fn load_application_settings(
              ORDER BY provider_kind, connection_id",
         )
         .map_err(settings_store_error)?;
-    let provider_connections = statement
+    let mut provider_connections = statement
         .query_map([], |row| row.get::<_, String>(0))
         .map_err(settings_store_error)?
         .map(|raw| {
@@ -732,11 +863,129 @@ fn load_application_settings(
                 .and_then(|raw| serde_json::from_str(&raw).map_err(settings_json_error))
         })
         .collect::<Result<Vec<ProviderConnectionView>, TenderCommandError>>()?;
+    if !provider_connections
+        .iter()
+        .any(|connection| connection.connection_id == ANTHROPIC_CONNECTION_ID)
+    {
+        provider_connections.push(anthropic_connection_without_catalog(
+            ProviderConnectionStatus::AuthenticationRequired,
+            "Add an Anthropic API key to connect.",
+        ));
+    }
     Ok(ApplicationSettingsView {
         ai_execution_selection: settings.ai_execution_selection,
         provider_connections,
         active_provider_login: None,
     })
+}
+
+fn provider_failure_status(category: ProviderFailureCategory) -> ProviderConnectionStatus {
+    match category {
+        ProviderFailureCategory::AuthenticationRequired => {
+            ProviderConnectionStatus::AuthenticationRequired
+        }
+        ProviderFailureCategory::ProtocolInvalid | ProviderFailureCategory::OutputInvalid => {
+            ProviderConnectionStatus::Incompatible
+        }
+        _ => ProviderConnectionStatus::TemporarilyUnavailable,
+    }
+}
+
+fn anthropic_connection_without_catalog(
+    status: ProviderConnectionStatus,
+    summary: &str,
+) -> ProviderConnectionView {
+    ProviderConnectionView {
+        connection_id: ANTHROPIC_CONNECTION_ID.to_owned(),
+        provider: AiProviderKind::Anthropic,
+        display_name: "Anthropic API key".to_owned(),
+        status,
+        account_label: None,
+        account_plan: None,
+        models: Vec::new(),
+        catalogue_fetched_at: None,
+        adapter_version: ANTHROPIC_ADAPTER_VERSION.to_owned(),
+        status_summary: summary.to_owned(),
+    }
+}
+
+fn save_anthropic_connection_status(
+    application_home: &Path,
+    status: ProviderConnectionStatus,
+    summary: &str,
+) -> Result<(), TenderCommandError> {
+    let mut database = settings_connection(application_home)?;
+    let transaction = database
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(settings_store_error)?;
+    let connection = anthropic_connection_without_catalog(status, summary);
+    upsert_connection(&transaction, &connection)?;
+    transaction.commit().map_err(settings_store_error)
+}
+
+fn clear_selection_for_connection(
+    application_home: &Path,
+    connection_id: &str,
+) -> Result<(), TenderCommandError> {
+    let mut database = settings_connection(application_home)?;
+    let transaction = database
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(settings_store_error)?;
+    let mut stored = load_stored_settings(&transaction)?;
+    if stored
+        .ai_execution_selection
+        .as_ref()
+        .is_some_and(|selection| selection.connection_id == connection_id)
+    {
+        stored.ai_execution_selection = None;
+        let settings_json = serde_json::to_string(&stored).map_err(settings_json_error)?;
+        transaction
+            .execute(
+                "UPDATE application_settings
+                 SET settings_json = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE singleton = 1",
+                [settings_json],
+            )
+            .map_err(settings_store_error)?;
+    }
+    transaction.commit().map_err(settings_store_error)
+}
+
+fn anthropic_credential_entry() -> Result<keyring::v1::Entry, keyring::v1::Error> {
+    keyring::v1::Entry::new(CREDENTIAL_SERVICE, ANTHROPIC_CREDENTIAL_ACCOUNT)
+}
+
+fn read_anthropic_api_key() -> Result<String, keyring::v1::Error> {
+    anthropic_credential_entry()?.get_password()
+}
+
+fn write_anthropic_api_key(api_key: &str) -> Result<(), keyring::v1::Error> {
+    anthropic_credential_entry()?.set_password(api_key)
+}
+
+fn delete_anthropic_api_key() -> Result<(), keyring::v1::Error> {
+    match anthropic_credential_entry()?.delete_credential() {
+        Ok(()) | Err(keyring::v1::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) fn load_anthropic_api_key() -> Result<String, ProviderFailure> {
+    match read_anthropic_api_key() {
+        Ok(api_key) if !api_key.trim().is_empty() => Ok(api_key),
+        Ok(_) | Err(keyring::v1::Error::NoEntry) => Err(ProviderFailure::new(
+            ProviderFailureCategory::AuthenticationRequired,
+            true,
+            "Add an Anthropic API key in Settings before retrying.",
+            Some("No Anthropic credential is available in the system credential vault."),
+        )),
+        Err(_) => Err(ProviderFailure::new(
+            ProviderFailureCategory::ProcessFailed,
+            true,
+            "Unlock or repair the operating-system credential vault before retrying.",
+            Some("Quantix could not read the Anthropic credential from the system vault."),
+        )),
+    }
 }
 
 fn load_stored_settings(

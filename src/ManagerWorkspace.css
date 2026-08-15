@@ -326,6 +326,10 @@ button {
   background: #fcfcfa;
 }
 
+.application-settings__provider-choice {
+  margin-top: 20px;
+}
+
 .application-settings__provider-status > div,
 .application-settings label {
   display: grid;
@@ -382,7 +386,8 @@ button {
 
 .application-settings__login-actions button,
 .application-settings__login-actions a,
-.application-settings__device-code button {
+.application-settings__device-code button,
+.application-settings__login > button {
   display: inline-flex;
   gap: 6px;
   align-items: center;
@@ -407,12 +412,14 @@ button {
   letter-spacing: 0.08em;
 }
 
-.application-settings__login-actions .application-settings__logout {
+.application-settings__login-actions .application-settings__logout,
+.application-settings__login > .application-settings__logout {
   margin-left: auto;
   color: #792d27;
 }
 
-.application-settings select {
+.application-settings select,
+.application-settings input {
   min-height: 42px;
   padding: 0 11px;
   border: 1px solid #d5d5d0;
@@ -422,6 +429,7 @@ button {
 }
 
 .application-settings select:focus-visible,
+.application-settings input:focus-visible,
 .application-settings button:focus-visible {
   outline: 3px solid rgb(58 105 86 / 34%);
   outline-offset: 2px;

@@ -11,9 +11,11 @@ import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProj
 
 const host = vi.hoisted(() => ({
   cancelProviderLogin: vi.fn(),
+  connectAnthropic: vi.fn(),
   chooseAndImportTenderPackage: vi.fn(),
   inspectManagerWorkspace: vi.fn(),
   logoutProvider: vi.fn(),
+  disconnectAiProvider: vi.fn(),
   openProviderLogin: vi.fn(),
   recordEngineerWorkspaceMessage: vi.fn(),
   refreshApplicationSettings: vi.fn(),
@@ -263,6 +265,100 @@ describe("ManagerWorkspace", () => {
       method: "device_code",
     });
     expect(document.body.textContent).not.toContain("accessToken");
+  });
+
+  it("submits an Anthropic key once and renders only credential-free state", async () => {
+    host.inspectManagerWorkspace.mockResolvedValue(projection);
+    const disconnected = {
+      ai_execution_selection: null,
+      active_provider_login: null,
+      provider_connections: [
+        {
+          connection_id: "codex_chatgpt",
+          provider: "codex",
+          display_name: "OpenAI account via Codex",
+          status: "authentication_required",
+          account_label: null,
+          account_plan: null,
+          models: [],
+          catalogue_fetched_at: null,
+          adapter_version: "0.147.0",
+          status_summary: "Connect an OpenAI account.",
+        },
+        {
+          connection_id: "anthropic_byok",
+          provider: "anthropic",
+          display_name: "Anthropic API key",
+          status: "authentication_required",
+          account_label: null,
+          account_plan: null,
+          models: [],
+          catalogue_fetched_at: null,
+          adapter_version: "anthropic-messages-v1",
+          status_summary: "Add an Anthropic API key to connect.",
+        },
+      ],
+    };
+    const connected = {
+      ...disconnected,
+      provider_connections: disconnected.provider_connections.map((connection) =>
+        connection.connection_id === "anthropic_byok"
+          ? {
+              ...connection,
+              status: "ready",
+              account_label: "API key stored in the system credential vault",
+              models: [
+                {
+                  model_id: "claude-live",
+                  display_name: "Claude Live",
+                  description: "Live Anthropic model",
+                  is_default: false,
+                  input_modalities: ["text"],
+                  reasoning_options: [
+                    {
+                      selection: { kind: "provider_default" },
+                      label: "Provider default",
+                      description: "Provider choice",
+                      is_default: true,
+                    },
+                  ],
+                },
+              ],
+              catalogue_fetched_at: "2026-08-15T12:00:00Z",
+            }
+          : connection,
+      ),
+    };
+    host.refreshApplicationSettings.mockResolvedValue(disconnected);
+    host.connectAnthropic.mockResolvedValue(connected);
+    host.updateAiExecutionSelection.mockResolvedValue({
+      ...connected,
+      ai_execution_selection: {
+        connection_id: "anthropic_byok",
+        provider: "anthropic",
+        model_id: "claude-live",
+        reasoning: { kind: "provider_default" },
+        catalogue_fetched_at: "2026-08-15T12:00:00Z",
+        adapter_version: "anthropic-messages-v1",
+      },
+    });
+
+    render(<ManagerWorkspace aiAvailable={false} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    fireEvent.change(screen.getByLabelText("Provider"), {
+      target: { value: "anthropic_byok" },
+    });
+    fireEvent.change(screen.getByLabelText("Anthropic API key"), {
+      target: { value: "sk-ant-secret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect Anthropic" }));
+
+    await waitFor(() => {
+      expect(host.connectAnthropic).toHaveBeenCalledWith({
+        api_key: "sk-ant-secret",
+      });
+    });
+    expect(document.body.textContent).not.toContain("sk-ant-secret");
   });
 
   it("keeps the Host-designated meaningful message visible after routine chatter", async () => {

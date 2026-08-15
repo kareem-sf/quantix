@@ -109,6 +109,8 @@ import type { InspectProductionTaskReviewCommand } from "./bindings/InspectProdu
 import type { InspectManagerWorkspaceCommand } from "./bindings/InspectManagerWorkspaceCommand";
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
 import type { CancelProviderLoginCommand } from "./bindings/CancelProviderLoginCommand";
+import type { ConnectAnthropicCommand } from "./bindings/ConnectAnthropicCommand";
+import type { DisconnectAiProviderCommand } from "./bindings/DisconnectAiProviderCommand";
 import type { OpenProviderLoginCommand } from "./bindings/OpenProviderLoginCommand";
 import type { StartProviderLoginCommand } from "./bindings/StartProviderLoginCommand";
 import type { UpdateAiExecutionSelectionCommand } from "./bindings/UpdateAiExecutionSelectionCommand";
@@ -301,6 +303,18 @@ export function openProviderLogin(
 
 export function logoutProvider(): Promise<ApplicationSettingsView> {
   return invoke<ApplicationSettingsView>("logout_provider");
+}
+
+export function connectAnthropic(
+  command: ConnectAnthropicCommand,
+): Promise<ApplicationSettingsView> {
+  return invoke<ApplicationSettingsView>("connect_anthropic", { command });
+}
+
+export function disconnectAiProvider(
+  command: DisconnectAiProviderCommand,
+): Promise<ApplicationSettingsView> {
+  return invoke<ApplicationSettingsView>("disconnect_ai_provider", { command });
 }
 
 export function inspectManagerWorkspace(

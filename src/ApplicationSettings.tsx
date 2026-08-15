@@ -12,6 +12,8 @@ import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView
 import type { ProviderReasoningSelection } from "./bindings/ProviderReasoningSelection";
 import {
   cancelProviderLogin,
+  connectAnthropic,
+  disconnectAiProvider,
   logoutProvider,
   openProviderLogin,
   refreshApplicationSettings,
@@ -52,6 +54,8 @@ export function ApplicationSettings({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [connectionId, setConnectionId] = useState<string | null>(null);
+  const [anthropicKey, setAnthropicKey] = useState("");
 
   const acceptSettings = useCallback(
     (view: ApplicationSettingsView) => {
@@ -104,26 +108,32 @@ export function ApplicationSettings({
     return () => window.clearInterval(timer);
   }, [acceptSettings, login, settings?.provider_connections]);
 
-  const connection = settings?.provider_connections.find(
-    (candidate) => candidate.connection_id === "codex_chatgpt",
-  );
   const persistedSelection = settings?.ai_execution_selection;
-  const selectedModel = persistedSelection
+  const connection = settings?.provider_connections.find(
+    (candidate) =>
+      candidate.connection_id ===
+      (connectionId ?? persistedSelection?.connection_id ?? "codex_chatgpt"),
+  );
+  const connectionSelection =
+    persistedSelection?.connection_id === connection?.connection_id
+      ? persistedSelection
+      : null;
+  const selectedModel = connectionSelection
     ? connection?.models.find(
-        (model) => model.model_id === persistedSelection.model_id,
+        (model) => model.model_id === connectionSelection.model_id,
       )
-    : connection?.models.find((model) => model.is_default);
-  const persistedReasoningKey = persistedSelection
-    ? reasoningKey(persistedSelection.reasoning)
+    : undefined;
+  const persistedReasoningKey = connectionSelection
+    ? reasoningKey(connectionSelection.reasoning)
     : null;
   const selectedReasoning = persistedReasoningKey
     ? selectedModel?.reasoning_options.find(
         (option) => reasoningKey(option.selection) === persistedReasoningKey,
       )
     : selectedModel?.reasoning_options.find((option) => option.is_default);
-  const modelUnavailable = Boolean(persistedSelection && !selectedModel);
+  const modelUnavailable = Boolean(connectionSelection && !selectedModel);
   const reasoningUnavailable = Boolean(
-    persistedSelection && selectedModel && !selectedReasoning,
+    connectionSelection && selectedModel && !selectedReasoning,
   );
 
   const save = useCallback(
@@ -185,6 +195,36 @@ export function ApplicationSettings({
     }
   }, [acceptSettings]);
 
+  const saveAnthropicKey = useCallback(async () => {
+    const apiKey = anthropicKey.trim();
+    if (!apiKey) return;
+    setBusy(true);
+    setError(null);
+    try {
+      acceptSettings(await connectAnthropic({ api_key: apiKey }));
+      setAnthropicKey("");
+      setConnectionId("anthropic_byok");
+    } catch (reason) {
+      setError(settingsError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }, [acceptSettings, anthropicKey]);
+
+  const disconnectAnthropic = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      acceptSettings(
+        await disconnectAiProvider({ connection_id: "anthropic_byok" }),
+      );
+    } catch (reason) {
+      setError(settingsError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }, [acceptSettings]);
+
   const openLogin = useCallback(async () => {
     if (!login) return;
     setError(null);
@@ -239,6 +279,26 @@ export function ApplicationSettings({
           </p>
         ) : null}
 
+        {settings && settings.provider_connections.length > 1 ? (
+          <label className="application-settings__provider-choice">
+            <span>Provider</span>
+            <select
+              value={connection?.connection_id ?? ""}
+              disabled={busy}
+              onChange={(event) => setConnectionId(event.target.value)}
+            >
+              {settings.provider_connections.map((candidate) => (
+                <option
+                  key={candidate.connection_id}
+                  value={candidate.connection_id}
+                >
+                  {candidate.display_name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+
         {connection ? (
           <div className="application-settings__provider">
             <div className="application-settings__provider-status">
@@ -258,7 +318,7 @@ export function ApplicationSettings({
             </div>
             <p>{connection.status_summary}</p>
 
-            {login ? (
+            {connection.provider === "codex" && login ? (
               <div className="application-settings__login" data-status={login.status}>
                 <strong>{login.status_summary}</strong>
                 {login.status === "awaiting_user" ? (
@@ -325,7 +385,7 @@ export function ApplicationSettings({
                   </div>
                 ) : null}
               </div>
-            ) : (
+            ) : connection.provider === "codex" ? (
               <div className="application-settings__login-actions">
                 {canConnect ? (
                   <>
@@ -356,13 +416,62 @@ export function ApplicationSettings({
                   </button>
                 ) : null}
               </div>
-            )}
+            ) : connection.provider === "anthropic" ? (
+              connection.status === "authentication_required" ? (
+                <form
+                  className="application-settings__login"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void saveAnthropicKey();
+                  }}
+                >
+                  <label>
+                    <span>Anthropic API key</span>
+                    <input
+                      type="password"
+                      value={anthropicKey}
+                      autoComplete="off"
+                      disabled={busy}
+                      onChange={(event) => setAnthropicKey(event.target.value)}
+                    />
+                    <small>
+                      Stored only in your operating system credential vault.
+                    </small>
+                  </label>
+                  <button type="submit" disabled={busy || !anthropicKey.trim()}>
+                    Connect Anthropic
+                  </button>
+                  <button
+                    type="button"
+                    className="application-settings__logout"
+                    disabled={busy}
+                    onClick={() => void disconnectAnthropic()}
+                  >
+                    Remove any stored key
+                  </button>
+                </form>
+              ) : (
+                <div className="application-settings__login-actions">
+                  <button
+                    type="button"
+                    className="application-settings__logout"
+                    disabled={busy}
+                    onClick={() => void disconnectAnthropic()}
+                  >
+                    <LogOut size={15} /> Remove local key
+                  </button>
+                  <small>
+                    Revoke externally created keys separately in the Anthropic Console.
+                  </small>
+                </div>
+              )
+            ) : null}
 
             <label>
               <span>Model</span>
               <select
                 value={
-                  selectedModel?.model_id ?? persistedSelection?.model_id ?? ""
+                  selectedModel?.model_id ?? connectionSelection?.model_id ?? ""
                 }
                 disabled={busy || !aiAvailable || connection.status !== "ready"}
                 onChange={(event) => {
@@ -375,9 +484,14 @@ export function ApplicationSettings({
                   if (model && reasoning) void save(model.model_id, reasoning);
                 }}
               >
-                {modelUnavailable && persistedSelection ? (
-                  <option value={persistedSelection.model_id} disabled>
-                    Unavailable — {persistedSelection.model_id}
+                {!connectionSelection ? (
+                  <option value="" disabled>
+                    Choose a live model
+                  </option>
+                ) : null}
+                {modelUnavailable && connectionSelection ? (
+                  <option value={connectionSelection.model_id} disabled>
+                    Unavailable — {connectionSelection.model_id}
                   </option>
                 ) : null}
                 {connection.models.map((model) => (
@@ -444,7 +558,7 @@ export function ApplicationSettings({
               ) : null}
             </label>
 
-            {persistedSelection ? (
+            {connectionSelection ? (
               <p className="application-settings__provenance">
                 {modelUnavailable ||
                 reasoningUnavailable ||
@@ -454,9 +568,9 @@ export function ApplicationSettings({
                   <>
                     Applies to new runs · catalog{" "}
                     {new Date(
-                      persistedSelection.catalogue_fetched_at,
+                      connectionSelection.catalogue_fetched_at,
                     ).toLocaleString()}{" "}
-                    · adapter {persistedSelection.adapter_version}
+                    · adapter {connectionSelection.adapter_version}
                   </>
                 )}
               </p>

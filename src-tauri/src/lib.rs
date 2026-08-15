@@ -40,10 +40,10 @@ pub use agent_runtime::{
 };
 pub use application_settings::{
     AiExecutionSelection, AiProviderKind, ApplicationSettingsView, CancelProviderLoginCommand,
-    OpenProviderLoginCommand, ProviderConnectionStatus, ProviderConnectionView,
-    ProviderLoginMethod, ProviderLoginStatus, ProviderLoginView, ProviderModelOption,
-    ProviderReasoningOption, ProviderReasoningSelection, StartProviderLoginCommand,
-    UpdateAiExecutionSelectionCommand,
+    ConnectAnthropicCommand, DisconnectAiProviderCommand, OpenProviderLoginCommand,
+    ProviderConnectionStatus, ProviderConnectionView, ProviderLoginMethod, ProviderLoginStatus,
+    ProviderLoginView, ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
+    StartProviderLoginCommand, UpdateAiExecutionSelectionCommand,
 };
 pub use document_parsing::{
     DocumentParseResult, EvidenceBoundingBox, EvidenceDocument, EvidenceLanguage, EvidenceLocation,
@@ -246,9 +246,9 @@ mod tauri_commands {
         CalculationRuleReviewResult, CalculationRuleVersion, CalculationScenarioVersion,
         CalculationWorkspaceInspection, CancelProviderLoginCommand, ChangeAssessment,
         ChangeAssessmentPage, ChooseTenderPackageCommand, CommercialStrategy, ComplianceMatrixPage,
-        ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand, ControlledBoqCalculationRun,
-        CoordinatedBidBaseline, CoordinatedBidBaselinePage, CostEstimatorBasisResult,
-        CostEstimatorCalculationResult, CreateBidDecisionPackageCommand,
+        ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand, ConnectAnthropicCommand,
+        ControlledBoqCalculationRun, CoordinatedBidBaseline, CoordinatedBidBaselinePage,
+        CostEstimatorBasisResult, CostEstimatorCalculationResult, CreateBidDecisionPackageCommand,
         CreateCalculationScenarioCommand, CreateCommercialStrategyCommand,
         CreateExternalRfiDraftCommand, CreatePortableTenderArchiveCommand,
         CreatePricedCostBaselineCommand, CreatePricingAdjustmentCommand,
@@ -257,8 +257,8 @@ mod tauri_commands {
         DecideBidDecisionPackageCommand, DecideChangeAssessmentCommand,
         DecideCoordinatedBidBaselineCommand, DecideTenderQueryTreatmentCommand,
         DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DecisionCockpit, DeletionReceipt,
-        DesignateBoqTableCommand, DocumentParseResult, DocumentRegister,
-        EstimateWorkspaceInspection, EvidenceDocument, EvidenceSearchResult,
+        DesignateBoqTableCommand, DisconnectAiProviderCommand, DocumentParseResult,
+        DocumentRegister, EstimateWorkspaceInspection, EvidenceDocument, EvidenceSearchResult,
         ExportApprovedExternalRfiCommand, ExportReleaseCopyCommand, ExternalRfiDraft,
         ExternalRfiEligibleQueryPage, ExternalRfiExportRecord, ExternalRfiPage,
         ExternalRfiResponseCandidatePage, ExternalRfiReviewResult, FinalReviewInspection,
@@ -277,14 +277,14 @@ mod tauri_commands {
         InterpretExternalRfiResponseCommand, InterruptAgentRunCommand,
         InvalidateBidDecisionApprovalCommand, LiveQualificationRun, ManagerWorkspaceProjection,
         OpenProviderLoginCommand, OpenTenderCommand, PackageProductionGeneration,
-        ParseSourceArtifactCommand,
-        PortableTenderArchiveRecord, PrepareTenderRecoveryCommand, PricedCostBaselineReviewResult,
-        PricedCostBaselineVersion, PricingAdjustmentReviewResult, PricingAdjustmentVersion,
-        PricingScenarioVersion, PricingWorkspaceInspection, PrivateQualificationRecord,
-        ProductAcceptanceRecord, ProductAcceptanceRun, ProductionTaskReviewInspection,
-        ProductionTaskRunResult, ProposeBoqCalculationRuleCommand, PublicReleaseGateRecord,
-        QuantixHost, RecordEngineerWorkspaceMessageCommand, RecordPackageManualVerificationCommand,
-        RegisterExternalRfiResponseCommand, RequestAgentAccessCommand, ResolveAgentAccessCommand,
+        ParseSourceArtifactCommand, PortableTenderArchiveRecord, PrepareTenderRecoveryCommand,
+        PricedCostBaselineReviewResult, PricedCostBaselineVersion, PricingAdjustmentReviewResult,
+        PricingAdjustmentVersion, PricingScenarioVersion, PricingWorkspaceInspection,
+        PrivateQualificationRecord, ProductAcceptanceRecord, ProductAcceptanceRun,
+        ProductionTaskReviewInspection, ProductionTaskRunResult, ProposeBoqCalculationRuleCommand,
+        PublicReleaseGateRecord, QuantixHost, RecordEngineerWorkspaceMessageCommand,
+        RecordPackageManualVerificationCommand, RegisterExternalRfiResponseCommand,
+        RequestAgentAccessCommand, ResolveAgentAccessCommand,
         ResolveBidDecisionReturnReworkCommand, ResolveIndeterminateAgentRunCommand,
         ResolveTenderRecoveryCommand, RetryManagerIntakeCommand, ReviseExternalRfiDraftCommand,
         ReviseTenderCommand, ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand,
@@ -638,6 +638,22 @@ mod tauri_commands {
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
         host.inner().logout_provider().await
+    }
+
+    #[tauri::command]
+    pub(super) async fn connect_anthropic(
+        host: tauri::State<'_, QuantixHost>,
+        command: ConnectAnthropicCommand,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        host.inner().connect_anthropic(command).await
+    }
+
+    #[tauri::command]
+    pub(super) async fn disconnect_ai_provider(
+        host: tauri::State<'_, QuantixHost>,
+        command: DisconnectAiProviderCommand,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        host.inner().disconnect_ai_provider(command).await
     }
 
     #[tauri::command]
@@ -2483,6 +2499,8 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::cancel_provider_login,
             tauri_commands::open_provider_login,
             tauri_commands::logout_provider,
+            tauri_commands::connect_anthropic,
+            tauri_commands::disconnect_ai_provider,
             tauri_commands::inspect_manager_workspace,
             tauri_commands::start_manager_tender,
             tauri_commands::resume_manager_intakes,
