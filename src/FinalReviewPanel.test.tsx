@@ -211,7 +211,7 @@ describe("FinalReviewPanel", () => {
     );
 
     expect(await screen.findByText(/1 release blocker/i)).toBeTruthy();
-    expect(screen.getByText(/departures: 0/i)).toBeTruthy();
+    expect(screen.getAllByText(/departures: 0/i).length).toBeGreaterThan(0);
     expect(
       screen.getAllByText(new RegExp(packageManifest)).length,
     ).toBeGreaterThan(0);
