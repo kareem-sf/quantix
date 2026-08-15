@@ -1004,8 +1004,12 @@ impl QuantixHost {
                     OsString::from("ch"),
                     OsString::from("--document-timeout"),
                     OsString::from("120"),
+                    OsString::from("--max-file-size"),
+                    OsString::from(crate::tender_intake::MAX_INTAKE_FILE_BYTES.to_string()),
+                    OsString::from("--max-num-pages"),
+                    OsString::from(crate::document_parsing::DOCLING_MAX_NUM_PAGES.to_string()),
                     OsString::from("--num-threads"),
-                    OsString::from("2"),
+                    OsString::from("1"),
                 ]
                 .into_iter()
                 .collect(),

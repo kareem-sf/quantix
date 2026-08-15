@@ -443,12 +443,24 @@ fn prepare_directory(
                 }
             } else if metadata.is_file() {
                 let size = metadata.len();
-                total_bytes = total_bytes.saturating_add(size);
-                if total_bytes > MAX_INTAKE_TOTAL_BYTES {
+                let path = Path::new(&package_path);
+                if is_nested_archive(path) {
                     documents.push(PreparedDocument::exception(
                         package_path,
                         size,
-                        IntakeExceptionCode::TotalSizeExceeded,
+                        IntakeExceptionCode::NestedArchive,
+                    ));
+                } else if is_macro_path(path) {
+                    documents.push(PreparedDocument::exception(
+                        package_path,
+                        size,
+                        IntakeExceptionCode::MacroBearing,
+                    ));
+                } else if !is_supported_extension(path) {
+                    documents.push(PreparedDocument::exception(
+                        package_path,
+                        size,
+                        IntakeExceptionCode::Unsupported,
                     ));
                 } else if size > MAX_INTAKE_FILE_BYTES {
                     documents.push(PreparedDocument::exception(
@@ -457,6 +469,15 @@ fn prepare_directory(
                         IntakeExceptionCode::FileSizeExceeded,
                     ));
                 } else {
+                    total_bytes = total_bytes.saturating_add(size);
+                    if total_bytes > MAX_INTAKE_TOTAL_BYTES {
+                        documents.push(PreparedDocument::exception(
+                            package_path,
+                            size,
+                            IntakeExceptionCode::TotalSizeExceeded,
+                        ));
+                        continue;
+                    }
                     let bytes = match read_bounded_file(&entry.path(), size) {
                         Ok(Some(bytes)) => bytes,
                         Ok(None) => {
@@ -627,21 +648,23 @@ fn prepare_zip(
             Some(IntakeExceptionCode::NestingExceeded)
         } else if !paths.insert(package_path.to_ascii_lowercase()) {
             Some(IntakeExceptionCode::DuplicatePath)
+        } else if is_nested_archive(Path::new(&package_path)) {
+            Some(IntakeExceptionCode::NestedArchive)
+        } else if is_macro_path(Path::new(&package_path)) {
+            Some(IntakeExceptionCode::MacroBearing)
+        } else if !is_supported_extension(Path::new(&package_path)) {
+            Some(IntakeExceptionCode::Unsupported)
         } else if size > MAX_INTAKE_FILE_BYTES {
             Some(IntakeExceptionCode::FileSizeExceeded)
         } else if size >= MIN_EXPANSION_CHECK_BYTES
             && size / compressed_size.max(1) > MAX_EXPANSION_RATIO
         {
             Some(IntakeExceptionCode::ExpansionRatioExceeded)
-        } else if is_nested_archive(Path::new(&package_path)) {
-            Some(IntakeExceptionCode::NestedArchive)
-        } else if is_macro_path(Path::new(&package_path)) {
-            Some(IntakeExceptionCode::MacroBearing)
         } else {
             None
         };
-        total_bytes = total_bytes.saturating_add(size);
         let exception = exception.or_else(|| {
+            total_bytes = total_bytes.saturating_add(size);
             (total_bytes > MAX_INTAKE_TOTAL_BYTES).then_some(IntakeExceptionCode::TotalSizeExceeded)
         });
         if let Some(exception) = exception {

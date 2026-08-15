@@ -274,6 +274,31 @@ button {
   overflow: auto;
 }
 
+.application-settings__back {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  margin: 0 0 20px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  color: #555550;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.application-settings__back:hover {
+  color: #171715;
+  background: #f2f2ef;
+}
+
+.application-settings__back:focus-visible {
+  outline: 2px solid #315f51;
+  outline-offset: 2px;
+}
+
 .application-settings__heading {
   display: flex;
   gap: 14px;
@@ -1360,12 +1385,25 @@ button {
 }
 
 .manager-view__stage-summary {
-  max-width: 650px;
-  margin: -17px 0 28px 20px;
-  padding-left: 19px;
+  margin: 0;
   color: #6f6f6a;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.manager-view__stage-detail {
+  display: grid;
+  max-width: 650px;
+  gap: 4px;
+  margin: -17px 0 28px 20px;
+  padding-left: 19px;
+}
+
+.manager-view__stage-progress {
+  margin: 0;
+  color: #686863;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .manager-view__conversation {

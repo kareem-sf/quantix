@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
-from docling.datamodel.base_models import InputFormat
+from docling.datamodel.base_models import ConversionStatus, InputFormat
 from docling.datamodel.object_detection_engine_options import (
     OnnxRuntimeObjectDetectionEngineOptions,
 )
@@ -33,6 +33,8 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--artifacts-path", type=Path, required=True)
     parser.add_argument("--document-timeout", type=float, required=True)
+    parser.add_argument("--max-file-size", type=int, required=True)
+    parser.add_argument("--max-num-pages", type=int, required=True)
     parser.add_argument("--num-threads", type=int, required=True)
     parser.add_argument(
         "--ocr-mode",
@@ -74,7 +76,16 @@ def main() -> None:
             InputFormat.IMAGE: ImageFormatOption(pipeline_options=pipeline_options),
         },
     )
-    result = converter.convert(options.input, raises_on_error=True)
+    result = converter.convert(
+        options.input,
+        raises_on_error=True,
+        max_file_size=options.max_file_size,
+        max_num_pages=options.max_num_pages,
+    )
+    if result.status != ConversionStatus.SUCCESS:
+        raise RuntimeError(
+            f"Docling returned non-publishable status: {result.status.value}"
+        )
     options.output_dir.mkdir(parents=True, exist_ok=True)
     result.document.save_as_json(
         options.output_dir / f"{options.input.stem}.json",

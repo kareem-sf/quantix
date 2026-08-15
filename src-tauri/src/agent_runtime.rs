@@ -1025,11 +1025,35 @@ impl QuantixHost {
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .manager_intake_parse_targets(&tender_id)?;
+        store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .refresh_manager_intake_parse_counts()?;
         for target in targets {
+            let package_path = store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                .source_artifact_package_path(&target.artifact_id, target.version)?;
             let result = self.parse_source_artifact(target).await?;
             if result.state != crate::document_parsing::ParseState::Parsed {
-                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+                let reason = result
+                    .exception
+                    .map(|exception| exception.as_str())
+                    .unwrap_or_else(|| result.state.as_str())
+                    .replace('_', " ");
+                let summary = format!(
+                    "Quantix could not safely read \"{package_path}\" ({reason}). Open Files to review that document, then retry intake. The registered source package remains unchanged."
+                );
+                store
+                    .lock()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                    .fail_manager_intake(&tender_id, &summary)?;
+                return Ok(());
             }
+            store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                .refresh_manager_intake_parse_counts()?;
         }
         let (batches, authorities) = {
             let mut store = store
@@ -2964,14 +2988,20 @@ fn codex_user_agent_is_supported(user_agent: &str) -> bool {
         .is_some_and(|(product, version)| !product.is_empty() && version == CODEX_VERSION)
 }
 
-fn controlled_codex_environment(application_home: &Path) -> io::Result<Vec<(OsString, OsString)>> {
+fn controlled_codex_environment(
+    application_home: &Path,
+) -> io::Result<(PathBuf, Vec<(OsString, OsString)>)> {
     let engineer_home = application_home.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "Application Home must have an Engineer home parent",
         )
     })?;
-    let staging = application_home.join("staging").join("provider-codex");
+    // Codex may grant its Windows sandbox identity access to its process
+    // directory. Keep that disposable provider directory outside Application
+    // Home so starting the provider cannot broaden access to Tender Stores.
+    let process_directory = engineer_home.join(".quantix-provider");
+    let staging = process_directory.join("staging");
     fs::create_dir_all(&staging)?;
     let codex_home = std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
@@ -2992,7 +3022,7 @@ fn controlled_codex_environment(application_home: &Path) -> io::Result<Vec<(OsSt
             environment.push((OsString::from(name), value));
         }
     }
-    Ok(environment)
+    Ok((process_directory, environment))
 }
 
 pub(super) struct CodexProviderProcess {
@@ -3004,17 +3034,18 @@ impl CodexProviderProcess {
     pub(super) async fn readiness(
         supervisor: &crate::process_supervisor::ProcessSupervisor,
         executable: PathBuf,
-        process_directory: &Path,
+        application_home: &Path,
         cancellation: CancellationToken,
     ) -> Result<Self, ProviderFailure> {
+        let (process_directory, environment) = controlled_codex_environment(application_home)
+            .map_err(|_| process_failure(false))?;
         let mut conversation = supervisor
             .start_conversation(
                 ProcessSpec {
                     executable,
                     arguments: restricted_codex_arguments(),
-                    current_directory: Some(process_directory.to_path_buf()),
-                    environment: controlled_codex_environment(process_directory)
-                        .map_err(|_| process_failure(false))?,
+                    current_directory: Some(process_directory),
+                    environment,
                     inherit_environment: false,
                     stdin: Vec::new(),
                     timeout: PROVIDER_TIMEOUT,

@@ -213,21 +213,18 @@ function App() {
     stage: "workspace",
   });
   const startupStarted = useRef(false);
+  const startupStartedAt = useRef(Date.now());
   const [clock, setClock] = useState(() => Date.now());
-  const runtimeProgressActive =
-    state.kind === "checking" &&
-    state.stage === "runtime_install" &&
-    state.runtimeProgress?.status === "preparing";
-
   useEffect(() => {
-    if (!runtimeProgressActive) {
+    if (state.kind !== "checking") {
       return;
     }
     const timer = window.setInterval(() => setClock(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [runtimeProgressActive]);
+  }, [state.kind]);
 
   const openWorkspace = useCallback(async () => {
+    startupStartedAt.current = Date.now();
     setState({ kind: "checking", stage: "workspace" });
     try {
       const setup = await ensureQuantixSetup();
@@ -355,6 +352,11 @@ function App() {
           clock,
         )
       : null;
+    const startupElapsed = formatElapsed(
+      startupStartedAt.current,
+      null,
+      clock,
+    );
     return (
       <main className="quantix-startup" aria-busy="true">
         <span className="quantix-startup__mark">Q</span>
@@ -443,6 +445,49 @@ function App() {
                 Waiting for the local Host to report its first operation...
               </p>
             )}
+          </details>
+        ) : null}
+        {stage === "runtime_check" ? (
+          <details className="quantix-startup__details" open>
+            <summary>
+              <span>
+                Verification details
+                {startupElapsed ? <small>{startupElapsed} elapsed</small> : null}
+              </span>
+              <ChevronDown size={15} aria-hidden="true" />
+            </summary>
+            <p className="quantix-startup__details-waiting">
+              Quantix is checking these local resources in order. Large Python
+              environments and model files can take several minutes to hash.
+            </p>
+            <ol aria-label="Local AI verification activity">
+              <li className="is-active">
+                <span className="quantix-startup__activity-icon">
+                  <LoaderCircle size={13} aria-hidden="true" />
+                </span>
+                <div>
+                  <strong>Validate installed files</strong>
+                  <p>
+                    Checking pinned Codex and uv files, the Python and Docling
+                    environment, and every local document-model fingerprint.
+                  </p>
+                </div>
+              </li>
+              <li className="is-pending">
+                <span className="quantix-startup__activity-icon" />
+                <div>
+                  <strong>Run local tool self-checks</strong>
+                  <p>Confirming the installed versions can start correctly.</p>
+                </div>
+              </li>
+              <li className="is-pending">
+                <span className="quantix-startup__activity-icon" />
+                <div>
+                  <strong>Check AI connection</strong>
+                  <p>Loading the selected provider and its live capabilities.</p>
+                </div>
+              </li>
+            </ol>
           </details>
         ) : null}
       </main>

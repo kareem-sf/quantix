@@ -3755,6 +3755,11 @@ fn run_convert_document(
             return Err(format!("fixture {profile} model is missing").into());
         }
     }
+    if argument_value(arguments, "--max-file-size")? != Path::new("16777216")
+        || argument_value(arguments, "--max-num-pages")? != Path::new("2000")
+    {
+        return Err("Docling resource limits were not applied".into());
+    }
     if source.file_name().and_then(|name| name.to_str()) == Some("readiness.pdf") {
         return run_docling_readiness(arguments, &output);
     }
@@ -3764,7 +3769,7 @@ fn run_convert_document(
         .ok_or("staged source has no format")?;
     if argument_value(arguments, "--input-format")? != Path::new(input_format)
         || argument_value(arguments, "--document-timeout")? != Path::new("840")
-        || argument_value(arguments, "--num-threads")? != Path::new("2")
+        || argument_value(arguments, "--num-threads")? != Path::new("1")
     {
         return Err("unexpected controlled Docling parse contract".into());
     }
@@ -3873,6 +3878,7 @@ fn run_docling_readiness(
 ) -> Result<(), Box<dyn std::error::Error>> {
     if argument_value(arguments, "--ocr-mode")? != Path::new("full_page")
         || argument_value(arguments, "--ocr-lang")? != Path::new("ch")
+        || argument_value(arguments, "--num-threads")? != Path::new("1")
     {
         return Err("RapidOCR full-page smoke was not requested".into());
     }

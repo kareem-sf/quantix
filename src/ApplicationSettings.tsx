@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   Bell,
   Bot,
   Copy,
@@ -42,6 +43,7 @@ interface ApplicationSettingsProps {
   aiAvailable: boolean;
   onAiAvailabilityChange: (available: boolean) => void;
   onPreferencesChange?: (preferences: GeneralApplicationPreferences) => void;
+  onClose: () => void;
 }
 
 function settingsError(reason: unknown): string {
@@ -116,6 +118,7 @@ export function ApplicationSettings({
   aiAvailable,
   onAiAvailabilityChange,
   onPreferencesChange,
+  onClose,
 }: ApplicationSettingsProps) {
   const [settings, setSettings] = useState<ApplicationSettingsView | null>(
     null,
@@ -386,6 +389,14 @@ export function ApplicationSettings({
 
   return (
     <main className="application-settings">
+      <button
+        className="application-settings__back"
+        type="button"
+        onClick={onClose}
+      >
+        <ArrowLeft size={16} aria-hidden="true" />
+        Back to workspace
+      </button>
       <div className="application-settings__heading">
         <span aria-hidden="true">
           <Settings2 size={20} />

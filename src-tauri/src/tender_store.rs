@@ -5643,6 +5643,22 @@ impl TenderStore {
         let exception_count = discovered_count
             .checked_sub(registered_count)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let skipped_count = u32::try_from(
+            prepared
+                .documents
+                .iter()
+                .filter(|document| {
+                    matches!(
+                        document.exception,
+                        Some(IntakeExceptionCode::Unsupported | IntakeExceptionCode::NestedArchive)
+                    )
+                })
+                .count(),
+        )
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let attention_count = exception_count
+            .checked_sub(skipped_count)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
 
         let transaction = self
             .connection
@@ -5765,13 +5781,22 @@ impl TenderStore {
                 )?;
             }
         }
-        let system_message_id = workspace::append_system_status(
-            &transaction,
-            &format!(
-                "Tender Package registered: {registered_count} documents available; {exception_count} need attention."
+        let package_status = match (skipped_count, attention_count) {
+            (0, 0) => format!(
+                "Tender Package registered: {registered_count} supported documents available."
             ),
-            &created_at,
-        )?;
+            (skipped, 0) => format!(
+                "Tender Package registered: {registered_count} supported documents available; {skipped} other files skipped."
+            ),
+            (0, attention) => format!(
+                "Tender Package registered: {registered_count} supported documents available; {attention} files need attention."
+            ),
+            (skipped, attention) => format!(
+                "Tender Package registered: {registered_count} supported documents available; {skipped} other files skipped; {attention} files need attention."
+            ),
+        };
+        let system_message_id =
+            workspace::append_system_status(&transaction, &package_status, &created_at)?;
         let manager_intake_run_id = (lifecycle_phase == "intake")
             .then(|| {
                 manager_intake::initialize_manager_intake_run(&transaction, &intake_id, &created_at)

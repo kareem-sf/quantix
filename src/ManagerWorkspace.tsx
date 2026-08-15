@@ -42,6 +42,7 @@ import { DEFAULT_GENERAL_APPLICATION_PREFERENCES } from "./applicationPreference
 import {
   archiveTender,
   chooseAndImportTenderPackage,
+  ensureQuantixSetup,
   inspectManagerWorkspace,
   inspectDeletionReceipts,
   inspectTrashedTenders,
@@ -93,7 +94,11 @@ function readableError(error: unknown): string {
       case "store_unavailable":
         return "The local Tender record is temporarily unavailable.";
     }
+    if (typeof error.code === "string") {
+      return `Quantix could not complete that action (${error.code.replaceAll("_", " ")}).`;
+    }
   }
+  if (typeof error === "string" && error.trim()) return error;
   return "Quantix could not complete that action.";
 }
 
@@ -336,6 +341,15 @@ function ManagerView({
   const currentActionSummary = intakePaused
     ? "Your registered Tender and completed work are safe. Restore the local AI runtime to continue this exact stage."
     : projection.current_action.summary;
+  const intakeProgress = projection.intake
+    ? projection.intake.stage === "reading_documents" &&
+      projection.intake.parseable_document_count > 0
+      ? `${projection.intake.parsed_document_count.toLocaleString()} of ${projection.intake.parseable_document_count.toLocaleString()} supported documents safely read`
+      : projection.intake.stage === "extracting_tender_facts" &&
+          projection.intake.extraction_run_count > 0
+        ? `${projection.intake.extraction_run_count.toLocaleString()} evidence batches completed`
+        : null
+    : null;
 
   return (
     <div className="manager-view">
@@ -363,11 +377,16 @@ function ManagerView({
         </div>
       </div>
       {projection.intake ? (
-        <p className="manager-view__stage-summary">
-          {intakePaused
-            ? "Your registered Tender and completed work are safe. Quantix will resume this stage after the local AI runtime is restored."
-            : projection.intake.summary}
-        </p>
+        <div className="manager-view__stage-detail">
+          <p className="manager-view__stage-summary">
+            {intakePaused
+              ? "Your registered Tender and completed work are safe. Quantix will resume this stage after the local AI runtime is restored."
+              : projection.intake.summary}
+          </p>
+          {!intakePaused && intakeProgress ? (
+            <p className="manager-view__stage-progress">{intakeProgress}</p>
+          ) : null}
+        </div>
       ) : null}
 
       <div className="manager-view__conversation" aria-live="polite">
@@ -939,6 +958,13 @@ export function ManagerWorkspace({
 
   const startTender = useCallback(
     async (kind: TenderPackageSourceKind) => {
+      const setup = await ensureQuantixSetup();
+      if (setup.state !== "ready" && setup.state !== "warning") {
+        setError(
+          `Quantix workspace check failed: ${setup.issues.join(", ").replaceAll("_", " ")}.`,
+        );
+        return;
+      }
       const next = await run(() => startManagerTender(kind));
       if (next) {
         setProjection(next);
@@ -1129,16 +1155,14 @@ export function ManagerWorkspace({
       <aside className="manager-workspace__sidebar" aria-label="Tenders">
         <div className="manager-workspace__sidebar-heading">
           <span>Tenders</span>
-          {selected ? (
-            <button
-              type="button"
-              aria-label="Start another Tender"
-              disabled={busy}
-              onClick={() => void startTender("directory")}
-            >
-              <Plus size={17} aria-hidden="true" />
-            </button>
-          ) : null}
+          <button
+            type="button"
+            aria-label={selected ? "Start another Tender" : "Start a Tender"}
+            disabled={busy}
+            onClick={() => void startTender("directory")}
+          >
+            <Plus size={17} aria-hidden="true" />
+          </button>
         </div>
         <nav aria-label="Tenders">
           {activeTenders.map((tender) => (
@@ -1205,6 +1229,7 @@ export function ManagerWorkspace({
             aiAvailable={aiAvailable}
             onAiAvailabilityChange={setAiAvailable}
             onPreferencesChange={setPreferences}
+            onClose={() => setSettingsOpen(false)}
           />
         ) : retentionOpen ? (
           <ArchivedTenders

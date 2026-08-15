@@ -714,6 +714,25 @@ impl TenderStore {
         Ok(targets)
     }
 
+    pub(crate) fn source_artifact_package_path(
+        &self,
+        artifact_id: &str,
+        version: u32,
+    ) -> Result<String, TenderCommandError> {
+        self.connection
+            .query_row(
+                "SELECT source_artifacts.package_path
+                 FROM source_artifacts
+                 JOIN source_artifact_versions
+                   ON source_artifact_versions.artifact_id = source_artifacts.artifact_id
+                 WHERE source_artifacts.artifact_id = ?1
+                   AND source_artifact_versions.version = ?2",
+                params![artifact_id, version],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)
+    }
+
     pub(crate) fn refresh_manager_intake_parse_counts(&mut self) -> Result<(), TenderCommandError> {
         let intake_id: String = self
             .connection
@@ -724,36 +743,43 @@ impl TenderStore {
                 |row| row.get(0),
             )
             .map_err(sql_error)?;
-        let documents = super::DocumentRegister {
-            query_register_open: false,
-            documents: self.document_register_entries(Some(&intake_id))?,
-        };
-        let parseable = documents
-            .documents
-            .iter()
-            .filter(|document| {
-                document.registration_state == super::RegistrationState::Registered
-                    && document.supersession_state != super::SupersessionState::Superseded
-                    && matches!(
-                        document.document_type.as_str(),
-                        "pdf_document" | "word_document" | "spreadsheet"
-                    )
-            })
-            .count();
-        let parsed = documents
-            .documents
-            .iter()
-            .filter(|document| {
-                document.registration_state == super::RegistrationState::Registered
-                    && document.supersession_state != super::SupersessionState::Superseded
-                    && matches!(
-                        document.document_type.as_str(),
-                        "pdf_document" | "word_document" | "spreadsheet"
-                    )
-                    && document.parse_state == ParseState::Parsed
-            })
-            .count();
-        self.update_manager_intake_counts(parseable, parsed, None)
+        let (parseable, parsed): (i64, i64) = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*),
+                        COALESCE(SUM(CASE WHEN COALESCE((
+                          SELECT pa.status
+                          FROM parse_attempts pa
+                          WHERE pa.artifact_id = sav.artifact_id
+                            AND pa.version = sav.version
+                          ORDER BY pa.attempt_sequence DESC
+                          LIMIT 1
+                        ), 'not_requested') = 'parsed' THEN 1 ELSE 0 END), 0)
+                 FROM source_artifacts sa
+                 JOIN source_artifact_versions sav
+                   ON sav.artifact_id = sa.artifact_id
+                 WHERE sa.intake_id = ?1
+                   AND sav.registration_state = 'registered'
+                   AND sav.document_type IN (
+                     'pdf_document', 'word_document', 'spreadsheet'
+                   )
+                   AND NOT EXISTS (
+                     SELECT 1 FROM source_relationships sr
+                     WHERE sr.prior_artifact_id = sav.artifact_id
+                       AND sr.prior_version = sav.version
+                       AND sr.relationship_kind = 'replacement'
+                   )",
+                [intake_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(sql_error)?;
+        self.update_manager_intake_counts(
+            usize::try_from(parseable)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            usize::try_from(parsed)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            None,
+        )
     }
 
     fn update_manager_intake_counts(

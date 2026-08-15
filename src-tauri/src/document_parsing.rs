@@ -26,6 +26,7 @@ use crate::{
 
 const DOCLING_DOCUMENT_SCHEMA_VERSION: &str = "1.10.0";
 const DOCLING_DOCUMENT_TIMEOUT_SECONDS: &str = "840";
+pub(crate) const DOCLING_MAX_NUM_PAGES: u32 = 2_000;
 const DOCLING_PROCESS_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const DOCLING_PROCESS_OUTPUT_LIMIT: usize = 64 * 1024;
 #[cfg(not(feature = "runtime-fixture"))]
@@ -515,8 +516,15 @@ fn docling_process_spec(host: &QuantixHost, job: &ParseJob) -> ProcessSpec {
             .into_os_string(),
         OsString::from("--document-timeout"),
         OsString::from(DOCLING_DOCUMENT_TIMEOUT_SECONDS),
+        OsString::from("--max-file-size"),
+        OsString::from(crate::tender_intake::MAX_INTAKE_FILE_BYTES.to_string()),
+        OsString::from("--max-num-pages"),
+        OsString::from(DOCLING_MAX_NUM_PAGES.to_string()),
         OsString::from("--num-threads"),
-        OsString::from("2"),
+        // Document conversion can briefly hold several full-page image and
+        // layout tensors at once. A single worker is slower but avoids
+        // memory-pressure data loss on ordinary desktop hardware.
+        OsString::from("1"),
     ];
     ProcessSpec {
         executable: python_executable(host.application_home()),
@@ -651,6 +659,14 @@ fn docling_document_schema() -> Value {
                 "required": ["self_ref", "children"],
                 "properties": {
                     "self_ref": { "const": "#/body" },
+                    "children": { "$ref": "#/$defs/children" }
+                }
+            },
+            "furniture": {
+                "type": "object",
+                "required": ["self_ref", "children"],
+                "properties": {
+                    "self_ref": { "const": "#/furniture" },
                     "children": { "$ref": "#/$defs/children" }
                 }
             },
@@ -810,7 +826,8 @@ fn docling_document_schema() -> Value {
                     "required": ["self_ref", "parent"],
                     "properties": {
                         "self_ref": { "$ref": "#/$defs/self_ref" },
-                        "parent": { "$ref": "#/$defs/reference" }
+                        "parent": { "$ref": "#/$defs/reference" },
+                        "children": { "$ref": "#/$defs/children" }
                     }
                 }
             }
@@ -918,8 +935,18 @@ impl<'a> ExtractionState<'a> {
             self.push_table(table, reference, context)?;
             return Ok(());
         }
-        if let Some(item) = self.ignored_items.get(reference) {
+        if let Some(item) = self.ignored_items.get(reference).copied() {
             require_parent(item, expected_parent)?;
+            // Pictures, key-value containers, and form containers do not
+            // become Evidence Locations themselves, but Docling can attach
+            // OCR text beneath them. Walk those children so their source text
+            // and provenance are preserved and the completeness check remains
+            // meaningful.
+            if item.get("children").is_some() {
+                for child in child_references(item)? {
+                    self.walk(&child, reference, context)?;
+                }
+            }
             return Ok(());
         }
         Err(ParseExceptionCode::MalformedOutput)
@@ -1091,11 +1118,18 @@ fn extract_locations(value: &Value) -> Result<Vec<EvidenceLocation>, ParseExcept
     if required_str(body, "self_ref")? != "#/body" {
         return Err(ParseExceptionCode::MalformedOutput);
     }
-    let children = child_references(body)?;
     let mut state = ExtractionState::new(value)?;
     let context = StructureContext::default();
-    for child in children {
+    for child in child_references(body)? {
         state.walk(&child, "#/body", &context)?;
+    }
+    if let Some(furniture) = value.get("furniture") {
+        if required_str(furniture, "self_ref")? != "#/furniture" {
+            return Err(ParseExceptionCode::MalformedOutput);
+        }
+        for child in child_references(furniture)? {
+            state.walk(&child, "#/furniture", &context)?;
+        }
     }
     state.finish()
 }

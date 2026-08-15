@@ -815,7 +815,13 @@ fn checked_storage_permissions(
     path: &Path,
     platform: &dyn SetupPlatform,
 ) -> Result<StoragePermissions, SetupOutcome> {
-    match platform.storage_permissions(path) {
+    let mut permissions = platform.storage_permissions(path);
+    if matches!(permissions, Ok(StoragePermissions::Unsafe))
+        && secure_created_directory(path).is_ok()
+    {
+        permissions = platform.storage_permissions(path);
+    }
+    match permissions {
         Ok(StoragePermissions::Unsafe) => Err(SetupOutcome::blocked(
             SetupState::RepairRequired,
             SetupIssue::UnsafeStoragePermissions,
@@ -1352,7 +1358,31 @@ fn secure_created_directory(path: &Path) -> io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn secure_created_directory(path: &Path) -> io::Result<()> {
+    use windows_permissions::{
+        constants::{SeObjectType, SecurityInformation},
+        wrappers::SetNamedSecurityInfo,
+        LocalBox, SecurityDescriptor,
+    };
+
+    let descriptor: LocalBox<SecurityDescriptor> =
+        "D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)".parse()?;
+    let dacl = descriptor
+        .dacl()
+        .ok_or_else(|| io::Error::other("private directory DACL is missing"))?;
+    SetNamedSecurityInfo(
+        path.as_os_str(),
+        SeObjectType::SE_FILE_OBJECT,
+        SecurityInformation::Dacl | SecurityInformation::ProtectedDacl,
+        None,
+        None,
+        Some(dacl),
+        None,
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
 fn secure_created_directory(_path: &Path) -> io::Result<()> {
     Ok(())
 }
