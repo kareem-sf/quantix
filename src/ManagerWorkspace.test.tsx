@@ -18,6 +18,7 @@ const host = vi.hoisted(() => ({
   logoutProvider: vi.fn(),
   disconnectAiProvider: vi.fn(),
   openProviderLogin: vi.fn(),
+  rebindManagerIntakeProvider: vi.fn(),
   recordEngineerWorkspaceMessage: vi.fn(),
   refreshApplicationSettings: vi.fn(),
   retryManagerIntake: vi.fn(),
@@ -261,7 +262,9 @@ describe("ManagerWorkspace", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Continue in browser" }),
     );
-    expect(host.openProviderLogin).toHaveBeenCalledWith({ login_id: "login-1" });
+    expect(host.openProviderLogin).toHaveBeenCalledWith({
+      login_id: "login-1",
+    });
     expect(host.startProviderLogin).toHaveBeenCalledWith({
       method: "device_code",
     });
@@ -302,32 +305,33 @@ describe("ManagerWorkspace", () => {
     };
     const connected = {
       ...disconnected,
-      provider_connections: disconnected.provider_connections.map((connection) =>
-        connection.connection_id === "anthropic_byok"
-          ? {
-              ...connection,
-              status: "ready",
-              account_label: "API key stored in the system credential vault",
-              models: [
-                {
-                  model_id: "claude-live",
-                  display_name: "Claude Live",
-                  description: "Live Anthropic model",
-                  is_default: false,
-                  input_modalities: ["text"],
-                  reasoning_options: [
-                    {
-                      selection: { kind: "provider_default" },
-                      label: "Provider default",
-                      description: "Provider choice",
-                      is_default: true,
-                    },
-                  ],
-                },
-              ],
-              catalogue_fetched_at: "2026-08-15T12:00:00Z",
-            }
-          : connection,
+      provider_connections: disconnected.provider_connections.map(
+        (connection) =>
+          connection.connection_id === "anthropic_byok"
+            ? {
+                ...connection,
+                status: "ready",
+                account_label: "API key stored in the system credential vault",
+                models: [
+                  {
+                    model_id: "claude-live",
+                    display_name: "Claude Live",
+                    description: "Live Anthropic model",
+                    is_default: false,
+                    input_modalities: ["text"],
+                    reasoning_options: [
+                      {
+                        selection: { kind: "provider_default" },
+                        label: "Provider default",
+                        description: "Provider choice",
+                        is_default: true,
+                      },
+                    ],
+                  },
+                ],
+                catalogue_fetched_at: "2026-08-15T12:00:00Z",
+              }
+            : connection,
       ),
     };
     host.refreshApplicationSettings.mockResolvedValue(disconnected);
@@ -595,6 +599,76 @@ describe("ManagerWorkspace", () => {
     await waitFor(() => {
       expect(host.startManagerTender).toHaveBeenCalledWith("directory");
     });
+  });
+
+  it("registers a Tender package even while every AI Provider is unavailable", async () => {
+    const empty: ManagerWorkspaceProjection = {
+      ...projection,
+      catalogue: [],
+      selected_tender: null,
+      conversation: null,
+      current_action: {
+        kind: "start_tender",
+        title: "Start a Tender",
+        summary: "Choose the Tender Package.",
+        action_label: "Choose Tender Package",
+        requires_engineer: true,
+      },
+      intake: null,
+    };
+    host.inspectManagerWorkspace.mockResolvedValue(empty);
+    host.startManagerTender.mockResolvedValue(null);
+    render(<ManagerWorkspace aiAvailable={false} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Choose Tender Package" }),
+    );
+
+    await waitFor(() => {
+      expect(host.startManagerTender).toHaveBeenCalledWith("directory");
+    });
+    expect(
+      screen.getByText(/register it safely and wait for an AI Provider/i),
+    ).toBeTruthy();
+  });
+
+  it("shows the canonical waiting state and requires an explicit provider rebind", async () => {
+    const waiting: ManagerWorkspaceProjection = {
+      ...projection,
+      current_action: {
+        kind: "configure_ai_provider",
+        title: "Waiting for AI Provider",
+        summary:
+          "The Tender Package is safe. Quantix will continue only with the exact approved choice.",
+        action_label: "Use selected AI",
+        requires_engineer: true,
+      },
+      intake: {
+        intake_run_id: "3".repeat(32),
+        stage: "waiting_for_provider",
+        status: "waiting",
+        label: "Waiting for AI Provider",
+        summary:
+          "The Tender Package is registered safely while the exact choice is unavailable.",
+        parseable_document_count: 1,
+        parsed_document_count: 0,
+        extraction_run_count: 0,
+      },
+    };
+    host.inspectManagerWorkspace.mockResolvedValue(waiting);
+    host.rebindManagerIntakeProvider.mockResolvedValue(undefined);
+    render(<ManagerWorkspace aiAvailable />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use selected AI" }),
+    );
+
+    await waitFor(() => {
+      expect(host.rebindManagerIntakeProvider).toHaveBeenCalledWith(tenderId);
+    });
+    expect(
+      screen.getAllByText("Waiting for AI Provider").length,
+    ).toBeGreaterThan(0);
   });
 
   it("renders an active intake as paused when the AI office is unavailable", async () => {

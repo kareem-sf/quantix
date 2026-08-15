@@ -4,8 +4,8 @@ use quantix_lib::{
     ensure_quantix_setup, AiProviderKind, CancelProviderLoginCommand, CodexReadiness,
     CreateTenderCommand, DeviceProtection, ImportTenderPackageCommand,
     InspectManagerWorkspaceCommand, ManagerIntakeStage, ManagerIntakeStatusKind,
-    ProviderConnectionStatus, ProviderLoginMethod, ProviderLoginStatus,
-    ProviderReasoningSelection, QuantixHost, RecordEngineerWorkspaceMessageCommand, RuntimeLayout,
+    ProviderConnectionStatus, ProviderLoginMethod, ProviderLoginStatus, ProviderReasoningSelection,
+    QuantixHost, RecordEngineerWorkspaceMessageCommand, RuntimeLayout,
     SelectManagerWorkspaceTenderCommand, SetupPlatform, SetupState, StartProviderLoginCommand,
     StoragePermissions, TenderOfficeMessageAuthor, TenderOfficeMessageKind,
     UpdateAiExecutionSelectionCommand, WorkspaceActionKind, WorkspaceMessageReferenceKind,
@@ -69,11 +69,11 @@ fn public_host_projection_exposes_registered_intake_stage_and_package_provenance
         })
         .expect("inspect Manager workspace");
     let intake = projection.intake.expect("Manager intake status");
-    assert_eq!(intake.stage, ManagerIntakeStage::PackageRegistered);
-    assert_eq!(intake.status, ManagerIntakeStatusKind::Working);
+    assert_eq!(intake.stage, ManagerIntakeStage::WaitingForProvider);
+    assert_eq!(intake.status, ManagerIntakeStatusKind::Waiting);
     assert_eq!(
         projection.current_action.kind,
-        WorkspaceActionKind::ObserveIntake
+        WorkspaceActionKind::ConfigureAiProvider
     );
     assert_eq!(projection.files.tender_document_count, 1);
     let source = projection
@@ -187,11 +187,17 @@ async fn public_host_completes_managed_browser_login_refreshes_catalogue_and_log
         .iter()
         .find(|connection| connection.connection_id == "codex_chatgpt")
         .expect("connected Codex account");
-    assert_eq!(connection.account_label.as_deref(), Some("engineer@example.com"));
+    assert_eq!(
+        connection.account_label.as_deref(),
+        Some("engineer@example.com")
+    );
     assert_eq!(connection.account_plan.as_deref(), Some("plus"));
     assert_eq!(connection.models[0].model_id, "gpt-5.6-terra");
 
-    let disconnected = host.logout_provider().await.expect("logout managed account");
+    let disconnected = host
+        .logout_provider()
+        .await
+        .expect("logout managed account");
     let connection = disconnected
         .provider_connections
         .iter()
@@ -243,9 +249,11 @@ async fn public_host_cancels_the_exact_managed_device_login() {
             .refresh_application_settings()
             .await
             .expect("refresh cancelled login");
-        if settings.active_provider_login.as_ref().is_some_and(|login| {
-            login.status == ProviderLoginStatus::Cancelled
-        }) {
+        if settings
+            .active_provider_login
+            .as_ref()
+            .is_some_and(|login| login.status == ProviderLoginStatus::Cancelled)
+        {
             cancelled = Some(settings);
             break;
         }

@@ -4,19 +4,19 @@ use quantix_lib::{
     ApproveSubmissionReleaseCommand, BootstrapRole, CancelProviderLoginCommand,
     CodexProductionAssuranceEvidence, ConnectAnthropicCommand, ConnectGeminiCommand,
     CreatePortableTenderArchiveCommand, DeletionReceipt, DisconnectAiProviderCommand,
-    EvaluatePublicReleaseGateCommand,
-    ExportReleaseCopyCommand, ImportPortableTenderArchiveCommand, InspectManagerWorkspaceCommand,
-    IntegrationTermsDecision, LicenseDistributionReview, LiveQualificationMetrics,
-    LiveQualificationRun, ManagerConversation, ManagerIntakeStage, ManagerIntakeStatus,
-    ManagerIntakeStatusKind, ManagerWorkspaceProjection, ManagerWorkspaceTender,
-    NativePlatformQualificationEvidence, NativePlatformQualificationRecord,
+    EvaluatePublicReleaseGateCommand, ExportReleaseCopyCommand, ImportPortableTenderArchiveCommand,
+    InspectManagerWorkspaceCommand, IntegrationTermsDecision, LicenseDistributionReview,
+    LiveQualificationMetrics, LiveQualificationRun, ManagerConversation, ManagerIntakeStage,
+    ManagerIntakeStatus, ManagerIntakeStatusKind, ManagerWorkspaceProjection,
+    ManagerWorkspaceTender, NativePlatformQualificationEvidence, NativePlatformQualificationRecord,
     OpenProviderLoginCommand, PortableTenderArchiveRecord, PrivateQualificationRecord,
     ProductAcceptanceOutcome, ProductAcceptanceRecord, ProductAcceptanceRun,
     ProviderConnectionStatus, ProviderConnectionView, ProviderLoginMethod, ProviderLoginStatus,
     ProviderLoginView, ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
-    PublicReleaseGateOutcome, PublicReleaseGateRecord, RecordEngineerWorkspaceMessageCommand,
-    RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand, ReleaseCopyExport,
-    ReleaseCopyItem, RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand,
+    PublicReleaseGateOutcome, PublicReleaseGateRecord, RebindManagerIntakeProviderCommand,
+    RecordEngineerWorkspaceMessageCommand, RecordLiveQualificationRunCommand,
+    RecordNativePlatformQualificationCommand, ReleaseCopyExport, ReleaseCopyItem,
+    RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand,
     SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand, StartProviderLoginCommand,
     SubmissionReleaseApproval, SubmissionReleaseInspection, SubmissionReleaseState,
     TechnicalRiskAcceptance, TenderOfficeMessage, TenderOfficeMessageAuthor,
@@ -74,6 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     SelectManagerWorkspaceTenderCommand::export_all(&config)?;
     RecordEngineerWorkspaceMessageCommand::export_all(&config)?;
     RetryManagerIntakeCommand::export_all(&config)?;
+    RebindManagerIntakeProviderCommand::export_all(&config)?;
     TenderOfficeMessageAuthor::export_all(&config)?;
     TenderOfficeMessageKind::export_all(&config)?;
     TenderOfficeMessage::export_all(&config)?;

@@ -230,7 +230,8 @@ pub use tender_records::{
 };
 pub use workspace::{
     InspectManagerWorkspaceCommand, ManagerConversation, ManagerWorkspaceProjection,
-    ManagerWorkspaceTender, RecordEngineerWorkspaceMessageCommand, RetryManagerIntakeCommand,
+    ManagerWorkspaceTender, RebindManagerIntakeProviderCommand,
+    RecordEngineerWorkspaceMessageCommand, RetryManagerIntakeCommand,
     SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand, TenderOfficeMessage,
     TenderOfficeMessageAuthor, TenderOfficeMessageKind, WorkspaceActionKind,
     WorkspaceCurrentAction, WorkspaceFilesSummary, WorkspaceTeamSummary, WorkspaceWorkSummary,
@@ -242,7 +243,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 29;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 30;
 
 pub(crate) fn record_agent_run_provider_binding(
     transaction: &Transaction<'_>,
@@ -298,10 +299,14 @@ CREATE TABLE manager_intake_runs (
   intake_run_id TEXT NOT NULL UNIQUE CHECK (length(intake_run_id) = 32),
   package_intake_id TEXT NOT NULL UNIQUE,
   stage TEXT NOT NULL CHECK (stage IN (
-    'package_registered', 'reading_documents', 'extracting_tender_facts', 'reviewing_tender_facts',
+    'waiting_for_provider', 'package_registered', 'reading_documents',
+    'extracting_tender_facts', 'reviewing_tender_facts',
     'preparing_first_decision', 'waiting_for_engineer',
     'bid_decision_ready', 'failed'
   )),
+  provider_selection_json TEXT CHECK (
+    provider_selection_json IS NULL OR json_valid(provider_selection_json)
+  ),
   parseable_document_count INTEGER NOT NULL DEFAULT 0 CHECK (parseable_document_count >= 0),
   parsed_document_count INTEGER NOT NULL DEFAULT 0 CHECK (parsed_document_count >= 0),
   extraction_run_count INTEGER NOT NULL DEFAULT 0 CHECK (extraction_run_count >= 0),
@@ -320,10 +325,12 @@ CREATE TABLE manager_intake_runs (
     OR (stage IN ('waiting_for_engineer', 'bid_decision_ready')
         AND failure_summary IS NULL AND completed_at IS NOT NULL)
     OR (stage IN (
-          'package_registered', 'reading_documents', 'extracting_tender_facts', 'reviewing_tender_facts',
+          'waiting_for_provider', 'package_registered', 'reading_documents',
+          'extracting_tender_facts', 'reviewing_tender_facts',
           'preparing_first_decision'
         ) AND failure_summary IS NULL AND completed_at IS NULL)
-  )
+  ),
+  CHECK (stage = 'waiting_for_provider' OR provider_selection_json IS NOT NULL)
 );
 CREATE TABLE tender_office_messages (
   message_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -6198,7 +6205,6 @@ impl QuantixHost {
         &self,
         command: ImportTenderPackageCommand,
     ) -> Result<TenderPackageImportResult, TenderCommandError> {
-        self.require_runtime_verified()?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         let source = Path::new(&command.source_path);

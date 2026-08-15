@@ -13,6 +13,7 @@ use crate::{
         AgentTaskInputReference, BootstrapRole, DataClassification, PendingProviderEvent,
         PreparedAgentRun, ProviderEventKind, TenderTaskView, VerificationStatus,
     },
+    application_settings::AiExecutionSelection,
     document_parsing::{ParseSourceArtifactCommand, ParseState},
 };
 
@@ -39,6 +40,7 @@ const MAX_MESSAGE_REFERENCE_DETAIL: usize = 2_000;
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum ManagerIntakeStage {
+    WaitingForProvider,
     PackageRegistered,
     ReadingDocuments,
     ExtractingTenderFacts,
@@ -52,6 +54,7 @@ pub enum ManagerIntakeStage {
 impl ManagerIntakeStage {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
+            Self::WaitingForProvider => "waiting_for_provider",
             Self::PackageRegistered => "package_registered",
             Self::ReadingDocuments => "reading_documents",
             Self::ExtractingTenderFacts => "extracting_tender_facts",
@@ -65,6 +68,7 @@ impl ManagerIntakeStage {
 
     fn parse(value: &str) -> Result<Self, TenderCommandError> {
         match value {
+            "waiting_for_provider" => Ok(Self::WaitingForProvider),
             "package_registered" => Ok(Self::PackageRegistered),
             "reading_documents" => Ok(Self::ReadingDocuments),
             "extracting_tender_facts" => Ok(Self::ExtractingTenderFacts),
@@ -87,12 +91,17 @@ impl ManagerIntakeStage {
                 | Self::PreparingFirstDecision
         )
     }
+
+    pub(crate) fn is_resumable(self) -> bool {
+        self == Self::WaitingForProvider || self.is_active()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum ManagerIntakeStatusKind {
+    Waiting,
     Working,
     NeedsEngineer,
     Ready,
@@ -244,7 +253,8 @@ pub(super) fn initialize_manager_intake_run(
             "SELECT EXISTS(
                SELECT 1 FROM manager_intake_runs
                WHERE stage IN (
-                 'package_registered', 'reading_documents', 'extracting_tender_facts',
+                 'waiting_for_provider', 'package_registered', 'reading_documents',
+                 'extracting_tender_facts',
                  'reviewing_tender_facts',
                  'preparing_first_decision'
                )
@@ -261,7 +271,7 @@ pub(super) fn initialize_manager_intake_run(
         .execute(
             "INSERT INTO manager_intake_runs (
                intake_run_id, package_intake_id, stage, created_at, updated_at
-             ) VALUES (?1, ?2, 'package_registered', ?3, ?3)",
+             ) VALUES (?1, ?2, 'waiting_for_provider', ?3, ?3)",
             params![intake_run_id, package_intake_id, created_at],
         )
         .map_err(sql_error)?;
@@ -305,6 +315,11 @@ impl TenderStore {
         };
         let stage = ManagerIntakeStage::parse(&stage)?;
         let (status, label, summary) = match stage {
+            ManagerIntakeStage::WaitingForProvider => (
+                ManagerIntakeStatusKind::Waiting,
+                "Waiting for AI Provider",
+                "The Tender Package is registered safely. Quantix will continue only when this Tender's exact provider, model, and reasoning choice is ready.",
+            ),
             ManagerIntakeStage::PackageRegistered => (
                 ManagerIntakeStatusKind::Working,
                 "Package registered",
@@ -358,6 +373,155 @@ impl TenderStore {
             parsed_document_count: checked_u32(parsed)?,
             extraction_run_count: checked_u32(extraction_runs)?,
         }))
+    }
+
+    pub(crate) fn manager_intake_provider_selection(
+        &self,
+    ) -> Result<Option<AiExecutionSelection>, TenderCommandError> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT provider_selection_json FROM manager_intake_runs
+                 ORDER BY intake_run_sequence DESC LIMIT 1",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(sql_error)?
+            .flatten();
+        row.as_deref().map(parse_canonical).transpose()
+    }
+
+    pub(crate) fn manager_intake_provider_selection_for(
+        &self,
+        intake_run_id: &str,
+    ) -> Result<AiExecutionSelection, TenderCommandError> {
+        let value = self
+            .connection
+            .query_row(
+                "SELECT provider_selection_json FROM manager_intake_runs
+                 WHERE intake_run_id = ?1",
+                [intake_run_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(sql_error)?
+            .flatten()
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+        parse_canonical(&value)
+    }
+
+    pub(crate) fn bind_manager_intake_provider_selection(
+        &mut self,
+        selection: &AiExecutionSelection,
+        allow_choice_change: bool,
+    ) -> Result<(), TenderCommandError> {
+        self.require_storage_writable()?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let (intake_run_id, stage, prior_json): (String, String, Option<String>) = transaction
+            .query_row(
+                "SELECT intake_run_id, stage, provider_selection_json
+                 FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(sql_error)?;
+        let stage = ManagerIntakeStage::parse(&stage)?;
+        if !stage.is_resumable()
+            || (allow_choice_change && stage != ManagerIntakeStage::WaitingForProvider)
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let prior = prior_json.as_deref().map(parse_canonical).transpose()?;
+        let choice_changed = prior
+            .as_ref()
+            .is_some_and(|prior| !same_provider_choice(prior, selection));
+        if choice_changed && !allow_choice_change {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let binding_json = canonical_json(selection)?;
+        let updated_at = sqlite_timestamp(&transaction)?;
+        if transaction
+            .execute(
+                "UPDATE manager_intake_runs
+                 SET provider_selection_json = ?2, updated_at = ?3
+                 WHERE intake_run_id = ?1 AND stage IN (
+                   'waiting_for_provider', 'package_registered', 'reading_documents',
+                   'extracting_tender_facts', 'reviewing_tender_facts',
+                   'preparing_first_decision'
+                 )",
+                params![intake_run_id, binding_json, updated_at],
+            )
+            .map_err(sql_error)?
+            != 1
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        if choice_changed {
+            transaction
+                .execute(
+                    "UPDATE provider_threads SET status = 'archive_pending'
+                     WHERE status = 'active'",
+                    [],
+                )
+                .map_err(sql_error)?;
+        }
+        let (tender_id, tender_revision): (String, u32) = transaction
+            .query_row(
+                "SELECT tender_id, current_revision FROM tender WHERE singleton = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(sql_error)?;
+        append_audit_event(
+            &transaction,
+            &tender_id,
+            if choice_changed {
+                "manager_intake_provider_rebound"
+            } else if prior.is_some() {
+                "manager_intake_provider_refreshed"
+            } else {
+                "manager_intake_provider_bound"
+            },
+            tender_revision,
+            json!({
+                "intake_run_id": intake_run_id,
+                "connection_id": selection.connection_id,
+                "provider": selection.provider,
+                "model_id": selection.model_id,
+                "reasoning": selection.reasoning,
+                "catalogue_fetched_at": selection.catalogue_fetched_at,
+                "adapter_version": selection.adapter_version,
+                "engineer_confirmed_change": choice_changed && allow_choice_change,
+            }),
+            &updated_at,
+        )?;
+        transaction.commit().map_err(sql_error)
+    }
+
+    pub(crate) fn wait_manager_intake_for_provider(&mut self) -> Result<(), TenderCommandError> {
+        self.require_storage_writable()?;
+        let updated_at = connection_timestamp(&self.connection)?;
+        self.connection
+            .execute(
+                "UPDATE manager_intake_runs
+                 SET stage = 'waiting_for_provider', current_manager_run_id = NULL,
+                     failure_summary = NULL, completed_at = NULL, updated_at = ?1
+                 WHERE intake_run_id = (
+                   SELECT intake_run_id FROM manager_intake_runs
+                   ORDER BY intake_run_sequence DESC LIMIT 1
+                 ) AND stage IN (
+                   'waiting_for_provider', 'package_registered', 'reading_documents',
+                   'extracting_tender_facts', 'reviewing_tender_facts',
+                   'preparing_first_decision'
+                 )",
+                [updated_at],
+            )
+            .map_err(sql_error)?;
+        Ok(())
     }
 
     pub(crate) fn unresolved_manager_intake_run_ids(
@@ -428,20 +592,24 @@ impl TenderStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_error)?;
-        let (intake_run_id, stage): (String, String) = transaction
-            .query_row(
-                "SELECT intake_run_id, stage FROM manager_intake_runs
+        let (intake_run_id, stage, provider_selection_json): (String, String, Option<String>) =
+            transaction
+                .query_row(
+                    "SELECT intake_run_id, stage, provider_selection_json FROM manager_intake_runs
                  ORDER BY intake_run_sequence DESC LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(sql_error)?;
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .map_err(sql_error)?;
         let prior = ManagerIntakeStage::parse(&stage)?;
         if matches!(
             prior,
             ManagerIntakeStage::WaitingForEngineer | ManagerIntakeStage::BidDecisionReady
         ) {
             return Ok(prior);
+        }
+        if provider_selection_json.is_none() {
+            return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
         }
         let updated_at = sqlite_timestamp(&transaction)?;
         transaction
@@ -464,7 +632,7 @@ impl TenderStore {
             .connection
             .execute(
                 "UPDATE manager_intake_runs
-                 SET stage = 'package_registered', failure_summary = NULL,
+                 SET stage = 'waiting_for_provider', failure_summary = NULL,
                      completed_at = NULL, updated_at = ?1
                  WHERE intake_run_id = (
                    SELECT intake_run_id FROM manager_intake_runs
@@ -815,8 +983,9 @@ impl TenderStore {
             .and_then(Path::parent)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
             .to_path_buf();
-        let provider_selection =
-            crate::application_settings::load_current_ai_execution_selection(&application_home)?;
+        let provider_selection = self
+            .manager_intake_provider_selection()?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
         let workspace = application_home
             .join("staging")
             .join(format!("agent-{}-{run_id}", tender_id.as_str()));
@@ -1132,6 +1301,34 @@ impl TenderStore {
         &self,
         check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
     ) -> Result<bool, TenderCommandError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT stage, provider_selection_json
+                 FROM manager_intake_runs ORDER BY intake_run_sequence",
+            )
+            .map_err(sql_error)?;
+        let mut rows = statement.query([]).map_err(sql_error)?;
+        while let Some(row) = rows.next().map_err(sql_error)? {
+            check()?;
+            let stage = ManagerIntakeStage::parse(&row.get::<_, String>(0).map_err(sql_error)?)?;
+            let binding = row.get::<_, Option<String>>(1).map_err(sql_error)?;
+            if stage != ManagerIntakeStage::WaitingForProvider && binding.is_none() {
+                return Ok(false);
+            }
+            if let Some(binding) = binding {
+                let selection: AiExecutionSelection = parse_canonical(&binding)?;
+                if selection.connection_id.trim().is_empty()
+                    || selection.model_id.trim().is_empty()
+                    || selection.catalogue_fetched_at.trim().is_empty()
+                    || selection.adapter_version.trim().is_empty()
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        drop(rows);
+        drop(statement);
         let mut statement = self
             .connection
             .prepare(
@@ -2011,6 +2208,13 @@ fn parse_canonical<T: for<'de> Deserialize<'de> + Serialize>(
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
     Ok(parsed)
+}
+
+fn same_provider_choice(left: &AiExecutionSelection, right: &AiExecutionSelection) -> bool {
+    left.connection_id == right.connection_id
+        && left.provider == right.provider
+        && left.model_id == right.model_id
+        && left.reasoning == right.reasoning
 }
 
 fn checked_u32(value: i64) -> Result<u32, TenderCommandError> {

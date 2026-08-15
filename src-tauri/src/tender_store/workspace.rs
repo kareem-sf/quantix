@@ -6,7 +6,10 @@ use ts_rs::TS;
 
 use std::{fs, path::Path, time::Duration};
 
-use crate::{QuantixHost, TenderPackageSourceKind};
+use crate::{
+    application_settings::load_preferred_ai_execution_selection, QuantixHost,
+    TenderPackageSourceKind,
+};
 
 use super::{
     append_audit_event, random_identifier, require_setup, sha256_hex, sql_error, sqlite_timestamp,
@@ -55,6 +58,14 @@ pub struct RecordEngineerWorkspaceMessageCommand {
 #[serde(deny_unknown_fields)]
 #[ts(export)]
 pub struct RetryManagerIntakeCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct RebindManagerIntakeProviderCommand {
     #[garde(length(bytes, min = 32, max = 32))]
     pub tender_id: String,
 }
@@ -147,6 +158,7 @@ pub enum WorkspaceActionKind {
     AddTenderPackage,
     ReviewIntake,
     ObserveIntake,
+    ConfigureAiProvider,
     AnswerManagerQuestion,
     RetryIntake,
     ReviewBidDecision,
@@ -690,6 +702,13 @@ impl TenderStore {
             TenderLifecyclePhase::Intake => {
                 if let Some(intake) = intake {
                     return Ok(match intake.stage {
+                        ManagerIntakeStage::WaitingForProvider => action(
+                            WorkspaceActionKind::ConfigureAiProvider,
+                            "Waiting for AI Provider",
+                            "The Tender Package is safe. Quantix will continue only with the exact provider, model, and reasoning choice approved for this Tender.",
+                            "Use selected AI",
+                            true,
+                        ),
                         ManagerIntakeStage::PackageRegistered
                         | ManagerIntakeStage::ReadingDocuments
                         | ManagerIntakeStage::ExtractingTenderFacts
@@ -877,7 +896,6 @@ impl QuantixHost {
         source: &Path,
     ) -> Result<ManagerWorkspaceProjection, TenderCommandError> {
         let _ordinary_work = self.begin_ordinary_work()?;
-        self.require_runtime_verified()?;
         require_setup(self)?;
         if !source.is_absolute() || fs::symlink_metadata(source).is_err() {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
@@ -897,6 +915,7 @@ impl QuantixHost {
             .application_home()
             .join("tenders")
             .join(tender_id.as_str());
+        let preferred_selection = load_preferred_ai_execution_selection(self.application_home())?;
         let mut store = match TenderStore::create(&stage_root, &tender_id, &name) {
             Ok(store) => store,
             Err(error) => {
@@ -908,6 +927,13 @@ impl QuantixHost {
             drop(store);
             let _ = fs::remove_dir_all(&stage_root);
             return Err(error);
+        }
+        if let Some(selection) = preferred_selection {
+            if let Err(error) = store.bind_manager_intake_provider_selection(&selection, false) {
+                drop(store);
+                let _ = fs::remove_dir_all(&stage_root);
+                return Err(error);
+            }
         }
         let projection = match (|| {
             let snapshot = store.workspace_snapshot()?;

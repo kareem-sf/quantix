@@ -6,6 +6,7 @@ import { ManagerWorkspace } from "./ManagerWorkspace";
 import {
   ensureQuantixSetup,
   inspectRuntimeReadiness,
+  refreshApplicationSettings,
   repairRuntimeReadiness,
   resumeManagerIntakes,
   validateQuantixUpdateRestart,
@@ -112,7 +113,12 @@ function App() {
       if (runtimeReadiness?.state === "preparing") {
         runtimeReadiness = await waitForRuntimePreparation();
       }
-      const aiAvailable = runtimeReadiness?.state === "ready";
+      const settings = await refreshApplicationSettings().catch(() => null);
+      const aiAvailable = settings
+        ? settings.provider_connections.some(
+            (connection) => connection.status === "ready",
+          )
+        : runtimeReadiness?.state === "ready";
       setState({
         kind: "ready",
         aiAvailable,

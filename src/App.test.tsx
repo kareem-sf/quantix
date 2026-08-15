@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const host = vi.hoisted(() => ({
   ensureQuantixSetup: vi.fn(),
   inspectRuntimeReadiness: vi.fn(),
+  refreshApplicationSettings: vi.fn(),
   repairRuntimeReadiness: vi.fn(),
   resumeManagerIntakes: vi.fn(),
   validateQuantixUpdateRestart: vi.fn(),
@@ -23,6 +24,11 @@ describe("App runtime startup", () => {
     host.ensureQuantixSetup.mockResolvedValue({ state: "ready", issues: [] });
     host.validateQuantixUpdateRestart.mockResolvedValue({ state: "idle" });
     host.resumeManagerIntakes.mockResolvedValue(undefined);
+    host.refreshApplicationSettings.mockResolvedValue({
+      ai_execution_selection: null,
+      provider_connections: [{ status: "ready" }],
+      active_provider_login: null,
+    });
   });
 
   afterEach(() => {

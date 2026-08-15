@@ -41,10 +41,10 @@ pub use agent_runtime::{
 pub use application_settings::{
     AiExecutionSelection, AiProviderKind, ApplicationSettingsView, CancelProviderLoginCommand,
     ConnectAnthropicCommand, ConnectGeminiCommand, DisconnectAiProviderCommand,
-    OpenProviderLoginCommand,
-    ProviderConnectionStatus, ProviderConnectionView, ProviderLoginMethod, ProviderLoginStatus,
-    ProviderLoginView, ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
-    StartProviderLoginCommand, UpdateAiExecutionSelectionCommand,
+    OpenProviderLoginCommand, ProviderConnectionStatus, ProviderConnectionView,
+    ProviderLoginMethod, ProviderLoginStatus, ProviderLoginView, ProviderModelOption,
+    ProviderReasoningOption, ProviderReasoningSelection, StartProviderLoginCommand,
+    UpdateAiExecutionSelectionCommand,
 };
 pub use document_parsing::{
     DocumentParseResult, EvidenceBoundingBox, EvidenceDocument, EvidenceLanguage, EvidenceLocation,
@@ -163,30 +163,30 @@ pub use tender_store::{
     ProductionIntegrationReadiness, ProductionQueryTreatmentApplication, ProductionRemediation,
     ProductionReview, ProductionReviewFinding, ProductionReviewResult, ProductionTaskInspection,
     ProductionTaskReviewInspection, ProductionTaskRunResult, ProductionTaskState,
-    ProposeBoqCalculationRuleCommand, RecordEngineerWorkspaceMessageCommand,
-    RecordPackageManualVerificationCommand, RegisterExternalRfiResponseCommand,
-    RegisterTenderContentCommand, ReleaseCopyExport, ReleaseCopyItem, ReleaseReadinessBlocker,
-    ReleaseReadinessBlockerCode, ReleaseReadinessCategorySummary, ReleaseReadinessReport,
-    ResolveBidDecisionReturnReworkCommand, ResolveTenderRecoveryCommand, ResourceImplication,
-    RetryManagerIntakeCommand, ReviewFindingSeverity, ReviseExternalRfiDraftCommand,
-    ReviseTenderCommand, ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand,
-    RunBasisOfEstimateReviewCommand, RunBidDecisionPackageReviewCommand,
-    RunCalculationRuleReviewCommand, RunCostEstimatorBasisCommand,
-    RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand, RunPackageValidationCommand,
-    RunPricedCostBaselineReviewCommand, RunPricingAdjustmentReviewCommand,
-    RunProductionTaskCommand, RunSubmissionSectionReviewCommand, RunTenderRecordExtractionCommand,
-    RunTenderRecordReviewCommand, SelectManagerWorkspaceTenderCommand,
-    SelectPricingScenarioCommand, StartManagerTenderCommand, StartupReconciliationReport,
-    SubmissionArtifactContent, SubmissionArtifactVersion, SubmissionAuthorshipProvenance,
-    SubmissionContributionKind, SubmissionCoverageBlocker, SubmissionCoverageBlockerCode,
-    SubmissionCoverageDisposition, SubmissionCoverageRow, SubmissionGeneratedArtifactReference,
-    SubmissionItemContent, SubmissionItemSource, SubmissionPackageAssessment,
-    SubmissionPackageCurrentnessCode, SubmissionPackageCurrentnessFact,
-    SubmissionPackageDependency, SubmissionPackageDependencyKind, SubmissionPackageItem,
-    SubmissionPackageSection, SubmissionPackageStatus, SubmissionPackageVersion,
-    SubmissionProfileVersionReference, SubmissionReleaseApproval, SubmissionReleaseInspection,
-    SubmissionReleaseState, SubmissionSectionIndependenceContext, SubmissionSectionReview,
-    SubmissionSectionReviewRunResult, SubmissionSectionRiskContext,
+    ProposeBoqCalculationRuleCommand, RebindManagerIntakeProviderCommand,
+    RecordEngineerWorkspaceMessageCommand, RecordPackageManualVerificationCommand,
+    RegisterExternalRfiResponseCommand, RegisterTenderContentCommand, ReleaseCopyExport,
+    ReleaseCopyItem, ReleaseReadinessBlocker, ReleaseReadinessBlockerCode,
+    ReleaseReadinessCategorySummary, ReleaseReadinessReport, ResolveBidDecisionReturnReworkCommand,
+    ResolveTenderRecoveryCommand, ResourceImplication, RetryManagerIntakeCommand,
+    ReviewFindingSeverity, ReviseExternalRfiDraftCommand, ReviseTenderCommand,
+    ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand, RunBasisOfEstimateReviewCommand,
+    RunBidDecisionPackageReviewCommand, RunCalculationRuleReviewCommand,
+    RunCostEstimatorBasisCommand, RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand,
+    RunPackageValidationCommand, RunPricedCostBaselineReviewCommand,
+    RunPricingAdjustmentReviewCommand, RunProductionTaskCommand, RunSubmissionSectionReviewCommand,
+    RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand,
+    SelectManagerWorkspaceTenderCommand, SelectPricingScenarioCommand, StartManagerTenderCommand,
+    StartupReconciliationReport, SubmissionArtifactContent, SubmissionArtifactVersion,
+    SubmissionAuthorshipProvenance, SubmissionContributionKind, SubmissionCoverageBlocker,
+    SubmissionCoverageBlockerCode, SubmissionCoverageDisposition, SubmissionCoverageRow,
+    SubmissionGeneratedArtifactReference, SubmissionItemContent, SubmissionItemSource,
+    SubmissionPackageAssessment, SubmissionPackageCurrentnessCode,
+    SubmissionPackageCurrentnessFact, SubmissionPackageDependency, SubmissionPackageDependencyKind,
+    SubmissionPackageItem, SubmissionPackageSection, SubmissionPackageStatus,
+    SubmissionPackageVersion, SubmissionProfileVersionReference, SubmissionReleaseApproval,
+    SubmissionReleaseInspection, SubmissionReleaseState, SubmissionSectionIndependenceContext,
+    SubmissionSectionReview, SubmissionSectionReviewRunResult, SubmissionSectionRiskContext,
     SubmissionSourceArtifactReference, SubmissionValidationContextInput, SubmissionWorkPlanContext,
     TenderBackupRecord, TenderBackupState, TenderCatalogueEntry, TenderCommandError,
     TenderErrorCode, TenderEvidenceReference, TenderInspection, TenderIntegrityIssue,
@@ -248,14 +248,13 @@ mod tauri_commands {
         CalculationWorkspaceInspection, CancelProviderLoginCommand, ChangeAssessment,
         ChangeAssessmentPage, ChooseTenderPackageCommand, CommercialStrategy, ComplianceMatrixPage,
         ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand, ConnectAnthropicCommand,
-        ConnectGeminiCommand, ControlledBoqCalculationRun, CoordinatedBidBaselinePage,
-        CoordinatedBidBaseline,
-        CostEstimatorBasisResult, CostEstimatorCalculationResult, CreateBidDecisionPackageCommand,
-        CreateCalculationScenarioCommand, CreateCommercialStrategyCommand,
-        CreateExternalRfiDraftCommand, CreatePortableTenderArchiveCommand,
-        CreatePricedCostBaselineCommand, CreatePricingAdjustmentCommand,
-        CreatePricingScenarioCommand, CreateTenderBackupCommand, CreateTenderCommand,
-        CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
+        ConnectGeminiCommand, ControlledBoqCalculationRun, CoordinatedBidBaseline,
+        CoordinatedBidBaselinePage, CostEstimatorBasisResult, CostEstimatorCalculationResult,
+        CreateBidDecisionPackageCommand, CreateCalculationScenarioCommand,
+        CreateCommercialStrategyCommand, CreateExternalRfiDraftCommand,
+        CreatePortableTenderArchiveCommand, CreatePricedCostBaselineCommand,
+        CreatePricingAdjustmentCommand, CreatePricingScenarioCommand, CreateTenderBackupCommand,
+        CreateTenderCommand, CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
         DecideBidDecisionPackageCommand, DecideChangeAssessmentCommand,
         DecideCoordinatedBidBaselineCommand, DecideTenderQueryTreatmentCommand,
         DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DecisionCockpit, DeletionReceipt,
@@ -284,9 +283,9 @@ mod tauri_commands {
         PricingAdjustmentVersion, PricingScenarioVersion, PricingWorkspaceInspection,
         PrivateQualificationRecord, ProductAcceptanceRecord, ProductAcceptanceRun,
         ProductionTaskReviewInspection, ProductionTaskRunResult, ProposeBoqCalculationRuleCommand,
-        PublicReleaseGateRecord, QuantixHost, RecordEngineerWorkspaceMessageCommand,
-        RecordPackageManualVerificationCommand, RegisterExternalRfiResponseCommand,
-        RequestAgentAccessCommand, ResolveAgentAccessCommand,
+        PublicReleaseGateRecord, QuantixHost, RebindManagerIntakeProviderCommand,
+        RecordEngineerWorkspaceMessageCommand, RecordPackageManualVerificationCommand,
+        RegisterExternalRfiResponseCommand, RequestAgentAccessCommand, ResolveAgentAccessCommand,
         ResolveBidDecisionReturnReworkCommand, ResolveIndeterminateAgentRunCommand,
         ResolveTenderRecoveryCommand, RetryManagerIntakeCommand, ReviseExternalRfiDraftCommand,
         ReviseTenderCommand, ReviseTenderQueryCommand, ReviseWorkPlanProposalCommand,
@@ -739,6 +738,19 @@ mod tauri_commands {
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         host.inner().retry_manager_intake(&command.tender_id)
+    }
+
+    #[tauri::command]
+    pub(super) async fn rebind_manager_intake_provider(
+        host: tauri::State<'_, QuantixHost>,
+        command: RebindManagerIntakeProviderCommand,
+    ) -> Result<(), TenderCommandError> {
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        host.inner()
+            .rebind_manager_intake_provider(&command.tender_id)
+            .await
     }
 
     #[tauri::command]
@@ -2516,6 +2528,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::start_manager_tender,
             tauri_commands::resume_manager_intakes,
             tauri_commands::retry_manager_intake,
+            tauri_commands::rebind_manager_intake_provider,
             tauri_commands::select_manager_workspace_tender,
             tauri_commands::record_engineer_workspace_message,
             tauri_commands::open_tender,

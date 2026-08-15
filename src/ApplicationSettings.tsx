@@ -137,6 +137,12 @@ export function ApplicationSettings({
   const reasoningUnavailable = Boolean(
     connectionSelection && selectedModel && !selectedReasoning,
   );
+  const recommendedModel =
+    connection?.models.find((model) => model.is_default) ??
+    connection?.models[0];
+  const recommendedReasoning =
+    recommendedModel?.reasoning_options.find((option) => option.is_default) ??
+    recommendedModel?.reasoning_options[0];
 
   const save = useCallback(
     async (modelId: string, reasoning: ProviderReasoningSelection) => {
@@ -160,17 +166,20 @@ export function ApplicationSettings({
     [acceptSettings, aiAvailable, connection],
   );
 
-  const beginLogin = useCallback(async (method: "browser" | "device_code") => {
-    setBusy(true);
-    setError(null);
-    try {
-      acceptSettings(await startProviderLogin({ method }));
-    } catch (reason) {
-      setError(settingsError(reason));
-    } finally {
-      setBusy(false);
-    }
-  }, [acceptSettings]);
+  const beginLogin = useCallback(
+    async (method: "browser" | "device_code") => {
+      setBusy(true);
+      setError(null);
+      try {
+        acceptSettings(await startProviderLogin({ method }));
+      } catch (reason) {
+        setError(settingsError(reason));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [acceptSettings],
+  );
 
   const cancelLogin = useCallback(async () => {
     if (!login) return;
@@ -351,7 +360,10 @@ export function ApplicationSettings({
             <p>{connection.status_summary}</p>
 
             {connection.provider === "codex" && login ? (
-              <div className="application-settings__login" data-status={login.status}>
+              <div
+                className="application-settings__login"
+                data-status={login.status}
+              >
                 <strong>{login.status_summary}</strong>
                 {login.status === "awaiting_user" ? (
                   <>
@@ -361,7 +373,9 @@ export function ApplicationSettings({
                         <button
                           type="button"
                           onClick={() =>
-                            void navigator.clipboard.writeText(login.user_code ?? "")
+                            void navigator.clipboard.writeText(
+                              login.user_code ?? "",
+                            )
                           }
                         >
                           <Copy size={15} /> Copy code
@@ -386,7 +400,8 @@ export function ApplicationSettings({
                     </div>
                   </>
                 ) : null}
-                {["cancelled", "failed"].includes(login.status) && canConnect ? (
+                {["cancelled", "failed"].includes(login.status) &&
+                canConnect ? (
                   <div className="application-settings__login-actions">
                     <button
                       type="button"
@@ -493,7 +508,8 @@ export function ApplicationSettings({
                     <LogOut size={15} /> Remove local key
                   </button>
                   <small>
-                    Revoke externally created keys separately in the Anthropic Console.
+                    Revoke externally created keys separately in the Anthropic
+                    Console.
                   </small>
                 </div>
               )
@@ -542,7 +558,8 @@ export function ApplicationSettings({
                     <LogOut size={15} /> Remove local key
                   </button>
                   <small>
-                    Revoke externally created keys separately in Google AI Studio or Google Cloud.
+                    Revoke externally created keys separately in Google AI
+                    Studio or Google Cloud.
                   </small>
                 </div>
               )
@@ -587,7 +604,11 @@ export function ApplicationSettings({
               {modelUnavailable ? (
                 <small className="application-settings__unavailable">
                   The saved model is no longer in the provider's live catalog.
-                  Choose an available model before Quantix starts another run.
+                  {recommendedModel
+                    ? ` Live recommendation: ${recommendedModel.display_name}${recommendedReasoning ? ` with ${recommendedReasoning.label}` : ""}.`
+                    : ""}{" "}
+                  Choose an available model to confirm the change before Quantix
+                  starts another run.
                 </small>
               ) : null}
             </label>
@@ -633,8 +654,12 @@ export function ApplicationSettings({
               </select>
               {reasoningUnavailable ? (
                 <small className="application-settings__unavailable">
-                  The saved reasoning option is no longer available. Choose a
-                  current option before Quantix starts another run.
+                  The saved reasoning option is no longer available.
+                  {recommendedReasoning
+                    ? ` Live recommendation: ${recommendedReasoning.label}.`
+                    : ""}{" "}
+                  Choose a current option to confirm the change before Quantix
+                  starts another run.
                 </small>
               ) : null}
             </label>

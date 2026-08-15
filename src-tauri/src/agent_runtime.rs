@@ -854,6 +854,20 @@ impl Drop for ActiveManagerIntakeGuard {
     }
 }
 
+fn agent_run_waits_for_provider(run: &AgentRunInspection) -> bool {
+    run.state == AgentRunState::Failed
+        && run.failure.as_ref().is_some_and(|failure| {
+            matches!(
+                failure.category,
+                ProviderFailureCategory::AuthenticationRequired
+                    | ProviderFailureCategory::SubscriptionRequired
+                    | ProviderFailureCategory::ProtocolInvalid
+                    | ProviderFailureCategory::ProcessFailed
+                    | ProviderFailureCategory::RateLimited
+            )
+        })
+}
+
 impl QuantixHost {
     pub(crate) fn start_manager_intake_background(
         &self,
@@ -870,14 +884,18 @@ impl QuantixHost {
                     host: host.clone(),
                     tender_id: tender_id.clone(),
                 };
-                if host.run_manager_intake_pipeline(&tender_id).await.is_err() {
+                if let Err(error) = host.run_manager_intake_pipeline(&tender_id).await {
                     if let Ok(parsed) = TenderId::parse(&tender_id) {
                         if let Ok(store) = host.tender_store(&parsed) {
                             if let Ok(mut store) = store.lock() {
-                                let _ = store.fail_manager_intake(
-                                    &parsed,
-                                    "Quantix could not complete the Tender intake safely. Review the local runtime and retry intake; the registered source package remains unchanged.",
-                                );
+                                if error.code == TenderErrorCode::RuntimeRequired {
+                                    let _ = store.wait_manager_intake_for_provider();
+                                } else {
+                                    let _ = store.fail_manager_intake(
+                                        &parsed,
+                                        "Quantix could not complete the Tender intake safely. Review the exact Agent Run and retry intake; the registered source package remains unchanged.",
+                                    );
+                                }
                             }
                         }
                     }
@@ -910,7 +928,7 @@ impl QuantixHost {
                 .lock()
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
                 .current_manager_intake_status()?
-                .is_some_and(|status| status.stage.is_active());
+                .is_some_and(|status| status.stage.is_resumable());
             if active {
                 self.start_manager_intake_background(entry.tender_id)?;
             }
@@ -919,7 +937,6 @@ impl QuantixHost {
     }
 
     pub(crate) fn retry_manager_intake(&self, tender_id: &str) -> Result<(), TenderCommandError> {
-        self.require_runtime_verified()?;
         let tender_id = TenderId::parse(tender_id)?;
         let store = self.tender_store(&tender_id)?;
         let unresolved_run_ids = store
@@ -941,12 +958,46 @@ impl QuantixHost {
         self.start_manager_intake_background(tender_id.as_str().into())
     }
 
+    pub(crate) async fn rebind_manager_intake_provider(
+        &self,
+        tender_id: &str,
+    ) -> Result<(), TenderCommandError> {
+        let tender_id = TenderId::parse(tender_id)?;
+        let selection = self
+            .refresh_exact_ai_execution_selection(None)
+            .await?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+        let store = self.tender_store(&tender_id)?;
+        store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .bind_manager_intake_provider_selection(&selection, true)?;
+        self.start_manager_intake_background(tender_id.as_str().into())
+    }
+
     async fn run_manager_intake_pipeline(&self, tender_id: &str) -> Result<(), TenderCommandError> {
-        self.require_runtime_verified()?;
         require_setup(self)?;
         let _execution = self.manager_intake_execution_guard().await;
         let tender_id = TenderId::parse(tender_id)?;
         let store = self.tender_store(&tender_id)?;
+        let preferred = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .manager_intake_provider_selection()?;
+        let Some(selection) = self
+            .refresh_exact_ai_execution_selection(preferred.as_ref())
+            .await?
+        else {
+            store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                .wait_manager_intake_for_provider()?;
+            return Ok(());
+        };
+        store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .bind_manager_intake_provider_selection(&selection, false)?;
         let stage = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
@@ -994,6 +1045,13 @@ impl QuantixHost {
                     Some(&intake_run_id),
                 )
                 .await?;
+            if agent_run_waits_for_provider(&result.run) {
+                store
+                    .lock()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                    .wait_manager_intake_for_provider()?;
+                return Ok(());
+            }
             if result.run.state != AgentRunState::Completed || result.published_record_count == 0 {
                 return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
             }
@@ -1020,11 +1078,25 @@ impl QuantixHost {
                     Some(&intake_run_id),
                 )
                 .await?;
+            if agent_run_waits_for_provider(&result.run) {
+                store
+                    .lock()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                    .wait_manager_intake_for_provider()?;
+                return Ok(());
+            }
             if result.run.state != AgentRunState::Completed {
                 return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
             }
         }
         let run = self.run_manager_intake_outcome(&tender_id).await?;
+        if agent_run_waits_for_provider(&run) {
+            store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                .wait_manager_intake_for_provider()?;
+            return Ok(());
+        }
         if run.state != AgentRunState::Completed {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
@@ -1096,7 +1168,7 @@ impl QuantixHost {
         command: RunBootstrapAgentCommand,
         deterministic_outcome: Option<DeterministicProviderOutcome>,
     ) -> Result<AgentRunInspection, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         if command
@@ -1171,7 +1243,7 @@ impl QuantixHost {
         &self,
         command: RunProductionTaskCommand,
     ) -> Result<ProductionTaskRunResult, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         command
             .validate()
@@ -1231,7 +1303,7 @@ impl QuantixHost {
         &self,
         tender_id: &str,
     ) -> Result<(), TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         TenderId::parse(tender_id)?;
         if !self.claim_production_scheduler(tender_id) {
@@ -1350,7 +1422,11 @@ impl QuantixHost {
         command: RunTenderRecordExtractionCommand,
         manager_intake_run_id: Option<&str>,
     ) -> Result<TenderRecordExtractionResult, TenderCommandError> {
-        self.require_runtime_verified()?;
+        if manager_intake_run_id.is_none() {
+            self.require_current_live_ai_selection().await?;
+        } else {
+            self.require_runtime_verified()?;
+        }
         require_setup(self)?;
         command
             .validate()
@@ -1396,7 +1472,11 @@ impl QuantixHost {
         command: RunTenderRecordReviewCommand,
         manager_intake_run_id: Option<&str>,
     ) -> Result<TenderRecordReviewResult, TenderCommandError> {
-        self.require_runtime_verified()?;
+        if manager_intake_run_id.is_none() {
+            self.require_current_live_ai_selection().await?;
+        } else {
+            self.require_runtime_verified()?;
+        }
         require_setup(self)?;
         command
             .validate()
@@ -1436,7 +1516,7 @@ impl QuantixHost {
         &self,
         command: RunExternalRfiReviewCommand,
     ) -> Result<ExternalRfiReviewResult, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         command
             .validate()
@@ -1475,7 +1555,7 @@ impl QuantixHost {
         &self,
         command: RunCalculationRuleReviewCommand,
     ) -> Result<CalculationRuleReviewResult, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
@@ -1543,7 +1623,7 @@ impl QuantixHost {
         &self,
         command: RunCostEstimatorCalculationCommand,
     ) -> Result<CostEstimatorCalculationResult, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
@@ -1617,7 +1697,7 @@ impl QuantixHost {
         &self,
         command: RunCostEstimatorBasisCommand,
     ) -> Result<CostEstimatorBasisResult, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
@@ -1690,7 +1770,7 @@ impl QuantixHost {
         &self,
         command: RunBasisOfEstimateReviewCommand,
     ) -> Result<BasisOfEstimateReviewResult, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
@@ -1761,7 +1841,7 @@ impl QuantixHost {
         &self,
         command: RunPricedCostBaselineReviewCommand,
     ) -> Result<PricedCostBaselineReviewResult, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
@@ -1832,7 +1912,7 @@ impl QuantixHost {
         &self,
         command: RunPricingAdjustmentReviewCommand,
     ) -> Result<PricingAdjustmentReviewResult, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
@@ -2105,7 +2185,7 @@ impl QuantixHost {
         &self,
         command: RunBidDecisionPackageReviewCommand,
     ) -> Result<BidDecisionPackageReviewResult, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         command
             .validate()
@@ -2144,7 +2224,7 @@ impl QuantixHost {
         &self,
         command: RunSubmissionSectionReviewCommand,
     ) -> Result<SubmissionSectionReviewRunResult, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         command
             .validate()
@@ -3038,17 +3118,11 @@ impl CodexProviderProcess {
         )
         .await
         .map_err(|_| process_failure(false))?;
-        let account = match read_expected_response(
-            conversation,
-            &json!(1),
-            "v2/GetAccountResponse",
-        )
-        .await
+        let account = match read_expected_response(conversation, &json!(1), "v2/GetAccountResponse")
+            .await
         {
             Ok(account) => account,
-            Err(failure)
-                if failure.category == ProviderFailureCategory::AuthenticationRequired =>
-            {
+            Err(failure) if failure.category == ProviderFailureCategory::AuthenticationRequired => {
                 return Ok(codex_connection_without_catalog(
                     ProviderConnectionStatus::AuthenticationRequired,
                     None,
@@ -3056,9 +3130,7 @@ impl CodexProviderProcess {
                     "Connect an OpenAI account to use Codex intelligence.",
                 ));
             }
-            Err(failure)
-                if failure.category == ProviderFailureCategory::SubscriptionRequired =>
-            {
+            Err(failure) if failure.category == ProviderFailureCategory::SubscriptionRequired => {
                 return Ok(codex_connection_without_catalog(
                     ProviderConnectionStatus::SubscriptionRequired,
                     None,

@@ -336,6 +336,48 @@ impl QuantixHost {
         Ok(view)
     }
 
+    pub(crate) async fn refresh_exact_ai_execution_selection(
+        &self,
+        preferred: Option<&AiExecutionSelection>,
+    ) -> Result<Option<AiExecutionSelection>, TenderCommandError> {
+        #[cfg(any(test, feature = "runtime-fixture"))]
+        if self.runtime_is_verified() {
+            if let Some(preferred) = preferred {
+                return Ok(Some(preferred.clone()));
+            }
+            return load_current_ai_execution_selection(self.application_home()).map(Some);
+        }
+
+        let view = self.refresh_application_settings().await?;
+        let preferred = preferred
+            .cloned()
+            .or_else(|| view.ai_execution_selection.clone());
+        let Some(preferred) = preferred else {
+            return Ok(None);
+        };
+        let Some(connection) = view
+            .provider_connections
+            .iter()
+            .find(|connection| connection.connection_id == preferred.connection_id)
+        else {
+            return Ok(None);
+        };
+        if !selection_is_supported(connection, &preferred) {
+            return Ok(None);
+        }
+        Ok(Some(selection_with_current_provenance(
+            connection, &preferred,
+        )?))
+    }
+
+    pub(crate) async fn require_current_live_ai_selection(
+        &self,
+    ) -> Result<AiExecutionSelection, TenderCommandError> {
+        self.refresh_exact_ai_execution_selection(None)
+            .await?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))
+    }
+
     pub async fn update_ai_execution_selection(
         &self,
         command: UpdateAiExecutionSelectionCommand,
@@ -655,7 +697,6 @@ impl QuantixHost {
             }
         };
         if retired {
-            self.set_runtime_verified(false);
             let snapshot = provider.connection_snapshot();
             if matches!(
                 snapshot.status,
@@ -668,15 +709,27 @@ impl QuantixHost {
                 let (status, summary) = codex_failure_connection_status(failure.category);
                 save_codex_connection_status(self.application_home(), status, summary)?;
             }
+            let view = load_application_settings(self.application_home())?;
+            self.set_runtime_verified(
+                view.provider_connections
+                    .iter()
+                    .any(|connection| connection.status == ProviderConnectionStatus::Ready),
+            );
         }
         Ok(())
     }
 
     fn invalidate_missing_provider(&self) -> Result<(), TenderCommandError> {
-        self.set_runtime_verified(false);
         let (status, summary) =
             codex_failure_connection_status(ProviderFailureCategory::ProcessFailed);
-        save_codex_connection_status(self.application_home(), status, summary)
+        save_codex_connection_status(self.application_home(), status, summary)?;
+        let view = load_application_settings(self.application_home())?;
+        self.set_runtime_verified(
+            view.provider_connections
+                .iter()
+                .any(|connection| connection.status == ProviderConnectionStatus::Ready),
+        );
+        Ok(())
     }
 }
 
@@ -733,6 +786,17 @@ pub(crate) fn load_current_ai_execution_selection(
     Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired))
 }
 
+pub(crate) fn load_preferred_ai_execution_selection(
+    application_home: &Path,
+) -> Result<Option<AiExecutionSelection>, TenderCommandError> {
+    let selection = load_application_settings(application_home)?.ai_execution_selection;
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    if selection.is_none() {
+        return load_current_ai_execution_selection(application_home).map(Some);
+    }
+    Ok(selection)
+}
+
 fn selection_from_command(
     connection: &ProviderConnectionView,
     command: &UpdateAiExecutionSelectionCommand,
@@ -759,6 +823,26 @@ fn selection_from_command(
         provider: connection.provider,
         model_id: model.model_id.clone(),
         reasoning: command.reasoning.clone(),
+        catalogue_fetched_at: connection
+            .catalogue_fetched_at
+            .clone()
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?,
+        adapter_version: connection.adapter_version.clone(),
+    })
+}
+
+fn selection_with_current_provenance(
+    connection: &ProviderConnectionView,
+    preferred: &AiExecutionSelection,
+) -> Result<AiExecutionSelection, TenderCommandError> {
+    if !selection_is_supported(connection, preferred) {
+        return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
+    }
+    Ok(AiExecutionSelection {
+        connection_id: connection.connection_id.clone(),
+        provider: connection.provider,
+        model_id: preferred.model_id.clone(),
+        reasoning: preferred.reasoning.clone(),
         catalogue_fetched_at: connection
             .catalogue_fetched_at
             .clone()
