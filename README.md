@@ -17,7 +17,7 @@ Core design language and decisions live in [`CONTEXT.md`](CONTEXT.md), [`AGENTS.
 Requirements: current Node.js/npm, the Rust toolchain, and the native prerequisites documented by Tauri for your operating system.
 
 ```text
-npm install
+npm ci
 npm run tauri dev
 ```
 

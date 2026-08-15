@@ -18,7 +18,7 @@ jobs:
   verify:
     name: Verify deterministic repository gates
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Check out repository
@@ -27,16 +27,26 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version-file: .node-version
           cache: npm
 
-      - name: Configure Rust components
+      - name: Configure pinned Rust toolchain
         shell: pwsh
         run: |
-          rustup default stable
-          rustup component add rustfmt clippy
+          rustup show active-toolchain
           rustc --version
           cargo --version
+
+      - name: Cache Rust dependencies and build output
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-rust-1.97.1-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-1.97.1-
 
       - name: Install locked JavaScript dependencies
         run: npm ci
