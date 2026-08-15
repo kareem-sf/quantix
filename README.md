@@ -14,7 +14,7 @@ Core design language and decisions live in [`CONTEXT.md`](CONTEXT.md), [`AGENTS.
 
 ## Development
 
-Requirements: current Node.js/npm, the Rust toolchain, and the native prerequisites documented by Tauri for your operating system.
+Requirements: the Node.js and Rust versions pinned by [`.node-version`](.node-version) and [`rust-toolchain.toml`](rust-toolchain.toml), plus the native prerequisites documented by Tauri for your operating system.
 
 ```text
 npm ci
