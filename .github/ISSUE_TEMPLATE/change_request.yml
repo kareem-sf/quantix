@@ -1,0 +1,35 @@
+name: Change request
+description: Propose a product, workflow, architecture, or developer-experience change
+title: "change: "
+labels:
+  - needs-triage
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What concrete user or engineering problem needs to be solved?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the observable result without prescribing unnecessary implementation detail.
+    validations:
+      required: true
+  - type: textarea
+    id: authority
+    attributes:
+      label: Existing authority and evidence
+      description: Link relevant issues/specifications, `CONTEXT.md` terms, ADRs, research, or code seams.
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Security, data, and authority impact
+      description: Note any effect on EITL, permissions, Evidence, calculations, reviews, provider exposure, persistence, or release gates.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional. Include rejected alternatives when they materially affect the decision.
