@@ -711,7 +711,7 @@ export function ApplicationSettings({
                   Connect Gemini
                 </button>
               </form>
-            ) : connection.provider !== "codex" && canDisconnect ? (
+            ) : canDisconnect ? (
               <div className="application-settings__login-actions">
                 <button
                   type="button"

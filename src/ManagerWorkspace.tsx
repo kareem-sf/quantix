@@ -95,7 +95,7 @@ function readableError(error: unknown): string {
         return "The local Tender record is temporarily unavailable.";
     }
     if (typeof error.code === "string") {
-      return `Quantix could not complete that action (${error.code.replaceAll("_", " ")}).`;
+      return `Quantix could not complete that action (${error.code.replace(/_/g, " ")}).`;
     }
   }
   if (typeof error === "string" && error.trim()) return error;
@@ -607,7 +607,7 @@ function ArchivedTenders({
                   <div>
                     <dt>Provider cleanup</dt>
                     <dd>
-                      {receipt.provider_cleanup_status.replaceAll("_", " ")}
+                      {receipt.provider_cleanup_status.replace(/_/g, " ")}
                     </dd>
                   </div>
                   <div>
@@ -622,16 +622,13 @@ function ArchivedTenders({
                   <summary>Deletion scope</summary>
                   <p>
                     Checked:{" "}
-                    {receipt.erased_copy_classes
-                      .join(", ")
-                      .replaceAll("_", " ")}
-                    .
+                    {receipt.erased_copy_classes.join(", ").replace(/_/g, " ")}.
                   </p>
                   <p>
                     Outside Quantix control:{" "}
                     {receipt.external_copy_exclusions
                       .join(", ")
-                      .replaceAll("_", " ")}
+                      .replace(/_/g, " ")}
                     .
                   </p>
                 </details>
@@ -961,7 +958,7 @@ export function ManagerWorkspace({
       const setup = await ensureQuantixSetup();
       if (setup.state !== "ready" && setup.state !== "warning") {
         setError(
-          `Quantix workspace check failed: ${setup.issues.join(", ").replaceAll("_", " ")}.`,
+          `Quantix workspace check failed: ${setup.issues.join(", ").replace(/_/g, " ")}.`,
         );
         return;
       }
@@ -1042,14 +1039,14 @@ export function ManagerWorkspace({
     const tenderId = projection?.selected_tender?.tender_id;
     const rationale = retentionRationale.trim();
     if (!tenderId || !retentionAction || !rationale) return;
-    const result = await run(() => {
+    const result = await run(async () => {
       if (retentionAction === "archive") {
-        return archiveTender(tenderId, rationale);
+        return await archiveTender(tenderId, rationale);
       }
       if (retentionAction === "trash") {
-        return trashTender(tenderId, rationale);
+        return await trashTender(tenderId, rationale);
       }
-      return restoreArchivedTender(tenderId, rationale);
+      return await restoreArchivedTender(tenderId, rationale);
     });
     if (!result) return;
     setRetentionAction(null);
@@ -1081,15 +1078,16 @@ export function ManagerWorkspace({
       return;
     }
     const { kind, record } = trashAction;
-    const result = await run(() =>
-      kind === "restore"
-        ? restoreTrashedTender(record.deletion_id, rationale)
-        : purgeTrashedTender(
-            record.deletion_id,
-            rationale,
-            permanentDeleteConfirmation,
-          ),
-    );
+    const result = await run(async () => {
+      if (kind === "restore") {
+        return await restoreTrashedTender(record.deletion_id, rationale);
+      }
+      return await purgeTrashedTender(
+        record.deletion_id,
+        rationale,
+        permanentDeleteConfirmation,
+      );
+    });
     if (!result) return;
     setTrashAction(null);
     setRetentionRationale("");

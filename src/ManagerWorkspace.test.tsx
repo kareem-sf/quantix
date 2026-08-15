@@ -214,8 +214,12 @@ describe("ManagerWorkspace", () => {
       `Type ${trashedRecord.tender_name} to confirm`,
     );
     expect(
-      screen.getByRole("button", { name: "Permanent Delete" }),
-    ).toBeDisabled();
+      (
+        screen.getByRole("button", {
+          name: "Permanent Delete",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
     fireEvent.change(confirm, { target: { value: trashedRecord.tender_name } });
     fireEvent.click(screen.getByRole("button", { name: "Permanent Delete" }));
 
