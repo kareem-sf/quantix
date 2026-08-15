@@ -62,6 +62,16 @@ gate = replaceOnce(
 );
 writeFileSync(gatePath, gate, "utf8");
 
+const acceptancePath = "src-tauri/src/bin/product_acceptance.rs";
+let acceptance = readNormalized(acceptancePath);
+acceptance = replaceOnce(
+  acceptance,
+  "components.get(0) != Some(&10)",
+  "components.first() != Some(&10)",
+  "acceptance Windows version first component",
+);
+writeFileSync(acceptancePath, acceptance, "utf8");
+
 const releasePath = "src-tauri/src/tender_store/final_release.rs";
 let release = readNormalized(releasePath);
 release = replaceOnce(
