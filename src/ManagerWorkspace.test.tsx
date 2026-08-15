@@ -13,9 +13,11 @@ const host = vi.hoisted(() => ({
   chooseAndImportTenderPackage: vi.fn(),
   inspectManagerWorkspace: vi.fn(),
   recordEngineerWorkspaceMessage: vi.fn(),
+  refreshApplicationSettings: vi.fn(),
   retryManagerIntake: vi.fn(),
   selectManagerWorkspaceTender: vi.fn(),
   startManagerTender: vi.fn(),
+  updateAiExecutionSelection: vi.fn(),
 }));
 
 vi.mock("./quantixHost", () => host);
@@ -115,6 +117,96 @@ describe("ManagerWorkspace", () => {
     expect(screen.getByRole("heading", { name: "Files" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Hide Tenders" }));
     expect(screen.getByRole("button", { name: "Show Tenders" })).toBeTruthy();
+  });
+
+  it("opens application Settings and saves a live provider selection atomically", async () => {
+    host.inspectManagerWorkspace.mockResolvedValue(projection);
+    const settings = {
+      ai_execution_selection: {
+        connection_id: "codex_chatgpt",
+        provider: "codex",
+        model_id: "gpt-live-a",
+        reasoning: { kind: "codex_effort", value: "medium" },
+        catalogue_fetched_at: "2026-08-15T10:00:00Z",
+        adapter_version: "0.147.0",
+      },
+      provider_connections: [
+        {
+          connection_id: "codex_chatgpt",
+          provider: "codex",
+          display_name: "OpenAI account via Codex",
+          status: "ready",
+          account_label: "engineer@example.com",
+          account_plan: "plus",
+          models: [
+            {
+              model_id: "gpt-live-a",
+              display_name: "Live model A",
+              description: "First live model",
+              is_default: true,
+              input_modalities: ["text"],
+              reasoning_options: [
+                {
+                  selection: { kind: "codex_effort", value: "medium" },
+                  label: "medium",
+                  description: "Balanced",
+                  is_default: true,
+                },
+              ],
+            },
+            {
+              model_id: "gpt-live-b",
+              display_name: "Live model B",
+              description: "Second live model",
+              is_default: false,
+              input_modalities: ["text"],
+              reasoning_options: [
+                {
+                  selection: { kind: "codex_effort", value: "high" },
+                  label: "high",
+                  description: "Deeper",
+                  is_default: true,
+                },
+              ],
+            },
+          ],
+          catalogue_fetched_at: "2026-08-15T10:00:00Z",
+          adapter_version: "0.147.0",
+          status_summary: "Ready to run Tender work.",
+        },
+      ],
+    };
+    host.refreshApplicationSettings.mockResolvedValue(settings);
+    host.updateAiExecutionSelection.mockResolvedValue({
+      ...settings,
+      ai_execution_selection: {
+        ...settings.ai_execution_selection,
+        model_id: "gpt-live-b",
+        reasoning: { kind: "codex_effort", value: "high" },
+      },
+    });
+
+    render(<ManagerWorkspace aiAvailable />);
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Settings" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Live model A" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Live model B" })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "gpt-live-b" },
+    });
+
+    await waitFor(() => {
+      expect(host.updateAiExecutionSelection).toHaveBeenCalledWith({
+        connection_id: "codex_chatgpt",
+        model_id: "gpt-live-b",
+        reasoning: { kind: "codex_effort", value: "high" },
+      });
+    });
+    expect(screen.getByRole("navigation", { name: "Tenders" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Manager" })).toBeNull();
   });
 
   it("keeps the Host-designated meaningful message visible after routine chatter", async () => {

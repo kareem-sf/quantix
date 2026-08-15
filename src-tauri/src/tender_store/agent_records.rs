@@ -143,6 +143,20 @@ fn profile_supports_linked_retry(profile: &AgentProfileVersionView, task: &Tende
         })
 }
 
+fn load_agent_run_provider_binding(
+    connection: &rusqlite::Connection,
+    run_id: &str,
+) -> Result<crate::application_settings::AiExecutionSelection, TenderCommandError> {
+    let binding_json: String = connection
+        .query_row(
+            "SELECT binding_json FROM agent_run_provider_bindings WHERE run_id = ?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    parse_canonical_json(&binding_json)
+}
+
 impl TenderStore {
     pub(crate) fn inspect_bootstrap_team(
         &self,
@@ -193,6 +207,8 @@ impl TenderStore {
             .parent()
             .and_then(Path::parent)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let provider_selection =
+            crate::application_settings::load_current_ai_execution_selection(application_home)?;
         let workspace = agent_workspace_path(application_home, tender_id.as_str(), &run_id);
 
         let prepared = (|| {
@@ -426,6 +442,12 @@ impl TenderStore {
                     ],
                 )
                 .map_err(sql_error)?;
+            super::record_agent_run_provider_binding(
+                &transaction,
+                &run_id,
+                &provider_selection,
+                &created_at,
+            )?;
             insert_event(
                 &transaction,
                 &run_id,
@@ -457,6 +479,7 @@ impl TenderStore {
             transaction.commit().map_err(sql_error)?;
             Ok(PreparedAgentRun {
                 run_id,
+                provider_selection,
                 profile,
                 task,
                 permission_grant,
@@ -3040,6 +3063,7 @@ impl TenderStore {
             (row.profile_id.clone(), row.profile_version),
         )?;
         let task = load_task(&self.connection, &row.task_id)?;
+        let provider_selection = load_agent_run_provider_binding(&self.connection, run_id)?;
         let usage = row
             .usage_json
             .as_deref()
@@ -3111,6 +3135,7 @@ impl TenderStore {
             has_linked_retry,
             linked_retry_supported,
             state,
+            provider_selection,
             profile_identity: profile.identity,
             profile_profession: profile.profession,
             profile_version: profile.version,
@@ -3224,6 +3249,7 @@ impl TenderStore {
             (row.profile_id.clone(), row.profile_version),
         )?;
         let task = load_task(&self.connection, &row.task_id)?;
+        let provider_selection = load_agent_run_provider_binding(&self.connection, run_id)?;
         let permission_grant: PermissionGrant = parse_canonical_json(&row.permission_grant_json)?;
         if task.profile_id != profile.profile_id || task.profile_version != profile.version {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
@@ -3328,6 +3354,7 @@ impl TenderStore {
             retry_of_run_id: row.retry_of_run_id,
             linked_retry_supported,
             state,
+            provider_selection,
             profile,
             task,
             permission_grant,

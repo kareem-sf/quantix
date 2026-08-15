@@ -1512,6 +1512,8 @@ impl TenderStore {
             .parent()
             .and_then(std::path::Path::parent)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let provider_selection =
+            crate::application_settings::load_current_ai_execution_selection(application_home)?;
         let workspace = application_home.join("staging").join(format!(
             "agent-{}-{}",
             tender_id.as_str(),
@@ -2295,6 +2297,12 @@ impl TenderStore {
                     ],
                 )
                 .map_err(sql_error)?;
+            super::record_agent_run_provider_binding(
+                &transaction,
+                &run_id,
+                &provider_selection,
+                &created_at,
+            )?;
             insert_event(
                 &transaction,
                 &run_id,
@@ -2376,6 +2384,7 @@ impl TenderStore {
             transaction.commit().map_err(sql_error)?;
             Ok(PreparedAgentRun {
                 run_id,
+                provider_selection,
                 profile,
                 task,
                 permission_grant,

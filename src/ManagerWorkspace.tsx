@@ -11,6 +11,7 @@ import {
   MessageSquare,
   Plus,
   Send,
+  Settings,
   Users,
   X,
 } from "lucide-react";
@@ -28,6 +29,7 @@ import type { ManagerWorkspaceTender } from "./bindings/ManagerWorkspaceTender";
 import type { TenderOfficeMessage } from "./bindings/TenderOfficeMessage";
 import type { TenderPackageSourceKind } from "./bindings/TenderPackageSourceKind";
 import type { WorkspaceCurrentAction } from "./bindings/WorkspaceCurrentAction";
+import { ApplicationSettings } from "./ApplicationSettings";
 import {
   chooseAndImportTenderPackage,
   inspectManagerWorkspace,
@@ -575,6 +577,7 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
   const [projection, setProjection] =
     useState<ManagerWorkspaceProjection | null>(null);
   const [view, setView] = useState<WorkspaceView>("manager");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(
     () => window.matchMedia("(min-width: 820px)").matches,
   );
@@ -643,6 +646,7 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
       if (next) {
         setProjection(next);
         setView("manager");
+        setSettingsOpen(false);
       }
     },
     [aiAvailable, run],
@@ -654,6 +658,7 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
       if (next) {
         setProjection(next);
         setView("manager");
+        setSettingsOpen(false);
         if (window.matchMedia("(max-width: 819px)").matches) {
           setSidebarOpen(false);
         }
@@ -761,6 +766,22 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
             />
           ))}
         </nav>
+        <div className="manager-workspace__sidebar-footer">
+          <button
+            type="button"
+            aria-current={settingsOpen ? "page" : undefined}
+            onClick={() => {
+              setSettingsOpen(true);
+              setTeamOpen(false);
+              if (window.matchMedia("(max-width: 819px)").matches) {
+                setSidebarOpen(false);
+              }
+            }}
+          >
+            <Settings size={17} aria-hidden="true" />
+            Settings
+          </button>
+        </div>
       </aside>
 
       <div className="manager-workspace__main">
@@ -774,7 +795,9 @@ export function ManagerWorkspace({ aiAvailable }: ManagerWorkspaceProps) {
           </div>
         ) : null}
 
-        {selected && projection ? (
+        {settingsOpen ? (
+          <ApplicationSettings aiAvailable={aiAvailable} />
+        ) : selected && projection ? (
           <>
             <div className="manager-workspace__heading">
               <div>

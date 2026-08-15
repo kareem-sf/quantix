@@ -143,6 +143,31 @@ button {
   overflow: auto;
 }
 
+.manager-workspace__sidebar-footer {
+  padding: 10px;
+  border-top: 1px solid #e5e5e1;
+}
+
+.manager-workspace__sidebar-footer button {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 42px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 9px;
+  color: #555551;
+  background: transparent;
+  cursor: pointer;
+}
+
+.manager-workspace__sidebar-footer button:hover,
+.manager-workspace__sidebar-footer button[aria-current="page"] {
+  color: #242422;
+  background: #e7e7e3;
+}
+
 .manager-workspace__tender {
   display: flex;
   gap: 8px;
@@ -213,6 +238,174 @@ button {
   flex-direction: column;
   overflow: hidden;
   background: #fff;
+}
+
+.application-settings {
+  width: min(720px, 100%);
+  margin: 0 auto;
+  padding: 54px 40px 80px;
+  overflow: auto;
+}
+
+.application-settings__heading {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding-bottom: 28px;
+  border-bottom: 1px solid #e5e5e1;
+}
+
+.application-settings__heading > span {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 10px;
+  background: #f0f0ed;
+}
+
+.application-settings h1,
+.application-settings h2,
+.application-settings p {
+  margin: 0;
+}
+
+.application-settings h1 {
+  font-size: 28px;
+  letter-spacing: -0.035em;
+}
+
+.application-settings__heading p,
+.application-settings__section-heading p,
+.application-settings__provider > p,
+.application-settings label small,
+.application-settings__provenance,
+.application-settings__empty,
+.application-settings__loading {
+  color: #73736e;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.application-settings__section {
+  padding-top: 30px;
+}
+
+.application-settings__section-heading,
+.application-settings__provider-status {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.application-settings__section-heading h2 {
+  margin-bottom: 5px;
+  font-size: 17px;
+}
+
+.application-settings__section-heading button {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid #d9d9d4;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.application-settings__provider {
+  display: grid;
+  gap: 20px;
+  margin-top: 20px;
+  padding: 20px;
+  border: 1px solid #e1e1dc;
+  border-radius: 12px;
+  background: #fcfcfa;
+}
+
+.application-settings__provider-status > div,
+.application-settings label {
+  display: grid;
+  gap: 5px;
+}
+
+.application-settings__provider-status strong,
+.application-settings label > span {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.application-settings__provider-status div > span {
+  color: #73736e;
+  font-size: 12px;
+}
+
+.application-settings__provider-status > span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #6d520d;
+  background: #f4e8c5;
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.application-settings__provider-status > span[data-status="ready"] {
+  color: #245d48;
+  background: #dcece4;
+}
+
+.application-settings select {
+  min-height: 42px;
+  padding: 0 11px;
+  border: 1px solid #d5d5d0;
+  border-radius: 8px;
+  color: #242422;
+  background: #fff;
+}
+
+.application-settings select:focus-visible,
+.application-settings button:focus-visible {
+  outline: 3px solid rgb(58 105 86 / 34%);
+  outline-offset: 2px;
+}
+
+.application-settings__unavailable {
+  color: #792d27;
+}
+
+.application-settings__provenance {
+  padding-top: 16px;
+  border-top: 1px solid #e5e5e1;
+}
+
+.application-settings__error {
+  margin-top: 18px !important;
+  padding: 11px 13px;
+  border-radius: 8px;
+  color: #792d27;
+  background: #f9e5e2;
+  font-size: 13px;
+}
+
+.application-settings__loading,
+.application-settings__empty {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 28px 0;
+}
+
+.is-spinning {
+  animation: quantix-spin 900ms linear infinite;
+}
+
+@keyframes quantix-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .manager-workspace__heading {

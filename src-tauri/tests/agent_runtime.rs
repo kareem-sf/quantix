@@ -2,13 +2,15 @@ use std::{fs, io, path::Path, sync::Arc, time::Duration};
 
 use quantix_lib::{
     ensure_quantix_setup, AgentAccessRequestStatus, AgentAccessResolution,
-    AgentRunRecoveryDisposition, AgentRunState, ApproveAgentAccessCommand, CreateTenderCommand,
-    DataClassification, DeviceProtection, InspectAgentRunCommand, InspectAgentRunHistoryCommand,
-    InterruptAgentRunCommand, PermissionDenialReason, ProviderEventKind, ProviderFailureCategory,
-    ProviderRateLimitState, QuantixHost, RequestAgentAccessCommand, ResolveAgentAccessCommand,
+    AgentRunRecoveryDisposition, AgentRunState, AiProviderKind, ApproveAgentAccessCommand,
+    CodexReadiness, CreateTenderCommand, DataClassification, DeviceProtection,
+    InspectAgentRunCommand, InspectAgentRunHistoryCommand, InterruptAgentRunCommand,
+    PermissionDenialReason, ProviderEventKind, ProviderFailureCategory, ProviderRateLimitState,
+    ProviderReasoningSelection, QuantixHost, RequestAgentAccessCommand, ResolveAgentAccessCommand,
     ResolveIndeterminateAgentRunCommand, ReviseTenderCommand, RunBootstrapAgentCommand,
     RuntimeLayout, SetupPlatform, SetupState, StoragePermissions, TenderErrorCode,
-    TenderIntegrityIssue, TenderIntegrityState, VerificationStatus, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    TenderIntegrityIssue, TenderIntegrityState, UpdateAiExecutionSelectionCommand,
+    VerificationStatus, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 struct ReadySetupPlatform;
@@ -195,6 +197,12 @@ async fn codex_model_capability_is_discovered_across_paginated_results() {
         .expect("discover a text model on a later page");
 
     assert_eq!(run.state, AgentRunState::Completed, "{run:#?}");
+    assert_eq!(run.provider_selection.provider, AiProviderKind::Codex);
+    assert_eq!(run.provider_selection.model_id, "gpt-5.6-terra");
+    assert_eq!(
+        run.provider_selection.reasoning,
+        ProviderReasoningSelection::CodexEffort("medium".into())
+    );
     assert!(run.proposed_result.is_some());
 }
 
@@ -370,6 +378,63 @@ async fn one_bootstrap_agent_turn_registers_only_a_validated_proposed_result() {
     assert!(!canonical_view.contains("streamed-delta-must-not-be-canonical"));
     assert!(!canonical_view.contains("hidden-reasoning-must-not-be-canonical"));
     assert!(!canonical_view.contains("raw-protocol"));
+}
+
+#[tokio::test]
+async fn non_default_live_selection_is_bound_to_the_run_and_survives_later_changes() {
+    let harness = Harness::new("selected-non-default");
+    assert_eq!(
+        harness
+            .host
+            .inspect_codex_subscription(tokio_util::sync::CancellationToken::new())
+            .await,
+        CodexReadiness::Ready
+    );
+    harness
+        .host
+        .update_ai_execution_selection(UpdateAiExecutionSelectionCommand {
+            connection_id: "codex_chatgpt".into(),
+            model_id: "gpt-5.6-sol".into(),
+            reasoning: ProviderReasoningSelection::CodexEffort("high".into()),
+        })
+        .await
+        .expect("select non-default live model");
+
+    let run = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("run with selected model");
+    assert_eq!(run.provider_selection.model_id, "gpt-5.6-sol");
+    assert_eq!(
+        run.provider_selection.reasoning,
+        ProviderReasoningSelection::CodexEffort("high".into())
+    );
+
+    harness
+        .host
+        .update_ai_execution_selection(UpdateAiExecutionSelectionCommand {
+            connection_id: "codex_chatgpt".into(),
+            model_id: "gpt-5.6-terra".into(),
+            reasoning: ProviderReasoningSelection::CodexEffort("medium".into()),
+        })
+        .await
+        .expect("change future-run selection");
+    let historical = harness
+        .host
+        .inspect_agent_run(InspectAgentRunCommand {
+            tender_id: harness.tender_id.clone(),
+            run_id: run.run_id,
+        })
+        .expect("inspect historical run");
+    assert_eq!(historical.provider_selection.model_id, "gpt-5.6-sol");
+    assert_eq!(
+        historical.provider_selection.reasoning,
+        ProviderReasoningSelection::CodexEffort("high".into())
+    );
 }
 
 #[tokio::test]

@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -26,6 +26,9 @@ use super::{
     PreparedAgentRun, ProviderEventKind, ProviderExecution, ProviderFailure,
     ProviderFailureCategory, ProviderUsage, RunCallbacks, PROVIDER_OUTPUT_LIMIT,
 };
+use crate::application_settings::{
+    AiProviderKind, ProviderConnectionView, ProviderReasoningSelection,
+};
 
 const COMMAND_CAPACITY: usize = 8;
 const ACTOR_OUTPUT_LIMIT: usize = PROVIDER_OUTPUT_LIMIT * 2;
@@ -38,6 +41,7 @@ pub(crate) struct CodexProvider {
     alive: Arc<AtomicBool>,
     terminated: Arc<AtomicBool>,
     termination: Arc<Notify>,
+    connection: Arc<Mutex<ProviderConnectionView>>,
 }
 
 impl CodexProvider {
@@ -57,6 +61,7 @@ impl CodexProvider {
                 CancellationToken::new(),
             ) => process?,
         };
+        let connection = Arc::new(Mutex::new(process.connection_snapshot()));
         let (sender, receiver) = mpsc::channel(COMMAND_CAPACITY);
         let alive = Arc::new(AtomicBool::new(true));
         let terminated = Arc::new(AtomicBool::new(false));
@@ -67,22 +72,31 @@ impl CodexProvider {
             Arc::clone(&alive),
             Arc::clone(&terminated),
             Arc::clone(&termination),
+            Arc::clone(&connection),
         ));
         Ok(Self {
             sender,
             alive,
             terminated,
             termination,
+            connection,
         })
     }
 
-    pub(crate) async fn refresh_readiness(&self) -> Result<(), ProviderFailure> {
+    pub(crate) async fn refresh_readiness(&self) -> Result<bool, ProviderFailure> {
         let (response, receiver) = oneshot::channel();
         self.sender
             .send(ProviderCommand::Refresh { response })
             .await
             .map_err(|_| process_failure(false))?;
         receiver.await.map_err(|_| process_failure(false))?
+    }
+
+    pub(crate) fn connection_snapshot(&self) -> ProviderConnectionView {
+        self.connection
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     pub(super) async fn run_turn(
@@ -143,11 +157,15 @@ impl CodexProvider {
     pub(crate) fn is_closed(&self) -> bool {
         !self.alive.load(Ordering::Acquire) || self.sender.is_closed()
     }
+
+    pub(crate) fn same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.alive, &other.alive)
+    }
 }
 
 enum ProviderCommand {
     Refresh {
-        response: oneshot::Sender<Result<(), ProviderFailure>>,
+        response: oneshot::Sender<Result<bool, ProviderFailure>>,
     },
     Run(Box<ProviderRunCommand>),
     Shutdown {
@@ -217,6 +235,7 @@ async fn run_actor(
     alive: Arc<AtomicBool>,
     terminated: Arc<AtomicBool>,
     termination: Arc<Notify>,
+    connection: Arc<Mutex<ProviderConnectionView>>,
 ) {
     let _termination_signal = ActorTerminationSignal {
         terminated,
@@ -244,9 +263,14 @@ async fn run_actor(
                 match command {
                     ProviderCommand::Refresh { response } => {
                         let result = if runs.is_empty() {
-                            process.refresh_readiness().await
+                            process.refresh_readiness().await.map(|updated| {
+                                *connection
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = updated;
+                                true
+                            })
                         } else {
-                            Ok(())
+                            Ok(false)
                         };
                         let fatal = result.is_err();
                         let _ = response.send(result);
@@ -571,6 +595,9 @@ async fn send_thread(
         .get_mut(run_id)
         .ok_or_else(|| protocol_failure(false))?;
     let existing = run.prepared.provider_thread_ref.as_deref();
+    if run.prepared.provider_selection.provider != AiProviderKind::Codex {
+        return Err(protocol_failure(false));
+    }
     let resumed = existing.is_some();
     let (method, params) = if let Some(thread_ref) = existing {
         (
@@ -587,6 +614,7 @@ async fn send_thread(
                 "approvalPolicy": "never",
                 "sandbox": "workspaceWrite",
                 "serviceName": "quantix",
+                "model": run.prepared.provider_selection.model_id,
                 "dynamicTools": tools,
             }),
         )
@@ -618,6 +646,14 @@ async fn send_turn(
         .as_deref()
         .ok_or_else(|| protocol_failure(false))?;
     let instruction_bundle = provider_instruction_bundle(&run.prepared)?;
+    if run.prepared.provider_selection.provider != AiProviderKind::Codex {
+        return Err(protocol_failure(false));
+    }
+    let effort = match &run.prepared.provider_selection.reasoning {
+        ProviderReasoningSelection::CodexEffort(effort) => Some(effort.as_str()),
+        ProviderReasoningSelection::ProviderDefault => None,
+        ProviderReasoningSelection::AnthropicEffort(_) => return Err(protocol_failure(false)),
+    };
     let on_requested = std::mem::replace(
         &mut run.callbacks.on_requested,
         Box::new(|| Err(protocol_failure(false))),
@@ -633,6 +669,8 @@ async fn send_turn(
             "params": {
                 "threadId": thread_ref,
                 "input": [{ "type": "text", "text": instruction_bundle }],
+                "model": run.prepared.provider_selection.model_id,
+                "effort": effort,
                 "cwd": run.prepared.workspace
                     .join(&run.prepared.permission_grant.workspace.working_area),
                 "approvalPolicy": "never",

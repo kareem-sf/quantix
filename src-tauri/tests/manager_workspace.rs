@@ -1,12 +1,13 @@
 use std::{fs, io, path::Path, sync::Arc};
 
 use quantix_lib::{
-    ensure_quantix_setup, CreateTenderCommand, DeviceProtection, ImportTenderPackageCommand,
-    InspectManagerWorkspaceCommand, ManagerIntakeStage, ManagerIntakeStatusKind, QuantixHost,
+    ensure_quantix_setup, AiProviderKind, CodexReadiness, CreateTenderCommand, DeviceProtection,
+    ImportTenderPackageCommand, InspectManagerWorkspaceCommand, ManagerIntakeStage,
+    ManagerIntakeStatusKind, ProviderReasoningSelection, QuantixHost,
     RecordEngineerWorkspaceMessageCommand, RuntimeLayout, SelectManagerWorkspaceTenderCommand,
     SetupPlatform, SetupState, StoragePermissions, TenderOfficeMessageAuthor,
-    TenderOfficeMessageKind, WorkspaceActionKind, WorkspaceMessageReferenceKind,
-    MINIMUM_SETUP_FREE_SPACE_BYTES,
+    TenderOfficeMessageKind, UpdateAiExecutionSelectionCommand, WorkspaceActionKind,
+    WorkspaceMessageReferenceKind, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use rusqlite::Connection;
 
@@ -80,6 +81,54 @@ fn public_host_projection_exposes_registered_intake_stage_and_package_provenance
         .expect("registered source provenance");
     assert_eq!(source.package_path, "01 Instructions/ITT.pdf");
     assert!(source.sha256.is_some());
+}
+
+#[tokio::test]
+async fn public_host_exposes_and_persists_the_live_codex_selection() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let resources = user_home.path().join("resources");
+    install_codex_fixture(&resources, "success");
+    let host = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(resources),
+    );
+    host.accept_runtime_fixture();
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    assert_eq!(
+        host.inspect_codex_subscription(tokio_util::sync::CancellationToken::new())
+            .await,
+        CodexReadiness::Ready
+    );
+
+    let settings = host
+        .refresh_application_settings()
+        .await
+        .expect("refresh live settings");
+    let connection = settings
+        .provider_connections
+        .iter()
+        .find(|connection| connection.connection_id == "codex_chatgpt")
+        .expect("live Codex connection");
+    assert_eq!(connection.models[0].model_id, "gpt-5.6-terra");
+    let saved = host
+        .update_ai_execution_selection(UpdateAiExecutionSelectionCommand {
+            connection_id: connection.connection_id.clone(),
+            model_id: connection.models[0].model_id.clone(),
+            reasoning: ProviderReasoningSelection::CodexEffort("medium".into()),
+        })
+        .await
+        .expect("save exact selection");
+    let selection = saved
+        .ai_execution_selection
+        .expect("persisted execution selection");
+    assert_eq!(selection.provider, AiProviderKind::Codex);
+    assert_eq!(selection.model_id, "gpt-5.6-terra");
+    assert_eq!(
+        selection.reasoning,
+        ProviderReasoningSelection::CodexEffort("medium".into())
+    );
 }
 
 #[tokio::test]

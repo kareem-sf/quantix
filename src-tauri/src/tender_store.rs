@@ -18,7 +18,6 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
-use crate::agent_runtime::{bootstrap_profile, BootstrapRole};
 use crate::document_parsing::{
     DocumentParseResult, EvidenceDocument, EvidenceLanguage, EvidenceLocation,
     EvidenceLocationKind, EvidenceRegion, EvidenceSearchHit, EvidenceSearchResult,
@@ -29,6 +28,10 @@ use crate::tender_intake::{
     prepare_package, ConfirmSourceRelationshipCommand, DocumentRegister, DocumentRegisterEntry,
     ImportTenderPackageCommand, IntakeExceptionCode, PreparedIntake, RegistrationState,
     SupersessionState, TenderPackageImportResult,
+};
+use crate::{
+    agent_runtime::{bootstrap_profile, BootstrapRole},
+    application_settings::AiExecutionSelection,
 };
 use crate::{host::OrdinaryWorkLease, setup::SetupState, QuantixHost};
 
@@ -239,7 +242,25 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 28;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 29;
+
+pub(crate) fn record_agent_run_provider_binding(
+    transaction: &Transaction<'_>,
+    run_id: &str,
+    selection: &AiExecutionSelection,
+    recorded_at: &str,
+) -> Result<(), TenderCommandError> {
+    let binding_json = serde_json_canonicalizer::to_string(selection)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+    transaction
+        .execute(
+            "INSERT INTO agent_run_provider_bindings (run_id, binding_json, recorded_at)
+             VALUES (?1, ?2, ?3)",
+            params![run_id, binding_json, recorded_at],
+        )
+        .map_err(sql_error)?;
+    Ok(())
+}
 const MAX_TENDER_NAME_BYTES: usize = 200;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const ZERO_AUDIT_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -1562,6 +1583,12 @@ CREATE TABLE agent_runs (
     (status IN ('interrupted', 'failed', 'indeterminate') AND completed_at IS NOT NULL
       AND failure_json IS NOT NULL)
   )
+);
+CREATE TABLE agent_run_provider_bindings (
+  run_id TEXT PRIMARY KEY,
+  binding_json TEXT NOT NULL CHECK (json_valid(binding_json)),
+  recorded_at TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
 );
 CREATE TABLE agent_run_recovery_dispositions (
   run_id TEXT PRIMARY KEY,
@@ -3355,6 +3382,16 @@ CREATE TRIGGER agent_runs_no_delete
 BEFORE DELETE ON agent_runs
 BEGIN
   SELECT RAISE(ABORT, 'Agent Runs are immutable');
+END;
+CREATE TRIGGER agent_run_provider_bindings_no_update
+BEFORE UPDATE ON agent_run_provider_bindings
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Run provider bindings are immutable');
+END;
+CREATE TRIGGER agent_run_provider_bindings_no_delete
+BEFORE DELETE ON agent_run_provider_bindings
+BEGIN
+  SELECT RAISE(ABORT, 'Agent Run provider bindings are immutable');
 END;
 CREATE TRIGGER agent_run_recovery_dispositions_no_update
 BEFORE UPDATE ON agent_run_recovery_dispositions

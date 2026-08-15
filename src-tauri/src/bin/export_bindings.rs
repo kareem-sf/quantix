@@ -1,5 +1,6 @@
 use quantix_lib::{
-    AcceptanceArtifactHash, AcceptanceCheckResult, AcceptanceStageTiming,
+    AcceptanceArtifactHash, AcceptanceCheckResult, AcceptanceStageTiming, AgentRunInspection,
+    AgentRunSummary, AiExecutionSelection, AiProviderKind, ApplicationSettingsView,
     ApproveSubmissionReleaseCommand, BootstrapRole, CodexProductionAssuranceEvidence,
     CreatePortableTenderArchiveCommand, DeletionReceipt, EvaluatePublicReleaseGateCommand,
     ExportReleaseCopyCommand, ImportPortableTenderArchiveCommand, InspectManagerWorkspaceCommand,
@@ -8,18 +9,20 @@ use quantix_lib::{
     ManagerIntakeStatusKind, ManagerWorkspaceProjection, ManagerWorkspaceTender,
     NativePlatformQualificationEvidence, NativePlatformQualificationRecord,
     PortableTenderArchiveRecord, PrivateQualificationRecord, ProductAcceptanceOutcome,
-    ProductAcceptanceRecord, ProductAcceptanceRun, PublicReleaseGateOutcome,
-    PublicReleaseGateRecord, RecordEngineerWorkspaceMessageCommand,
-    RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand, ReleaseCopyExport,
-    ReleaseCopyItem, RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand,
+    ProductAcceptanceRecord, ProductAcceptanceRun, ProviderConnectionStatus,
+    ProviderConnectionView, ProviderModelOption, ProviderReasoningOption,
+    ProviderReasoningSelection, PublicReleaseGateOutcome, PublicReleaseGateRecord,
+    RecordEngineerWorkspaceMessageCommand, RecordLiveQualificationRunCommand,
+    RecordNativePlatformQualificationCommand, ReleaseCopyExport, ReleaseCopyItem,
+    RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand,
     SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand, SubmissionReleaseApproval,
     SubmissionReleaseInspection, SubmissionReleaseState, TechnicalRiskAcceptance,
     TenderOfficeMessage, TenderOfficeMessageAuthor, TenderOfficeMessageKind,
     TenderRetentionDecisionCommand, TenderRetentionDecisionRecord, TenderRetentionState,
-    TrashedTenderDecisionCommand, TrashedTenderRecord, TrashedTenderState, WorkspaceActionKind,
-    WorkspaceCurrentAction, WorkspaceFilesSummary, WorkspaceMessageReference,
-    WorkspaceMessageReferenceKind, WorkspaceTeamSummary, WorkspaceTenderDocument,
-    WorkspaceWorkSummary,
+    TrashedTenderDecisionCommand, TrashedTenderRecord, TrashedTenderState,
+    UpdateAiExecutionSelectionCommand, WorkspaceActionKind, WorkspaceCurrentAction,
+    WorkspaceFilesSummary, WorkspaceMessageReference, WorkspaceMessageReferenceKind,
+    WorkspaceTeamSummary, WorkspaceTenderDocument, WorkspaceWorkSummary,
 };
 use ts_rs::{Config, TS};
 
@@ -87,5 +90,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ManagerIntakeStatus::export_all(&config)?;
     BootstrapRole::export_all(&config)?;
     ManagerWorkspaceProjection::export_all(&config)?;
+    AiProviderKind::export_all(&config)?;
+    ProviderConnectionStatus::export_all(&config)?;
+    ProviderReasoningSelection::export_all(&config)?;
+    ProviderReasoningOption::export_all(&config)?;
+    ProviderModelOption::export_all(&config)?;
+    ProviderConnectionView::export_all(&config)?;
+    AiExecutionSelection::export_all(&config)?;
+    ApplicationSettingsView::export_all(&config)?;
+    UpdateAiExecutionSelectionCommand::export_all(&config)?;
+    AgentRunInspection::export_all(&config)?;
+    AgentRunSummary::export_all(&config)?;
     Ok(())
 }

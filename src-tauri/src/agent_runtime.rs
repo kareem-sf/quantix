@@ -14,6 +14,12 @@ use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 
 use crate::{
+    application_settings::{
+        codex_connection_version, codex_failure_connection_status, save_codex_connection_status,
+        save_live_connection, AiExecutionSelection, AiProviderKind, ProviderConnectionStatus,
+        ProviderConnectionView, ProviderModelOption, ProviderReasoningOption,
+        ProviderReasoningSelection, CODEX_CONNECTION_ID,
+    },
     process_supervisor::{ProcessError, ProcessSpec, ProcessTermination, SupervisedConversation},
     tender_store::{
         lock_mutex_with_check, require_setup, BasisOfEstimateReviewResult,
@@ -51,6 +57,70 @@ use codex_protocol::{
     typed_tool_arguments_are_valid, typed_tool_is_known, write_rpc,
 };
 use permissions::permission_duration;
+
+#[derive(Clone)]
+pub(crate) enum AgentProvider {
+    Codex(CodexProvider),
+}
+
+impl AgentProvider {
+    async fn codex_readiness(
+        supervisor: &crate::process_supervisor::ProcessSupervisor,
+        executable: PathBuf,
+        process_directory: &Path,
+        cancellation: CancellationToken,
+    ) -> Result<Self, ProviderFailure> {
+        CodexProvider::readiness(supervisor, executable, process_directory, cancellation)
+            .await
+            .map(Self::Codex)
+    }
+
+    pub(crate) async fn refresh_readiness(&self) -> Result<bool, ProviderFailure> {
+        match self {
+            Self::Codex(provider) => provider.refresh_readiness().await,
+        }
+    }
+
+    pub(crate) fn connection_snapshot(&self) -> ProviderConnectionView {
+        match self {
+            Self::Codex(provider) => provider.connection_snapshot(),
+        }
+    }
+
+    async fn run_turn(
+        &self,
+        prepared: PreparedAgentRun,
+        operation_limit: Duration,
+        cancellation: CancellationToken,
+        callbacks: RunCallbacks,
+    ) -> ProviderExecution {
+        match self {
+            Self::Codex(provider) => {
+                provider
+                    .run_turn(prepared, operation_limit, cancellation, callbacks)
+                    .await
+            }
+        }
+    }
+
+    pub(crate) async fn shutdown(&self) -> Result<(), ProcessError> {
+        match self {
+            Self::Codex(provider) => provider.shutdown().await,
+        }
+    }
+
+    fn is_closed(&self) -> bool {
+        match self {
+            Self::Codex(provider) => provider.is_closed(),
+        }
+    }
+
+    pub(crate) fn same_instance(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Codex(left), Self::Codex(right)) => left.same_instance(right),
+        }
+    }
+}
 pub use permissions::{
     approve_one_run_access, AccessApproval, AccessRequest, AgentAccessRequestStatus,
     AgentAccessRequestView, AgentAccessResolution, AgentRunWorkspaceManifest, DataClassification,
@@ -573,6 +643,7 @@ pub struct AgentRunInspection {
     pub retry_of_run_id: Option<String>,
     pub linked_retry_supported: bool,
     pub state: AgentRunState,
+    pub provider_selection: AiExecutionSelection,
     pub profile: AgentProfileVersionView,
     pub task: TenderTaskView,
     pub permission_grant: PermissionGrant,
@@ -619,6 +690,7 @@ pub struct AgentRunSummary {
     pub has_linked_retry: bool,
     pub linked_retry_supported: bool,
     pub state: AgentRunState,
+    pub provider_selection: AiExecutionSelection,
     pub profile_identity: String,
     pub profile_profession: String,
     pub profile_version: u32,
@@ -636,6 +708,7 @@ pub struct AgentRunSummary {
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedAgentRun {
     pub run_id: String,
+    pub provider_selection: AiExecutionSelection,
     pub profile: AgentProfileVersionView,
     pub task: TenderTaskView,
     pub permission_grant: PermissionGrant,
@@ -2242,13 +2315,25 @@ impl QuantixHost {
     ) -> CodexReadiness {
         match self.try_inspect_codex_subscription(cancellation).await {
             Ok(()) => CodexReadiness::Ready,
-            Err(failure) if failure.category == ProviderFailureCategory::AuthenticationRequired => {
-                CodexReadiness::AuthenticationRequired
+            Err(failure) => {
+                let (status, summary) = codex_failure_connection_status(failure.category);
+                let readiness = match status {
+                    ProviderConnectionStatus::AuthenticationRequired => {
+                        CodexReadiness::AuthenticationRequired
+                    }
+                    ProviderConnectionStatus::SubscriptionRequired => {
+                        CodexReadiness::SubscriptionRequired
+                    }
+                    ProviderConnectionStatus::Ready
+                    | ProviderConnectionStatus::TemporarilyUnavailable
+                    | ProviderConnectionStatus::Incompatible => CodexReadiness::Unavailable,
+                };
+                if save_codex_connection_status(self.application_home(), status, summary).is_err() {
+                    CodexReadiness::Unavailable
+                } else {
+                    readiness
+                }
             }
-            Err(failure) if failure.category == ProviderFailureCategory::SubscriptionRequired => {
-                CodexReadiness::SubscriptionRequired
-            }
-            Err(_) => CodexReadiness::Unavailable,
         }
     }
 
@@ -2270,7 +2355,7 @@ impl QuantixHost {
             provider_slot = self.agent_provider().lock() => provider_slot,
         };
         if provider_slot.is_none() {
-            let provider = CodexProvider::readiness(
+            let provider = AgentProvider::codex_readiness(
                 self.process_supervisor(),
                 self.runtime_layout().codex_executable(),
                 self.application_home(),
@@ -2283,7 +2368,10 @@ impl QuantixHost {
                 }
                 return Err(readiness_interruption_failure());
             }
-            *provider_slot = Some(provider?);
+            let provider = provider?;
+            save_live_connection(self.application_home(), &provider.connection_snapshot())
+                .map_err(|_| process_failure(false))?;
+            *provider_slot = Some(provider);
             return Ok(());
         }
         let provider = provider_slot
@@ -2301,8 +2389,11 @@ impl QuantixHost {
             *provider_slot = None;
             drop(provider_slot);
             let _ = provider.shutdown().await;
+        } else {
+            save_live_connection(self.application_home(), &provider.connection_snapshot())
+                .map_err(|_| process_failure(false))?;
         }
-        readiness
+        readiness.map(|_| ())
     }
 }
 
@@ -2319,7 +2410,7 @@ async fn execute_provider_turn(
     let provider = {
         let mut provider_slot = host.agent_provider().lock().await;
         if provider_slot.is_none() {
-            let provider = match CodexProvider::readiness(
+            let provider = match AgentProvider::codex_readiness(
                 host.process_supervisor(),
                 host.runtime_layout().codex_executable(),
                 host.application_home(),
@@ -2461,8 +2552,18 @@ async fn execute_provider_turn(
         Some(started.elapsed().as_millis().try_into().unwrap_or(u64::MAX));
     if provider.is_closed() {
         let mut provider_slot = host.agent_provider().lock().await;
-        if provider_slot.as_ref().is_some_and(CodexProvider::is_closed) {
+        let removed = provider_slot
+            .as_ref()
+            .is_some_and(|current| current.same_instance(&provider) && current.is_closed());
+        if removed {
             *provider_slot = None;
+        }
+        drop(provider_slot);
+        if removed {
+            host.set_runtime_verified(false);
+            let (status, summary) =
+                codex_failure_connection_status(ProviderFailureCategory::ProcessFailed);
+            let _ = save_codex_connection_status(host.application_home(), status, summary);
         }
     }
     execution
@@ -2720,6 +2821,7 @@ fn controlled_codex_environment(application_home: &Path) -> io::Result<Vec<(OsSt
 
 pub(super) struct CodexProviderProcess {
     conversation: Option<SupervisedConversation>,
+    connection: ProviderConnectionView,
 }
 
 impl CodexProviderProcess {
@@ -2747,19 +2849,25 @@ impl CodexProviderProcess {
             )
             .await
             .map_err(|_| process_failure(false))?;
-        if let Err(failure) = Self::initialize(&mut conversation).await {
-            let termination = conversation
-                .failure_termination()
-                .unwrap_or(ProcessTermination::Cancelled);
-            let _ = conversation.finish(Some(termination)).await;
-            return Err(failure);
-        }
+        let connection = match Self::initialize(&mut conversation).await {
+            Ok(connection) => connection,
+            Err(failure) => {
+                let termination = conversation
+                    .failure_termination()
+                    .unwrap_or(ProcessTermination::Cancelled);
+                let _ = conversation.finish(Some(termination)).await;
+                return Err(failure);
+            }
+        };
         Ok(Self {
             conversation: Some(conversation),
+            connection,
         })
     }
 
-    pub(super) async fn refresh_readiness(&mut self) -> Result<(), ProviderFailure> {
+    pub(super) async fn refresh_readiness(
+        &mut self,
+    ) -> Result<ProviderConnectionView, ProviderFailure> {
         let conversation = self.conversation_mut()?;
         conversation
             .begin_operation(
@@ -2768,10 +2876,18 @@ impl CodexProviderProcess {
                 PROVIDER_OUTPUT_LIMIT,
             )
             .map_err(|_| process_failure(false))?;
-        Self::verify_subscription(conversation).await
+        let connection = Self::verify_subscription(conversation).await?;
+        self.connection = connection.clone();
+        Ok(connection)
     }
 
-    async fn initialize(conversation: &mut SupervisedConversation) -> Result<(), ProviderFailure> {
+    pub(super) fn connection_snapshot(&self) -> ProviderConnectionView {
+        self.connection.clone()
+    }
+
+    async fn initialize(
+        conversation: &mut SupervisedConversation,
+    ) -> Result<ProviderConnectionView, ProviderFailure> {
         write_rpc(
             conversation,
             &json!({
@@ -2817,7 +2933,7 @@ impl CodexProviderProcess {
 
     async fn verify_subscription(
         conversation: &mut SupervisedConversation,
-    ) -> Result<(), ProviderFailure> {
+    ) -> Result<ProviderConnectionView, ProviderFailure> {
         write_rpc(
             conversation,
             &json!({
@@ -2838,7 +2954,13 @@ impl CodexProviderProcess {
         if !chatgpt_subscription_is_supported(account_type, plan_type) {
             return Err(subscription_failure());
         }
+        let account_label = account
+            .pointer("/account/email")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let account_plan = plan_type.map(str::to_owned);
         let mut cursor: Option<String> = None;
+        let mut available_models = Vec::new();
         for page in 0_u32..100 {
             let id = json!(2 + page);
             write_rpc(
@@ -2856,29 +2978,20 @@ impl CodexProviderProcess {
             .await
             .map_err(|_| process_failure(false))?;
             let models = read_expected_response(conversation, &id, "v2/ModelListResponse").await?;
-            let has_usable_model =
-                models
-                    .get("data")
-                    .and_then(Value::as_array)
-                    .is_some_and(|models| {
-                        models.iter().any(|model| {
-                            model.get("hidden").and_then(Value::as_bool) == Some(false)
-                                && model
-                                    .get("id")
-                                    .and_then(Value::as_str)
-                                    .is_some_and(|id| !id.is_empty())
-                                && model
-                                    .get("inputModalities")
-                                    .and_then(Value::as_array)
-                                    .is_none_or(|modalities| {
-                                        modalities
-                                            .iter()
-                                            .any(|value| value.as_str() == Some("text"))
-                                    })
-                        })
-                    });
-            if has_usable_model {
-                return Ok(());
+            let page_models = models
+                .get("data")
+                .and_then(Value::as_array)
+                .ok_or_else(|| protocol_failure(false))?;
+            for model in page_models {
+                if let Some(model) = parse_codex_model(model) {
+                    if available_models
+                        .iter()
+                        .any(|existing: &ProviderModelOption| existing.model_id == model.model_id)
+                    {
+                        return Err(protocol_failure(false));
+                    }
+                    available_models.push(model);
+                }
             }
             cursor = models
                 .get("nextCursor")
@@ -2888,7 +3001,28 @@ impl CodexProviderProcess {
                 break;
             }
         }
-        Err(protocol_failure(false))
+        if available_models.is_empty() || cursor.is_some() {
+            return Err(protocol_failure(false));
+        }
+        let default_count = available_models
+            .iter()
+            .filter(|model| model.is_default)
+            .count();
+        if default_count != 1 {
+            return Err(protocol_failure(false));
+        }
+        Ok(ProviderConnectionView {
+            connection_id: CODEX_CONNECTION_ID.to_owned(),
+            provider: AiProviderKind::Codex,
+            display_name: "OpenAI account via Codex".to_owned(),
+            status: ProviderConnectionStatus::Ready,
+            account_label,
+            account_plan,
+            models: available_models,
+            catalogue_fetched_at: Some(Timestamp::now().to_string()),
+            adapter_version: codex_connection_version(),
+            status_summary: "Ready to run Tender work.".to_owned(),
+        })
     }
 
     pub(super) async fn shutdown(&mut self) -> Result<(), ProcessError> {
@@ -2912,6 +3046,81 @@ impl CodexProviderProcess {
             .as_mut()
             .ok_or_else(|| process_failure(false))
     }
+}
+
+fn parse_codex_model(model: &Value) -> Option<ProviderModelOption> {
+    if model.get("hidden").and_then(Value::as_bool) != Some(false) {
+        return None;
+    }
+    let model_id = model.get("id")?.as_str()?.trim();
+    if model_id.is_empty() || model_id.len() > 200 {
+        return None;
+    }
+    let input_modalities = model
+        .get("inputModalities")?
+        .as_array()?
+        .iter()
+        .map(|value| value.as_str().map(str::to_owned))
+        .collect::<Option<Vec<_>>>()?;
+    if !input_modalities.iter().any(|modality| modality == "text") {
+        return None;
+    }
+    let default_effort = model.get("defaultReasoningEffort")?.as_str()?.trim();
+    if default_effort.is_empty() {
+        return None;
+    }
+    let reasoning_options = model
+        .get("supportedReasoningEfforts")?
+        .as_array()?
+        .iter()
+        .map(|option| {
+            let effort = option.get("reasoningEffort")?.as_str()?.trim();
+            let description = option.get("description")?.as_str()?.trim();
+            if effort.is_empty()
+                || effort.len() > 100
+                || description.is_empty()
+                || description.len() > 1_000
+            {
+                return None;
+            }
+            Some(ProviderReasoningOption {
+                selection: ProviderReasoningSelection::CodexEffort(effort.to_owned()),
+                label: effort.to_owned(),
+                description: description.to_owned(),
+                is_default: effort == default_effort,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if reasoning_options.is_empty()
+        || reasoning_options
+            .iter()
+            .filter(|option| option.is_default)
+            .count()
+            != 1
+    {
+        return None;
+    }
+    let display_name = model.get("displayName")?.as_str()?.trim().to_owned();
+    if display_name.is_empty() || display_name.len() > 300 {
+        return None;
+    }
+    let description = model
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    if description.len() > 2_000 {
+        return None;
+    }
+    Some(ProviderModelOption {
+        model_id: model_id.to_owned(),
+        display_name,
+        description,
+        is_default: model.get("isDefault").and_then(Value::as_bool) == Some(true),
+        input_modalities,
+        reasoning_options,
+    })
 }
 
 fn restricted_codex_arguments() -> Vec<OsString> {

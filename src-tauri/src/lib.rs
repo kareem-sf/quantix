@@ -2,6 +2,7 @@
 
 mod acceptance;
 mod agent_runtime;
+mod application_settings;
 mod document_parsing;
 mod host;
 mod process_supervisor;
@@ -36,6 +37,11 @@ pub use agent_runtime::{
     ResolveIndeterminateAgentRunCommand, RunBootstrapAgentCommand, TenderTaskView,
     ThreadExposureSet, ToolIdempotency, ToolSideEffectClass, TypedToolDefinition, TypedToolQuota,
     VerificationStatus,
+};
+pub use application_settings::{
+    AiExecutionSelection, AiProviderKind, ApplicationSettingsView, ProviderConnectionStatus,
+    ProviderConnectionView, ProviderModelOption, ProviderReasoningOption,
+    ProviderReasoningSelection, UpdateAiExecutionSelectionCommand,
 };
 pub use document_parsing::{
     DocumentParseResult, EvidenceBoundingBox, EvidenceDocument, EvidenceLanguage, EvidenceLocation,
@@ -224,22 +230,23 @@ mod tauri_commands {
     use super::{
         ensure_quantix_setup as ensure_setup, ActivateTenderProductionCommand,
         AgentAccessRequestView, AgentRunActivity, AgentRunHistoryPage, AgentRunInspection,
-        AgentRunRecoveryDecision, ApproveAgentAccessCommand, ApproveBasisOfEstimateCommand,
-        ApproveCalculationRuleCommand, ApproveCommercialStrategyCommand,
-        ApproveControlledBoqCalculationRunCommand, ApproveExternalRfiForIssueCommand,
-        ApprovePackageFindingExceptionCommand, ApprovePricedCostBaselineCommand,
-        ApprovePricingAdjustmentCommand, ApproveProductionFindingExceptionCommand,
-        ApproveSubmissionReleaseCommand, ApproveTenderPriceCommand,
-        AssembleCoordinatedBidBaselineCommand, AssembleSubmissionPackageCommand,
-        BasisOfEstimateReviewResult, BasisOfEstimateVersion, BidDecisionApprovalHistoryPage,
-        BidDecisionApprovalInvalidationResult, BidDecisionApprovalResult,
-        BidDecisionPackageInspection, BidDecisionPackageRecordPage, BidDecisionPackageReviewResult,
-        BidDecisionReturnReworkResult, BoqTableDesignation, CalculationRuleReviewResult,
-        CalculationRuleVersion, CalculationScenarioVersion, CalculationWorkspaceInspection,
-        ChangeAssessment, ChangeAssessmentPage, ChooseTenderPackageCommand, CommercialStrategy,
-        ComplianceMatrixPage, ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand,
-        ControlledBoqCalculationRun, CoordinatedBidBaseline, CoordinatedBidBaselinePage,
-        CostEstimatorBasisResult, CostEstimatorCalculationResult, CreateBidDecisionPackageCommand,
+        AgentRunRecoveryDecision, ApplicationSettingsView, ApproveAgentAccessCommand,
+        ApproveBasisOfEstimateCommand, ApproveCalculationRuleCommand,
+        ApproveCommercialStrategyCommand, ApproveControlledBoqCalculationRunCommand,
+        ApproveExternalRfiForIssueCommand, ApprovePackageFindingExceptionCommand,
+        ApprovePricedCostBaselineCommand, ApprovePricingAdjustmentCommand,
+        ApproveProductionFindingExceptionCommand, ApproveSubmissionReleaseCommand,
+        ApproveTenderPriceCommand, AssembleCoordinatedBidBaselineCommand,
+        AssembleSubmissionPackageCommand, BasisOfEstimateReviewResult, BasisOfEstimateVersion,
+        BidDecisionApprovalHistoryPage, BidDecisionApprovalInvalidationResult,
+        BidDecisionApprovalResult, BidDecisionPackageInspection, BidDecisionPackageRecordPage,
+        BidDecisionPackageReviewResult, BidDecisionReturnReworkResult, BoqTableDesignation,
+        CalculationRuleReviewResult, CalculationRuleVersion, CalculationScenarioVersion,
+        CalculationWorkspaceInspection, ChangeAssessment, ChangeAssessmentPage,
+        ChooseTenderPackageCommand, CommercialStrategy, ComplianceMatrixPage,
+        ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand, ControlledBoqCalculationRun,
+        CoordinatedBidBaseline, CoordinatedBidBaselinePage, CostEstimatorBasisResult,
+        CostEstimatorCalculationResult, CreateBidDecisionPackageCommand,
         CreateCalculationScenarioCommand, CreateCommercialStrategyCommand,
         CreateExternalRfiDraftCommand, CreatePortableTenderArchiveCommand,
         CreatePricedCostBaselineCommand, CreatePricingAdjustmentCommand,
@@ -294,7 +301,7 @@ mod tauri_commands {
         TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordPage,
         TenderRecordReviewResult, TenderRecoveryRecord, TenderRetentionDecisionCommand,
         TenderRetentionDecisionRecord, TenderSummary, TrashedTenderDecisionCommand,
-        TrashedTenderRecord, WorkPlanProposalInspection,
+        TrashedTenderRecord, UpdateAiExecutionSelectionCommand, WorkPlanProposalInspection,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -581,6 +588,21 @@ mod tauri_commands {
             .map_err(|_| TenderCommandError {
                 code: TenderErrorCode::StoreUnavailable,
             })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn refresh_application_settings(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        host.inner().refresh_application_settings().await
+    }
+
+    #[tauri::command]
+    pub(super) async fn update_ai_execution_selection(
+        host: tauri::State<'_, QuantixHost>,
+        command: UpdateAiExecutionSelectionCommand,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        host.inner().update_ai_execution_selection(command).await
     }
 
     #[tauri::command]
@@ -2420,6 +2442,8 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::retry_quantix_update_repair,
             tauri_commands::create_tender,
             tauri_commands::list_tenders,
+            tauri_commands::refresh_application_settings,
+            tauri_commands::update_ai_execution_selection,
             tauri_commands::inspect_manager_workspace,
             tauri_commands::start_manager_tender,
             tauri_commands::resume_manager_intakes,

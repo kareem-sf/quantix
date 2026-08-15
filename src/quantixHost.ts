@@ -107,6 +107,8 @@ import type { InvalidateBidDecisionApprovalCommand } from "./bindings/Invalidate
 import type { InspectComplianceMatrixCommand } from "./bindings/InspectComplianceMatrixCommand";
 import type { InspectProductionTaskReviewCommand } from "./bindings/InspectProductionTaskReviewCommand";
 import type { InspectManagerWorkspaceCommand } from "./bindings/InspectManagerWorkspaceCommand";
+import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
+import type { UpdateAiExecutionSelectionCommand } from "./bindings/UpdateAiExecutionSelectionCommand";
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
 import type { ManagerCapabilityDemandInput } from "./bindings/ManagerCapabilityDemandInput";
 import type { OpenTenderCommand } from "./bindings/OpenTenderCommand";
@@ -262,6 +264,18 @@ export function createTender(name: string): Promise<TenderSummary> {
 
 export function listTenders(): Promise<TenderCatalogueEntry[]> {
   return invoke<TenderCatalogueEntry[]>("list_tenders");
+}
+
+export function refreshApplicationSettings(): Promise<ApplicationSettingsView> {
+  return invoke<ApplicationSettingsView>("refresh_application_settings");
+}
+
+export function updateAiExecutionSelection(
+  command: UpdateAiExecutionSelectionCommand,
+): Promise<ApplicationSettingsView> {
+  return invoke<ApplicationSettingsView>("update_ai_execution_selection", {
+    command,
+  });
 }
 
 export function inspectManagerWorkspace(

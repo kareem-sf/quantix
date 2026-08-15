@@ -2570,6 +2570,8 @@ pub(crate) fn insert_planned_run(
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let provider_selection =
+        crate::application_settings::load_current_ai_execution_selection(application_home)?;
     let workspace = application_home.join("staging").join(format!(
         "agent-{}-{}",
         request.tender_id.as_str(),
@@ -2659,6 +2661,12 @@ pub(crate) fn insert_planned_run(
             ],
         )
         .map_err(sql_error)?;
+    super::record_agent_run_provider_binding(
+        transaction,
+        request.run_id,
+        &provider_selection,
+        request.created_at,
+    )?;
     insert_event(
         transaction,
         request.run_id,
@@ -2683,6 +2691,7 @@ pub(crate) fn insert_planned_run(
     )?;
     Ok(PreparedAgentRun {
         run_id: request.run_id.into(),
+        provider_selection,
         profile: request.profile.clone(),
         task: request.task.clone(),
         permission_grant,

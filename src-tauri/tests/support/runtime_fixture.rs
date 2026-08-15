@@ -327,9 +327,26 @@ fn run_agent_codex(
         "supportsPersonality": true,
         "isDefault": true
     });
+    let alternate_model = serde_json::json!({
+        "id": "gpt-5.6-sol",
+        "model": "gpt-5.6-sol",
+        "displayName": "GPT-5.6 Sol",
+        "description": "Alternate fixture Codex model",
+        "hidden": false,
+        "defaultReasoningEffort": "high",
+        "supportedReasoningEfforts": [{
+            "reasoningEffort": "high",
+            "description": "Fixture high reasoning effort"
+        }],
+        "inputModalities": ["text"],
+        "supportsPersonality": true,
+        "isDefault": false
+    });
     let model_list = read_json_request(&mut requests, "model/list")?;
     let first_page = if matches!(scenario, "missing-capability" | "model-second-page") {
         Vec::new()
+    } else if scenario == "selected-non-default" {
+        vec![usable_model.clone(), alternate_model]
     } else {
         vec![usable_model.clone()]
     };
@@ -475,11 +492,23 @@ fn run_agent_turn(
                 "quantix_read_tender_metadata".into(),
             ))
     };
+    let expected_model = if scenario == "selected-non-default" {
+        "gpt-5.6-sol"
+    } else {
+        "gpt-5.6-terra"
+    };
+    let expected_effort = if scenario == "selected-non-default" {
+        "high"
+    } else {
+        "medium"
+    };
     if thread_method == "thread/start"
         && (thread_request.pointer("/params/sandbox")
             != Some(&serde_json::Value::String("workspaceWrite".into()))
             || thread_request.pointer("/params/approvalPolicy")
                 != Some(&serde_json::Value::String("never".into()))
+            || thread_request.pointer("/params/model")
+                != Some(&serde_json::Value::String(expected_model.into()))
             || !dynamic_tools_are_exact)
     {
         return Err("thread lacks its default-deny sandbox contract".into());
@@ -567,6 +596,10 @@ fn run_agent_turn(
 
     let turn_request = read_json_request(requests, "turn/start")?;
     if turn_request.pointer("/params/outputSchema").is_none()
+        || turn_request.pointer("/params/model")
+            != Some(&serde_json::Value::String(expected_model.into()))
+        || turn_request.pointer("/params/effort")
+            != Some(&serde_json::Value::String(expected_effort.into()))
         || turn_request.pointer("/params/sandboxPolicy/type")
             != Some(&serde_json::Value::String("workspaceWrite".into()))
         || turn_request.pointer("/params/sandboxPolicy/networkAccess")

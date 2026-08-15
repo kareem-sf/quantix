@@ -14,7 +14,7 @@ use crate::QuantixHost;
 
 pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 1024 * 1024 * 1024;
 
-pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 15;
+pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 16;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
@@ -30,7 +30,18 @@ const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
 ];
 const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 15)
+           schema_version INTEGER NOT NULL CHECK (schema_version = 16)
+         )";
+pub(crate) const APPLICATION_SETTINGS_TABLE_SQL: &str = "CREATE TABLE application_settings (
+           singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+           settings_json TEXT NOT NULL CHECK (json_valid(settings_json)),
+           updated_at TEXT NOT NULL
+         )";
+pub(crate) const PROVIDER_CONNECTIONS_TABLE_SQL: &str = "CREATE TABLE provider_connections (
+           connection_id TEXT PRIMARY KEY CHECK (length(CAST(connection_id AS BLOB)) BETWEEN 1 AND 100),
+           provider_kind TEXT NOT NULL CHECK (provider_kind IN ('codex', 'anthropic', 'gemini')),
+           connection_json TEXT NOT NULL CHECK (json_valid(connection_json)),
+           updated_at TEXT NOT NULL
          )";
 const MANAGER_WORKSPACE_SELECTION_TABLE_SQL: &str = "CREATE TABLE manager_workspace_selection (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -825,6 +836,8 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute(INSTALLATION_TABLE_SQL, [])?;
+    transaction.execute(APPLICATION_SETTINGS_TABLE_SQL, [])?;
+    transaction.execute(PROVIDER_CONNECTIONS_TABLE_SQL, [])?;
     transaction.execute(MANAGER_WORKSPACE_SELECTION_TABLE_SQL, [])?;
     transaction.execute(RUNTIME_PREPARATION_TABLE_SQL, [])?;
     transaction.execute(TENDER_BACKUPS_TABLE_SQL, [])?;
@@ -871,7 +884,12 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_UPDATE_SQL, [])?;
     transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_DELETE_SQL, [])?;
     transaction.execute(
-        "INSERT INTO installation (singleton, schema_version) VALUES (1, 15)",
+        "INSERT INTO installation (singleton, schema_version) VALUES (1, 16)",
+        [],
+    )?;
+    transaction.execute(
+        "INSERT INTO application_settings (singleton, settings_json, updated_at)
+         VALUES (1, '{\"ai_execution_selection\":null}', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
         [],
     )?;
     transaction.execute(
@@ -994,6 +1012,16 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
     drop(statement);
     let mut expected_schema_objects = vec![
         schema_object("table", "installation", INSTALLATION_TABLE_SQL),
+        schema_object(
+            "table",
+            "application_settings",
+            APPLICATION_SETTINGS_TABLE_SQL,
+        ),
+        schema_object(
+            "table",
+            "provider_connections",
+            PROVIDER_CONNECTIONS_TABLE_SQL,
+        ),
         schema_object(
             "table",
             "manager_workspace_selection",
@@ -1208,6 +1236,14 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
     let row_count: i64 =
         connection.query_row("SELECT COUNT(*) FROM installation", [], |row| row.get(0))?;
     if row_count != 1 {
+        return Ok(CatalogueStatus::Corrupt);
+    }
+    let application_settings_row_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM application_settings WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    if application_settings_row_count != 1 {
         return Ok(CatalogueStatus::Corrupt);
     }
     let runtime_row_count: i64 = connection.query_row(

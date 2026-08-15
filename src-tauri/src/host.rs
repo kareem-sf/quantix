@@ -11,7 +11,7 @@ use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent_runtime::{
-    CodexProvider, ProviderRateLimit, ProviderRateLimitState, ProviderUsage,
+    AgentProvider, ProviderRateLimit, ProviderRateLimitState, ProviderUsage,
 };
 use crate::process_supervisor::ProcessSupervisor;
 use crate::runtime_readiness::RuntimeLayout;
@@ -41,7 +41,7 @@ struct QuantixHostInner {
     active_manager_intakes: Mutex<HashMap<String, OrdinaryWorkLease>>,
     manager_intake_execution: tokio::sync::Mutex<()>,
     production_schedulers: Mutex<HashMap<String, OrdinaryWorkLease>>,
-    agent_provider: tokio::sync::Mutex<Option<CodexProvider>>,
+    agent_provider: tokio::sync::Mutex<Option<AgentProvider>>,
     provider_rate_limit: Mutex<Option<ProviderRateLimit>>,
     runtime_verified: AtomicBool,
     update_installation_active: AtomicBool,
@@ -296,7 +296,7 @@ impl QuantixHost {
         &self.inner.process_supervisor
     }
 
-    pub(crate) fn agent_provider(&self) -> &tokio::sync::Mutex<Option<CodexProvider>> {
+    pub(crate) fn agent_provider(&self) -> &tokio::sync::Mutex<Option<AgentProvider>> {
         &self.inner.agent_provider
     }
 
