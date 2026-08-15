@@ -1,0 +1,53 @@
+name: One-time repository formatting
+
+on:
+  push:
+    branches:
+      - chore/github-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out setup branch
+        uses: actions/checkout@v7
+        with:
+          ref: chore/github-foundation
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Configure Rust formatter
+        shell: pwsh
+        run: |
+          rustup default stable
+          rustup component add rustfmt
+
+      - name: Install locked JavaScript dependencies
+        run: npm ci
+
+      - name: Apply repository formatters
+        run: npm run format
+
+      - name: Commit formatter output
+        shell: pwsh
+        run: |
+          git add --all
+          $staged = git diff --cached --name-only
+          if (-not $staged) {
+            Write-Host "Repository already matches formatter output."
+            exit 0
+          }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "style: apply repository formatters"
+          git push origin HEAD:chore/github-foundation
