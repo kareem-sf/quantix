@@ -102,7 +102,7 @@ describe("App runtime startup", () => {
     expect(await screen.findByText("Installing local AI tools")).toBeTruthy();
     expect(
       screen.getByText(
-        "First-time setup is downloading and preparing Python and Docling. This can take several minutes.",
+        "First-time setup is preparing Python, Docling, and local document models. This can take several minutes.",
       ),
     ).toBeTruthy();
     expect(

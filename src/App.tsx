@@ -47,7 +47,7 @@ const startupStageCopy: Record<
   runtime_install: {
     title: "Installing local AI tools",
     summary:
-      "First-time setup is downloading and preparing Python and Docling. This can take several minutes.",
+      "First-time setup is preparing Python, Docling, and local document models. This can take several minutes.",
     step: 1,
   },
   providers: {
