@@ -48,7 +48,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return run_uv(&executable, &arguments);
     }
     if tool == "python" {
-        return run_python(&arguments);
+        return run_python(&executable, &arguments);
     }
     Err(format!("unrecognized fixture tool {tool}").into())
 }
@@ -345,11 +345,66 @@ fn run_agent_codex(
         "supportsPersonality": true,
         "isDefault": false
     });
-    let model_list = read_json_request(&mut requests, "model/list")?;
+    if !respond_agent_model_catalogue(&mut requests, scenario, &usable_model, &alternate_model)? {
+        for request in requests {
+            request?;
+        }
+        return Ok(());
+    }
+
+    let mut thread_count = 0_u32;
+    let mut turn_count = 0_u32;
+    loop {
+        let Some(request) = requests.next() else {
+            return Ok(());
+        };
+        let request: serde_json::Value = serde_json::from_str(&request?)?;
+        if request.get("method").and_then(serde_json::Value::as_str) == Some("account/read") {
+            if request.pointer("/params/refreshToken") != Some(&serde_json::Value::Bool(true)) {
+                return Err("Codex refresh did not request a managed-auth refresh".into());
+            }
+            write_json(&serde_json::json!({
+                "id": request.get("id").cloned().ok_or("account refresh request id")?,
+                "result": {
+                    "account": {
+                        "type": "chatgpt",
+                        "email": null,
+                        "planType": "plus"
+                    },
+                    "requiresOpenaiAuth": true
+                }
+            }))?;
+            respond_agent_model_catalogue(
+                &mut requests,
+                scenario,
+                &usable_model,
+                &alternate_model,
+            )?;
+            continue;
+        }
+        if !run_agent_turn(
+            executable,
+            request,
+            &mut requests,
+            &mut thread_count,
+            &mut turn_count,
+        )? {
+            return Ok(());
+        }
+    }
+}
+
+fn respond_agent_model_catalogue(
+    requests: &mut impl Iterator<Item = io::Result<String>>,
+    scenario: &str,
+    usable_model: &serde_json::Value,
+    alternate_model: &serde_json::Value,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let model_list = read_json_request(requests, "model/list")?;
     let first_page = if matches!(scenario, "missing-capability" | "model-second-page") {
         Vec::new()
     } else if scenario == "selected-non-default" {
-        vec![usable_model.clone(), alternate_model]
+        vec![usable_model.clone(), alternate_model.clone()]
     } else {
         vec![usable_model.clone()]
     };
@@ -360,14 +415,8 @@ fn run_agent_codex(
             "nextCursor": if scenario == "model-second-page" { Some("models-2") } else { None }
         }
     }))?;
-    if scenario == "missing-capability" {
-        for request in requests {
-            request?;
-        }
-        return Ok(());
-    }
     if scenario == "model-second-page" {
-        let second_page = read_json_request(&mut requests, "model/list")?;
+        let second_page = read_json_request(requests, "model/list")?;
         if second_page
             .pointer("/params/cursor")
             .and_then(serde_json::Value::as_str)
@@ -380,19 +429,7 @@ fn run_agent_codex(
             "result": { "data": [usable_model], "nextCursor": null }
         }))?;
     }
-
-    let mut thread_count = 0_u32;
-    let mut turn_count = 0_u32;
-    loop {
-        if !run_agent_turn(
-            executable,
-            &mut requests,
-            &mut thread_count,
-            &mut turn_count,
-        )? {
-            return Ok(());
-        }
-    }
+    Ok(scenario != "missing-capability")
 }
 
 fn run_managed_login_codex(
@@ -450,7 +487,9 @@ fn run_managed_login_codex(
                 }
             }
             "account/login/cancel" => {
-                if request.pointer("/params/loginId").and_then(serde_json::Value::as_str)
+                if request
+                    .pointer("/params/loginId")
+                    .and_then(serde_json::Value::as_str)
                     != Some("fixture-device-login")
                 {
                     return Err("managed login cancellation id mismatch".into());
@@ -521,14 +560,11 @@ fn run_managed_login_codex(
 
 fn run_agent_turn(
     executable: &Path,
+    mut thread_request: serde_json::Value,
     requests: &mut impl Iterator<Item = io::Result<String>>,
     thread_count: &mut u32,
     turn_count: &mut u32,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    let Some(thread_request) = requests.next() else {
-        return Ok(false);
-    };
-    let mut thread_request: serde_json::Value = serde_json::from_str(&thread_request?)?;
     let scenario = fs::read_to_string(executable.with_extension("agent-scenario"))?;
     let scenario = scenario.trim();
     if matches!(
@@ -665,11 +701,18 @@ fn run_agent_turn(
         *thread_count = thread_count
             .checked_add(1)
             .ok_or("fixture thread count overflow")?;
-        let sequence = if matches!(scenario, "success-new-thread" | "archive-already-complete") {
-            2
-        } else {
-            *thread_count
-        };
+        let thread_sequence_path = executable.with_extension("agent-thread-count");
+        let persisted_sequence = fs::read_to_string(&thread_sequence_path)
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(0);
+        let mut sequence = persisted_sequence
+            .checked_add(1)
+            .ok_or("fixture thread sequence overflow")?;
+        if matches!(scenario, "success-new-thread" | "archive-already-complete") {
+            sequence = sequence.max(2);
+        }
+        fs::write(&thread_sequence_path, sequence.to_string())?;
         new_thread_id = if scenario == "record-extraction-change-assessment"
             || scenario == "bid-package-review-change-assessment"
         {
@@ -1076,6 +1119,7 @@ fn run_agent_turn(
             | "retry-then-success"
             | "rate-limit-update-success"
             | "model-second-page"
+            | "selected-non-default"
             | "usage-stream"
             | "output-invalid"
             | "record-extraction"
@@ -1101,6 +1145,8 @@ fn run_agent_turn(
             | "record-extraction-invalid"
             | "record-review"
             | "record-review-delayed"
+            | "manager-intake"
+            | "manager-intake-bid"
             | "bid-package-review"
             | "bid-package-review-change-assessment"
             | "bid-package-review-failed"
@@ -1503,7 +1549,9 @@ fn run_agent_turn(
         }
     }
     let mut candidate = if scenario.starts_with("manager-intake") {
-        if provider_data_view.get("evidence").is_some() {
+        if provider_data_view.get("evidence").is_some()
+            && provider_data_view.get("record").is_none()
+        {
             let mut candidate = record_extraction_candidate(provider_data_view)?;
             if scenario == "manager-intake-bid" {
                 candidate["records"] = serde_json::Value::Array(
@@ -3704,13 +3752,33 @@ fn run_uv(
             destination.with_extension("version"),
             fs::read_to_string(executable.with_file_name("docling.version"))?,
         )?;
+        if name == "docling" {
+            let version_delay = executable.with_file_name("docling.version-delay");
+            if version_delay.is_file() {
+                fs::copy(version_delay, destination.with_extension("version-delay"))?;
+            }
+        }
         make_executable(&destination)?;
     }
     Ok(())
 }
 
-fn run_python(arguments: &[std::ffi::OsString]) -> Result<(), Box<dyn std::error::Error>> {
+fn run_python(
+    executable: &Path,
+    arguments: &[std::ffi::OsString],
+) -> Result<(), Box<dyn std::error::Error>> {
     assert_isolated_python_environment()?;
+    if arguments.len() == 3
+        && arguments[0] == "-I"
+        && arguments[1] == "-c"
+        && arguments[2] == "from importlib.metadata import version; print(version('docling'))"
+    {
+        println!(
+            "{}",
+            fs::read_to_string(executable.with_extension("version"))?.trim()
+        );
+        return Ok(());
+    }
     let script = arguments
         .first()
         .ok_or("missing model preparation script")?;

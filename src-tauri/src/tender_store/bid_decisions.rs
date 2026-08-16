@@ -4492,7 +4492,7 @@ fn bid_package_review_output_contract() -> String {
 fn bid_package_review_profile(profile_id: String) -> AgentProfileVersionView {
     AgentProfileVersionView {
         profile_id,
-        version: 3,
+        version: 4,
         identity: "Independent Reviewer".into(),
         profession: "Tender Assurance Engineer".into(),
         seniority: "Senior".into(),

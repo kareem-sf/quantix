@@ -735,7 +735,7 @@ fn inspect_exact_native_platform() -> Option<&'static str> {
                 .collect::<Result<Vec<_>, _>>()
                 .ok()?;
             (output.status.success()
-                && components.get(0) == Some(&10)
+                && components.first() == Some(&10)
                 && components.get(1) == Some(&0)
                 && components.get(2).is_some_and(|build| *build >= 22_000))
             .then_some("windows_11_x64")

@@ -27,22 +27,80 @@
     }
   ],
   "requirements": [
-    {"id": "REQ-001", "critical": true, "text": "Bid security: EGP 2,500,000 valid for 150 days."},
-    {"id": "REQ-002", "critical": true, "text": "Construction period: 540 calendar days."},
-    {"id": "REQ-003", "critical": false, "text": "Provide a preliminary environmental-management method statement."},
-    {"id": "REQ-004", "critical": false, "text": "تقديم برنامج تنفيذي مبدئي خلال 30 يومًا من الإسناد."}
+    {
+      "id": "REQ-001",
+      "critical": true,
+      "text": "Bid security: EGP 2,500,000 valid for 150 days."
+    },
+    {
+      "id": "REQ-002",
+      "critical": true,
+      "text": "Construction period: 540 calendar days."
+    },
+    {
+      "id": "REQ-003",
+      "critical": false,
+      "text": "Provide a preliminary environmental-management method statement."
+    },
+    {
+      "id": "REQ-004",
+      "critical": false,
+      "text": "تقديم برنامج تنفيذي مبدئي خلال 30 يومًا من الإسناد."
+    }
   ],
-  "forms": ["FORM-BID", "FORM-POWER-OF-ATTORNEY", "FORM-BOQ", "FORM-DECLARATIONS"],
+  "forms": [
+    "FORM-BID",
+    "FORM-POWER-OF-ATTORNEY",
+    "FORM-BOQ",
+    "FORM-DECLARATIONS"
+  ],
   "boq": [
-    {"row": "CIV-001", "description": "Reinforced concrete", "quantity": "1850", "unit": "m3", "rate": "4200.00"},
-    {"row": "ARC-008", "description": "External stone cladding", "quantity": "3200", "unit": "m2", "rate": "1850.00"},
-    {"row": "MEP-014", "description": "Air handling unit", "quantity": "16", "unit": "nr", "rate": "675000.00"}
+    {
+      "row": "CIV-001",
+      "description": "Reinforced concrete",
+      "quantity": "1850",
+      "unit": "m3",
+      "rate": "4200.00"
+    },
+    {
+      "row": "ARC-008",
+      "description": "External stone cladding",
+      "quantity": "3200",
+      "unit": "m2",
+      "rate": "1850.00"
+    },
+    {
+      "row": "MEP-014",
+      "description": "Air handling unit",
+      "quantity": "16",
+      "unit": "nr",
+      "rate": "675000.00"
+    }
   ],
   "queries": [
-    {"id": "Q-001", "material": true, "question": "Confirm whether testing fees are included in the BOQ rates."}
+    {
+      "id": "Q-001",
+      "material": true,
+      "question": "Confirm whether testing fees are included in the BOQ rates."
+    }
   ],
-  "assumptions": ["Existing utility diversions are completed before site possession."],
-  "reviews": ["independent_technical", "independent_commercial", "document_control"],
-  "calculations": ["boq_extension", "subtotal", "risk_allowance", "commercial_adjustment", "tender_total"],
-  "pricing": {"risk_allowance_percent": "2.50", "commercial_adjustment_percent": "-0.75"}
+  "assumptions": [
+    "Existing utility diversions are completed before site possession."
+  ],
+  "reviews": [
+    "independent_technical",
+    "independent_commercial",
+    "document_control"
+  ],
+  "calculations": [
+    "boq_extension",
+    "subtotal",
+    "risk_allowance",
+    "commercial_adjustment",
+    "tender_total"
+  ],
+  "pricing": {
+    "risk_allowance_percent": "2.50",
+    "commercial_adjustment_percent": "-0.75"
+  }
 }

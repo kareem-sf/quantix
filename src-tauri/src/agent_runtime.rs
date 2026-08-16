@@ -2710,6 +2710,10 @@ async fn execute_provider_turn(
             }
         }),
     };
+    let operation_limit = operation_limit.saturating_sub(started.elapsed());
+    if operation_limit.is_zero() {
+        return failed_execution(permission_failure(), started);
+    }
     let mut execution = match prepared.provider_selection.provider {
         AiProviderKind::Codex => {
             provider
@@ -2760,7 +2764,6 @@ async fn execute_provider_turn(
         }
         drop(provider_slot);
         if removed {
-            host.set_runtime_verified(false);
             let (status, summary) =
                 codex_failure_connection_status(ProviderFailureCategory::ProcessFailed);
             let _ = save_codex_connection_status(host.application_home(), status, summary);
@@ -3037,8 +3040,8 @@ impl CodexProviderProcess {
         application_home: &Path,
         cancellation: CancellationToken,
     ) -> Result<Self, ProviderFailure> {
-        let (process_directory, environment) = controlled_codex_environment(application_home)
-            .map_err(|_| process_failure(false))?;
+        let (process_directory, environment) =
+            controlled_codex_environment(application_home).map_err(|_| process_failure(false))?;
         let mut conversation = supervisor
             .start_conversation(
                 ProcessSpec {

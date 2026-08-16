@@ -62,6 +62,14 @@ def pdf_options(options: argparse.Namespace) -> PdfPipelineOptions:
             lang=[options.ocr_lang],
         ),
         layout_options=layout,
+        # Bound every inter-stage queue and inference batch to one page. Large
+        # Tender PDFs otherwise let preprocessed page images accumulate faster
+        # than the CPU models release them, which can exhaust ordinary desktop
+        # memory and force Docling to return a lossy partial result.
+        ocr_batch_size=1,
+        layout_batch_size=1,
+        table_batch_size=1,
+        queue_max_size=1,
     )
 
 

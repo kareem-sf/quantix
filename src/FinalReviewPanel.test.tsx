@@ -11,6 +11,7 @@ const host = vi.hoisted(() => ({
   approvePackageFindingException: vi.fn(),
   inspectCurrentSubmissionPackage: vi.fn(),
   inspectFinalReview: vi.fn(),
+  inspectSubmissionRelease: vi.fn(),
   recordPackageManualVerification: vi.fn(),
   runPackageValidation: vi.fn(),
   runSubmissionSectionReview: vi.fn(),
@@ -32,17 +33,35 @@ const submissionPackage = {
   manifest_sha256: packageManifest,
   assessment: "complete",
   current: true,
+  coverage: [],
   items: [
     {
       item_id: itemId,
       package_path: "Forms/Arabic-Form.pdf",
       content_sha256: "6".repeat(64),
+      provenance: [],
       evidence: [
         {
           reference: {
             artifact_id: "7".repeat(32),
             version: 1,
             ordinal: 2,
+          },
+          package_path: "Sources/Arabic-Form.pdf",
+          location: {
+            ordinal: 2,
+            kind: "paragraph",
+            structural_path: "#/texts/1",
+            provenance: [],
+            section: null,
+            paragraph_number: 1,
+            table_number: null,
+            sheet_name: null,
+            cell_range: null,
+            original_text: "Exact source evidence.",
+            translated_text: null,
+            language: "english",
+            direction: "left_to_right",
           },
         },
       ],
@@ -60,6 +79,7 @@ const submissionPackage = {
 
 const inspection = {
   package: submissionPackage,
+  decision_evidence: [],
   policy: {
     policy_id: "8".repeat(32),
     version: 1,
@@ -169,6 +189,7 @@ describe("FinalReviewPanel", () => {
   it("shows exact readiness evidence and sends exact manual and review targets", async () => {
     host.inspectCurrentSubmissionPackage.mockResolvedValue(submissionPackage);
     host.inspectFinalReview.mockResolvedValue(inspection);
+    host.inspectSubmissionRelease.mockResolvedValue(null);
     host.recordPackageManualVerification.mockResolvedValue({
       ...inspection,
       manual_verifications: [

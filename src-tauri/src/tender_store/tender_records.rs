@@ -2073,17 +2073,45 @@ impl TenderStore {
                             let profile =
                                 load_profile(&self.connection, (profile_id, profile_version))?;
                             let review_task = load_task(&self.connection, &review_task_id)?;
+                            let review_inputs_are_valid = match review_task.exact_inputs.as_slice()
+                            {
+                                [record] => {
+                                    record
+                                        == &AgentTaskInputReference {
+                                            kind: "tender_record_version".into(),
+                                            reference: record_id.clone(),
+                                            version,
+                                        }
+                                }
+                                [record, intake] => {
+                                    record
+                                        == &AgentTaskInputReference {
+                                            kind: "tender_record_version".into(),
+                                            reference: record_id.clone(),
+                                            version,
+                                        }
+                                        && intake.kind == "manager_intake_run"
+                                        && intake.version == 1
+                                        && self
+                                            .connection
+                                            .query_row(
+                                                "SELECT EXISTS(
+                                                   SELECT 1 FROM manager_intake_runs
+                                                   WHERE intake_run_id = ?1
+                                                 )",
+                                                [&intake.reference],
+                                                |row| row.get::<_, bool>(0),
+                                            )
+                                            .map_err(sql_error)?
+                                }
+                                _ => false,
+                            };
                             if status != "completed"
                                 || !profile
                                     .capabilities
                                     .iter()
                                     .any(|capability| capability == RECORD_REVIEW_CAPABILITY)
-                                || review_task.exact_inputs
-                                    != vec![AgentTaskInputReference {
-                                        kind: "tender_record_version".into(),
-                                        reference: record_id.clone(),
-                                        version,
-                                    }]
+                                || !review_inputs_are_valid
                                 || review.outcome == TenderRecordReviewOutcome::ApprovedAssumption
                                 || (review.outcome == TenderRecordReviewOutcome::Verified
                                     && !record_fields_are_verifiable(&self.connection, &fields)?)

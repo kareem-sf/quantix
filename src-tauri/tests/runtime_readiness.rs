@@ -124,6 +124,14 @@ impl RuntimeHarness {
         fs::write(self.runtime_bin.join("codex.plan"), format!("{plan}\n"))
             .expect("write Codex plan");
     }
+
+    fn managed_docling_executable(&self) -> std::path::PathBuf {
+        self.application_home
+            .join("runtimes")
+            .join("docling")
+            .join(if cfg!(windows) { "Scripts" } else { "bin" })
+            .join(executable_name("docling"))
+    }
 }
 
 fn application_only_update() -> UpdateCandidate {
@@ -136,8 +144,8 @@ fn application_only_update() -> UpdateCandidate {
             signature_sha256: "b".repeat(64),
         },
         compatibility: UpdateCompatibilityManifest {
-            installation_schema_version: 8,
-            tender_schema_version: 24,
+            installation_schema_version: 19,
+            tender_schema_version: 31,
             codex_version: "0.147.0".into(),
             docling_version: "2.118.0".into(),
             runtime_manifest_schema_version: 2,
@@ -316,6 +324,25 @@ async fn readiness_reports_each_engineer_actionable_runtime_state() {
         ]
     );
     assert!(!missing_bundled_tools.repair_available);
+}
+
+#[tokio::test]
+async fn runtime_preparation_does_not_launch_docling_to_read_its_version() {
+    let harness = RuntimeHarness::new();
+    fs::write(harness.runtime_bin.join("docling.version-delay"), "1\n")
+        .expect("Docling fixture version marker");
+
+    let ready = harness.host.repair_runtime_readiness().await;
+
+    assert_eq!(ready.state, RuntimeReadinessState::Ready, "{ready:?}");
+    assert_eq!(ready.docling_version.as_deref(), Some("2.118.0"));
+    assert!(
+        !harness
+            .managed_docling_executable()
+            .with_extension("version-ready")
+            .exists(),
+        "the heavyweight Docling CLI must not run during version inspection",
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

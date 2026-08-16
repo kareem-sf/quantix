@@ -352,11 +352,7 @@ function App() {
           clock,
         )
       : null;
-    const startupElapsed = formatElapsed(
-      startupStartedAt.current,
-      null,
-      clock,
-    );
+    const startupElapsed = formatElapsed(startupStartedAt.current, null, clock);
     return (
       <main className="quantix-startup" aria-busy="true">
         <span className="quantix-startup__mark">Q</span>
@@ -452,7 +448,9 @@ function App() {
             <summary>
               <span>
                 Verification details
-                {startupElapsed ? <small>{startupElapsed} elapsed</small> : null}
+                {startupElapsed ? (
+                  <small>{startupElapsed} elapsed</small>
+                ) : null}
               </span>
               <ChevronDown size={15} aria-hidden="true" />
             </summary>
@@ -484,7 +482,9 @@ function App() {
                 <span className="quantix-startup__activity-icon" />
                 <div>
                   <strong>Check AI connection</strong>
-                  <p>Loading the selected provider and its live capabilities.</p>
+                  <p>
+                    Loading the selected provider and its live capabilities.
+                  </p>
                 </div>
               </li>
             </ol>

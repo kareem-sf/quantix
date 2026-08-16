@@ -811,7 +811,7 @@ fn validate_final_text(
         || conditions
             .iter()
             .chain(exceptions)
-            .any(|value| value.trim().is_empty() || value.as_bytes().len() > MAX_FINAL_TEXT_BYTES)
+            .any(|value| value.trim().is_empty() || value.len() > MAX_FINAL_TEXT_BYTES)
     {
         return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
     }

@@ -65,7 +65,9 @@ button {
     "bar bar" 56px
     "sidebar main" minmax(0, 1fr) /
     var(--sidebar-width) minmax(0, 1fr);
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
   background: #fff;
 }
 

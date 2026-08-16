@@ -70,6 +70,12 @@ interface ManagerWorkspaceProps {
   initialPreferences?: GeneralApplicationPreferences;
 }
 
+function mediaQueryMatches(query: string) {
+  return (
+    typeof window.matchMedia === "function" && window.matchMedia(query).matches
+  );
+}
+
 const phaseLabel: Record<ManagerWorkspaceTender["phase"], string> = {
   intake: "Intake",
   bid_decision: "Bid decision",
@@ -95,7 +101,7 @@ function readableError(error: unknown): string {
         return "The local Tender record is temporarily unavailable.";
     }
     if (typeof error.code === "string") {
-      return `Quantix could not complete that action (${error.code.replaceAll("_", " ")}).`;
+      return `Quantix could not complete that action (${error.code.replace(/_/g, " ")}).`;
     }
   }
   if (typeof error === "string" && error.trim()) return error;
@@ -607,7 +613,7 @@ function ArchivedTenders({
                   <div>
                     <dt>Provider cleanup</dt>
                     <dd>
-                      {receipt.provider_cleanup_status.replaceAll("_", " ")}
+                      {receipt.provider_cleanup_status.replace(/_/g, " ")}
                     </dd>
                   </div>
                   <div>
@@ -622,16 +628,13 @@ function ArchivedTenders({
                   <summary>Deletion scope</summary>
                   <p>
                     Checked:{" "}
-                    {receipt.erased_copy_classes
-                      .join(", ")
-                      .replaceAll("_", " ")}
-                    .
+                    {receipt.erased_copy_classes.join(", ").replace(/_/g, " ")}.
                   </p>
                   <p>
                     Outside Quantix control:{" "}
                     {receipt.external_copy_exclusions
                       .join(", ")
-                      .replaceAll("_", " ")}
+                      .replace(/_/g, " ")}
                     .
                   </p>
                 </details>
@@ -817,7 +820,9 @@ export function ManagerWorkspace({
     useState("");
   const [retentionRationale, setRetentionRationale] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(
-    () => window.matchMedia("(min-width: 820px)").matches,
+    () =>
+      typeof window.matchMedia !== "function" ||
+      mediaQueryMatches("(min-width: 820px)"),
   );
   const [teamOpen, setTeamOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -961,7 +966,7 @@ export function ManagerWorkspace({
       const setup = await ensureQuantixSetup();
       if (setup.state !== "ready" && setup.state !== "warning") {
         setError(
-          `Quantix workspace check failed: ${setup.issues.join(", ").replaceAll("_", " ")}.`,
+          `Quantix workspace check failed: ${setup.issues.join(", ").replace(/_/g, " ")}.`,
         );
         return;
       }
@@ -984,7 +989,7 @@ export function ManagerWorkspace({
         setView("manager");
         setSettingsOpen(false);
         setRetentionOpen(false);
-        if (window.matchMedia("(max-width: 819px)").matches) {
+        if (mediaQueryMatches("(max-width: 819px)")) {
           setSidebarOpen(false);
         }
       }
@@ -1042,16 +1047,17 @@ export function ManagerWorkspace({
     const tenderId = projection?.selected_tender?.tender_id;
     const rationale = retentionRationale.trim();
     if (!tenderId || !retentionAction || !rationale) return;
-    const result = await run(() => {
+    const succeeded = await run(async () => {
       if (retentionAction === "archive") {
-        return archiveTender(tenderId, rationale);
+        await archiveTender(tenderId, rationale);
+      } else if (retentionAction === "trash") {
+        await trashTender(tenderId, rationale);
+      } else {
+        await restoreArchivedTender(tenderId, rationale);
       }
-      if (retentionAction === "trash") {
-        return trashTender(tenderId, rationale);
-      }
-      return restoreArchivedTender(tenderId, rationale);
+      return true;
     });
-    if (!result) return;
+    if (!succeeded) return;
     setRetentionAction(null);
     setRetentionRationale("");
     if (retentionAction === "restore") {
@@ -1081,16 +1087,19 @@ export function ManagerWorkspace({
       return;
     }
     const { kind, record } = trashAction;
-    const result = await run(() =>
-      kind === "restore"
-        ? restoreTrashedTender(record.deletion_id, rationale)
-        : purgeTrashedTender(
-            record.deletion_id,
-            rationale,
-            permanentDeleteConfirmation,
-          ),
-    );
-    if (!result) return;
+    const succeeded = await run(async () => {
+      if (kind === "restore") {
+        await restoreTrashedTender(record.deletion_id, rationale);
+      } else {
+        await purgeTrashedTender(
+          record.deletion_id,
+          rationale,
+          permanentDeleteConfirmation,
+        );
+      }
+      return true;
+    });
+    if (!succeeded) return;
     setTrashAction(null);
     setRetentionRationale("");
     setPermanentDeleteConfirmation("");
@@ -1184,7 +1193,7 @@ export function ManagerWorkspace({
               void loadTrash();
               setSettingsOpen(false);
               setTeamOpen(false);
-              if (window.matchMedia("(max-width: 819px)").matches) {
+              if (mediaQueryMatches("(max-width: 819px)")) {
                 setSidebarOpen(false);
               }
             }}
@@ -1202,7 +1211,7 @@ export function ManagerWorkspace({
               setSettingsOpen(true);
               setRetentionOpen(false);
               setTeamOpen(false);
-              if (window.matchMedia("(max-width: 819px)").matches) {
+              if (mediaQueryMatches("(max-width: 819px)")) {
                 setSidebarOpen(false);
               }
             }}
