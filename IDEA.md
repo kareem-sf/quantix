@@ -1,10 +1,10 @@
 
 
-Context: An Open-Source Agentic Tendering Office for Construction
+Quantix: An Open-Source Agentic Tendering Office for Construction
 
 Executive conclusion
 
-Context is feasible, but it should not be designed as an autonomous chatbot that “does tenders.” It should be a local-first tender operating system in which a deterministic workflow controls deadlines, approvals, document versions, pricing calculations, permissions, and submission status, while AI agents perform bounded analytical and drafting work.
+Quantix is feasible, but it should not be designed as an autonomous chatbot that “does tenders.” It should be a local-first tender operating system in which a deterministic workflow controls deadlines, approvals, document versions, pricing calculations, permissions, and submission status, while AI agents perform bounded analytical and drafting work.
 
 
 
@@ -20,7 +20,7 @@ A literal “build nothing from scratch” approach is impossible because the co
 
 
 
-Context should not claim to be the first AI tender product. Current commercial products already advertise functions such as RFP analysis, go/no-go recommendations, compliance checking, proposal drafting, vendor sourcing, and scope review. Vendor materials for ContraVault, TendersWorld, Civilnex, SimpleTender, BidSubs, and Tender X describe parts of this market. 
+Quantix should not claim to be the first AI tender product. Current commercial products already advertise functions such as RFP analysis, go/no-go recommendations, compliance checking, proposal drafting, vendor sourcing, and scope review. Vendor materials for ContraVault, TendersWorld, Civilnex, SimpleTender, BidSubs, and Tender X describe parts of this market.
 
 
 
@@ -62,7 +62,7 @@ The World Bank Procurement Framework treats procurement as a configurable proces
 
 
 
-Context is primarily a bidder-side system. It can prepare the contractor for award and support post-tender clarifications, negotiation, and contract handover, but it cannot “award” the contractor because the buyer or employer controls that decision.
+Quantix is primarily a bidder-side system. It can prepare the contractor for award and support post-tender clarifications, negotiation, and contract handover, but it cannot “award” the contractor because the buyer or employer controls that decision.
 
 
 
@@ -152,7 +152,7 @@ RICS describes quantity-surveying and commercial functions as covering lifecycle
 
 Dynamic tender team
 
-Context should maintain a capability catalogue rather than a permanently fixed employee list.
+Quantix should maintain a capability catalogue rather than a permanently fixed employee list.
 
 
 
@@ -200,7 +200,7 @@ Adaptive agent operating model
 
 What should be dynamic
 
-On project creation, Context should generate a project fingerprint from the uploaded package and a short manager interview. The fingerprint should include:
+On Tender creation, Quantix should generate a Construction Project fingerprint from the connected Tender Package and a short manager interview. The fingerprint should include:
 
 
 
@@ -310,23 +310,25 @@ For example, the Red-Team Reviewer should be sceptical, omission-focused and una
 
 
 
-OpenAI’s Agents SDK supports agents, tools, agents-as-tools, handoffs, dynamic instructions, guardrails, sessions, human intervention and tracing. Its documentation distinguishes a manager pattern—in which one agent retains control and invokes specialists—from handoffs that transfer control to another agent. Dynamic instruction functions can adapt behaviour from runtime context. 
+Generic agent frameworks such as PydanticAI, the OpenAI Agents SDK, LangGraph and CrewAI are useful design references, but Quantix v0 does not install one. Their ordinary provider paths require API credentials or a custom Codex adapter, introduce another runtime and state model, and duplicate capabilities already supplied by Codex app-server. Codex app-server is the model-facing agent runtime; the genuine Rust Quantix Host is the deterministic Tender Office control plane.
 
 
 
-The recommended pattern for Context is:
+The selected pattern for Quantix is:
 
 
 
-The Tendering Manager Agent remains the controller.
+The Engineer User, acting as Tendering Manager, remains the sole decision and approval authority.
 
-Specialist agents are normally exposed as bounded tools.
+The Tender Office Coordinator coordinates routine work inside the approved Work Plan but cannot make manager decisions.
 
-Handoffs are used only when the human deliberately enters a specialist workspace.
+Each specialist is a separate versioned Agent Profile with one bounded Codex thread, exact tasks, inputs, permissions, output contracts and independent review.
 
-A deterministic workflow engine, not the LLM, decides legal state transitions.
+Inter-role handoff occurs through validated, registered records and Artifact Versions rather than shared mutable chat or workspaces.
 
-Agents return structured proposals; application services validate and apply them.
+Typed Rust workflow transitions, not an LLM or generic agent framework, decide legal state changes.
+
+Agents return structured proposals; the Rust Host validates, reviews and publishes accepted versions.
 
 Privacy and permissions
 
@@ -372,7 +374,7 @@ Guardrails are necessary but insufficient by themselves. OpenAI’s documentatio
 
 Evidence-first information model
 
-Context should turn tender documents into structured, traceable objects rather than storing only chat messages.
+Quantix should turn tender documents into structured, traceable objects rather than storing only chat messages.
 
 
 
@@ -450,7 +452,7 @@ Human verification status.
 
 Relationships to responses, tasks and deliverables.
 
-The Open Contracting Data Standard can inform exchange entities such as tender, award, contract and implementation, but Context needs an extended bidder-side schema for requirements, estimate build-ups, assumptions, qualifications, work packages and proposal evidence. 
+The Open Contracting Data Standard can inform exchange entities such as tender, award, contract and implementation, but Quantix needs an extended bidder-side schema for requirements, estimate build-ups, assumptions, qualifications, work packages and proposal evidence.
 
 
 
@@ -504,21 +506,23 @@ Architecture and open-source reuse
 
 Recommended stack
 
-The simplest durable implementation is a TypeScript-oriented monorepo with an Electron desktop shell and a separately packaged Python document-processing worker.
+The simplest durable implementation is a Tauri 2 desktop application with a genuine Rust Quantix Host, a React/TypeScript renderer, and a pinned Docling runtime installed and supervised by the Host. There is no Node Host sidecar.
 
 
 
 Layer	Recommended component	Reason
 
-Desktop runtime	electron/electron	Cross-platform Windows, macOS and Linux runtime using JavaScript, HTML, CSS, Node.js and Chromium; MIT licensed. 
+Desktop runtime	tauri-apps/tauri	Cross-platform Rust Core with the operating system WebView, scoped capabilities and native packaging; MIT/Apache-2.0 licensed.
 
-Packaging	electron/forge	Established Electron packaging and publishing tooling maintained under the Electron organisation. 
+Packaging	Tauri CLI and updater	Native Windows, macOS and Linux bundles with mandatory signed updater artifacts and first-party release tooling.
 
 UI	React, TypeScript and Vite	Familiar, strongly typed ecosystem suitable for Codex-generated components
 
-Workflow	statelyai/xstate	MIT-licensed TypeScript state machines and actors with zero dependencies, intended for predictable application and workflow orchestration. 
+Workflow	Typed Rust domain transitions	Pure transition functions plus persisted SQLite facts and Audit Events; add a state-machine crate only after repeated hierarchy is demonstrated.
 
-Agent runtime	openai/openai-agents-js	TypeScript agent primitives, tools, manager/handoff patterns, guardrails, sessions, human-in-loop and tracing. 
+Agent runtime	Pinned openai/codex app-server	Codex-managed ChatGPT login and threads behind the Quantix-owned AI Provider Interface; no BYOK or custom token handling.
+
+Agent orchestration	Quantix Team Composer and typed Rust Tender Tasks	Project-specific Agent Profiles, work dependencies, permissions, EITL, evidence and publication stay in the Host; no generic agent framework or second orchestration runtime.
 
 Local database	SQLite	Single-file local storage, transactions, indexing and straightforward backup
 
@@ -534,101 +538,67 @@ DOCX generation	dolanmiu/docx	MIT-licensed Word generation and modification for 
 
 XLSX handling	exceljs/exceljs	Reads, manipulates and writes Excel workbooks and JSON data. 
 
-Validation	Zod and JSON Schema	Shared runtime and static validation for agent outputs, configuration and IPC
+Validation	Serde, garde, ts-rs and JSON Schema	Strict Rust command decoding, Safety Limits, generated TypeScript DTOs and version-matched external output validation
 
-Testing	Vitest, Playwright and Python pytest	Unit, contract, document and cross-platform end-to-end testing
+Testing	Cargo test, Vitest, Playwright and Python pytest	Domain, contract, document and native cross-platform end-to-end testing
 
-Observability	Agent SDK tracing plus local audit log	Agent tracing can capture runs, agents, generations, tools, guardrails and handoffs. 
-
-
-
-Electron is recommended over Tauri for the first long-term architecture because Context already needs a Node/TypeScript agent runtime and a Python document worker. Electron keeps the application layer in one primary language and avoids adding Rust plus sidecar orchestration. Tauri remains a reasonable alternative where smaller binaries and OS-level capability configuration outweigh the additional integration complexity; Tauri supports scoped capability files, secret storage through Stronghold and bundled sidecars. 
+Observability	Rust tracing plus local Audit Events	Structured operational diagnostics remain separate from the canonical, tamper-evident Tender audit sequence.
 
 
 
-Electron must be treated as privileged software. Its official security guidance recommends context isolation, renderer sandboxing, restrictive Content Security Policy, validation of IPC senders and avoidance of unsafe remote content. Context should load only bundled local UI code, expose a small typed preload API and perform file, database, network and model operations outside the renderer. 
+Tauri 2 with a genuine Rust Host is the selected long-term desktop architecture. The React renderer is an untrusted presentation Module; the Rust Core owns all domain commands, EITL decisions, filesystem access, SQLite transactions, process supervision, recovery and updates. Quantix accepts the additional Rust-to-TypeScript binding and process-containment work in exchange for one durable native Host, declarative capability control and no Electron ABI or Chromium-distribution layer.
 
 
 
-API keys should use the operating system’s credential facilities. Electron’s safeStorage provides OS-backed encryption, but its Linux documentation warns that some environments can fall back to a weak basic\_text backend; Context should detect that state and refuse to represent the secret as securely stored. 
+Tauri's Rust Core is privileged software. Quantix loads only bundled local UI code, applies a restrictive Content Security Policy and grants the main WebView only named, domain-shaped commands through a minimal capability manifest. The renderer receives no generic filesystem, SQL, shell, credential or updater permission.
+
+
+
+Quantix does not store an OpenAI API key. The bundled Codex executable owns the Engineer User's ChatGPT authentication and exposes account state through app-server; Quantix never reads or exports Codex credentials. Any future provider requiring application-owned secrets needs a separate decision and an operating-system credential Adapter.
+
+Codex app-server is pinned behind a generated-schema Adapter and may qualify a private engineer-operated v0. Public distribution remains blocked while OpenAI describes app-server as experimental and unsupported for production, and until applicable terms permit Quantix's intended third-party subscription-backed use. Technical risk acceptance cannot waive contractual authorization.
 
 
 
 Repository structure
 
-text
-
-Copy
-
-context/
-
-&#x20; apps/
-
-&#x20;   desktop/
-
-&#x20;     main/
-
-&#x20;     preload/
-
-&#x20;     renderer/
-
-&#x20; packages/
-
-&#x20;   domain/
-
-&#x20;   workflow/
-
-&#x20;   agents/
-
-&#x20;   storage/
-
-&#x20;   evidence/
-
-&#x20;   permissions/
-
-&#x20;   estimating/
-
-&#x20;   artifacts/
-
-&#x20;   integrations/
-
-&#x20;   testing/
-
-&#x20; workers/
-
-&#x20;   docling/
-
-&#x20; workflow-packs/
-
-&#x20;   core-construction/
-
-&#x20;   fidic/
-
-&#x20;   egypt/
-
-&#x20; templates/
-
-&#x20;   bid-no-bid/
-
-&#x20;   compliance-matrix/
-
-&#x20;   technical-proposal/
-
-&#x20;   commercial-submission/
-
-&#x20; fixtures/
-
-&#x20;   synthetic-tenders/
-
-&#x20; docs/
-
-&#x20;   architecture-decisions/
-
-&#x20;   domain/
-
-&#x20;   security/
-
-&#x20; AGENTS.md
+```text
+quantix/
+  apps/
+    desktop/
+      src/                 # React/TypeScript renderer
+      src-tauri/
+        src/               # Rust Quantix Host and deep Modules
+        capabilities/      # least-authority WebView commands
+        binaries/          # target-specific Codex and uv sidecars
+  crates/
+    domain/
+    workflow/
+    agents/
+    tender-store/
+    evidence/
+    permissions/
+    estimating/
+    artifacts/
+    integrations/
+    testing/
+  workflow-packs/
+    core-construction/
+    fidic/
+    egypt/
+  templates/
+    bid-no-bid/
+    compliance-matrix/
+    technical-proposal/
+    commercial-submission/
+  fixtures/
+    synthetic-tenders/
+  docs/
+    adr/
+    domain/
+    security/
+  AGENTS.md
+```
 
 The boundaries should be strict:
 
@@ -648,17 +618,17 @@ estimating performs deterministic quantities and arithmetic.
 
 artifacts generates controlled outputs.
 
-desktop presents the product but contains no tendering logic.
+the renderer presents the product but contains no tendering logic or privileged mechanism.
 
-workers/docling is replaceable through a narrow document-conversion interface.
+the Rust Process Supervisor owns replaceable Codex and Docling Adapters behind narrow internal seams.
 
-There should be no microservices, Kubernetes, cloud collaboration server, event broker or distributed database in the first product. A local SQLite database, a content-addressed project file store, a TypeScript application process and one Python ingestion worker are sufficient.
+There should be no microservices, Kubernetes, cloud collaboration server, event broker or distributed database in the first product. One Tauri Rust Host, local SQLite Tender Stores, a content-addressed file store, the packaged Codex process and disposable Docling jobs are sufficient.
 
 
 
 What to reuse and what not to reuse
 
-Several GitHub repositories use names such as “Tender Management System,” but many are small educational CRUD applications and do not provide a mature construction bidding core. ProposalForce is a more relevant BSD-licensed RFP-management reference that supports proposal records and CSV/DOCX export, but it is Salesforce-oriented and should be studied for domain ideas rather than adopted as Context’s foundation. 
+Several GitHub repositories use names such as “Tender Management System,” but many are small educational CRUD applications and do not provide a mature construction bidding core. ProposalForce is a more relevant BSD-licensed RFP-management reference that supports proposal records and CSV/DOCX export, but it is Salesforce-oriented and should be studied for domain ideas rather than adopted as Quantix’s foundation.
 
 
 
@@ -666,7 +636,7 @@ Recently created generic multi-agent projects such as Multica, SwarmClaw, OpenSa
 
 
 
-Context should reuse their ideas, not combine their entire codebases. The foundation should remain a small set of mature libraries with a construction-specific domain layer owned by the Context project.
+Quantix should reuse their ideas, not combine their entire codebases. The foundation should remain a small set of mature libraries with a construction-specific domain layer owned by the Quantix project.
 
 
 
@@ -686,15 +656,15 @@ Domain vocabulary and entity schemas.
 
 Project and document storage.
 
-Electron shell with sandboxed renderer.
+Tauri 2 shell with a least-authority React renderer and genuine Rust Host.
 
 Docling worker adapter.
 
 PDF evidence viewer.
 
-XState tender workflow.
+Typed Rust Tender workflow transitions persisted as domain facts and Audit Events.
 
-Agent SDK adapter.
+Pinned Codex app-server Adapter using the Engineer User's Codex login.
 
 Structured logging and audit events.
 
@@ -716,7 +686,7 @@ Use only three AI agents:
 
 Agent	Scope
 
-Tendering Manager	Creates the project plan and consolidates results
+Tender Office Coordinator	Coordinates the approved plan, dependencies and consolidation without manager authority
 
 Tender Analyst	Extracts deadlines, requirements, evaluation criteria and risks
 
@@ -746,7 +716,7 @@ Export the memorandum and compliance matrix to DOCX/XLSX.
 
 Preserve all evidence and review decisions.
 
-Exit condition: a user can complete this entire process without editing application data outside Context.
+Exit condition: a user can complete this entire process without editing application data outside Quantix.
 
 
 
@@ -854,7 +824,7 @@ Submission manifest, file hashes and receipt storage.
 
 Red-team and final executive reviews.
 
-Exit condition: Context creates a complete, validated submission package while making every unresolved exception visible.
+Exit condition: Quantix creates a complete, validated submission package while making every unresolved exception visible.
 
 
 
@@ -916,7 +886,7 @@ MCP integration with explicit permissions.
 
 Public benchmark tenders and evaluation suite.
 
-This is where Context becomes a community platform rather than one application.
+This is where Quantix becomes a community platform rather than one application.
 
 
 
@@ -924,7 +894,7 @@ Quality, security and open-source governance
 
 Testing strategy
 
-The most important quality metric is not how polished the proposal sounds. It is whether Context finds the requirements, preserves evidence, performs correct calculations and prevents unsafe actions.
+The most important quality metric is not how polished the proposal sounds. It is whether Quantix finds the requirements, preserves evidence, performs correct calculations and prevents unsafe actions.
 
 
 
@@ -954,6 +924,22 @@ Cross-platform tests	Installation, update, import, processing and export on Wind
 
 
 
+Product acceptance is layered. Private v0 Qualification requires the complete deterministic suite, five consecutive clean live runs of the synthetic bilingual Acceptance Tender Fixture against the pinned Codex version, and a packaged Windows 11 end-to-end rehearsal. Public Release Gate additionally requires equivalent native packaged acceptance on Windows 11 x64, macOS 14+ Apple Silicon and Ubuntu 24.04 x64, plus production assurance and terms permitting the intended third-party subscription-backed Codex integration.
+
+
+
+Every live release-candidate run must recover 100% of oracle-marked critical requirements, addenda, deadlines, forms and submission instructions; introduce zero unsupported critical requirements; account for 100% of BOQ rows; reproduce every deterministic calculation; attach approved provenance to every material claim; and recover at least 95% of non-critical oracle items. No average may hide a critical, calculation, evidence, permission, EITL, information-boundary, prompt-injection, integrity, recovery or security failure.
+
+
+
+Pull requests use a deterministic fake app-server to exercise provider contracts, malformed messages, interruption, crash, restart and indeterminate outcomes on every supported CI platform without credentials. Live Codex evaluation is opted-in and release-candidate-only. Product acceptance enforces timeouts, bounded resources, no hangs, no orphaned processes and no partial canonical publication; stage timings establish an evidence-based performance baseline before a latency regression limit is introduced.
+
+
+
+The implemented repository must expose separate deterministic verification, live-provider evaluation, native packaging-validation and aggregate release-acceptance entry points. Each qualifying attempt produces immutable Product Acceptance Runs and an attributable Product Acceptance Record binding exact fixture, oracle, source, application, Codex, Docling, model, schema, dependency, platform, test, evaluation, package, finding, exception, timing and artifact hashes.
+
+
+
 Recommended product metrics are:
 
 
@@ -978,7 +964,7 @@ Critical review findings remaining at submission.
 
 Human acceptance or correction rate by agent and task type.
 
-Model cost per tender.
+Provider usage and elapsed time by Tender; missing monetary cost remains unknown rather than estimated from subscription usage.
 
 Processing time by stage.
 
@@ -1082,7 +1068,7 @@ Allowed module dependency direction.
 
 “Do not add packages before checking existing dependency APIs and types.”
 
-Codex became generally available with CLI and SDK capabilities in October 2025, and OpenAI’s 2026 Codex application supports parallel agents and isolated worktrees. Those features are useful for separate module tasks, but merge order should remain controlled because Context’s domain schema and workflow are shared foundations. 
+Codex became generally available with CLI and SDK capabilities in October 2025, and OpenAI’s 2026 Codex application supports parallel agents and isolated worktrees. Those features are useful for separate module tasks, but merge order should remain controlled because Quantix’s domain schema and workflow are shared foundations.
 
 
 
@@ -1126,45 +1112,43 @@ A dependency policy should normally accept MIT, BSD, Apache-2.0 and similarly pe
 
 
 
-Decisions to lock before Codex starts
+Locked v0 mission
 
-Decision	Recommended default	Question to resolve
+Decision	Selected v0 boundary
 
-Primary market	Main and specialist construction contractors	Is the first user a main contractor, subcontractor, consultant or employer?
+Primary user	One Egyptian main-contractor Engineer User acting as Tendering Manager
 
-Initial geography	Egypt and Gulf region	Which country’s practices and portals should the first fixture represent?
+Construction Project	One FIDIC-oriented employer-designed building Tender; authentic FIDIC text remains outside the public fixture
 
-Contract family	FIDIC-based projects	Which FIDIC editions and local amendments are most common in the target company?
+Tender language	English and Arabic source analysis and Tender-required output language
 
-Project types	Buildings first	Buildings, infrastructure, MEP, industrial, fit-out or mixed?
+Input package	Connected directory or archive containing PDF, DOCX and XLSX; native DWG, Revit, BIM, Primavera and proprietary estimating integrations are later capabilities
 
-Tender language	English and Arabic	Must the first release extract and generate both languages or only display Arabic sources?
+Commercial depth	Mandatory evidence-linked Cost Estimating through an independently reviewed Priced Cost Baseline and EITL-approved Tender price; no LLM arithmetic or pricing autonomy
 
-Input package	PDF, DOCX and XLSX	Are drawings, Primavera schedules, BIM models and emails required in the first usable release?
+Deployment	Local single-user Tauri 2 desktop application with a genuine Rust Host and all Quantix-managed data under `~/.quantix`
 
-Commercial depth	Requirements and assumptions before detailed estimating	Is full BOQ rate build-up required for the first live pilot?
+AI Provider	One pinned Codex app-server Adapter using the Engineer User's Codex-managed ChatGPT subscription; no BYOK, routing, fallback or generic agent framework
 
-Deployment	Local single-user desktop	Must multiple tender staff collaborate concurrently from the first release?
+Document processing	Pinned local Docling runtime installed through bundled `uv`; provider reasoning remains online
 
-Model provider	OpenAI first behind a narrow provider interface	Is cloud processing acceptable for confidential tender documents?
+Company knowledge	Only explicitly approved, versioned company records and templates
 
-Offline requirement	Local document parsing; model use initially online	Is fully offline inference a mandatory contractual requirement?
+External actions	Draft and approve inside Quantix only; no autonomous email, RFQ issue, portal upload or submission
 
-Company knowledge	Explicitly approved library only	What source systems hold CVs, project references, productivity rates and templates?
+Submission scope	Generate, validate, review and freeze an exact Submission Package; external submission remains outside v0
 
-External actions	Draft-only with human approval	Should Context ever send emails, upload portals or contact vendors automatically?
+Product qualification	Private Windows engineer-operated v0 first; public support requires native Windows, macOS and Linux qualification plus a supported and permitted Codex integration
 
-Submission scope	Generate and validate package, not autonomously submit	Are specific e-tendering portals required?
+Project licence	Apache-2.0, with dependency and model licences audited before distribution
 
-Licensing	Apache-2.0	Is commercial hosting of Context by third parties acceptable?
-
-Product name	Context as working name	Is the name legally and commercially available in the target software categories?
+Product name	Quantix; Context is obsolete
 
 
 
-The recommended defaults produce a coherent first mission:
+These locked decisions produce the coherent first mission:
 
 
 
-Context v0 should be a local single-user Electron application for English and Arabic construction tenders, initially focused on FIDIC-oriented building projects. It should import PDF/DOCX/XLSX packages, extract an evidence-linked compliance matrix, generate a bid/no-bid decision and tender work plan through three controlled agents, and export reviewed Word and Excel artifacts. No pricing autonomy, external communication, portal submission, cloud collaboration or speculative plugin system should enter the first end-to-end release.
+Quantix v0 should be a local single-user Tauri 2 application with a genuine Rust Host for English and Arabic construction tenders, initially focused on FIDIC-oriented building projects. It should import PDF/DOCX/XLSX packages, extract an evidence-linked compliance matrix, generate a bid/no-bid decision and Tender work plan through controlled agents, and export reviewed Word and Excel artifacts. No pricing autonomy, external communication, portal submission, cloud collaboration or speculative plugin system should enter the first end-to-end release.
 

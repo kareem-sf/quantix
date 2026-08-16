@@ -1,0 +1,314 @@
+.quantix-startup,
+.quantix-blocked {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  text-align: center;
+  color: #242422;
+  background: #fff;
+}
+
+.quantix-startup__mark {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 13px;
+  color: #fff;
+  background: #2f2f2d;
+  font-size: 19px;
+  font-weight: 720;
+}
+
+.quantix-startup h1,
+.quantix-blocked h1 {
+  margin: 16px 0 8px;
+  font-size: 25px;
+  letter-spacing: -0.04em;
+}
+
+.quantix-blocked p {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  max-width: 480px;
+  margin: 0;
+  color: #73736e;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.quantix-startup__status {
+  display: flex;
+  width: min(100%, 390px);
+  gap: 11px;
+  align-items: flex-start;
+  padding: 13px 14px;
+  border: 1px solid #e3e3de;
+  border-radius: 11px;
+  text-align: left;
+  background: #f7f7f4;
+}
+
+.quantix-startup__status > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  animation: startup-spin 900ms linear infinite;
+}
+
+.quantix-startup__status > div {
+  display: grid;
+  gap: 3px;
+}
+
+.quantix-startup__status strong {
+  font-size: 13px;
+}
+
+.quantix-startup__status span {
+  color: #73736e;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.quantix-startup__steps {
+  display: grid;
+  width: min(100%, 390px);
+  gap: 7px;
+  margin: 16px 0 0;
+  padding: 0 5px;
+  list-style: none;
+  text-align: left;
+}
+
+.quantix-startup__details {
+  width: min(100%, 390px);
+  margin-top: 14px;
+  border: 1px solid #e3e3de;
+  border-radius: 11px;
+  overflow: hidden;
+  text-align: left;
+  background: #fff;
+}
+
+.quantix-startup__details summary {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 13px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.quantix-startup__details summary::-webkit-details-marker {
+  display: none;
+}
+
+.quantix-startup__details summary > span {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.quantix-startup__details summary small {
+  color: #85857f;
+  font-size: 11px;
+  font-weight: 450;
+}
+
+.quantix-startup__details summary > svg {
+  color: #777771;
+  transition: transform 150ms ease;
+}
+
+.quantix-startup__details[open] summary > svg {
+  transform: rotate(180deg);
+}
+
+.quantix-startup__details > ol {
+  display: grid;
+  max-height: min(42vh, 360px);
+  margin: 0;
+  padding: 4px 13px 11px;
+  overflow-y: auto;
+  border-top: 1px solid #edede8;
+  list-style: none;
+}
+
+.quantix-startup__live-observation {
+  display: flex;
+  min-height: 32px;
+  gap: 7px;
+  align-items: center;
+  padding: 0 13px;
+  border-top: 1px solid #edede8;
+  color: #555550;
+  background: #f7f7f4;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quantix-startup__live-observation > svg {
+  flex: 0 0 auto;
+  animation: startup-spin 900ms linear infinite;
+}
+
+.quantix-startup__details li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: start;
+  padding: 9px 0;
+  color: #aaa9a3;
+}
+
+.quantix-startup__details li + li {
+  border-top: 1px solid #f0f0ec;
+}
+
+.quantix-startup__activity-icon {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  margin-top: 1px;
+  border: 1px solid #deded8;
+  border-radius: 50%;
+}
+
+.quantix-startup__details li > div {
+  display: grid;
+  gap: 2px;
+}
+
+.quantix-startup__details li strong {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 590;
+}
+
+.quantix-startup__details li p {
+  margin: 0;
+  color: inherit;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.quantix-startup__details li time {
+  padding-top: 1px;
+  color: #8d8d87;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quantix-startup__details li.is-complete,
+.quantix-startup__details li.is-active {
+  color: #5d5d58;
+}
+
+.quantix-startup__details li.is-active strong {
+  color: #222220;
+  font-weight: 680;
+}
+
+.quantix-startup__details li.is-complete .quantix-startup__activity-icon {
+  border-color: #333330;
+  color: #fff;
+  background: #333330;
+}
+
+.quantix-startup__details li.is-active .quantix-startup__activity-icon > svg {
+  animation: startup-spin 900ms linear infinite;
+}
+
+.quantix-startup__details li.is-failed {
+  color: #93473f;
+}
+
+.quantix-startup__details-waiting {
+  margin: 0;
+  padding: 12px 13px;
+  border-top: 1px solid #edede8;
+  color: #73736e;
+  font-size: 11.5px;
+}
+
+@media (max-height: 650px) {
+  .quantix-startup,
+  .quantix-blocked {
+    justify-content: flex-start;
+    overflow-y: auto;
+  }
+
+  .quantix-startup {
+    padding-top: 24px;
+  }
+}
+
+.quantix-startup__steps li {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  min-height: 24px;
+  color: #a1a19b;
+  font-size: 12px;
+}
+
+.quantix-startup__steps li > span {
+  display: grid;
+  width: 19px;
+  height: 19px;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid #d8d8d2;
+  border-radius: 50%;
+  font-size: 10px;
+}
+
+.quantix-startup__steps .is-complete {
+  color: #62625d;
+}
+
+.quantix-startup__steps .is-complete > span {
+  border-color: #2f2f2d;
+  color: #fff;
+  background: #2f2f2d;
+}
+
+.quantix-startup__steps .is-current {
+  color: #242422;
+  font-weight: 650;
+}
+
+.quantix-startup__steps .is-current > span {
+  border-color: #2f2f2d;
+}
+
+.quantix-blocked > svg {
+  color: #9c4d43;
+}
+
+.quantix-blocked button {
+  min-height: 38px;
+  margin-top: 22px;
+  padding: 0 16px;
+  border: 1px solid #2d2d2b;
+  border-radius: 8px;
+  color: #fff;
+  background: #2d2d2b;
+  font-size: 13px;
+  font-weight: 640;
+  cursor: pointer;
+}
+
+@keyframes startup-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
