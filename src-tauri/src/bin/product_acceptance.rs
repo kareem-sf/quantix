@@ -13,21 +13,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let application_home = env::var("QUANTIX_APPLICATION_HOME")
             .map(PathBuf::from)
             .map_err(|_| "QUANTIX_APPLICATION_HOME is required for release packaging")?;
-        let release_candidate = env::var("QUANTIX_RELEASE_CANDIDATE_SHA256")
-            .map_err(|_| "QUANTIX_RELEASE_CANDIDATE_SHA256 is required for release packaging")?;
+        let release_candidate_manifest = env::var("QUANTIX_RELEASE_CANDIDATE_MANIFEST_SHA256")
+            .map_err(|_| {
+                "QUANTIX_RELEASE_CANDIDATE_MANIFEST_SHA256 is required for release packaging"
+            })?;
         let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .ok_or("repository root is unavailable")?
             .to_path_buf();
         let measured_candidate = release_candidate_manifest_sha256(&repository_root)?;
-        if measured_candidate != release_candidate {
+        if measured_candidate != release_candidate_manifest {
             return Err(
                 "release candidate manifest changed since Public Release Gate approval".into(),
             );
         }
         let resource_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let host = QuantixHost::new(application_home, resource_directory);
-        let gate = host.inspect_current_public_release_gate(&release_candidate)?;
+        let gate = host.inspect_current_public_release_gate(&release_candidate_manifest)?;
         return match gate {
             Some(record) if record.public_production_ready => {
                 println!("{}", serde_json_canonicalizer::to_string(&record)?);
@@ -37,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
     }
     let [mode, application_home, input] = arguments.as_slice() else {
-        return Err("usage: quantix-product-acceptance <deterministic|aggregate|live|private|native|release> <application-home> <command.json|source-revision|release-candidate-sha256>, or release-check with QUANTIX_APPLICATION_HOME and QUANTIX_RELEASE_CANDIDATE_SHA256".into());
+        return Err("usage: quantix-product-acceptance <deterministic|aggregate|live|private|native|release> <application-home> <command.json|source-revision|release-candidate-sha256>, or release-check with QUANTIX_APPLICATION_HOME and QUANTIX_RELEASE_CANDIDATE_MANIFEST_SHA256".into());
     };
     let application_home = PathBuf::from(application_home);
     let resource_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

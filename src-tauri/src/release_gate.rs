@@ -34,6 +34,9 @@ const REQUIRED_NATIVE_CHECKS: [&str; 8] = [
     "uninstall",
 ];
 const CODEX_APP_SERVER_PRODUCTION_SUPPORTED: bool = false;
+// Public release remains impossible until the build produces a signer-verified
+// attestation that binds the measured source manifest to each native binary.
+const SIGNED_BUILD_PROVENANCE_SUPPORTED: bool = false;
 // A real release key/certificate allowlist is intentionally empty until the
 // legal release process establishes the authorized Quantix signers.
 const AUTHORIZED_WINDOWS_SIGNER_THUMBPRINTS: [&str; 0] = [];
@@ -191,7 +194,9 @@ pub struct TechnicalRiskAcceptance {
 #[ts(export)]
 pub struct EvaluatePublicReleaseGateCommand {
     #[garde(length(bytes, min = 64, max = 64), ascii)]
-    pub release_candidate_sha256: String,
+    pub release_candidate_manifest_sha256: String,
+    #[garde(length(bytes, min = 64, max = 64), ascii)]
+    pub private_windows_candidate_binary_sha256: String,
     #[garde(length(bytes, min = 64, max = 64), ascii)]
     pub private_qualification_sha256: String,
     #[garde(skip)]
@@ -222,7 +227,8 @@ pub enum PublicReleaseGateOutcome {
 #[ts(export)]
 pub struct PublicReleaseGateRecord {
     pub gate_id: String,
-    pub release_candidate_sha256: String,
+    pub release_candidate_manifest_sha256: String,
+    pub private_windows_candidate_binary_sha256: String,
     pub private_qualification_sha256: String,
     pub native_platforms: Vec<NativePlatformQualificationRecord>,
     pub license_review: LicenseDistributionReview,
@@ -379,6 +385,9 @@ impl QuantixHost {
         }
         let connection = self.open_release_gate_database()?;
         let mut blockers = Vec::new();
+        if let Some(blocker) = signed_build_provenance_blocker() {
+            blockers.push(blocker.into());
+        }
         let private_current: bool = connection
             .query_row(
                 "SELECT EXISTS(
@@ -386,7 +395,7 @@ impl QuantixHost {
                    WHERE release_candidate_sha256 = ?1 AND manifest_sha256 = ?2
                  )",
                 params![
-                    command.release_candidate_sha256,
+                    command.private_windows_candidate_binary_sha256,
                     command.private_qualification_sha256
                 ],
                 |row| row.get(0),
@@ -441,8 +450,17 @@ impl QuantixHost {
             if evidence.fixture_sha256 != crate::acceptance::acceptance_fixture_sha256() {
                 blockers.push(format!("fixture_changed:{}", evidence.platform));
             }
-            if evidence.release_candidate_manifest_sha256 != command.release_candidate_sha256 {
+            if evidence.release_candidate_manifest_sha256
+                != command.release_candidate_manifest_sha256
+            {
                 blockers.push(format!("release_candidate_changed:{}", evidence.platform));
+            }
+            if !windows_candidate_matches_private_binary(
+                &evidence.platform,
+                &evidence.signed_binary_sha256,
+                &command.private_windows_candidate_binary_sha256,
+            ) {
+                blockers.push("private_windows_candidate_changed".into());
             }
             if evidence_expired(&evidence.expires_at) {
                 blockers.push(format!("native_evidence_expired:{}", evidence.platform));
@@ -496,7 +514,9 @@ impl QuantixHost {
         let created_at = installation_timestamp(&connection)?;
         let mut record = PublicReleaseGateRecord {
             gate_id: installation_identifier(&connection)?,
-            release_candidate_sha256: command.release_candidate_sha256,
+            release_candidate_manifest_sha256: command.release_candidate_manifest_sha256,
+            private_windows_candidate_binary_sha256: command
+                .private_windows_candidate_binary_sha256,
             private_qualification_sha256: command.private_qualification_sha256,
             native_platforms: command.native_platforms,
             license_review: command.license_review,
@@ -527,12 +547,12 @@ impl QuantixHost {
         connection
             .execute(
                 "INSERT INTO public_release_gate_records (
-                   gate_id, release_candidate_sha256, outcome, record_json,
+                   gate_id, release_candidate_manifest_sha256, outcome, record_json,
                    manifest_sha256, created_at
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     record.gate_id,
-                    record.release_candidate_sha256,
+                    record.release_candidate_manifest_sha256,
                     if authorized { "authorized" } else { "blocked" },
                     canonical_json(&record)?,
                     record.manifest_sha256,
@@ -545,10 +565,10 @@ impl QuantixHost {
 
     pub fn inspect_current_public_release_gate(
         &self,
-        release_candidate_sha256: &str,
+        release_candidate_manifest_sha256: &str,
     ) -> Result<Option<PublicReleaseGateRecord>, TenderCommandError> {
         require_setup(self)?;
-        if release_candidate_sha256.len() != 64 {
+        if release_candidate_manifest_sha256.len() != 64 {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
         let connection = Connection::open_with_flags(
@@ -559,9 +579,9 @@ impl QuantixHost {
         let json = connection
             .query_row(
                 "SELECT record_json FROM public_release_gate_records
-                 WHERE release_candidate_sha256 = ?1
+                 WHERE release_candidate_manifest_sha256 = ?1
                  ORDER BY created_at DESC, gate_id DESC LIMIT 1",
-                [release_candidate_sha256],
+                [release_candidate_manifest_sha256],
                 |row| row.get::<_, String>(0),
             )
             .optional()
@@ -891,4 +911,43 @@ fn parse_record<T: for<'de> Deserialize<'de> + Serialize>(
 
 fn sql_error(_: rusqlite::Error) -> TenderCommandError {
     TenderCommandError::new(TenderErrorCode::StoreUnavailable)
+}
+
+fn windows_candidate_matches_private_binary(
+    platform: &str,
+    native_binary_sha256: &str,
+    private_windows_candidate_binary_sha256: &str,
+) -> bool {
+    platform != "windows_11_x64" || native_binary_sha256 == private_windows_candidate_binary_sha256
+}
+
+fn signed_build_provenance_blocker() -> Option<&'static str> {
+    (!SIGNED_BUILD_PROVENANCE_SUPPORTED).then_some("signed_build_provenance_not_supported")
+}
+
+#[cfg(test)]
+mod release_identity_tests {
+    use super::{signed_build_provenance_blocker, windows_candidate_matches_private_binary};
+
+    #[test]
+    fn public_release_cannot_substitute_a_different_windows_binary() {
+        assert!(!windows_candidate_matches_private_binary(
+            "windows_11_x64",
+            &"a".repeat(64),
+            &"b".repeat(64),
+        ));
+        assert!(windows_candidate_matches_private_binary(
+            "ubuntu_24_04_x64",
+            &"a".repeat(64),
+            &"b".repeat(64),
+        ));
+    }
+
+    #[test]
+    fn public_release_stays_closed_without_signed_build_provenance() {
+        assert_eq!(
+            signed_build_provenance_blocker(),
+            Some("signed_build_provenance_not_supported")
+        );
+    }
 }
