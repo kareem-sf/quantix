@@ -35,7 +35,7 @@ fn windows_candidate_workflow_creates_only_private_windows_installers() {
     for required in [
         "name: Windows candidate",
         "run-name: Windows candidate ${{ inputs.candidate_id }}",
-        "runs-on: [self-hosted, Windows, X64, quantix-release]",
+        "runs-on: windows-2025",
         "releaseDraft: true",
         "prerelease: true",
         "args: --bundles nsis,msi",
@@ -52,6 +52,10 @@ fn windows_candidate_workflow_creates_only_private_windows_installers() {
     assert!(
         !workflow.contains("macos") && !workflow.contains("ubuntu"),
         "Private v0 candidate packaging is Windows-only",
+    );
+    assert!(
+        !workflow.contains("self-hosted") && !workflow.contains("quantix-release"),
+        "candidate packaging must use an ephemeral GitHub-hosted runner",
     );
     let build_step = workflow
         .split("- name: Build the private Windows candidate")

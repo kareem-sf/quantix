@@ -190,8 +190,8 @@ finish() {
 # Replace the example below. Set the two totals to match the stages you write.
 # ──────────────────────────────────────────────────────────────────────────
 
-TOTAL_STAGES=11
-TOTAL_MINUTES=210
+TOTAL_STAGES=10
+TOTAL_MINUTES=185
 ENV_FILE="${QUANTIX_RELEASE_ENV_FILE:-}"
 if [[ -z "$ENV_FILE" ]]; then
   ENV_FILE=".env.release.local"
@@ -358,23 +358,6 @@ else
     exit 1
   fi
 fi
-
-stage "Register the private Windows runner" 25
-say "GitHub must build private native candidates on a trusted Windows 11 x64 machine."
-open_url "https://github.com/kareem-sf/quantix/settings/actions/runners/new"
-step "Choose Windows and x64."
-step "Open PowerShell as Administrator and run GitHub's Download commands exactly."
-step "Run the shown config.cmd command with: --labels quantix-release"
-step "When asked whether to run as a Windows service, answer Y."
-step "Use a dedicated local service account that can read the Quantix checkout but is not an administrator."
-step "Never use this private runner for pull requests from forks."
-pause "Press Enter after the runner page shows the machine."
-RUNNER_READY="$(gh api "repos/$REPOSITORY/actions/runners" --jq '[.runners[] | select(.os == "Windows" and .status == "online" and any(.labels[]; .name == "quantix-release"))] | length')"
-if [[ "$RUNNER_READY" == "0" ]]; then
-  warn "No online Windows runner with the quantix-release label was found."
-  exit 1
-fi
-say "The trusted Windows release runner is online."
 
 stage "Confirm the Quantix Application Home" 10
 DEFAULT_APPLICATION_HOME="$(powershell.exe -NoProfile -NonInteractive -Command '[Environment]::GetFolderPath("UserProfile") + "\.quantix"' | tr -d '\r')"

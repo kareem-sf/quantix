@@ -19,7 +19,7 @@ concurrency:
 jobs:
   candidate:
     name: Build private Windows candidate
-    runs-on: [self-hosted, Windows, X64, quantix-release]
+    runs-on: windows-2025
     timeout-minutes: 120
 
     steps:
