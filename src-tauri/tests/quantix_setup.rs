@@ -295,8 +295,11 @@ fn newer_installation_catalogue_requires_a_supported_quantix_version() {
 
     let catalogue = rusqlite::Connection::open(application_home.join("installation.sqlite"))
         .expect("installation catalogue");
+    let installed_version: u32 = catalogue
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("installed schema marker");
     catalogue
-        .execute_batch("PRAGMA user_version = 9;")
+        .pragma_update(None, "user_version", installed_version + 1)
         .expect("newer schema marker");
     drop(catalogue);
     let inspection_host =

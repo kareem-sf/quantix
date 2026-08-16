@@ -83,12 +83,26 @@ impl RuntimeHarness {
     }
 
     async fn parsed_pdf_evidence(&self, name: &str, marker: &[u8]) -> ParsedEvidence {
-        let source = self._root.path().join(format!("{name}-source"));
+        self.parsed_pdf_evidence_package(name, &[(name, marker)])
+            .await
+            .into_iter()
+            .next()
+            .expect("single parsed PDF Evidence")
+    }
+
+    async fn parsed_pdf_evidence_package(
+        &self,
+        package_name: &str,
+        documents: &[(&str, &[u8])],
+    ) -> Vec<ParsedEvidence> {
+        let source = self._root.path().join(format!("{package_name}-source"));
         fs::create_dir(&source).expect("source directory");
-        let mut bytes = b"%PDF-1.7\n".to_vec();
-        bytes.extend_from_slice(marker);
-        bytes.extend_from_slice(b"\n%%EOF\n");
-        fs::write(source.join(format!("{name}.pdf")), bytes).expect("PDF fixture");
+        for (name, marker) in documents {
+            let mut bytes = b"%PDF-1.7\n".to_vec();
+            bytes.extend_from_slice(marker);
+            bytes.extend_from_slice(b"\n%%EOF\n");
+            fs::write(source.join(format!("{name}.pdf")), bytes).expect("PDF fixture");
+        }
         let imported = self
             .host
             .import_tender_package(ImportTenderPackageCommand {
@@ -96,36 +110,45 @@ impl RuntimeHarness {
                 source_path: source.to_string_lossy().into_owned(),
             })
             .expect("import PDF");
-        let document = imported.documents.first().expect("registered PDF");
-        self.host
-            .parse_source_artifact(ParseSourceArtifactCommand {
-                tender_id: self.tender_id.clone(),
+        let mut parsed = Vec::with_capacity(documents.len());
+        for (name, _) in documents {
+            let package_path = format!("{name}.pdf");
+            let document = imported
+                .documents
+                .iter()
+                .find(|document| document.package_path == package_path)
+                .expect("registered package PDF");
+            self.host
+                .parse_source_artifact(ParseSourceArtifactCommand {
+                    tender_id: self.tender_id.clone(),
+                    artifact_id: document.artifact_id.clone(),
+                    version: document.version,
+                })
+                .await
+                .expect("parse PDF");
+            let references = self
+                .host
+                .inspect_evidence(ParseSourceArtifactCommand {
+                    tender_id: self.tender_id.clone(),
+                    artifact_id: document.artifact_id.clone(),
+                    version: document.version,
+                })
+                .expect("inspect parsed evidence")
+                .locations
+                .into_iter()
+                .map(|location| TenderEvidenceReference {
+                    artifact_id: document.artifact_id.clone(),
+                    version: document.version,
+                    ordinal: location.ordinal,
+                })
+                .collect();
+            parsed.push(ParsedEvidence {
                 artifact_id: document.artifact_id.clone(),
                 version: document.version,
-            })
-            .await
-            .expect("parse PDF");
-        let references = self
-            .host
-            .inspect_evidence(ParseSourceArtifactCommand {
-                tender_id: self.tender_id.clone(),
-                artifact_id: document.artifact_id.clone(),
-                version: document.version,
-            })
-            .expect("inspect parsed evidence")
-            .locations
-            .into_iter()
-            .map(|location| TenderEvidenceReference {
-                artifact_id: document.artifact_id.clone(),
-                version: document.version,
-                ordinal: location.ordinal,
-            })
-            .collect();
-        ParsedEvidence {
-            artifact_id: document.artifact_id.clone(),
-            version: document.version,
-            references,
+                references,
+            });
         }
+        parsed
     }
 }
 
@@ -522,12 +545,18 @@ async fn record_runs_require_fresh_exact_workflow_reruns_not_bootstrap_linked_re
 #[tokio::test]
 async fn confirmed_addendum_precedence_remains_attached_to_conflicting_records() {
     let harness = RuntimeHarness::new("record-extraction");
-    let prior = harness
-        .parsed_pdf_evidence("original", b"TENDER_RECORD_GOLDEN")
-        .await;
-    let addendum = harness
-        .parsed_pdf_evidence("addendum", b"TENDER_RECORD_GOLDEN")
-        .await;
+    let mut sources = harness
+        .parsed_pdf_evidence_package(
+            "original-with-addendum",
+            &[
+                ("original", b"TENDER_RECORD_GOLDEN"),
+                ("addendum", b"TENDER_RECORD_GOLDEN"),
+            ],
+        )
+        .await
+        .into_iter();
+    let prior = sources.next().expect("original Evidence");
+    let addendum = sources.next().expect("addendum Evidence");
     harness
         .host
         .confirm_source_relationship(ConfirmSourceRelationshipCommand {
@@ -607,34 +636,28 @@ async fn confirmed_addendum_precedence_remains_attached_to_conflicting_records()
 
 #[tokio::test]
 async fn later_addenda_make_affected_verified_records_visibly_stale() {
-    let harness = RuntimeHarness::new("record-extraction");
+    let harness = RuntimeHarness::new("manager-intake");
     let prior = harness
         .parsed_pdf_evidence("stale-original", b"TENDER_RECORD_GOLDEN")
         .await;
-    let extraction = harness
-        .host
-        .run_tender_record_extraction(RunTenderRecordExtractionCommand {
-            tender_id: harness.tender_id.clone(),
-            evidence: prior.references,
-            authorities: Vec::new(),
-        })
-        .await
-        .expect("extract record before addendum");
-    let records = records_for_run(&harness.host, &harness.tender_id, &extraction.run.run_id);
-    let requirement = records
-        .iter()
-        .find(|record| record.kind == TenderRecordKind::Requirement)
-        .expect("affected requirement");
+    fs::write(
+        harness.codex.with_extension("manager-output-release"),
+        b"release",
+    )
+    .expect("release initial Manager outcome");
     harness
         .host
-        .decide_tender_record(DecideTenderRecordCommand {
-            tender_id: harness.tender_id.clone(),
-            record_id: requirement.record_id.clone(),
-            version: requirement.version,
-            decision: TenderRecordEngineerDecisionKind::Verify,
-            rationale: "Verified against the then-current authoritative package.".into(),
+        .run_manager_intake_for_verification(&harness.tender_id)
+        .await
+        .expect("complete initial Manager Intake before later addendum");
+    let records = inspect_all_records(&harness.host, &harness.tender_id);
+    let requirement = records
+        .iter()
+        .find(|record| {
+            record.kind == TenderRecordKind::Requirement
+                && record.verification_status == VerificationStatus::Verified
         })
-        .expect("verify exact pre-addendum record");
+        .expect("verified affected requirement");
     let addendum = harness
         .parsed_pdf_evidence("stale-addendum", b"TENDER_RECORD_GOLDEN")
         .await;

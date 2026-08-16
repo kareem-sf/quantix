@@ -3255,15 +3255,14 @@ fn parse_canonical_record<T: for<'de> Deserialize<'de> + Serialize>(
 fn manifest_sha256_record<T: Serialize>(value: &T) -> Result<String, TenderCommandError> {
     let mut value = serde_json::to_value(value)
         .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-    let field = if object.contains_key("manifest_sha256") {
-        "manifest_sha256"
-    } else {
-        "approval_manifest_sha256"
-    };
-    object.insert(field.into(), serde_json::Value::String(String::new()));
+    if let Some(object) = value.as_object_mut() {
+        let self_hash_field = ["manifest_sha256", "approval_manifest_sha256"]
+            .into_iter()
+            .find(|field| object.contains_key(*field));
+        if let Some(field) = self_hash_field {
+            object.insert(field.into(), serde_json::Value::String(String::new()));
+        }
+    }
     let bytes = serde_json_canonicalizer::to_vec(&value)
         .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
     Ok(sha256_hex(&bytes))

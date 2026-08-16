@@ -1,18 +1,20 @@
 use std::{fs, io, path::Path, process::Command, sync::Arc};
 
 use quantix_lib::{
-    ensure_quantix_setup, AiProviderKind, CancelProviderLoginCommand, CodexReadiness,
-    CreatePortableTenderArchiveCommand, CreateTenderBackupCommand, CreateTenderCommand,
-    DeviceProtection, ErasedTenderCopyClass, ImportTenderPackageCommand,
-    InspectManagerWorkspaceCommand, ManagerIntakeStage, ManagerIntakeStatusKind,
-    ManagerWorkspaceTenderState, ProviderCleanupStatus, ProviderConnectionStatus,
-    ProviderLoginMethod, ProviderLoginStatus, ProviderReasoningSelection,
-    PurgeTrashedTenderCommand, QuantixHost, RecordEngineerWorkspaceMessageCommand, RuntimeLayout,
-    SelectManagerWorkspaceTenderCommand, SetupPlatform, SetupState, StartProviderLoginCommand,
-    StoragePermissions, TenderErrorCode, TenderOfficeMessageAuthor, TenderOfficeMessageKind,
-    TenderRetentionDecisionCommand, TenderRetentionState, TrashedTenderDecisionCommand,
-    TrashedTenderState, UpdateAiExecutionSelectionCommand, WorkspaceActionKind,
-    WorkspaceMessageReferenceKind, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    ensure_quantix_setup, AiProviderKind, BidDecisionApprovalDecision, CancelProviderLoginCommand,
+    CodexReadiness, ComplianceDisposition, ComplianceDispositionUpdate,
+    CreateBidDecisionPackageCommand, CreatePortableTenderArchiveCommand, CreateTenderBackupCommand,
+    CreateTenderCommand, DecideBidDecisionPackageCommand, DeviceProtection, ErasedTenderCopyClass,
+    ImportTenderPackageCommand, InspectManagerWorkspaceCommand, ManagerIntakeStage,
+    ManagerIntakeStatusKind, ManagerWorkspaceTenderState, ProviderCleanupStatus,
+    ProviderConnectionStatus, ProviderLoginMethod, ProviderLoginStatus, ProviderReasoningSelection,
+    PurgeTrashedTenderCommand, QuantixHost, RecordEngineerWorkspaceMessageCommand,
+    RunBidDecisionPackageReviewCommand, RuntimeLayout, SelectManagerWorkspaceTenderCommand,
+    SetupPlatform, SetupState, StartProviderLoginCommand, StoragePermissions, TenderErrorCode,
+    TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderRecordInspection, TenderRecordKind,
+    TenderRecordVersionReference, TenderRetentionDecisionCommand, TenderRetentionState,
+    TrashedTenderDecisionCommand, TrashedTenderState, UpdateAiExecutionSelectionCommand,
+    WorkspaceActionKind, WorkspaceMessageReferenceKind, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use rusqlite::Connection;
 
@@ -46,12 +48,203 @@ fn run_storage_fixture(application_home: &Path, arguments: &[&str], failpoint: &
         .success()
 }
 
-#[test]
-fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_workspace() {
+async fn establish_declined_tender(
+    host: &QuantixHost,
+    codex: &Path,
+    application_home: &Path,
+    source_root: &Path,
+    tender_id: &str,
+) {
+    let source = source_root.join(format!("decline-source-{tender_id}"));
+    fs::create_dir(&source).expect("decline source directory");
+    fs::write(
+        source.join("conditions.pdf"),
+        b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
+    )
+    .expect("decline PDF fixture");
+    fs::write(codex.with_extension("agent-scenario"), "manager-intake-bid")
+        .expect("select complete Manager Intake fixture");
+    fs::write(codex.with_extension("manager-output-release"), b"release")
+        .expect("release Manager Intake output");
+    host.import_tender_package(ImportTenderPackageCommand {
+        tender_id: tender_id.into(),
+        source_path: source.to_string_lossy().into_owned(),
+    })
+    .expect("import decline source");
+    if let Err(error) = host.run_manager_intake_for_verification(tender_id).await {
+        let workspace = host
+            .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+                tender_id: Some(tender_id.into()),
+            })
+            .expect("inspect failed terminal Manager Intake");
+        let database = application_home
+            .join("tenders")
+            .join(tender_id)
+            .join("tender.sqlite");
+        let agent_failure = Connection::open(database)
+            .expect("open failed Manager Intake store")
+            .query_row(
+                "SELECT status, failure_json FROM agent_runs ORDER BY run_sequence DESC LIMIT 1",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .ok();
+        let fixture_error = fs::read_to_string(codex.with_extension("fixture-error")).ok();
+        panic!(
+            "complete Manager Intake before terminal decision: {error:?}; agent={agent_failure:?}; fixture={fixture_error:?}; {workspace:#?}"
+        );
+    }
+    let intake = host
+        .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+            tender_id: Some(tender_id.into()),
+        })
+        .expect("inspect completed terminal Manager Intake")
+        .intake
+        .expect("terminal Manager Intake status");
+    if intake.stage != ManagerIntakeStage::BidDecisionReady {
+        let database = application_home
+            .join("tenders")
+            .join(tender_id)
+            .join("tender.sqlite");
+        let connection = Connection::open(database).expect("open incomplete Manager Intake store");
+        let mut statement = connection
+            .prepare(
+                "SELECT ar.run_sequence, ar.profile_id, ar.profile_version, ar.status,
+                        ar.provider_thread_ref, ar.provider_turn_ref, ar.failure_json,
+                        group_concat(pe.kind, ' -> ')
+                 FROM agent_runs ar
+                 LEFT JOIN provider_events pe ON pe.run_id = ar.run_id
+                 GROUP BY ar.run_id
+                 ORDER BY ar.run_sequence",
+            )
+            .expect("prepare incomplete Agent Runs");
+        let runs = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                ))
+            })
+            .expect("query incomplete Agent Runs")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect incomplete Agent Runs");
+        let fixture_error = fs::read_to_string(codex.with_extension("fixture-error")).ok();
+        panic!(
+            "Manager Intake did not reach Bid Decision: {intake:#?}; runs={runs:#?}; fixture={fixture_error:?}"
+        );
+    }
+
+    let records = inspect_all_records(host, tender_id);
+    let package = host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: tender_id.into(),
+            base_version: None,
+            disposition_updates: complete_dispositions(&records),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("create decline Bid Decision Package");
+    fs::write(codex.with_extension("agent-scenario"), "bid-package-review")
+        .expect("select Bid Decision review fixture");
+    let review = host
+        .run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+            tender_id: tender_id.into(),
+            package_id: package.package_id,
+            version: package.version,
+        })
+        .await;
+    let package = match review {
+        Ok(review) => review.package,
+        Err(error) => {
+            let integrity = host.inspect_tender_integrity(tender_id).ok();
+            let fixture_error = fs::read_to_string(codex.with_extension("fixture-error")).ok();
+            panic!(
+                "review decline Bid Decision Package: {error:?}; fixture={fixture_error:?}; integrity={integrity:#?}"
+            );
+        }
+    };
+    host.decide_bid_decision_package(DecideBidDecisionPackageCommand {
+        tender_id: tender_id.into(),
+        package_id: package.package_id,
+        version: package.version,
+        manifest_sha256: package.manifest_sha256,
+        decision: BidDecisionApprovalDecision::Reject,
+        rationale: "Tendering Manager reviewed the exact package and records the Decline.".into(),
+        conditions: Vec::new(),
+        exceptions: Vec::new(),
+        required_rework: Vec::new(),
+    })
+    .expect("record authentic terminal Decline");
+}
+
+fn inspect_all_records(host: &QuantixHost, tender_id: &str) -> Vec<TenderRecordInspection> {
+    let mut cursor = None;
+    let mut records = Vec::new();
+    loop {
+        let page = host
+            .inspect_tender_record_page(tender_id, cursor.as_deref(), 4)
+            .expect("inspect Tender Record page");
+        records.extend(page.records);
+        let Some(next) = page.next_cursor else {
+            return records;
+        };
+        cursor = Some(next);
+    }
+}
+
+fn complete_dispositions(records: &[TenderRecordInspection]) -> Vec<ComplianceDispositionUpdate> {
+    records
+        .iter()
+        .filter(|record| {
+            record.version == 1
+                && matches!(
+                    record.kind,
+                    TenderRecordKind::Requirement
+                        | TenderRecordKind::EvaluationCriterion
+                        | TenderRecordKind::Deliverable
+                        | TenderRecordKind::Deadline
+                        | TenderRecordKind::Form
+                        | TenderRecordKind::Clause
+                )
+        })
+        .map(|record| ComplianceDispositionUpdate {
+            record: TenderRecordVersionReference {
+                record_id: record.record_id.clone(),
+                version: record.version,
+            },
+            disposition: ComplianceDisposition::Comply,
+            responsibility: "Tender Office Coordinator".into(),
+            planned_treatment: "Carry this exact verified obligation into controlled planning."
+                .into(),
+            affected_work: vec!["tender_planning".into()],
+            uncertainty: record
+                .fields
+                .iter()
+                .find_map(|field| field.uncertainty.clone()),
+            related_records: Vec::new(),
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_workspace() {
     let user_home = tempfile::tempdir().expect("temporary user home");
     let application_home = user_home.path().join(".quantix");
-    let host = QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+    let resources = user_home.path().join("resources");
+    let codex = install_codex_fixture(&resources, "manager-intake-bid");
+    let host = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(resources),
+    );
+    host.accept_runtime_fixture();
     assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    install_docling_fixture(&application_home);
     let tender = host
         .create_tender(CreateTenderCommand {
             name: "Terminal Archive Tender".into(),
@@ -87,17 +280,14 @@ fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_workspace()
         .expect_err("active Tender must not archive");
     assert_eq!(refused.code, TenderErrorCode::InvalidCommand);
 
-    let tender_database = application_home
-        .join("tenders")
-        .join(&tender.tender_id)
-        .join("tender.sqlite");
-    Connection::open(tender_database)
-        .expect("open Tender Store fixture")
-        .execute(
-            "UPDATE tender SET lifecycle_phase = 'declined' WHERE singleton = 1",
-            [],
-        )
-        .expect("establish terminal fixture state");
+    establish_declined_tender(
+        &host,
+        &codex,
+        &application_home,
+        user_home.path(),
+        &tender.tender_id,
+    )
+    .await;
     let terminal = host
         .inspect_manager_workspace(InspectManagerWorkspaceCommand {
             tender_id: Some(tender.tender_id.clone()),
@@ -106,8 +296,11 @@ fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_workspace()
     assert!(
         terminal
             .selected_tender
+            .as_ref()
             .expect("selected Tender")
-            .can_archive
+            .can_archive,
+        "terminal={terminal:#?}; integrity={:#?}",
+        host.inspect_tender_integrity(&tender.tender_id)
     );
     assert!(
         host.inspect_manager_workspace(InspectManagerWorkspaceCommand {
@@ -280,8 +473,10 @@ fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_workspace()
     assert!(receipt.local_deletion_completed);
     assert_eq!(
         receipt.provider_cleanup_status,
-        ProviderCleanupStatus::NotRequired
+        ProviderCleanupStatus::Pending
     );
+    assert!(receipt.provider_thread_count > 0);
+    assert_eq!(receipt.confirmed_provider_thread_deletions, 0);
     assert!(receipt
         .erased_copy_classes
         .contains(&ErasedTenderCopyClass::TenderStore));
@@ -319,31 +514,35 @@ fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_workspace()
     assert_eq!(cannot_restore.code, TenderErrorCode::InvalidCommand);
 }
 
-#[test]
-fn permanent_deletion_reconciles_each_local_publication_boundary_without_tender_content() {
+#[tokio::test]
+async fn permanent_deletion_reconciles_each_local_publication_boundary_without_tender_content() {
     let user_home = tempfile::tempdir().expect("temporary user home");
     for failpoint in ["purge_after_decision", "purge_after_local_delete"] {
         let application_home = user_home.path().join(failpoint);
-        let host =
-            QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+        let resources = user_home.path().join(format!("{failpoint}-resources"));
+        let codex = install_codex_fixture(&resources, "manager-intake-bid");
+        let host = QuantixHost::with_setup_platform_and_runtime(
+            &application_home,
+            Arc::new(ReadySetupPlatform),
+            RuntimeLayout::bundled(resources),
+        );
+        host.accept_runtime_fixture();
         assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+        install_docling_fixture(&application_home);
         let tender_name = format!("Confidential deletion fixture {failpoint}");
         let tender = host
             .create_tender(CreateTenderCommand {
                 name: tender_name.clone(),
             })
             .expect("create deletion fixture Tender");
-        let tender_database = application_home
-            .join("tenders")
-            .join(&tender.tender_id)
-            .join("tender.sqlite");
-        Connection::open(tender_database)
-            .expect("open Tender Store fixture")
-            .execute(
-                "UPDATE tender SET lifecycle_phase = 'declined' WHERE singleton = 1",
-                [],
-            )
-            .expect("establish terminal fixture state");
+        establish_declined_tender(
+            &host,
+            &codex,
+            &application_home,
+            user_home.path(),
+            &tender.tender_id,
+        )
+        .await;
         let trashed = host
             .trash_tender(TenderRetentionDecisionCommand {
                 tender_id: tender.tender_id.clone(),
@@ -620,7 +819,6 @@ async fn public_host_runs_real_manager_intake_while_engineer_switches_tenders() 
     let application_home = user_home.path().join(".quantix");
     let resources = user_home.path().join("resources");
     let codex = install_codex_fixture(&resources, "manager-intake");
-    install_docling_fixture(&application_home);
     let host = QuantixHost::with_setup_platform_and_runtime(
         &application_home,
         Arc::new(ReadySetupPlatform),
@@ -628,6 +826,7 @@ async fn public_host_runs_real_manager_intake_while_engineer_switches_tenders() 
     );
     host.accept_runtime_fixture();
     assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    install_docling_fixture(&application_home);
     let intake_tender = host
         .create_tender(CreateTenderCommand {
             name: "Live Intake Tender".into(),
@@ -642,7 +841,7 @@ async fn public_host_runs_real_manager_intake_while_engineer_switches_tenders() 
     fs::create_dir_all(&package).expect("create package");
     fs::write(
         package.join("ITT.pdf"),
-        b"%PDF-1.7\nSubmission deadline 15 May 2026 at 14:00 Cairo time.\nSubmission deadline 16 May 2026 at 14:00 Cairo time.\n%%EOF\n",
+        b"%PDF-1.7\nTENDER_RECORD_GOLDEN\nSubmission deadline 15 May 2026 at 14:00 Cairo time.\nSubmission deadline 16 May 2026 at 14:00 Cairo time.\n%%EOF\n",
     )
     .expect("write package");
     host.import_tender_package(ImportTenderPackageCommand {
@@ -660,12 +859,38 @@ async fn public_host_runs_real_manager_intake_while_engineer_switches_tenders() 
     });
     let waiting = codex.with_extension("manager-output-waiting");
     for _ in 0..2_000 {
-        if waiting.is_file() {
+        if waiting.is_file() || worker.is_finished() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
-    assert!(waiting.is_file(), "Manager reached its real Provider turn");
+    if !waiting.is_file() {
+        let result = worker.await.expect("join early Manager intake worker");
+        let workspace = host
+            .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+                tender_id: Some(intake_tender.tender_id.clone()),
+            })
+            .expect("inspect early Manager intake result");
+        let fixture_error = fs::read_to_string(codex.with_extension("fixture-error")).ok();
+        let database = application_home
+            .join("tenders")
+            .join(&intake_tender.tender_id)
+            .join("tender.sqlite");
+        let connection = Connection::open(database).expect("open early Manager intake store");
+        let runs = connection
+            .prepare("SELECT status, failure_json FROM agent_runs ORDER BY run_sequence")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .expect("inspect early Agent Runs");
+        panic!(
+            "Manager did not reach its real Provider turn: result={result:?}; fixture={fixture_error:?}; runs={runs:#?}; workspace={workspace:#?}"
+        );
+    }
     host.select_manager_workspace_tender(SelectManagerWorkspaceTenderCommand {
         tender_id: other_tender.tender_id.clone(),
     })
@@ -721,7 +946,6 @@ async fn public_host_clean_intake_reaches_canonical_bid_recommendation() {
     let codex = install_codex_fixture(&resources, "manager-intake-bid");
     fs::write(codex.with_extension("manager-output-release"), b"release")
         .expect("pre-release Manager output");
-    install_docling_fixture(&application_home);
     let host = QuantixHost::with_setup_platform_and_runtime(
         &application_home,
         Arc::new(ReadySetupPlatform),
@@ -729,6 +953,7 @@ async fn public_host_clean_intake_reaches_canonical_bid_recommendation() {
     );
     host.accept_runtime_fixture();
     assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    install_docling_fixture(&application_home);
     let tender = host
         .create_tender(CreateTenderCommand {
             name: "Clean Bid Tender".into(),

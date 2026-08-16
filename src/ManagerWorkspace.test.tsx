@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,6 +17,7 @@ const host = vi.hoisted(() => ({
   connectGemini: vi.fn(),
   chooseAndImportTenderPackage: vi.fn(),
   checkQuantixUpdate: vi.fn(),
+  ensureQuantixSetup: vi.fn(),
   inspectManagerWorkspace: vi.fn(),
   inspectDeletionReceipts: vi.fn(),
   inspectTrashedTenders: vi.fn(),
@@ -137,6 +139,7 @@ const projection: ManagerWorkspaceProjection = {
 };
 
 beforeEach(() => {
+  host.ensureQuantixSetup.mockResolvedValue({ state: "ready", warnings: [] });
   host.inspectTrashedTenders.mockResolvedValue([]);
   host.inspectDeletionReceipts.mockResolvedValue([]);
 });
@@ -213,15 +216,14 @@ describe("ManagerWorkspace", () => {
     const confirm = screen.getByLabelText(
       `Type ${trashedRecord.tender_name} to confirm`,
     );
+    const dialog = screen.getByRole("dialog");
     expect(
-      (
-        screen.getByRole("button", {
-          name: "Permanent Delete",
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
+      within(dialog).getByRole("button", { name: "Permanent Delete" }),
+    ).toHaveProperty("disabled", true);
     fireEvent.change(confirm, { target: { value: trashedRecord.tender_name } });
-    fireEvent.click(screen.getByRole("button", { name: "Permanent Delete" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Permanent Delete" }),
+    );
 
     await waitFor(() => {
       expect(host.purgeTrashedTender).toHaveBeenCalledWith(
@@ -518,6 +520,17 @@ describe("ManagerWorkspace", () => {
     expect(screen.getByText("Data & Storage")).toBeTruthy();
     expect(screen.getByText("Updates")).toBeTruthy();
     expect(screen.getByText("About & Diagnostics")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "gpt-live-b" },
+    });
+
+    await waitFor(() => {
+      expect(host.updateAiExecutionSelection).toHaveBeenCalledWith({
+        connection_id: "codex_chatgpt",
+        model_id: "gpt-live-b",
+        reasoning: { kind: "codex_effort", value: "high" },
+      });
+    });
     fireEvent.change(screen.getByLabelText("Appearance"), {
       target: { value: "dark" },
     });
@@ -546,17 +559,6 @@ describe("ManagerWorkspace", () => {
           },
         },
       );
-    });
-    fireEvent.change(screen.getByLabelText("Model"), {
-      target: { value: "gpt-live-b" },
-    });
-
-    await waitFor(() => {
-      expect(host.updateAiExecutionSelection).toHaveBeenCalledWith({
-        connection_id: "codex_chatgpt",
-        model_id: "gpt-live-b",
-        reasoning: { kind: "codex_effort", value: "high" },
-      });
     });
     expect(screen.getByRole("navigation", { name: "Tenders" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Manager" })).toBeNull();
@@ -696,9 +698,9 @@ describe("ManagerWorkspace", () => {
 
     render(<ManagerWorkspace aiAvailable={false} />);
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
-    fireEvent.change(screen.getByLabelText("Provider"), {
-      target: { value: "anthropic_byok" },
-    });
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Anthropic API key/ }),
+    );
     fireEvent.change(screen.getByLabelText("Anthropic API key"), {
       target: { value: "sk-ant-secret" },
     });

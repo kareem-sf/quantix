@@ -832,7 +832,7 @@ impl TenderStore {
                        AND sr.prior_version = el.version
                        AND sr.relationship_kind = 'replacement'
                    )
-                 ORDER BY artifact_id, version, ordinal",
+                 ORDER BY el.artifact_id, el.version, el.ordinal",
             )
             .map_err(sql_error)?;
         let references = statement
@@ -2077,6 +2077,8 @@ fn manager_intake_data_view(
         })
         .collect::<Vec<_>>();
     Ok(json!({
+        "data_classification": DataClassification::TenderInternal,
+        "data_scope": MANAGER_INTAKE_SCOPE,
         "schema_version": 1,
         "tender_id": tender_id.as_str(),
         "tender_revision": tender_revision,

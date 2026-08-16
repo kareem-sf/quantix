@@ -506,17 +506,10 @@ impl QuantixHost {
             self.invalidate_missing_provider()?;
             return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
         };
-        let refreshed = match provider.refresh_readiness().await {
-            Ok(refreshed) => refreshed,
-            Err(failure) => {
-                self.retire_failed_provider(&provider, &failure).await?;
-                return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
-            }
-        };
-        if !refreshed {
+        let connection = provider.connection_snapshot();
+        if connection.status != ProviderConnectionStatus::Ready {
             return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
         }
-        let connection = provider.connection_snapshot();
         let selection = selection_from_command(&connection, &command)?;
         save_connection_and_selection(self.application_home(), &connection, &selection)?;
         load_application_settings(self.application_home())

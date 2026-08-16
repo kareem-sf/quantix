@@ -21,9 +21,9 @@ use super::{
         response_result, validate_candidate, validate_schema, write_rpc, ControlRequestContext,
         ControlRequestLedger, NotificationOutcome,
     },
-    failed_execution, interrupted_execution, permission_failure, stream_provider_events,
-    turn_acceptance_unknown, AgentRunState, CodexProviderProcess, PendingProviderEvent,
-    PreparedAgentRun, ProviderEventKind, ProviderExecution, ProviderFailure,
+    failed_execution, interrupted_execution, permission_failure, provider_connection_readiness,
+    stream_provider_events, turn_acceptance_unknown, AgentRunState, CodexProviderProcess,
+    PendingProviderEvent, PreparedAgentRun, ProviderEventKind, ProviderExecution, ProviderFailure,
     ProviderFailureCategory, ProviderUsage, RunCallbacks, PROVIDER_OUTPUT_LIMIT,
 };
 use crate::application_settings::{
@@ -655,19 +655,21 @@ async fn run_actor(
                                     | PendingRpc::DeleteConfirm { .. }
                             )
                         });
-                        let connection_ready = connection
+                        let connection_snapshot = connection
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .status
-                            == ProviderConnectionStatus::Ready;
+                            .clone();
                         if active_login_id.is_some()
                             || account_management_pending
-                            || !connection_ready
                         {
                             let _ = response.send(failed_execution(
                                 permission_failure(),
                                 Instant::now(),
                             ));
+                            continue;
+                        }
+                        if let Err(failure) = provider_connection_readiness(&connection_snapshot) {
+                            let _ = response.send(failed_execution(failure, Instant::now()));
                             continue;
                         }
                         let transport_deadline = runs
@@ -772,13 +774,15 @@ async fn run_actor(
                     }
                 };
                 let handled = handle_message(
-                    &mut process,
-                    &mut runs,
-                    &mut pending,
-                    &mut next_rpc_id,
-                    &mut active_login_id,
-                    &connection,
-                    &login,
+                    CodexActorContext {
+                        process: &mut process,
+                        runs: &mut runs,
+                        pending: &mut pending,
+                        next_rpc_id: &mut next_rpc_id,
+                        active_login_id: &mut active_login_id,
+                        connection: &connection,
+                        login: &login,
+                    },
                     &line,
                     message,
                 ).await;
@@ -1144,18 +1148,30 @@ async fn send_interrupt(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+struct CodexActorContext<'a> {
+    process: &'a mut CodexProviderProcess,
+    runs: &'a mut HashMap<String, ActorRun>,
+    pending: &'a mut HashMap<u64, PendingRpc>,
+    next_rpc_id: &'a mut u64,
+    active_login_id: &'a mut Option<String>,
+    connection: &'a Arc<Mutex<ProviderConnectionView>>,
+    login: &'a Arc<Mutex<Option<ProviderLoginView>>>,
+}
+
 async fn handle_message(
-    process: &mut CodexProviderProcess,
-    runs: &mut HashMap<String, ActorRun>,
-    pending: &mut HashMap<u64, PendingRpc>,
-    next_rpc_id: &mut u64,
-    active_login_id: &mut Option<String>,
-    connection: &Arc<Mutex<ProviderConnectionView>>,
-    login: &Arc<Mutex<Option<ProviderLoginView>>>,
+    context: CodexActorContext<'_>,
     line: &[u8],
     message: Value,
 ) -> Result<(), ProviderFailure> {
+    let CodexActorContext {
+        process,
+        runs,
+        pending,
+        next_rpc_id,
+        active_login_id,
+        connection,
+        login,
+    } = context;
     if message.get("id").is_some() && message.get("method").is_none() {
         let id = message
             .get("id")
@@ -1165,13 +1181,15 @@ async fn handle_message(
             return Err(protocol_failure(true));
         };
         return handle_response(
-            process,
-            runs,
-            pending,
-            next_rpc_id,
-            active_login_id,
-            connection,
-            login,
+            CodexActorContext {
+                process,
+                runs,
+                pending,
+                next_rpc_id,
+                active_login_id,
+                connection,
+                login,
+            },
             line.len(),
             message,
             operation,
@@ -1313,19 +1331,21 @@ async fn handle_message(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn handle_response(
-    process: &mut CodexProviderProcess,
-    runs: &mut HashMap<String, ActorRun>,
-    pending: &mut HashMap<u64, PendingRpc>,
-    next_rpc_id: &mut u64,
-    active_login_id: &mut Option<String>,
-    connection: &Arc<Mutex<ProviderConnectionView>>,
-    login: &Arc<Mutex<Option<ProviderLoginView>>>,
+    context: CodexActorContext<'_>,
     line_bytes: usize,
     message: Value,
     operation: PendingRpc,
 ) -> Result<(), ProviderFailure> {
+    let CodexActorContext {
+        process,
+        runs,
+        pending,
+        next_rpc_id,
+        active_login_id,
+        connection,
+        login,
+    } = context;
     let operation = match operation {
         PendingRpc::LoginStart { method, response } => {
             let result = parse_login_start_response(&message, method);

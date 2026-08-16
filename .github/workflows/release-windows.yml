@@ -1,0 +1,57 @@
+name: Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_candidate_sha256:
+        description: SHA-256 of the privately qualified release candidate
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build Windows installers
+    runs-on: [self-hosted, Windows, X64, quantix-release]
+    timeout-minutes: 120
+    env:
+      QUANTIX_APPLICATION_HOME: ${{ vars.QUANTIX_APPLICATION_HOME }}
+      QUANTIX_RELEASE_CANDIDATE_SHA256: ${{ inputs.release_candidate_sha256 }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install locked JavaScript dependencies
+        run: npm ci
+
+      - name: Verify the qualified source revision
+        run: npm run verify
+
+      - name: Build and draft the Windows release
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: quantix-v__VERSION__
+          releaseName: Quantix v__VERSION__
+          releaseBody: Windows x64 installers for the privately qualified Quantix release candidate.
+          releaseDraft: true
+          prerelease: false
+          args: --bundles nsis,msi

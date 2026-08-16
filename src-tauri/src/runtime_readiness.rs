@@ -821,7 +821,6 @@ impl QuantixHost {
         versions.docling = probe_docling_version(
             self.process_supervisor(),
             self.application_home(),
-            &docling,
             cancellation.clone(),
         )
         .await
@@ -941,7 +940,6 @@ impl QuantixHost {
         let docling_version = probe_docling_version(
             self.process_supervisor(),
             self.application_home(),
-            &docling,
             cancellation.clone(),
         )
         .await?;
@@ -1367,17 +1365,32 @@ async fn probe_version(
 async fn probe_docling_version(
     supervisor: &ProcessSupervisor,
     application_home: &Path,
-    executable: &Path,
     cancellation: CancellationToken,
 ) -> Result<String, RuntimeError> {
-    probe_version_with_timeout(
+    let output = run_checked(
         supervisor,
-        application_home,
-        executable,
+        ProcessSpec {
+            executable: python_executable(application_home),
+            arguments: os_arguments(&[
+                "-I",
+                "-c",
+                "from importlib.metadata import version; print(version('docling'))",
+            ]),
+            current_directory: Some(application_home.join("runtimes")),
+            environment: docling_environment(application_home),
+            inherit_environment: false,
+            stdin: Vec::new(),
+            timeout: ENVIRONMENT_CHECK_TIMEOUT,
+            stdout_limit: PROBE_OUTPUT_LIMIT,
+            stderr_limit: PROBE_OUTPUT_LIMIT,
+        },
         cancellation,
-        ENVIRONMENT_CHECK_TIMEOUT,
     )
-    .await
+    .await?;
+    let text = std::str::from_utf8(&output.stdout).map_err(|_| RuntimeError::InvalidOutput)?;
+    Version::parse(text.trim())
+        .map(|version| version.to_string())
+        .map_err(|_| RuntimeError::InvalidOutput)
 }
 
 async fn probe_version_with_timeout(

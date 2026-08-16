@@ -677,6 +677,7 @@ export function ApplicationSettings({
                   <span>Anthropic API key</span>
                   <input
                     type="password"
+                    aria-label="Anthropic API key"
                     value={anthropicKey}
                     autoComplete="off"
                     disabled={busy}
@@ -700,6 +701,7 @@ export function ApplicationSettings({
                   <span>Gemini API key</span>
                   <input
                     type="password"
+                    aria-label="Gemini API key"
                     value={geminiKey}
                     autoComplete="off"
                     disabled={busy}
@@ -729,6 +731,7 @@ export function ApplicationSettings({
             <label>
               <span>Model</span>
               <select
+                aria-label="Model"
                 value={
                   selectedModel?.model_id ?? connectionSelection?.model_id ?? ""
                 }
@@ -778,6 +781,7 @@ export function ApplicationSettings({
             <label>
               <span>Reasoning</span>
               <select
+                aria-label="Reasoning"
                 value={
                   selectedReasoning
                     ? reasoningKey(selectedReasoning.selection)
