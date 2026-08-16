@@ -9,5 +9,6 @@ export default defineConfig({
     exclude: [...configDefaults.exclude, ".worktrees/**"],
     fileParallelism: false,
     pool: "vmThreads",
+    setupFiles: ["./src/testSetup.ts"],
   },
 });

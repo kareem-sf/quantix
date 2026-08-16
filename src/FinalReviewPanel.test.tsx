@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const host = vi.hoisted(() => ({
   approvePackageFindingException: vi.fn(),
+  approveSubmissionRelease: vi.fn(),
+  exportReleaseCopy: vi.fn(),
   inspectCurrentSubmissionPackage: vi.fn(),
   inspectFinalReview: vi.fn(),
   inspectSubmissionRelease: vi.fn(),
@@ -228,7 +230,7 @@ describe("FinalReviewPanel", () => {
     );
 
     expect(await screen.findByText(/1 release blocker/i)).toBeTruthy();
-    expect(screen.getByText(/departures: 0/i)).toBeTruthy();
+    expect(screen.getAllByText(/departures: 0/i).length).toBeGreaterThan(0);
     expect(
       screen.getAllByText(new RegExp(packageManifest)).length,
     ).toBeGreaterThan(0);
