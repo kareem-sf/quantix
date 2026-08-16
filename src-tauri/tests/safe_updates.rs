@@ -141,7 +141,7 @@ fn valid_offer(data_may_change: bool) -> UpdateCandidate {
             signature_sha256: "b".repeat(64),
         },
         compatibility: UpdateCompatibilityManifest {
-            installation_schema_version: 19,
+            installation_schema_version: 20,
             tender_schema_version: 31,
             codex_version: "0.147.0".into(),
             docling_version: "2.118.0".into(),

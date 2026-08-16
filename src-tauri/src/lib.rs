@@ -888,11 +888,11 @@ mod tauri_commands {
     #[tauri::command]
     pub(super) async fn inspect_current_public_release_gate(
         host: tauri::State<'_, QuantixHost>,
-        release_candidate_sha256: String,
+        release_candidate_manifest_sha256: String,
     ) -> Result<Option<PublicReleaseGateRecord>, TenderCommandError> {
         let host = host.inner().clone();
         tauri::async_runtime::spawn_blocking(move || {
-            host.inspect_current_public_release_gate(&release_candidate_sha256)
+            host.inspect_current_public_release_gate(&release_candidate_manifest_sha256)
         })
         .await
         .map_err(|_| TenderCommandError {

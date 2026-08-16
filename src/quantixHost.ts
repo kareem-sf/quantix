@@ -1391,11 +1391,11 @@ export function qualifyPrivateV0(
 }
 
 export function inspectCurrentPublicReleaseGate(
-  releaseCandidateSha256: string,
+  releaseCandidateManifestSha256: string,
 ): Promise<PublicReleaseGateRecord | null> {
   return invoke<PublicReleaseGateRecord | null>(
     "inspect_current_public_release_gate",
-    { releaseCandidateSha256 },
+    { releaseCandidateManifestSha256 },
   );
 }
 

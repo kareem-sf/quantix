@@ -14,7 +14,7 @@ use crate::QuantixHost;
 
 pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 1024 * 1024 * 1024;
 
-pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 19;
+pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 20;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
@@ -30,7 +30,7 @@ const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
 ];
 const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 19)
+           schema_version INTEGER NOT NULL CHECK (schema_version = 20)
          )";
 pub(crate) const APPLICATION_SETTINGS_TABLE_SQL: &str = "CREATE TABLE application_settings (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -297,7 +297,7 @@ const PRIVATE_QUALIFICATION_RECORDS_NO_DELETE_SQL: &str =
          BEGIN SELECT RAISE(ABORT, 'Private Qualification Records are immutable'); END";
 const PUBLIC_RELEASE_GATE_RECORDS_TABLE_SQL: &str = "CREATE TABLE public_release_gate_records (
            gate_id TEXT PRIMARY KEY CHECK (length(gate_id) = 32),
-           release_candidate_sha256 TEXT NOT NULL CHECK (length(release_candidate_sha256) = 64),
+           release_candidate_manifest_sha256 TEXT NOT NULL CHECK (length(release_candidate_manifest_sha256) = 64),
            outcome TEXT NOT NULL CHECK (outcome IN ('blocked', 'authorized')),
            record_json TEXT NOT NULL CHECK (json_valid(record_json)),
            manifest_sha256 TEXT NOT NULL UNIQUE CHECK (length(manifest_sha256) = 64),
@@ -933,7 +933,7 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_UPDATE_SQL, [])?;
     transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_DELETE_SQL, [])?;
     transaction.execute(
-        "INSERT INTO installation (singleton, schema_version) VALUES (1, 19)",
+        "INSERT INTO installation (singleton, schema_version) VALUES (1, 20)",
         [],
     )?;
     transaction.execute(

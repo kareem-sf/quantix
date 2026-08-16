@@ -34,6 +34,20 @@ npm run verify        # Formatting, static checks, and deterministic tests
 
 Live-provider and release acceptance commands are explicit and are not part of routine CI. See `package.json` and the accepted product specifications before running them.
 
+## Private Windows release candidate
+
+Quantix releases are intentionally layered. A draft Windows candidate is qualified first for engineer-operated, non-public use. Public distribution remains blocked until signed native acceptance passes on Windows 11 x64, macOS 14+ Apple Silicon, and Ubuntu 24.04 x64; signer-verified provenance binds the measured source to every native binary; and the legal and Codex production-assurance gates are satisfied.
+
+On the trusted Windows 11 release workstation, open Git Bash and run the repeatable setup wizard:
+
+```text
+bash scripts/setup-windows-private-release.sh
+```
+
+The wizard creates the updater signing secrets, guides the one-time private GitHub runner setup, builds a draft NSIS/MSI candidate, and records deterministic plus five clean live qualification runs. It can be stopped and restarted; non-secret progress is kept in the ignored `.env.release.local` file. Never commit that file, updater private keys, passwords, certificates, downloaded candidate packages, or acceptance logs.
+
+The candidate workflow is manual by design. It creates only draft prereleases and cannot authorize a public release. See [`ADR 0010`](docs/adr/0010-qualify-v0-through-layered-product-acceptance.md) for the complete release evidence model.
+
 The generated TypeScript DTOs are committed outputs of the Rust Host types. Run `npm test` after changing an exported DTO and include regenerated declarations in the same commit.
 
 ## Contributing
