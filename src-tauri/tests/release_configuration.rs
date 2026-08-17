@@ -70,6 +70,11 @@ fn windows_candidate_workflow_creates_only_private_windows_installers() {
         "the candidate build step needs the updater signing key",
     );
     assert!(
+        build_step
+            .contains("QUANTIX_UPDATE_PUBLIC_KEY: ${{ steps.updater-public-key.outputs.value }}",),
+        "release-mode Rust must receive the updater public key committed in Tauri configuration",
+    );
+    assert!(
         !pre_build_steps.contains("TAURI_SIGNING_PRIVATE_KEY:"),
         "signing secrets must not be exposed to checkout, dependency installation, or verification",
     );
