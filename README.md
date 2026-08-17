@@ -44,7 +44,7 @@ On the trusted Windows 11 release workstation, open Git Bash and run the repeata
 bash scripts/setup-windows-private-release.sh
 ```
 
-The wizard creates the updater signing secrets, guides the one-time private GitHub runner setup, builds a draft NSIS/MSI candidate, and records deterministic plus five clean live qualification runs. It can be stopped and restarted; non-secret progress is kept in the ignored `.env.release.local` file. Never commit that file, updater private keys, passwords, certificates, downloaded candidate packages, or acceptance logs.
+The wizard creates the updater signing secrets, builds a draft NSIS/MSI candidate on an ephemeral GitHub-hosted Windows runner, and records deterministic plus five clean live qualification runs on the trusted Windows workstation. It can be stopped and restarted; non-secret progress is kept in the ignored `.env.release.local` file. Never commit that file, updater private keys, passwords, certificates, downloaded candidate packages, or acceptance logs.
 
 The candidate workflow is manual by design. It creates only draft prereleases and cannot authorize a public release. See [`ADR 0010`](docs/adr/0010-qualify-v0-through-layered-product-acceptance.md) for the complete release evidence model.
 
