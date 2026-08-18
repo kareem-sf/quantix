@@ -504,6 +504,10 @@ _Avoid_: External submission, editable approval, agent release decision
 A structured link from a canonical claim or record field to an exact Source Artifact Version and typed location, preserving the original excerpt, extraction provenance, confidence, verification status, and any non-authoritative translation. New source versions leave historical Evidence intact but can make it stale for current work.
 _Avoid_: Unsupported assertion, generic file citation, translated text as authority
 
+**Semantic Evidence Search**:
+A local, similarity-threshold retrieval over immutable Evidence locations. It returns exact Source Artifact Version and typed-location provenance with each ranked match; similarity is discovery support only and never changes Evidence authority, verification, or currentness.
+_Avoid_: Autonomous fact selection, semantic result as Evidence, replacement for exact search
+
 **Assumption**:
 A first-class record of an unproven proposition needed for Tender work, including its evidence gap, owner, affected work, proposed treatment, confidence, status, and EITL decision when material. Approval permits controlled reliance but never converts an Assumption into a fact.
 _Avoid_: Hidden premise, unsupported Evidence, approved fact
@@ -569,7 +573,7 @@ An immutable execution of one exact product acceptance suite against an exact Qu
 _Avoid_: Package Validation Run, ordinary test log, Tender approval
 
 **Product Acceptance Record**:
-The immutable aggregate of the Product Acceptance Runs and release evidence required for one Quantix release candidate, including fixture and binary hashes, application, Codex and Docling versions, platform results, evaluation metrics, known non-blocking findings, approved exceptions, and attributable release approval. It qualifies software; it does not approve a Tender or Submission Package.
+The immutable aggregate of the Product Acceptance Runs and release evidence required for one Quantix release candidate, including fixture and binary hashes, application, Codex and OCR versions, platform results, evaluation metrics, known non-blocking findings, approved exceptions, and attributable release approval. It qualifies software; it does not approve a Tender or Submission Package.
 _Avoid_: Release Readiness Report, Final Approval, CI dashboard
 
 **Private v0 Qualification**:

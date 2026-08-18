@@ -45,9 +45,9 @@ impl RuntimeHarness {
         let resources = root.path().join("resources");
         let runtime = resources.join("runtime");
         let runtime_bin = runtime.join("bin");
-        let docling_project = runtime.join("docling");
+        let ocr_project = runtime.join("ocr");
         fs::create_dir_all(&runtime_bin).expect("runtime bin");
-        fs::create_dir_all(&docling_project).expect("Docling project");
+        fs::create_dir_all(&ocr_project).expect("OCR project");
 
         let fixture = Path::new(env!("CARGO_BIN_EXE_quantix-runtime-fixture"));
         for tool in ["codex", "uv"] {
@@ -57,11 +57,11 @@ impl RuntimeHarness {
         fs::write(runtime_bin.join("codex.auth"), "chatgpt\n").expect("Codex auth");
         fs::write(runtime_bin.join("codex.plan"), "plus\n").expect("Codex plan");
         fs::write(runtime_bin.join("uv.version"), "0.12.2\n").expect("uv version");
-        fs::write(runtime_bin.join("docling.version"), "2.118.0\n").expect("Docling version");
+        fs::write(runtime_bin.join("ocr.version"), "3.9.2\n").expect("OCR version");
 
         let source = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("runtime")
-            .join("docling");
+            .join("ocr");
         for name in [
             "pyproject.toml",
             "uv.lock",
@@ -70,9 +70,9 @@ impl RuntimeHarness {
             "approved-model-sources.json",
             "python-downloads.json",
             "prepare_models.py",
-            "convert_document.py",
+            "ocr_document.py",
         ] {
-            fs::copy(source.join(name), docling_project.join(name)).expect("copy runtime source");
+            fs::copy(source.join(name), ocr_project.join(name)).expect("copy runtime source");
         }
         let schema_name = "codex_app_server_protocol.schemas.json";
         let schema_source = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -95,7 +95,7 @@ impl RuntimeHarness {
                     "sha256": sha256(&runtime_bin.join(executable_name("uv"))),
                 },
                 "codex_schema_sha256": sha256(&schema),
-                "docling_project_files": hashed_files(&docling_project),
+                "ocr_project_files": hashed_files(&ocr_project),
             }))
             .expect("serialize runtime provenance"),
         )
@@ -125,12 +125,12 @@ impl RuntimeHarness {
             .expect("write Codex plan");
     }
 
-    fn managed_docling_executable(&self) -> std::path::PathBuf {
+    fn managed_ocr_python(&self) -> std::path::PathBuf {
         self.application_home
             .join("runtimes")
-            .join("docling")
+            .join("ocr")
             .join(if cfg!(windows) { "Scripts" } else { "bin" })
-            .join(executable_name("docling"))
+            .join(executable_name("python"))
     }
 }
 
@@ -144,10 +144,10 @@ fn application_only_update() -> UpdateCandidate {
             signature_sha256: "b".repeat(64),
         },
         compatibility: UpdateCompatibilityManifest {
-            installation_schema_version: 20,
-            tender_schema_version: 31,
+            installation_schema_version: 21,
+            tender_schema_version: 33,
             codex_version: "0.147.0".into(),
-            docling_version: "2.118.0".into(),
+            ocr_version: "3.9.2".into(),
             runtime_manifest_schema_version: 2,
         },
         release: UpdateReleaseInformation {
@@ -166,23 +166,20 @@ fn application_only_update() -> UpdateCandidate {
 async fn readiness_reports_each_engineer_actionable_runtime_state() {
     let harness = RuntimeHarness::new();
 
-    let missing_docling = harness.host.inspect_runtime_readiness().await;
+    let missing_ocr = harness.host.inspect_runtime_readiness().await;
+    assert_eq!(missing_ocr.state, RuntimeReadinessState::MissingExecutable);
     assert_eq!(
-        missing_docling.state,
-        RuntimeReadinessState::MissingExecutable
+        missing_ocr.issues,
+        vec![RuntimeReadinessIssue::OcrExecutableMissing]
     );
-    assert_eq!(
-        missing_docling.issues,
-        vec![RuntimeReadinessIssue::DoclingExecutableMissing]
-    );
-    assert!(missing_docling.repair_available);
+    assert!(missing_ocr.repair_available);
 
     let ready = harness.host.repair_runtime_readiness().await;
     assert_eq!(ready.state, RuntimeReadinessState::Ready, "{ready:?}");
     assert!(ready.issues.is_empty());
     assert_eq!(ready.codex_version.as_deref(), Some("0.147.0"));
     assert_eq!(ready.uv_version.as_deref(), Some("0.12.2"));
-    assert_eq!(ready.docling_version.as_deref(), Some("2.118.0"));
+    assert_eq!(ready.ocr_version.as_deref(), Some("3.9.2"));
     let confirmed_ready = harness.host.inspect_runtime_readiness().await;
     assert_eq!(confirmed_ready.state, RuntimeReadinessState::Ready);
     assert_eq!(
@@ -212,7 +209,7 @@ async fn readiness_reports_each_engineer_actionable_runtime_state() {
     let unexpected_model = harness
         .application_home
         .join("models")
-        .join("docling")
+        .join("ocr")
         .join("unexpected.bin");
     fs::write(&unexpected_model, b"unexpected").expect("write unexpected model file");
     let unlisted_model = harness.host.inspect_runtime_readiness().await;
@@ -294,17 +291,16 @@ async fn readiness_reports_each_engineer_actionable_runtime_state() {
         harness
             .application_home
             .join("models")
-            .join("docling")
-            .join("layout")
-            .join("model.bin"),
+            .join("ocr")
+            .join("PP-OCRv6_det_small.onnx"),
         b"altered model",
     )
-    .expect("alter model fixture without changing its size");
+    .expect("alter model fixture");
     let missing_model = harness.host.inspect_runtime_readiness().await;
     assert_eq!(missing_model.state, RuntimeReadinessState::MissingModel);
     assert_eq!(
         missing_model.issues,
-        vec![RuntimeReadinessIssue::DoclingModelsMissing]
+        vec![RuntimeReadinessIssue::OcrModelsMissing]
     );
     assert!(missing_model.repair_available);
 
@@ -327,21 +323,19 @@ async fn readiness_reports_each_engineer_actionable_runtime_state() {
 }
 
 #[tokio::test]
-async fn runtime_preparation_does_not_launch_docling_to_read_its_version() {
+async fn runtime_preparation_does_not_launch_the_ocr_engine_to_read_its_version() {
     let harness = RuntimeHarness::new();
-    fs::write(harness.runtime_bin.join("docling.version-delay"), "1\n")
-        .expect("Docling fixture version marker");
 
     let ready = harness.host.repair_runtime_readiness().await;
 
     assert_eq!(ready.state, RuntimeReadinessState::Ready, "{ready:?}");
-    assert_eq!(ready.docling_version.as_deref(), Some("2.118.0"));
+    assert_eq!(ready.ocr_version.as_deref(), Some("3.9.2"));
     assert!(
         !harness
-            .managed_docling_executable()
+            .managed_ocr_python()
             .with_extension("version-ready")
             .exists(),
-        "the heavyweight Docling CLI must not run during version inspection",
+        "the heavyweight OCR engine must not run during version inspection",
     );
 }
 
@@ -398,7 +392,7 @@ async fn in_flight_runtime_probe_holds_the_global_ordinary_work_lease_until_chil
     assert_eq!(
         readiness.state,
         RuntimeReadinessState::MissingExecutable,
-        "the fixture still reports missing Docling after its retained-lease probe"
+        "the fixture still reports missing OCR after its retained-lease probe"
     );
 }
 
@@ -465,7 +459,7 @@ async fn managed_environment_drift_requires_repair() {
         harness
             .application_home
             .join("runtimes")
-            .join("docling")
+            .join("ocr")
             .join("fixture_dependency.py"),
         b"fixture=false",
     )
@@ -473,7 +467,7 @@ async fn managed_environment_drift_requires_repair() {
     let contamination = harness
         .application_home
         .join("runtimes")
-        .join("docling")
+        .join("ocr")
         .join("unmanaged-contamination.bin");
     fs::write(&contamination, b"unmanaged").expect("write unmanaged environment file");
 
@@ -481,7 +475,7 @@ async fn managed_environment_drift_requires_repair() {
     assert_eq!(readiness.state, RuntimeReadinessState::RepairRequired);
     assert_eq!(
         readiness.issues,
-        vec![RuntimeReadinessIssue::DoclingEnvironmentInvalid]
+        vec![RuntimeReadinessIssue::OcrEnvironmentInvalid]
     );
     assert!(readiness.repair_available);
 
@@ -493,7 +487,7 @@ async fn managed_environment_drift_requires_repair() {
             harness
                 .application_home
                 .join("runtimes")
-                .join("docling")
+                .join("ocr")
                 .join("fixture_dependency.py")
         )
         .expect("read repaired dependency"),
@@ -523,7 +517,7 @@ async fn repair_unlinks_an_external_managed_python_junction_without_touching_its
     assert_eq!(invalid.state, RuntimeReadinessState::RepairRequired);
     assert_eq!(
         invalid.issues,
-        vec![RuntimeReadinessIssue::DoclingEnvironmentInvalid]
+        vec![RuntimeReadinessIssue::OcrEnvironmentInvalid]
     );
 
     let repaired = harness.host.repair_runtime_readiness().await;
@@ -547,7 +541,7 @@ async fn model_junctions_fail_closed_instead_of_hashing_external_files() {
     let link = harness
         .application_home
         .join("models")
-        .join("docling")
+        .join("ocr")
         .join("linked-models");
     junction::create(&external, &link).expect("model junction");
 
@@ -555,7 +549,7 @@ async fn model_junctions_fail_closed_instead_of_hashing_external_files() {
     assert_eq!(readiness.state, RuntimeReadinessState::MissingModel);
     assert_eq!(
         readiness.issues,
-        vec![RuntimeReadinessIssue::DoclingModelsMissing]
+        vec![RuntimeReadinessIssue::OcrModelsMissing]
     );
 
     junction::delete(link).expect("remove model junction");
@@ -586,7 +580,7 @@ async fn engineer_cancellation_never_publishes_partial_readiness() {
     assert!(!harness
         .application_home
         .join("runtimes")
-        .join("docling-readiness.json")
+        .join("ocr-readiness.json")
         .exists());
     assert!(!harness.host.cancel_runtime_preparation());
 }
@@ -654,7 +648,7 @@ fn renderer_receives_only_named_runtime_readiness_facts() {
     assert_eq!(response["state"], "missing_executable");
     assert_eq!(
         response["issues"],
-        serde_json::json!(["docling_executable_missing"])
+        serde_json::json!(["ocr_executable_missing"])
     );
     assert!(response.get("executable").is_none());
     assert!(response.get("arguments").is_none());

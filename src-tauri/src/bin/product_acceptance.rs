@@ -1,7 +1,7 @@
 use std::{env, fs, path::PathBuf, process::Command};
 
 use quantix_lib::{
-    measure_docling_runtime_sha256, release_candidate_manifest_sha256,
+    measure_ocr_runtime_sha256, release_candidate_manifest_sha256,
     EvaluatePublicReleaseGateCommand, LiveQualificationEnvironment, QuantixHost,
     RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand,
     RunDeterministicAcceptanceCommand,
@@ -91,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     platform: exact_windows_platform()?,
                     app_server_version: codex_version.clone(),
                     codex_version,
-                    docling_runtime_sha256: measure_docling_runtime_sha256(
+                    ocr_runtime_sha256: measure_ocr_runtime_sha256(
                         &application_home,
                         &candidate_resource_directory,
                     )?,

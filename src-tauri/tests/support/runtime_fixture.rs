@@ -3741,7 +3741,8 @@ fn run_uv(
         std::os::unix::fs::symlink(&library, environment.join("lib64"))?;
     }
     let extension = env::consts::EXE_EXTENSION;
-    for name in ["docling", "python"] {
+    {
+        let name = "python";
         let destination = binary_directory.join(if extension.is_empty() {
             name.to_owned()
         } else {
@@ -3750,14 +3751,8 @@ fn run_uv(
         fs::copy(executable, &destination)?;
         fs::write(
             destination.with_extension("version"),
-            fs::read_to_string(executable.with_file_name("docling.version"))?,
+            fs::read_to_string(executable.with_file_name("ocr.version"))?,
         )?;
-        if name == "docling" {
-            let version_delay = executable.with_file_name("docling.version-delay");
-            if version_delay.is_file() {
-                fs::copy(version_delay, destination.with_extension("version-delay"))?;
-            }
-        }
         make_executable(&destination)?;
     }
     Ok(())
@@ -3771,7 +3766,7 @@ fn run_python(
     if arguments.len() == 3
         && arguments[0] == "-I"
         && arguments[1] == "-c"
-        && arguments[2] == "from importlib.metadata import version; print(version('docling'))"
+        && arguments[2] == "from importlib.metadata import version; print(version('rapidocr'))"
     {
         println!(
             "{}",
@@ -3784,62 +3779,65 @@ fn run_python(
         .ok_or("missing model preparation script")?;
     match Path::new(script).file_name().and_then(|name| name.to_str()) {
         Some("prepare_models.py") => run_prepare_models(arguments),
-        Some("convert_document.py") => run_convert_document(arguments),
+        Some("ocr_document.py") => run_ocr_document(arguments),
         _ => Err("unexpected managed Python script".into()),
     }
 }
 
 fn run_prepare_models(arguments: &[std::ffi::OsString]) -> Result<(), Box<dyn std::error::Error>> {
     let output = argument_value(arguments, "--output-dir")?;
-    for profile in [
-        "layout",
-        "tableformer",
-        "code_formula",
-        "picture_classifier",
-        "rapidocr",
+    for artifact in [
+        "PP-OCRv6_det_small.onnx",
+        "PP-OCRv6_rec_small.onnx",
+        "ch_ppocr_mobile_v2.0_cls_mobile.onnx",
     ] {
-        let model = output.join(profile).join("model.bin");
-        fs::create_dir_all(model.parent().ok_or("model parent")?)?;
-        fs::write(model, format!("{profile} fixture model"))?;
+        fs::write(output.join(artifact), format!("{artifact} fixture model"))?;
+    }
+    let embeddings = output.join("embeddings");
+    fs::create_dir_all(&embeddings)?;
+    for artifact in [
+        "model.onnx",
+        "tokenizer.json",
+        "config.json",
+        "special_tokens_map.json",
+        "tokenizer_config.json",
+    ] {
+        fs::write(
+            embeddings.join(artifact),
+            format!("{artifact} fixture embedding model"),
+        )?;
     }
     println!("{}", output.display());
     Ok(())
 }
 
-fn run_convert_document(
-    arguments: &[std::ffi::OsString],
-) -> Result<(), Box<dyn std::error::Error>> {
+fn run_ocr_document(arguments: &[std::ffi::OsString]) -> Result<(), Box<dyn std::error::Error>> {
     let source = argument_value(arguments, "--input")?;
     let output = argument_value(arguments, "--output-dir")?;
     let models = argument_value(arguments, "--artifacts-path")?;
-    for profile in [
-        "layout",
-        "tableformer",
-        "code_formula",
-        "picture_classifier",
-        "rapidocr",
+    for artifact in [
+        "PP-OCRv6_det_small.onnx",
+        "PP-OCRv6_rec_small.onnx",
+        "ch_ppocr_mobile_v2.0_cls_mobile.onnx",
     ] {
-        if !models.join(profile).join("model.bin").is_file() {
-            return Err(format!("fixture {profile} model is missing").into());
+        if !models.join(artifact).is_file() {
+            return Err(format!("fixture OCR artifact {artifact} is missing").into());
         }
     }
     if argument_value(arguments, "--max-file-size")? != Path::new("16777216")
         || argument_value(arguments, "--max-num-pages")? != Path::new("2000")
-    {
-        return Err("Docling resource limits were not applied".into());
-    }
-    if source.file_name().and_then(|name| name.to_str()) == Some("readiness.pdf") {
-        return run_docling_readiness(arguments, &output);
-    }
-    let input_format = source
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .ok_or("staged source has no format")?;
-    if argument_value(arguments, "--input-format")? != Path::new(input_format)
-        || argument_value(arguments, "--document-timeout")? != Path::new("840")
         || argument_value(arguments, "--num-threads")? != Path::new("1")
     {
-        return Err("unexpected controlled Docling parse contract".into());
+        return Err("OCR resource limits were not applied".into());
+    }
+    if source.file_name().and_then(|name| name.to_str()) == Some("readiness.pdf") {
+        if argument_value(arguments, "--document-timeout")? != Path::new("120") {
+            return Err("OCR readiness contract was not applied".into());
+        }
+        return run_ocr_readiness(&output);
+    }
+    if argument_value(arguments, "--document-timeout")? != Path::new("840") {
+        return Err("unexpected controlled OCR parse contract".into());
     }
     if source
         .parent()
@@ -3848,7 +3846,7 @@ fn run_convert_document(
         != Some("input")
         || output.file_name().and_then(|name| name.to_str()) != Some("candidate")
     {
-        return Err("Docling did not receive isolated staged paths".into());
+        return Err("OCR did not receive isolated staged paths".into());
     }
     fs::create_dir_all(&output)?;
     let name = source
@@ -3869,15 +3867,16 @@ fn run_convert_document(
             .windows(b"/Encrypt".len())
             .any(|window| window == b"/Encrypt")
     {
-        return Err("fixture Docling conversion failed".into());
+        return Err("fixture OCR conversion failed".into());
     }
     if source_bytes
         .windows(b"MALFORMED_OUTPUT".len())
         .any(|window| window == b"MALFORMED_OUTPUT")
     {
+        fs::write(output.join(format!("{name}.md")), b"fixture markdown")?;
         fs::write(
-            output.join(format!("{name}.json")),
-            br#"{"schema_name":"DoclingDocument"}"#,
+            output.join(format!("{name}.locations.json")),
+            br#"{"schema_version":2}"#,
         )?;
         return Ok(());
     }
@@ -3885,26 +3884,28 @@ fn run_convert_document(
         .windows(b"EXCESSIVE_OUTPUT".len())
         .any(|window| window == b"EXCESSIVE_OUTPUT")
     {
-        fs::File::create(output.join(format!("{name}.json")))?.set_len(64 * 1024 + 1)?;
+        fs::File::create(output.join(format!("{name}.md")))?.set_len(64 * 1024 + 1)?;
+        fs::write(
+            output.join(format!("{name}.locations.json")),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "locations": [{
+                    "kind": "paragraph",
+                    "text": "fixture",
+                    "page": 1
+                }]
+            }))?,
+        )?;
         return Ok(());
     }
     if source_bytes
         .windows(b"LOSS_OUTPUT".len())
         .any(|window| window == b"LOSS_OUTPUT")
     {
+        fs::write(output.join(format!("{name}.md")), b"# Empty\n")?;
         fs::write(
-            output.join(format!("{name}.json")),
-            serde_json::to_vec(&serde_json::json!({
-                "schema_name": "DoclingDocument",
-                "version": "1.10.0",
-                "name": name,
-                "origin": { "mimetype": "application/pdf", "filename": format!("{name}.pdf") },
-                "body": { "self_ref": "#/body", "children": [] },
-                "groups": [],
-                "texts": [],
-                "tables": [],
-                "pages": {}
-            }))?,
+            output.join(format!("{name}.locations.json")),
+            br#"{"schema_version":1,"locations":[]}"#,
         )?;
         return Ok(());
     }
@@ -3912,345 +3913,361 @@ fn run_convert_document(
         .windows(b"INVALID_REFERENCE_OUTPUT".len())
         .any(|window| window == b"INVALID_REFERENCE_OUTPUT")
     {
-        let mut document = bilingual_pdf_document(name);
-        document["body"]["children"] = serde_json::json!([{ "$ref": "#/texts/999" }]);
+        fs::write(output.join(format!("{name}.md")), b"short markdown")?;
         fs::write(
-            output.join(format!("{name}.json")),
-            serde_json::to_vec(&document)?,
+            output.join(format!("{name}.locations.json")),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "locations": [{
+                    "kind": "paragraph",
+                    "text": "unreachable text",
+                    "page": 1,
+                    "char_start": 1000,
+                    "char_end": 2000
+                }]
+            }))?,
         )?;
         return Ok(());
     }
-    let document = if source_bytes
+    let input_format = source
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .ok_or("staged source has no format")?;
+    if source_bytes
         .windows(b"TENDER_RECORD_GOLDEN".len())
         .any(|window| window == b"TENDER_RECORD_GOLDEN")
     {
-        tender_record_pdf_document(name)
-    } else {
-        match input_format {
-            "pdf" => bilingual_pdf_document(name),
-            "docx" => bilingual_docx_document(name),
-            "xlsx" => bilingual_xlsx_document(name),
-            _ => return Err(format!("unsupported fixture input format {input_format}").into()),
-        }
-    };
+        return write_fixture_output(&output, name, tender_record_pdf_output());
+    }
+    match input_format {
+        "pdf" => write_fixture_output(&output, name, bilingual_pdf_output()),
+        "docx" => write_fixture_output(&output, name, bilingual_docx_output()),
+        "xlsx" => write_fixture_output(&output, name, bilingual_xlsx_output()),
+        _ => Err(format!("unsupported fixture input format {input_format}").into()),
+    }
+}
+
+fn write_fixture_output(
+    output: &Path,
+    name: &str,
+    fixture: (String, serde_json::Value),
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (markdown, locations) = fixture;
+    fs::write(output.join(format!("{name}.md")), markdown.as_bytes())?;
     fs::write(
-        output.join(format!("{name}.json")),
-        serde_json::to_vec(&document)?,
+        output.join(format!("{name}.locations.json")),
+        serde_json::to_vec(&locations)?,
     )?;
     Ok(())
 }
 
-fn run_docling_readiness(
-    arguments: &[std::ffi::OsString],
-    output: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if argument_value(arguments, "--ocr-mode")? != Path::new("full_page")
-        || argument_value(arguments, "--ocr-lang")? != Path::new("ch")
-        || argument_value(arguments, "--num-threads")? != Path::new("1")
-    {
-        return Err("RapidOCR full-page smoke was not requested".into());
-    }
+fn run_ocr_readiness(output: &Path) -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(output)?;
     fs::write(
-        output.join("readiness.json"),
+        output.join("readiness.md"),
+        b"Quantix bundles PDF document conversion to Markdown in an easy self contained package\n",
+    )?;
+    fs::write(
+        output.join("readiness.locations.json"),
         serde_json::to_vec(&serde_json::json!({
-            "schema_name": "DoclingDocument",
-            "name": "readiness",
-            "origin": { "mimetype": "application/pdf" },
-            "texts": [{
-                "text": "Docling bundles PDF document conversion to JSON and Markdown in an easy self contained package"
-            }],
-            "pages": { "1": { "size": { "width": 1, "height": 1 } } },
+            "schema_version": 1,
+            "locations": [{
+                "kind": "paragraph",
+                "text": "Quantix bundles PDF document conversion to Markdown in an easy self contained package",
+                "page": 1,
+                "char_start": 0,
+                "char_end": 84,
+                "bbox": [68.0, 112.0, 498.0, 220.5]
+            }]
         }))?,
     )?;
     Ok(())
 }
 
-fn bilingual_pdf_document(name: &str) -> serde_json::Value {
-    serde_json::json!({
-        "schema_name": "DoclingDocument",
-        "version": "1.10.0",
-        "name": name,
-        "origin": { "mimetype": "application/pdf", "filename": format!("{name}.pdf") },
-        "body": {
-            "self_ref": "#/body",
-            "children": [
-                { "$ref": "#/groups/0" },
-                { "$ref": "#/tables/0" }
-            ]
-        },
-        "groups": [{
-            "self_ref": "#/groups/0",
-            "parent": { "$ref": "#/body" },
-            "children": [
-                { "$ref": "#/texts/0" },
-                { "$ref": "#/texts/1" },
-                { "$ref": "#/texts/2" }
-            ],
-            "name": "Commercial Conditions",
-            "label": "section"
-        }],
-        "texts": [
+fn bilingual_pdf_output() -> (String, serde_json::Value) {
+    let markdown = [
+        "# Commercial Conditions",
+        "",
+        "Bid security is required.",
+        "",
+        "ضمان العطاء مطلوب.",
+        "",
+        "| Item | Price |",
+        "| --- | --- |",
+        "| Concrete | 125000 |",
+        "",
+    ]
+    .join("\n");
+    let locations = serde_json::json!({
+        "schema_version": 1,
+        "locations": [
             {
-                "self_ref": "#/texts/0",
-                "parent": { "$ref": "#/groups/0" },
-                "label": "section_header",
-                "orig": "Commercial Conditions",
+                "kind": "section",
                 "text": "Commercial Conditions",
-                "prov": [{
-                    "page_no": 1,
-                    "charspan": [0, 21],
-                    "bbox": { "l": 10, "t": 90, "r": 190, "b": 70, "coord_origin": "BOTTOMLEFT" }
+                "provenance": [{
+                    "page": 1,
+                    "char_start": 0,
+                    "char_end": 21,
+                    "bbox": [10.0, 90.0, 190.0, 70.0, "BOTTOMLEFT"]
                 }]
             },
             {
-                "self_ref": "#/texts/1",
-                "parent": { "$ref": "#/groups/0" },
-                "label": "text",
-                "orig": "Bid security is required.",
+                "kind": "paragraph",
                 "text": "Bid security is required.",
-                "prov": [
+                "section": "Commercial Conditions",
+                "paragraph_number": 1,
+                "provenance": [
                     {
-                        "page_no": 1,
-                        "charspan": [0, 12],
-                        "bbox": { "l": 10, "t": 65, "r": 190, "b": 45, "coord_origin": "BOTTOMLEFT" }
+                        "page": 1,
+                        "char_start": 0,
+                        "char_end": 12,
+                        "bbox": [10.0, 65.0, 190.0, 45.0, "BOTTOMLEFT"]
                     },
                     {
-                        "page_no": 2,
-                        "charspan": [12, 25],
-                        "bbox": { "l": 10, "t": 95, "r": 190, "b": 75, "coord_origin": "BOTTOMLEFT" }
+                        "page": 2,
+                        "char_start": 12,
+                        "char_end": 25,
+                        "bbox": [10.0, 95.0, 190.0, 75.0, "BOTTOMLEFT"]
                     }
                 ]
             },
             {
-                "self_ref": "#/texts/2",
-                "parent": { "$ref": "#/groups/0" },
-                "label": "text",
-                "orig": "ضمان العطاء مطلوب.",
+                "kind": "paragraph",
                 "text": "ضمان العطاء مطلوب.",
-                "prov": [{
-                    "page_no": 2,
-                    "charspan": [0, 19],
-                    "bbox": { "l": 10, "t": 90, "r": 190, "b": 70, "coord_origin": "BOTTOMLEFT" }
+                "section": "Commercial Conditions",
+                "paragraph_number": 2,
+                "provenance": [{
+                    "page": 2,
+                    "char_start": 0,
+                    "char_end": 19,
+                    "bbox": [10.0, 90.0, 190.0, 70.0, "BOTTOMLEFT"]
                 }]
+            },
+            {
+                "kind": "table",
+                "text": "Item\nPrice\nConcrete\n125000",
+                "section": "Commercial Conditions",
+                "table_number": 1,
+                "provenance": [{
+                    "page": 2,
+                    "char_start": 0,
+                    "char_end": 0,
+                    "bbox": [10.0, 60.0, 190.0, 10.0, "BOTTOMLEFT"]
+                }]
+            },
+            {
+                "kind": "cell",
+                "text": "Item",
+                "section": "Commercial Conditions",
+                "table_number": 1,
+                "cell_range": "A1",
+                "provenance": [{ "page": 2 }]
+            },
+            {
+                "kind": "cell",
+                "text": "Price",
+                "section": "Commercial Conditions",
+                "table_number": 1,
+                "cell_range": "B1",
+                "provenance": [{ "page": 2 }]
+            },
+            {
+                "kind": "cell",
+                "text": "Concrete",
+                "section": "Commercial Conditions",
+                "table_number": 1,
+                "cell_range": "A2",
+                "provenance": [{ "page": 2 }]
+            },
+            {
+                "kind": "cell",
+                "text": "125000",
+                "section": "Commercial Conditions",
+                "table_number": 1,
+                "cell_range": "B2",
+                "provenance": [{ "page": 2 }]
             }
-        ],
-        "tables": [{
-            "self_ref": "#/tables/0",
-            "parent": { "$ref": "#/body" },
-            "label": "table",
-            "prov": [{
-                "page_no": 2,
-                "charspan": [0, 0],
-                "bbox": { "l": 10, "t": 60, "r": 190, "b": 10, "coord_origin": "BOTTOMLEFT" }
-            }],
-            "data": {
-                "num_rows": 2,
-                "num_cols": 2,
-                "table_cells": [
-                    { "start_row_offset_idx": 0, "end_row_offset_idx": 1, "start_col_offset_idx": 0, "end_col_offset_idx": 1, "text": "Item" },
-                    { "start_row_offset_idx": 0, "end_row_offset_idx": 1, "start_col_offset_idx": 1, "end_col_offset_idx": 2, "text": "Price" },
-                    { "start_row_offset_idx": 1, "end_row_offset_idx": 2, "start_col_offset_idx": 0, "end_col_offset_idx": 1, "text": "Concrete" },
-                    { "start_row_offset_idx": 1, "end_row_offset_idx": 2, "start_col_offset_idx": 1, "end_col_offset_idx": 2, "text": "125000" }
-                ]
-            }
-        }],
-        "pages": {
-            "1": { "page_no": 1, "size": { "width": 200, "height": 100 } },
-            "2": { "page_no": 2, "size": { "width": 200, "height": 100 } }
-        }
-    })
+        ]
+    });
+    (markdown, locations)
 }
 
-fn tender_record_pdf_document(name: &str) -> serde_json::Value {
-    serde_json::json!({
-        "schema_name": "DoclingDocument",
-        "version": "1.10.0",
-        "name": name,
-        "origin": { "mimetype": "application/pdf", "filename": format!("{name}.pdf") },
-        "body": {
-            "self_ref": "#/body",
-            "children": [{ "$ref": "#/groups/0" }]
-        },
-        "groups": [{
-            "self_ref": "#/groups/0",
-            "parent": { "$ref": "#/body" },
-            "children": [
-                { "$ref": "#/texts/0" },
-                { "$ref": "#/texts/1" },
-                { "$ref": "#/texts/2" },
-                { "$ref": "#/texts/3" },
-                { "$ref": "#/texts/4" }
-            ],
-            "name": "Tender Conditions",
-            "label": "section"
-        }],
-        "texts": [
+fn tender_record_pdf_output() -> (String, serde_json::Value) {
+    let markdown = [
+        "# Tender Conditions",
+        "",
+        "Bid security is required.",
+        "",
+        "ضمان العطاء مطلوب.",
+        "",
+        "Submission deadline: 15 May 2026 at 14:00 Cairo time.",
+        "",
+        "Submission deadline: 16 May 2026 at 14:00 Cairo time.",
+        "",
+    ]
+    .join("\n");
+    let locations = serde_json::json!({
+        "schema_version": 1,
+        "locations": [
             {
-                "self_ref": "#/texts/0",
-                "parent": { "$ref": "#/groups/0" },
-                "label": "section_header",
-                "orig": "Tender Conditions",
+                "kind": "section",
                 "text": "Tender Conditions",
-                "prov": [{
-                    "page_no": 1,
-                    "charspan": [0, 17],
-                    "bbox": { "l": 10, "t": 90, "r": 190, "b": 70, "coord_origin": "BOTTOMLEFT" }
+                "provenance": [{
+                    "page": 1,
+                    "char_start": 0,
+                    "char_end": 17,
+                    "bbox": [10.0, 90.0, 190.0, 70.0, "BOTTOMLEFT"]
                 }]
             },
             {
-                "self_ref": "#/texts/1",
-                "parent": { "$ref": "#/groups/0" },
-                "label": "text",
-                "orig": "Bid security is required.",
+                "kind": "paragraph",
                 "text": "Bid security is required.",
-                "prov": [{
-                    "page_no": 1,
-                    "charspan": [0, 25],
-                    "bbox": { "l": 10, "t": 65, "r": 190, "b": 45, "coord_origin": "BOTTOMLEFT" }
+                "section": "Tender Conditions",
+                "paragraph_number": 1,
+                "provenance": [{
+                    "page": 1,
+                    "char_start": 0,
+                    "char_end": 25,
+                    "bbox": [10.0, 65.0, 190.0, 45.0, "BOTTOMLEFT"]
                 }]
             },
             {
-                "self_ref": "#/texts/2",
-                "parent": { "$ref": "#/groups/0" },
-                "label": "text",
-                "orig": "\u{0636}\u{0645}\u{0627}\u{0646} \u{0627}\u{0644}\u{0639}\u{0637}\u{0627}\u{0621} \u{0645}\u{0637}\u{0644}\u{0648}\u{0628}.",
-                "text": "Bid security is required.",
-                "prov": [{
-                    "page_no": 2,
-                    "charspan": [0, 19],
-                    "bbox": { "l": 10, "t": 90, "r": 190, "b": 70, "coord_origin": "BOTTOMLEFT" }
+                "kind": "paragraph",
+                "text": "ضمان العطاء مطلوب.",
+                "translated_text": "Bid security is required.",
+                "section": "Tender Conditions",
+                "paragraph_number": 2,
+                "provenance": [{
+                    "page": 2,
+                    "char_start": 0,
+                    "char_end": 19,
+                    "bbox": [10.0, 90.0, 190.0, 70.0, "BOTTOMLEFT"]
                 }]
             },
             {
-                "self_ref": "#/texts/3",
-                "parent": { "$ref": "#/groups/0" },
-                "label": "text",
-                "orig": "Submission deadline: 15 May 2026 at 14:00 Cairo time.",
+                "kind": "paragraph",
                 "text": "Submission deadline: 15 May 2026 at 14:00 Cairo time.",
-                "prov": [{
-                    "page_no": 1,
-                    "charspan": [0, 57],
-                    "bbox": { "l": 10, "t": 40, "r": 190, "b": 25, "coord_origin": "BOTTOMLEFT" }
+                "section": "Tender Conditions",
+                "paragraph_number": 3,
+                "provenance": [{
+                    "page": 1,
+                    "char_start": 0,
+                    "char_end": 57,
+                    "bbox": [10.0, 40.0, 190.0, 25.0, "BOTTOMLEFT"]
                 }]
             },
             {
-                "self_ref": "#/texts/4",
-                "parent": { "$ref": "#/groups/0" },
-                "label": "text",
-                "orig": "Submission deadline: 16 May 2026 at 14:00 Cairo time.",
+                "kind": "paragraph",
                 "text": "Submission deadline: 16 May 2026 at 14:00 Cairo time.",
-                "prov": [{
-                    "page_no": 2,
-                    "charspan": [0, 57],
-                    "bbox": { "l": 10, "t": 65, "r": 190, "b": 45, "coord_origin": "BOTTOMLEFT" }
+                "section": "Tender Conditions",
+                "paragraph_number": 4,
+                "provenance": [{
+                    "page": 2,
+                    "char_start": 0,
+                    "char_end": 57,
+                    "bbox": [10.0, 65.0, 190.0, 45.0, "BOTTOMLEFT"]
                 }]
             }
-        ],
-        "tables": [],
-        "pages": {
-            "1": { "page_no": 1, "size": { "width": 200, "height": 100 } },
-            "2": { "page_no": 2, "size": { "width": 200, "height": 100 } }
-        }
-    })
+        ]
+    });
+    (markdown, locations)
 }
 
-fn bilingual_docx_document(name: &str) -> serde_json::Value {
-    serde_json::json!({
-        "schema_name": "DoclingDocument",
-        "version": "1.10.0",
-        "name": name,
-        "origin": {
-            "mimetype": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "filename": format!("{name}.docx")
-        },
-        "body": {
-            "self_ref": "#/body",
-            "children": [{ "$ref": "#/groups/0" }]
-        },
-        "groups": [{
-            "self_ref": "#/groups/0",
-            "parent": { "$ref": "#/body" },
-            "children": [
-                { "$ref": "#/texts/0" },
-                { "$ref": "#/texts/1" },
-                { "$ref": "#/texts/2" }
-            ],
-            "name": "Scope of Works",
-            "label": "section"
-        }],
-        "texts": [
+fn bilingual_docx_output() -> (String, serde_json::Value) {
+    let markdown = [
+        "# Scope of Works",
+        "",
+        "Works include concrete and finishes.",
+        "",
+        "تشمل الأعمال الخرسانة والتشطيبات.",
+        "",
+    ]
+    .join("\n");
+    let locations = serde_json::json!({
+        "schema_version": 1,
+        "locations": [
             {
-                "self_ref": "#/texts/0",
-                "parent": { "$ref": "#/groups/0" },
-                "label": "section_header",
-                "orig": "Scope of Works",
-                "text": "Scope of Works"
+                "kind": "section",
+                "text": "Scope of Works",
+                "provenance": []
             },
             {
-                "self_ref": "#/texts/1",
-                "parent": { "$ref": "#/groups/0" },
-                "label": "text",
-                "orig": "Works include concrete and finishes.",
-                "text": "Works include concrete and finishes."
+                "kind": "paragraph",
+                "text": "Works include concrete and finishes.",
+                "section": "Scope of Works",
+                "paragraph_number": 1,
+                "provenance": []
             },
             {
-                "self_ref": "#/texts/2",
-                "parent": { "$ref": "#/groups/0" },
-                "label": "text",
-                "orig": "تشمل الأعمال الخرسانة والتشطيبات.",
-                "text": "تشمل الأعمال الخرسانة والتشطيبات."
+                "kind": "paragraph",
+                "text": "تشمل الأعمال الخرسانة والتشطيبات.",
+                "section": "Scope of Works",
+                "paragraph_number": 2,
+                "provenance": []
             }
-        ],
-        "tables": [],
-        "pages": {}
-    })
+        ]
+    });
+    (markdown, locations)
 }
 
-fn bilingual_xlsx_document(name: &str) -> serde_json::Value {
-    serde_json::json!({
-        "schema_name": "DoclingDocument",
-        "version": "1.10.0",
-        "name": name,
-        "origin": {
-            "mimetype": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "filename": format!("{name}.xlsx")
-        },
-        "body": {
-            "self_ref": "#/body",
-            "children": [{ "$ref": "#/groups/0" }]
-        },
-        "groups": [{
-            "self_ref": "#/groups/0",
-            "parent": { "$ref": "#/body" },
-            "children": [{ "$ref": "#/tables/0" }],
-            "name": "Pricing",
-            "label": "sheet"
-        }],
-        "texts": [],
-        "tables": [{
-            "self_ref": "#/tables/0",
-            "parent": { "$ref": "#/groups/0" },
-            "label": "table",
-            "prov": [{
-                "page_no": 1,
-                "charspan": [0, 0],
-                "bbox": { "l": 0, "t": 4, "r": 3, "b": 0, "coord_origin": "TOPLEFT" }
-            }],
-            "data": {
-                "num_rows": 4,
-                "num_cols": 3,
-                "table_cells": [
-                    { "start_row_offset_idx": 0, "end_row_offset_idx": 1, "start_col_offset_idx": 0, "end_col_offset_idx": 1, "text": "Item" },
-                    { "start_row_offset_idx": 3, "end_row_offset_idx": 4, "start_col_offset_idx": 1, "end_col_offset_idx": 2, "text": "خرسانة" },
-                    { "start_row_offset_idx": 3, "end_row_offset_idx": 4, "start_col_offset_idx": 2, "end_col_offset_idx": 3, "text": "450.75" }
-                ]
+fn bilingual_xlsx_output() -> (String, serde_json::Value) {
+    let markdown = [
+        "## Pricing",
+        "",
+        "| Item |  |  |",
+        "| --- | --- | --- |",
+        "|  |  |  |",
+        "|  |  |  |",
+        "|  | خرسانة | 450.75 |",
+        "",
+    ]
+    .join("\n");
+    let locations = serde_json::json!({
+        "schema_version": 1,
+        "locations": [
+            {
+                "kind": "sheet",
+                "text": "Pricing",
+                "sheet_name": "Pricing",
+                "provenance": []
+            },
+            {
+                "kind": "table",
+                "text": "Item\nخرسانة\n450.75",
+                "sheet_name": "Pricing",
+                "table_number": 1,
+                "provenance": [{
+                    "page": 1,
+                    "bbox": [0.0, 4.0, 3.0, 0.0, "TOPLEFT"]
+                }]
+            },
+            {
+                "kind": "cell",
+                "text": "Item",
+                "sheet_name": "Pricing",
+                "table_number": 1,
+                "cell_range": "A1",
+                "provenance": [{ "page": 1 }]
+            },
+            {
+                "kind": "cell",
+                "text": "خرسانة",
+                "sheet_name": "Pricing",
+                "table_number": 1,
+                "cell_range": "B4",
+                "provenance": [{ "page": 1 }]
+            },
+            {
+                "kind": "cell",
+                "text": "450.75",
+                "sheet_name": "Pricing",
+                "table_number": 1,
+                "cell_range": "C4",
+                "provenance": [{ "page": 1 }]
             }
-        }],
-        "pages": {
-            "1": { "page_no": 1, "size": { "width": 3, "height": 4 } }
-        }
-    })
+        ]
+    });
+    (markdown, locations)
 }
 
 fn assert_isolated_python_environment() -> Result<(), Box<dyn std::error::Error>> {

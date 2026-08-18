@@ -12,9 +12,9 @@ use ts_rs::TS;
 
 use crate::QuantixHost;
 
-pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 1024 * 1024 * 1024;
+pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
-pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 20;
+pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 21;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
@@ -30,7 +30,7 @@ const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
 ];
 const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 20)
+           schema_version INTEGER NOT NULL CHECK (schema_version = 21)
          )";
 pub(crate) const APPLICATION_SETTINGS_TABLE_SQL: &str = "CREATE TABLE application_settings (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -333,7 +333,7 @@ pub(crate) const RUNTIME_PREPARATION_TABLE_SQL: &str = "CREATE TABLE runtime_pre
            status TEXT NOT NULL CHECK (status IN ('not_started', 'preparing', 'ready', 'failed')),
            codex_version TEXT,
            uv_version TEXT,
-           docling_version TEXT,
+           ocr_version TEXT,
            updated_at TEXT NOT NULL
          )";
 pub(crate) const UPDATE_OPERATIONS_TABLE_SQL: &str = "CREATE TABLE update_operations (
@@ -933,8 +933,8 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_UPDATE_SQL, [])?;
     transaction.execute(NATIVE_PLATFORM_QUALIFICATION_RECORDS_NO_DELETE_SQL, [])?;
     transaction.execute(
-        "INSERT INTO installation (singleton, schema_version) VALUES (1, 20)",
-        [],
+        "INSERT INTO installation (singleton, schema_version) VALUES (1, ?1)",
+        [INSTALLATION_SCHEMA_VERSION],
     )?;
     transaction.execute(
         "INSERT INTO application_settings (singleton, settings_json, updated_at)
@@ -943,7 +943,7 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     )?;
     transaction.execute(
         "INSERT INTO runtime_preparation (
-           singleton, status, codex_version, uv_version, docling_version, updated_at
+           singleton, status, codex_version, uv_version, ocr_version, updated_at
          ) VALUES (1, 'not_started', NULL, NULL, NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
         [],
     )?;

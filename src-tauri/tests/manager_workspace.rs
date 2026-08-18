@@ -244,7 +244,7 @@ async fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_works
     );
     host.accept_runtime_fixture();
     assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
-    install_docling_fixture(&application_home);
+    install_ocr_fixture(&application_home);
     let tender = host
         .create_tender(CreateTenderCommand {
             name: "Terminal Archive Tender".into(),
@@ -528,7 +528,7 @@ async fn permanent_deletion_reconciles_each_local_publication_boundary_without_t
         );
         host.accept_runtime_fixture();
         assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
-        install_docling_fixture(&application_home);
+        install_ocr_fixture(&application_home);
         let tender_name = format!("Confidential deletion fixture {failpoint}");
         let tender = host
             .create_tender(CreateTenderCommand {
@@ -826,7 +826,7 @@ async fn public_host_runs_real_manager_intake_while_engineer_switches_tenders() 
     );
     host.accept_runtime_fixture();
     assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
-    install_docling_fixture(&application_home);
+    install_ocr_fixture(&application_home);
     let intake_tender = host
         .create_tender(CreateTenderCommand {
             name: "Live Intake Tender".into(),
@@ -953,7 +953,7 @@ async fn public_host_clean_intake_reaches_canonical_bid_recommendation() {
     );
     host.accept_runtime_fixture();
     assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
-    install_docling_fixture(&application_home);
+    install_ocr_fixture(&application_home);
     let tender = host
         .create_tender(CreateTenderCommand {
             name: "Clean Bid Tender".into(),
@@ -1160,30 +1160,29 @@ fn install_codex_fixture(resources: &Path, scenario: &str) -> std::path::PathBuf
     codex
 }
 
-fn install_docling_fixture(application_home: &Path) {
+fn install_ocr_fixture(application_home: &Path) {
     let executable = application_home
         .join("runtimes")
-        .join("docling")
+        .join("ocr")
         .join(if cfg!(windows) { "Scripts" } else { "bin" })
         .join(executable_name("python"));
-    fs::create_dir_all(executable.parent().expect("Docling executable parent"))
-        .expect("Docling executable directory");
+    fs::create_dir_all(executable.parent().expect("OCR executable parent"))
+        .expect("OCR executable directory");
     fs::copy(
         Path::new(env!("CARGO_BIN_EXE_quantix-runtime-fixture")),
         &executable,
     )
-    .expect("install Docling fixture");
-    let models = application_home.join("models").join("docling");
-    for profile in [
-        "layout",
-        "tableformer",
-        "code_formula",
-        "picture_classifier",
-        "rapidocr",
+    .expect("install OCR fixture");
+    fs::write(executable.with_extension("version"), "3.9.2\n").expect("OCR fixture version");
+    let models = application_home.join("models").join("ocr");
+    fs::create_dir_all(&models).expect("model directory");
+    for artifact in [
+        "PP-OCRv6_det_small.onnx",
+        "PP-OCRv6_rec_small.onnx",
+        "ch_ppocr_mobile_v2.0_cls_mobile.onnx",
     ] {
-        let model = models.join(profile).join("model.bin");
-        fs::create_dir_all(model.parent().expect("model parent")).expect("model directory");
-        fs::write(model, format!("{profile} fixture model")).expect("model fixture");
+        fs::write(models.join(artifact), format!("{artifact} fixture model"))
+            .expect("model fixture");
     }
 }
 

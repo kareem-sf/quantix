@@ -141,10 +141,10 @@ fn valid_offer(data_may_change: bool) -> UpdateCandidate {
             signature_sha256: "b".repeat(64),
         },
         compatibility: UpdateCompatibilityManifest {
-            installation_schema_version: 20,
-            tender_schema_version: 31,
+            installation_schema_version: 21,
+            tender_schema_version: 33,
             codex_version: "0.147.0".into(),
-            docling_version: "2.118.0".into(),
+            ocr_version: "3.9.2".into(),
             runtime_manifest_schema_version: 2,
         },
         release: UpdateReleaseInformation {
@@ -623,7 +623,7 @@ fn valid_signed_update_is_presented_and_requires_exact_backup_before_installatio
     assert_eq!(presented.version, "0.2.0");
     assert_eq!(presented.artifact.sha256, "a".repeat(64));
     assert_eq!(presented.artifact.signature_sha256, "b".repeat(64));
-    assert_eq!(presented.compatibility.tender_schema_version, 31);
+    assert_eq!(presented.compatibility.tender_schema_version, 33);
     assert!(presented.impact.stored_data_may_change);
 
     let approved = host
@@ -1078,10 +1078,10 @@ fn unsafe_or_incompatible_offers_are_rejected_before_approval() {
         (
             {
                 let mut offer = valid_offer(false);
-                offer.compatibility.docling_version = "2.76.0".into();
+                offer.compatibility.ocr_version = "3.8.0".into();
                 offer
             },
-            UpdateDiagnostic::DoclingIncompatible,
+            UpdateDiagnostic::OcrIncompatible,
         ),
         (
             {
@@ -1660,17 +1660,17 @@ async fn in_flight_agent_work_on_one_host_blocks_update_authorization_on_another
 }
 
 #[tokio::test]
-async fn in_flight_docling_work_on_one_host_blocks_update_authorization_on_another() {
+async fn in_flight_ocr_work_on_one_host_blocks_update_authorization_on_another() {
     let (root, host) = ready_host();
     let application_home = root.path().join(".quantix");
-    install_docling_fixture(&application_home);
+    install_ocr_fixture(&application_home);
     let tender = host
         .create_tender(CreateTenderCommand {
-            name: "Docling Update Race".into(),
+            name: "OCR Update Race".into(),
         })
         .expect("create Tender");
-    let source = root.path().join("docling-update-race-source");
-    fs::create_dir(&source).expect("create Docling update race source");
+    let source = root.path().join("ocr-update-race-source");
+    fs::create_dir(&source).expect("create OCR Update Race source");
     fs::write(
         source.join("slow.pdf"),
         b"%PDF-1.7\nINTERRUPTED_PROCESS\n%%EOF",
@@ -1688,7 +1688,7 @@ async fn in_flight_docling_work_on_one_host_blocks_update_authorization_on_anoth
     host.decide_update(
         update_id.clone(),
         UpdateDecision::Approve,
-        "Approve only when Docling work is quiescent".into(),
+        "Approve only when OCR work is quiescent".into(),
     )
     .expect("approve update");
 
@@ -1706,7 +1706,7 @@ async fn in_flight_docling_work_on_one_host_blocks_update_authorization_on_anoth
         loop {
             if running.is_finished() {
                 let early_result = (&mut running).await;
-                panic!("Docling parse exited before its public Running state: {early_result:?}");
+                panic!("OCR parse exited before its public Running state: {early_result:?}");
             }
             let register = host
                 .inspect_document_register(&tender.tender_id)
@@ -1722,21 +1722,21 @@ async fn in_flight_docling_work_on_one_host_blocks_update_authorization_on_anoth
         }
     })
     .await
-    .expect("Docling parse reaches its public persisted in-flight state");
+    .expect("OCR parse reaches its public persisted in-flight state");
 
     let contender =
         QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
     assert_eq!(
         contender
             .authorize_update_installation(&update_id)
-            .expect_err("in-flight Docling work owns the global ordinary-work lease")
+            .expect_err("in-flight OCR work owns the global ordinary-work lease")
             .diagnostic,
         UpdateDiagnostic::ActiveWork
     );
     running.abort();
     assert!(running
         .await
-        .expect_err("stop hanging Docling fixture")
+        .expect_err("stop hanging OCR fixture")
         .is_cancelled());
 }
 
@@ -1754,30 +1754,29 @@ fn install_codex_fixture(resources: &Path, scenario: &str) -> std::path::PathBuf
     codex
 }
 
-fn install_docling_fixture(application_home: &Path) {
+fn install_ocr_fixture(application_home: &Path) {
     let executable = application_home
         .join("runtimes")
-        .join("docling")
+        .join("ocr")
         .join(if cfg!(windows) { "Scripts" } else { "bin" })
         .join(executable_name("python"));
-    fs::create_dir_all(executable.parent().expect("Docling executable parent"))
-        .expect("Docling executable directory");
+    fs::create_dir_all(executable.parent().expect("OCR executable parent"))
+        .expect("OCR executable directory");
     fs::copy(
         Path::new(env!("CARGO_BIN_EXE_quantix-runtime-fixture")),
         &executable,
     )
-    .expect("install Docling fixture");
-    let models = application_home.join("models").join("docling");
-    for profile in [
-        "layout",
-        "tableformer",
-        "code_formula",
-        "picture_classifier",
-        "rapidocr",
+    .expect("install OCR fixture");
+    fs::write(executable.with_extension("version"), "3.9.2\n").expect("OCR fixture version");
+    let models = application_home.join("models").join("ocr");
+    fs::create_dir_all(&models).expect("model directory");
+    for artifact in [
+        "PP-OCRv6_det_small.onnx",
+        "PP-OCRv6_rec_small.onnx",
+        "ch_ppocr_mobile_v2.0_cls_mobile.onnx",
     ] {
-        let model = models.join(profile).join("model.bin");
-        fs::create_dir_all(model.parent().expect("model parent")).expect("model directory");
-        fs::write(model, format!("{profile} fixture model")).expect("model fixture");
+        fs::write(models.join(artifact), format!("{artifact} fixture model"))
+            .expect("model fixture");
     }
 }
 

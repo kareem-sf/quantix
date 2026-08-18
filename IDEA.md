@@ -506,7 +506,7 @@ Architecture and open-source reuse
 
 Recommended stack
 
-The simplest durable implementation is a Tauri 2 desktop application with a genuine Rust Quantix Host, a React/TypeScript renderer, and a pinned Docling runtime installed and supervised by the Host. There is no Node Host sidecar.
+The simplest durable implementation is a Tauri 2 desktop application with a genuine Rust Quantix Host, a React/TypeScript renderer, and a pinned OCR runtime installed and supervised by the Host. There is no Node Host sidecar.
 
 
 
@@ -526,11 +526,11 @@ Agent orchestration	Quantix Team Composer and typed Rust Tender Tasks	Project-sp
 
 Local database	SQLite	Single-file local storage, transactions, indexing and straightforward backup
 
-Full-text search	SQLite FTS5	Exact search should work before semantic retrieval is added
+Full-text search	SQLite FTS5	Exact phrase retrieval over immutable Evidence locations remains available alongside semantic discovery.
 
-Semantic search	asg017/sqlite-vec, later	Tiny cross-platform SQLite vector extension with MIT/Apache licensing, but it is explicitly pre-v1 and may introduce breaking changes. 
+Semantic search	fastembed-rs + asg017/sqlite-vec	Pinned multilingual E5 inference runs locally through Rust ONNX, while thresholded cosine vectors stay beside immutable Evidence in each Tender Store. sqlite-vec is explicitly pre-v1 and remains a version-pinned risk.
 
-Document parsing	docling-project/docling	MIT-licensed local parsing for PDF, DOCX, PPTX, XLSX, email and images, including layout, table and OCR support. Individual model licences still require audit. 
+Document parsing	firecrawl/anydoc + RapidAI/RapidOCR	MIT-licensed local conversion of digital PDF, DOCX and XLSX to Markdown in-process, plus a small pinned RapidOCR ONNX runtime for scanned pages. RapidOCR model licences still require audit.
 
 PDF display	mozilla/pdf.js	Mozilla-supported Apache-licensed PDF rendering for the evidence-review interface. 
 
@@ -620,9 +620,9 @@ artifacts generates controlled outputs.
 
 the renderer presents the product but contains no tendering logic or privileged mechanism.
 
-the Rust Process Supervisor owns replaceable Codex and Docling Adapters behind narrow internal seams.
+the Rust Process Supervisor owns replaceable Codex and OCR Adapters behind narrow internal seams.
 
-There should be no microservices, Kubernetes, cloud collaboration server, event broker or distributed database in the first product. One Tauri Rust Host, local SQLite Tender Stores, a content-addressed file store, the packaged Codex process and disposable Docling jobs are sufficient.
+There should be no microservices, Kubernetes, cloud collaboration server, event broker or distributed database in the first product. One Tauri Rust Host, local SQLite Tender Stores, a content-addressed file store, the packaged Codex process and disposable OCR jobs are sufficient.
 
 
 
@@ -658,7 +658,7 @@ Project and document storage.
 
 Tauri 2 shell with a least-authority React renderer and genuine Rust Host.
 
-Docling worker adapter.
+OCR worker adapter.
 
 PDF evidence viewer.
 
@@ -936,7 +936,7 @@ Pull requests use a deterministic fake app-server to exercise provider contracts
 
 
 
-The implemented repository must expose separate deterministic verification, live-provider evaluation, native packaging-validation and aggregate release-acceptance entry points. Each qualifying attempt produces immutable Product Acceptance Runs and an attributable Product Acceptance Record binding exact fixture, oracle, source, application, Codex, Docling, model, schema, dependency, platform, test, evaluation, package, finding, exception, timing and artifact hashes.
+The implemented repository must expose separate deterministic verification, live-provider evaluation, native packaging-validation and aggregate release-acceptance entry points. Each qualifying attempt produces immutable Product Acceptance Runs and an attributable Product Acceptance Record binding exact fixture, oracle, source, application, Codex, OCR, model, schema, dependency, platform, test, evaluation, package, finding, exception, timing and artifact hashes.
 
 
 
@@ -1108,7 +1108,7 @@ Developer Certificate of Origin sign-off rather than an initially complex CLA.
 
 Automated dependency, vulnerability and secret scanning.
 
-A dependency policy should normally accept MIT, BSD, Apache-2.0 and similarly permissive licences. Copyleft, source-available, model-specific and non-commercial licences should receive explicit review before entering the distributed product. Docling’s code is MIT-licensed, but its own repository advises checking the licences of individual models, so model assets must be part of the dependency audit. 
+A dependency policy should normally accept MIT, BSD, Apache-2.0 and similarly permissive licences. Copyleft, source-available, model-specific and non-commercial licences should receive explicit review before entering the distributed product. anydoc and RapidOCR are MIT/Apache-2.0 licensed, but the RapidOCR model assets require their own audit, so model files must be part of the dependency audit.
 
 
 
@@ -1130,7 +1130,7 @@ Deployment	Local single-user Tauri 2 desktop application with a genuine Rust Hos
 
 AI Provider	One pinned Codex app-server Adapter using the Engineer User's Codex-managed ChatGPT subscription; no BYOK, routing, fallback or generic agent framework
 
-Document processing	Pinned local Docling runtime installed through bundled `uv`; provider reasoning remains online
+Document processing	In-process anydoc Markdown conversion for digital documents plus a pinned local RapidOCR runtime installed through bundled `uv`; provider reasoning remains online
 
 Company knowledge	Only explicitly approved, versioned company records and templates
 
@@ -1151,4 +1151,3 @@ These locked decisions produce the coherent first mission:
 
 
 Quantix v0 should be a local single-user Tauri 2 application with a genuine Rust Host for English and Arabic construction tenders, initially focused on FIDIC-oriented building projects. It should import PDF/DOCX/XLSX packages, extract an evidence-linked compliance matrix, generate a bid/no-bid decision and Tender work plan through controlled agents, and export reviewed Word and Excel artifacts. No pricing autonomy, external communication, portal submission, cloud collaboration or speculative plugin system should enter the first end-to-end release.
-

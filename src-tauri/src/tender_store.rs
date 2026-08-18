@@ -4,7 +4,7 @@ use std::{
     io::Read,
     ops::Deref,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
@@ -21,8 +21,9 @@ use ts_rs::TS;
 use crate::document_parsing::{
     DocumentParseResult, EvidenceDocument, EvidenceLanguage, EvidenceLocation,
     EvidenceLocationKind, EvidenceRegion, EvidenceSearchHit, EvidenceSearchResult,
-    ParseExceptionCode, ParseJob, ParseSourceArtifactCommand, ParseState, PreparedParseOutput,
-    SearchEvidenceCommand, TextDirection, MAX_DOCLING_JSON_BYTES, MAX_EVIDENCE_LOCATIONS,
+    EvidenceSemanticSearchHit, EvidenceSemanticSearchResult, ParseExceptionCode, ParseJob,
+    ParseSourceArtifactCommand, ParseState, PreparedParseOutput, SearchEvidenceCommand,
+    SearchEvidenceSemanticCommand, TextDirection, MAX_EVIDENCE_LOCATIONS, MAX_MARKDOWN_BYTES,
 };
 use crate::tender_intake::{
     prepare_package, ConfirmSourceRelationshipCommand, DocumentRegister, DocumentRegisterEntry,
@@ -244,7 +245,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 31;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 33;
 
 pub(crate) fn record_agent_run_provider_binding(
     transaction: &Transaction<'_>,
@@ -1451,8 +1452,8 @@ CREATE TABLE parsed_documents (
   artifact_id TEXT NOT NULL,
   version INTEGER NOT NULL CHECK (version > 0),
   attempt_id TEXT NOT NULL UNIQUE,
-  docling_schema_version TEXT NOT NULL,
-  json_sha256 TEXT NOT NULL,
+  pipeline_version TEXT NOT NULL,
+  markdown_sha256 TEXT NOT NULL,
   language TEXT NOT NULL CHECK (language IN ('arabic', 'english', 'mixed', 'undetermined')),
   direction TEXT NOT NULL CHECK (direction IN ('left_to_right', 'right_to_left', 'mixed', 'neutral')),
   location_count INTEGER NOT NULL CHECK (location_count > 0),
@@ -1460,7 +1461,7 @@ CREATE TABLE parsed_documents (
   PRIMARY KEY (artifact_id, version),
   FOREIGN KEY (artifact_id, version) REFERENCES source_artifact_versions(artifact_id, version),
   FOREIGN KEY (attempt_id) REFERENCES parse_attempts(attempt_id),
-  FOREIGN KEY (json_sha256) REFERENCES content_objects(sha256)
+  FOREIGN KEY (markdown_sha256) REFERENCES content_objects(sha256)
 );
 CREATE TABLE evidence_locations (
   artifact_id TEXT NOT NULL,
@@ -1487,6 +1488,18 @@ CREATE VIRTUAL TABLE evidence_fts USING fts5(
   version UNINDEXED,
   ordinal UNINDEXED,
   tokenize = 'unicode61 remove_diacritics 0'
+);
+CREATE TABLE evidence_embeddings (
+  embedding_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  artifact_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+  UNIQUE (artifact_id, version, ordinal),
+  FOREIGN KEY (artifact_id, version, ordinal)
+    REFERENCES evidence_locations(artifact_id, version, ordinal)
+);
+CREATE VIRTUAL TABLE evidence_embedding_vectors USING vec0(
+  embedding float[384] distance_metric=cosine
 );
 CREATE TABLE agent_profiles (
   profile_id TEXT PRIMARY KEY CHECK (length(profile_id) = 32),
@@ -3280,6 +3293,16 @@ BEFORE DELETE ON evidence_locations
 BEGIN
   SELECT RAISE(ABORT, 'Evidence locations are immutable');
 END;
+CREATE TRIGGER evidence_embeddings_no_update
+BEFORE UPDATE ON evidence_embeddings
+BEGIN
+  SELECT RAISE(ABORT, 'Evidence embeddings are immutable');
+END;
+CREATE TRIGGER evidence_embeddings_no_delete
+BEFORE DELETE ON evidence_embeddings
+BEGIN
+  SELECT RAISE(ABORT, 'Evidence embeddings are immutable');
+END;
 CREATE TRIGGER agent_profiles_no_update
 BEFORE UPDATE ON agent_profiles
 BEGIN
@@ -4093,6 +4116,7 @@ impl RawEvidenceLocation {
 
 impl TenderStore {
     fn create(root: &Path, tender_id: &TenderId, name: &str) -> Result<Self, TenderCommandError> {
+        register_sqlite_vec()?;
         fs::create_dir(root).map_err(store_unavailable)?;
         for directory in ["content", "runs", "staging"] {
             fs::create_dir(root.join(directory)).map_err(store_unavailable)?;
@@ -4276,6 +4300,7 @@ impl TenderStore {
     }
 
     fn open(root: &Path, expected_tender_id: &TenderId) -> Result<Self, TenderCommandError> {
+        register_sqlite_vec()?;
         #[cfg(test)]
         TENDER_STORE_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
         validate_tender_store_layout(root).map_err(recovery_required_if_integrity)?;
@@ -4476,6 +4501,7 @@ impl TenderStore {
         expected_tender_id: &TenderId,
         mut check: impl FnMut() -> Result<(), TenderCommandError>,
     ) -> Result<TenderIntegrityReport, TenderCommandError> {
+        register_sqlite_vec()?;
         check()?;
         #[cfg(feature = "runtime-fixture")]
         if let Ok(failure) = std::env::var("QUANTIX_STORAGE_INSPECTION_FAIL_TENDER") {
@@ -5252,18 +5278,27 @@ impl TenderStore {
         prepared: PreparedParseOutput,
     ) -> Result<DocumentParseResult, TenderCommandError> {
         self.require_change_intake_writable()?;
-        let integrity = cacache::write_hash_sync(self.root.join("content"), &prepared.json_bytes)
-            .map_err(content_store_error)?;
-        let verified = cacache::read_hash_sync(self.root.join("content"), &integrity)
-            .map_err(content_store_error)?;
-        if verified != prepared.json_bytes {
+        if prepared.embeddings.len() != prepared.locations.len()
+            || prepared.embeddings.iter().any(|embedding| {
+                embedding.len() != crate::embedding::EMBEDDING_DIMENSIONS
+                    || embedding.iter().any(|value| !value.is_finite())
+            })
+        {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
-        let json_sha256: String = Sha256::digest(&prepared.json_bytes)
+        let integrity =
+            cacache::write_hash_sync(self.root.join("content"), &prepared.markdown_bytes)
+                .map_err(content_store_error)?;
+        let verified = cacache::read_hash_sync(self.root.join("content"), &integrity)
+            .map_err(content_store_error)?;
+        if verified != prepared.markdown_bytes {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let markdown_sha256: String = Sha256::digest(&prepared.markdown_bytes)
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
-        let size_bytes = i64::try_from(prepared.json_bytes.len())
+        let size_bytes = i64::try_from(prepared.markdown_bytes.len())
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         let location_count = u32::try_from(prepared.locations.len())
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
@@ -5284,13 +5319,13 @@ impl TenderStore {
                 "INSERT INTO content_objects (sha256, integrity, size_bytes)
                  VALUES (?1, ?2, ?3)
                  ON CONFLICT(sha256) DO NOTHING",
-                params![json_sha256, integrity.to_string(), size_bytes],
+                params![markdown_sha256, integrity.to_string(), size_bytes],
             )
             .map_err(sql_error)?;
         let stored: (String, i64) = transaction
             .query_row(
                 "SELECT integrity, size_bytes FROM content_objects WHERE sha256 = ?1",
-                [&json_sha256],
+                [&markdown_sha256],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(sql_error)?;
@@ -5300,15 +5335,15 @@ impl TenderStore {
         transaction
             .execute(
                 "INSERT INTO parsed_documents (
-                   artifact_id, version, attempt_id, docling_schema_version,
-                   json_sha256, language, direction, location_count, created_at
+                   artifact_id, version, attempt_id, pipeline_version,
+                   markdown_sha256, language, direction, location_count, created_at
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     job.artifact_id,
                     job.version,
                     job.attempt_id,
-                    prepared.schema_version,
-                    json_sha256,
+                    crate::document_parsing::MARKDOWN_PIPELINE_VERSION,
+                    markdown_sha256,
                     prepared.language.as_str(),
                     prepared.direction.as_str(),
                     location_count,
@@ -5316,7 +5351,7 @@ impl TenderStore {
                 ],
             )
             .map_err(sql_error)?;
-        for location in &prepared.locations {
+        for (location, embedding) in prepared.locations.iter().zip(&prepared.embeddings) {
             let provenance_json = serde_json_canonicalizer::to_string(&location.provenance)
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
             transaction
@@ -5361,6 +5396,23 @@ impl TenderStore {
                     ],
                 )
                 .map_err(sql_error)?;
+            transaction
+                .execute(
+                    "INSERT INTO evidence_embeddings (artifact_id, version, ordinal)
+                     VALUES (?1, ?2, ?3)",
+                    params![job.artifact_id, job.version, location.ordinal],
+                )
+                .map_err(sql_error)?;
+            let embedding_id = transaction.last_insert_rowid();
+            let embedding_json = serde_json::to_string(embedding)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            transaction
+                .execute(
+                    "INSERT INTO evidence_embedding_vectors (rowid, embedding)
+                     VALUES (?1, ?2)",
+                    params![embedding_id, embedding_json],
+                )
+                .map_err(sql_error)?;
         }
         if transaction
             .execute(
@@ -5382,8 +5434,8 @@ impl TenderStore {
             json!({
                 "artifact_id": job.artifact_id,
                 "attempt_id": job.attempt_id,
-                "docling_schema_version": prepared.schema_version,
-                "json_sha256": json_sha256,
+                "pipeline_version": crate::document_parsing::MARKDOWN_PIPELINE_VERSION,
+                "markdown_sha256": markdown_sha256,
                 "location_count": location_count.to_string(),
                 "version": job.version.to_string(),
             }),
@@ -5399,8 +5451,8 @@ impl TenderStore {
             location_count,
             language: prepared.language,
             direction: prepared.direction,
-            docling_schema_version: Some(prepared.schema_version),
-            docling_json_sha256: Some(json_sha256),
+            pipeline_version: Some(crate::document_parsing::MARKDOWN_PIPELINE_VERSION.into()),
+            markdown_sha256: Some(markdown_sha256),
         })
     }
 
@@ -5470,8 +5522,8 @@ impl TenderStore {
             location_count: 0,
             language: EvidenceLanguage::Undetermined,
             direction: TextDirection::Neutral,
-            docling_schema_version: None,
-            docling_json_sha256: None,
+            pipeline_version: None,
+            markdown_sha256: None,
         })
     }
 
@@ -5491,7 +5543,7 @@ impl TenderStore {
         let parsed: (String, String, String, String, u32) = self
             .connection
             .query_row(
-                "SELECT pd.language, pd.direction, pd.docling_schema_version, pd.json_sha256,
+                "SELECT pd.language, pd.direction, pd.pipeline_version, pd.markdown_sha256,
                         pd.location_count
                  FROM parsed_documents pd
                  WHERE pd.artifact_id = ?1 AND pd.version = ?2",
@@ -5548,7 +5600,7 @@ impl TenderStore {
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
             total_bytes = total_bytes
                 .checked_add(row_bytes)
-                .filter(|total| *total <= MAX_DOCLING_JSON_BYTES)
+                .filter(|total| *total <= MAX_MARKDOWN_BYTES)
                 .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
             locations.push(
                 RawEvidenceLocation::read(row, 0)
@@ -5567,8 +5619,8 @@ impl TenderStore {
             exception: None,
             language: EvidenceLanguage::parse(&parsed.0)?,
             direction: TextDirection::parse(&parsed.1)?,
-            docling_schema_version: Some(parsed.2),
-            docling_json_sha256: Some(parsed.3),
+            pipeline_version: Some(parsed.2),
+            markdown_sha256: Some(parsed.3),
             locations,
         })
     }
@@ -5620,6 +5672,82 @@ impl TenderStore {
             });
         }
         Ok(EvidenceSearchResult {
+            query: query.to_owned(),
+            matches,
+        })
+    }
+
+    pub(crate) fn search_evidence_semantic(
+        &self,
+        command: &SearchEvidenceSemanticCommand,
+        query_embedding: &[f32],
+    ) -> Result<EvidenceSemanticSearchResult, TenderCommandError> {
+        if query_embedding.len() != crate::embedding::EMBEDDING_DIMENSIONS
+            || query_embedding.iter().any(|value| !value.is_finite())
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let query = command.query.trim();
+        let query_json = serde_json::to_string(query_embedding)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let mut statement = self
+            .connection
+            .prepare(
+                "WITH nearest AS (
+                   SELECT rowid AS embedding_id, distance
+                   FROM evidence_embedding_vectors
+                   WHERE embedding MATCH ?1 AND k = ?2
+                 )
+                 SELECT nearest.distance, el.artifact_id, el.version, sa.package_path,
+                        el.ordinal, el.kind, el.structural_path, el.provenance_json,
+                        el.section, el.paragraph_number, el.table_number,
+                        el.sheet_name, el.cell_range, el.original_text,
+                        el.translated_text, el.language, el.direction
+                 FROM nearest
+                 JOIN evidence_embeddings ee ON ee.embedding_id = nearest.embedding_id
+                 JOIN evidence_locations el
+                   ON el.artifact_id = ee.artifact_id
+                  AND el.version = ee.version
+                  AND el.ordinal = ee.ordinal
+                 JOIN source_artifacts sa ON sa.artifact_id = el.artifact_id
+                 WHERE nearest.distance <= ?3
+                 ORDER BY nearest.distance, el.artifact_id, el.version, el.ordinal",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map(
+                params![
+                    query_json,
+                    i64::from(command.limit),
+                    f64::from(command.distance_threshold)
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, f64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, u32>(2)?,
+                        row.get::<_, String>(3)?,
+                        RawEvidenceLocation::read(row, 4)?,
+                    ))
+                },
+            )
+            .map_err(sql_error)?;
+        let mut matches = Vec::new();
+        for row in rows {
+            let (distance, artifact_id, version, package_path, location) =
+                row.map_err(sql_error)?;
+            if !distance.is_finite() || !(0.0..=2.0).contains(&distance) {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            matches.push(EvidenceSemanticSearchHit {
+                distance: distance as f32,
+                artifact_id,
+                version,
+                package_path,
+                location: location.into_domain()?,
+            });
+        }
+        Ok(EvidenceSemanticSearchResult {
             query: query.to_owned(),
             matches,
         })
@@ -6786,6 +6914,25 @@ fn configure_writer(connection: &mut Connection) -> Result<(), TenderCommandErro
         .pragma_update(None, "synchronous", "FULL")
         .map_err(sql_error)?;
     configure_sqlite_limits(connection)
+}
+
+fn register_sqlite_vec() -> Result<(), TenderCommandError> {
+    static REGISTRATION: OnceLock<bool> = OnceLock::new();
+    let registered = *REGISTRATION.get_or_init(|| {
+        // sqlite-vec is statically linked; registering its entry point makes it
+        // available to every subsequently opened rusqlite connection.
+        let entry_point = unsafe {
+            std::mem::transmute::<*const (), rusqlite::auto_extension::RawAutoExtension>(
+                sqlite_vec::sqlite3_vec_init as *const (),
+            )
+        };
+        unsafe { rusqlite::auto_extension::register_auto_extension(entry_point).is_ok() }
+    });
+    if registered {
+        Ok(())
+    } else {
+        Err(TenderCommandError::new(TenderErrorCode::StoreUnavailable))
+    }
 }
 
 fn configure_reader(connection: &Connection) -> Result<(), TenderCommandError> {

@@ -28,8 +28,8 @@ describe("App runtime startup", () => {
       status: "preparing",
       started_at_epoch_ms: 1,
       updated_at_epoch_ms: 1,
-      model_files_written: 47,
-      model_bytes_written: 488471536,
+      model_files_written: 3,
+      model_bytes_written: 31769509,
       activities: [
         {
           step: "prepare_document_models",
@@ -61,8 +61,8 @@ describe("App runtime startup", () => {
       },
       diagnostics: {
         quantix_version: "0.1.0",
-        installation_schema_version: 20,
-        tender_schema_version: 31,
+        installation_schema_version: 21,
+        tender_schema_version: 32,
       },
     });
   });
@@ -75,10 +75,10 @@ describe("App runtime startup", () => {
   it("prepares a missing managed runtime before opening the workspace", async () => {
     host.inspectRuntimeReadiness.mockResolvedValue({
       state: "missing_executable",
-      issues: ["docling_executable_missing"],
+      issues: ["ocr_executable_missing"],
       codex_version: "0.147.0",
       uv_version: "0.12.2",
-      docling_version: null,
+      ocr_version: null,
       repair_available: true,
     });
     host.repairRuntimeReadiness.mockResolvedValue({
@@ -86,7 +86,7 @@ describe("App runtime startup", () => {
       issues: [],
       codex_version: "0.147.0",
       uv_version: "0.12.2",
-      docling_version: "2.118.0",
+      ocr_version: "3.9.2",
       repair_available: false,
     });
 
@@ -102,10 +102,10 @@ describe("App runtime startup", () => {
   it("shows truthful first-run runtime feedback while preparation is active", async () => {
     host.inspectRuntimeReadiness.mockResolvedValue({
       state: "missing_executable",
-      issues: ["docling_executable_missing"],
+      issues: ["ocr_executable_missing"],
       codex_version: "0.147.0",
       uv_version: "0.12.2",
-      docling_version: null,
+      ocr_version: null,
       repair_available: true,
     });
     let finishPreparation: ((value: unknown) => void) | undefined;
@@ -132,7 +132,7 @@ describe("App runtime startup", () => {
     expect(
       (await screen.findAllByText("Prepare document models")).length,
     ).toBeGreaterThan(0);
-    expect(await screen.findByText(/47 model files/)).toBeTruthy();
+    expect(await screen.findByText(/3 model files/)).toBeTruthy();
 
     await act(async () => {
       finishPreparation?.({
@@ -140,7 +140,7 @@ describe("App runtime startup", () => {
         issues: [],
         codex_version: "0.147.0",
         uv_version: "0.12.2",
-        docling_version: "2.118.0",
+        ocr_version: "3.9.2",
         repair_available: false,
       });
     });
@@ -154,7 +154,7 @@ describe("App runtime startup", () => {
         issues: ["runtime_preparation_active"],
         codex_version: null,
         uv_version: null,
-        docling_version: null,
+        ocr_version: null,
         repair_available: false,
       })
       .mockResolvedValueOnce({
@@ -162,7 +162,7 @@ describe("App runtime startup", () => {
         issues: ["runtime_preparation_active"],
         codex_version: null,
         uv_version: null,
-        docling_version: null,
+        ocr_version: null,
         repair_available: false,
       })
       .mockResolvedValueOnce({
@@ -170,7 +170,7 @@ describe("App runtime startup", () => {
         issues: [],
         codex_version: "0.147.0",
         uv_version: "0.12.2",
-        docling_version: "2.118.0",
+        ocr_version: "3.9.2",
         repair_available: false,
       });
 

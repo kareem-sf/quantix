@@ -29,7 +29,7 @@ const codexSchema = path.join(
   runtimeRoot,
   "codex_app_server_protocol.schemas.json",
 );
-const doclingProject = path.join(runtimeRoot, "docling");
+const ocrProject = path.join(runtimeRoot, "ocr");
 const provenance = path.join(runtimeRoot, "runtime-provenance.json");
 
 mkdirSync(runtimeBin, { recursive: true });
@@ -175,7 +175,7 @@ function writeRuntimeProvenance() {
     codex: { version: CODEX_VERSION, sha256: digestFile(codexDestination) },
     uv: { version: UV_VERSION, sha256: digestFile(uvDestination) },
     codex_schema_sha256: digestFile(codexSchema),
-    docling_project_files: collectHashedFiles(doclingProject),
+    ocr_project_files: collectHashedFiles(ocrProject),
   };
   const staging = `${provenance}.staging`;
   const serialized = `${JSON.stringify(manifest, null, 2)}\n`;

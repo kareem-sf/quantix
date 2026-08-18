@@ -22,7 +22,7 @@ const stateCopy: Record<
   ready: {
     title: "AI office ready",
     summary:
-      "Codex subscription access and the private Docling runtime passed their readiness checks.",
+      "Codex subscription access and the private OCR runtime passed their readiness checks.",
   },
   preparing: {
     title: "Preparing AI office",
@@ -40,7 +40,7 @@ const stateCopy: Record<
   missing_model: {
     title: "Document models required",
     summary:
-      "The pinned Docling models must be prepared before tender documents can be read.",
+      "The pinned OCR models must be prepared before tender documents can be read.",
   },
   authentication_required: {
     title: "Codex sign-in required",
@@ -63,17 +63,16 @@ const issueCopy: Record<RuntimeReadinessIssue, string> = {
   setup_incomplete: "Complete Application Home setup first.",
   codex_executable_missing: "The approved Codex executable is missing.",
   uv_executable_missing: "The bundled uv runtime manager is missing.",
-  docling_executable_missing:
-    "The managed Docling environment has not been prepared.",
+  ocr_executable_missing: "The managed OCR environment has not been prepared.",
   codex_version_incompatible: "Codex does not match the approved version.",
   uv_version_incompatible: "uv does not match the approved version.",
-  docling_version_incompatible: "Docling does not match the approved version.",
+  ocr_version_incompatible:
+    "The OCR runtime does not match the approved version.",
   runtime_resource_integrity_failed:
     "A bundled runtime file does not match its approved cryptographic digest.",
-  docling_environment_invalid:
-    "The locked Docling environment or managed Python has changed.",
-  docling_models_missing:
-    "One or more approved Docling model files are missing.",
+  ocr_environment_invalid:
+    "The locked OCR environment or managed Python has changed.",
+  ocr_models_missing: "One or more approved OCR model files are missing.",
   codex_authentication_required:
     "Open Codex, sign in with the Engineer User's ChatGPT subscription, then check again.",
   codex_subscription_required:
@@ -183,7 +182,7 @@ export function RuntimeReadinessPanel({
               </ul>
             ) : (
               <p className="success-message">
-                Codex, uv, Docling, and local model readiness verified.
+                Codex, uv, OCR, and local model readiness verified.
               </p>
             )}
             <dl className="runtime-versions">
@@ -196,8 +195,8 @@ export function RuntimeReadinessPanel({
                 <dd>{outcome.uv_version ?? "Not verified"}</dd>
               </div>
               <div>
-                <dt>Docling</dt>
-                <dd>{outcome.docling_version ?? "Not verified"}</dd>
+                <dt>OCR runtime</dt>
+                <dd>{outcome.ocr_version ?? "Not verified"}</dd>
               </div>
             </dl>
           </div>

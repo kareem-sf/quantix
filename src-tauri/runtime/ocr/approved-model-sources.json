@@ -1,0 +1,60 @@
+{
+  "schema_version": 3,
+  "rapidocr": {
+    "backend": "onnxruntime",
+    "language": "ch",
+    "artifacts": [
+      {
+        "path": "PP-OCRv6_det_small.onnx",
+        "size_bytes": 9929594,
+        "sha256": "090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f"
+      },
+      {
+        "path": "PP-OCRv6_rec_small.onnx",
+        "size_bytes": 21234383,
+        "sha256": "6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884"
+      },
+      {
+        "path": "ch_ppocr_mobile_v2.0_cls_mobile.onnx",
+        "size_bytes": 585532,
+        "sha256": "e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c"
+      }
+    ]
+  },
+  "embeddings": {
+    "model": "intfloat/multilingual-e5-small",
+    "dimensions": 384,
+    "artifacts": [
+      {
+        "path": "embeddings/model.onnx",
+        "url": "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/onnx/model.onnx",
+        "size_bytes": 470268510,
+        "sha256": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665"
+      },
+      {
+        "path": "embeddings/tokenizer.json",
+        "url": "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/onnx/tokenizer.json",
+        "size_bytes": 17082730,
+        "sha256": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39"
+      },
+      {
+        "path": "embeddings/config.json",
+        "url": "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/onnx/config.json",
+        "size_bytes": 653,
+        "sha256": "bbb7c1333fc4b3e27fbc9cd5d2070aabcc1d4dfb99917c3633e772f97545a6b6"
+      },
+      {
+        "path": "embeddings/special_tokens_map.json",
+        "url": "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/onnx/special_tokens_map.json",
+        "size_bytes": 167,
+        "sha256": "d05497f1da52c5e09554c0cd874037a083e1dc1b9cfd48034d1c717f1afc07a7"
+      },
+      {
+        "path": "embeddings/tokenizer_config.json",
+        "url": "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/onnx/tokenizer_config.json",
+        "size_bytes": 443,
+        "sha256": "a1d6bc8734a6f635dc158508bef000f8e2e5a759c7d92f984b2c86e5ff53425b"
+      }
+    ]
+  }
+}

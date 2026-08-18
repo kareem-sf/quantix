@@ -55,13 +55,13 @@ const startupStageCopy: Record<
   },
   runtime_check: {
     title: "Checking local AI tools",
-    summary: "Verifying the pinned Codex, Python, and Docling runtime.",
+    summary: "Verifying the pinned Codex, Python, and OCR runtime.",
     step: 1,
   },
   runtime_install: {
     title: "Installing local AI tools",
     summary:
-      "First-time setup is preparing Python, Docling, and local document models. This can take several minutes.",
+      "First-time setup is preparing Python, the OCR engine, and local document models. This can take several minutes.",
     step: 1,
   },
   providers: {
@@ -191,7 +191,7 @@ const setupIssueCopy: Record<SetupIssue, string> = {
     "Quantix could not verify device storage protection.",
   installation_catalogue_corrupt:
     "The local Quantix installation record needs repair.",
-  insufficient_free_space: "This device needs at least 1 GB of free space.",
+  insufficient_free_space: "This device needs at least 2 GB of free space.",
   storage_not_writable: "Quantix cannot write to its local workspace.",
   storage_permissions_unverified:
     "Quantix could not verify local storage permissions.",
@@ -466,7 +466,7 @@ function App() {
                 <div>
                   <strong>Validate installed files</strong>
                   <p>
-                    Checking pinned Codex and uv files, the Python and Docling
+                    Checking pinned Codex and uv files, the Python and OCR
                     environment, and every local document-model fingerprint.
                   </p>
                 </div>

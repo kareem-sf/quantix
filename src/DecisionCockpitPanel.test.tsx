@@ -209,8 +209,8 @@ describe("DecisionCockpitPanel", () => {
       exception: null,
       language: "arabic",
       direction: "right_to_left",
-      docling_schema_version: "1.0",
-      docling_json_sha256: "b".repeat(64),
+      pipeline_version: "1",
+      markdown_sha256: "b".repeat(64),
       locations: [
         {
           ordinal: 7,
@@ -301,8 +301,8 @@ describe("DecisionCockpitPanel", () => {
       exception: null,
       language: "english",
       direction: "left_to_right",
-      docling_schema_version: "1.0",
-      docling_json_sha256: "b".repeat(64),
+      pipeline_version: "1",
+      markdown_sha256: "b".repeat(64),
       locations: [],
     });
     const reportCommandFailure = vi.fn();
@@ -356,8 +356,8 @@ describe("DecisionCockpitPanel", () => {
       exception: null,
       language: "arabic",
       direction: "right_to_left",
-      docling_schema_version: "1.0",
-      docling_json_sha256: "b".repeat(64),
+      pipeline_version: "1",
+      markdown_sha256: "b".repeat(64),
       locations: [
         {
           ordinal: 1,

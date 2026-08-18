@@ -232,13 +232,13 @@ export function EvidenceReview({
               </dd>
             </div>
             <div>
-              <dt>Docling contract</dt>
-              <dd>{evidence.docling_schema_version}</dd>
+              <dt>Markdown pipeline</dt>
+              <dd>{evidence.pipeline_version}</dd>
             </div>
             <div>
-              <dt>Lossless JSON digest</dt>
-              <dd title={evidence.docling_json_sha256 ?? undefined}>
-                {evidence.docling_json_sha256?.slice(0, 16)}…
+              <dt>Markdown digest</dt>
+              <dd title={evidence.markdown_sha256 ?? undefined}>
+                {evidence.markdown_sha256?.slice(0, 16)}…
               </dd>
             </div>
           </dl>

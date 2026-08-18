@@ -1,15 +1,12 @@
-use std::{
-    collections::{HashMap, HashSet},
-    ffi::OsString,
-    fs,
-    io::Read,
-    path::PathBuf,
-    time::Duration,
-};
+use std::{fs, io::Read, path::PathBuf, time::Duration};
 
+#[cfg(not(feature = "runtime-fixture"))]
+use anydoc::ConvertError;
+#[cfg(not(feature = "runtime-fixture"))]
+use calamine::{open_workbook_auto_from_rs, Data, DataType, Reader};
 use garde::Validate;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use ts_rs::TS;
 use unicode_bidi::{bidi_class, BidiClass};
 use unicode_script::{Script, UnicodeScript};
@@ -17,22 +14,22 @@ use unicode_script::{Script, UnicodeScript};
 use crate::{
     host::ParseTargetKey,
     process_supervisor::{ProcessSpec, ProcessTermination},
-    runtime_readiness::{docling_environment, python_executable},
+    runtime_readiness::{ocr_environment, python_executable},
     tender_store::{
         metadata_is_unsafe_storage_link, TenderCommandError, TenderErrorCode, TenderId,
     },
     QuantixHost,
 };
 
-const DOCLING_DOCUMENT_SCHEMA_VERSION: &str = "1.10.0";
-const DOCLING_DOCUMENT_TIMEOUT_SECONDS: &str = "840";
-pub(crate) const DOCLING_MAX_NUM_PAGES: u32 = 2_000;
-const DOCLING_PROCESS_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-const DOCLING_PROCESS_OUTPUT_LIMIT: usize = 64 * 1024;
+pub(crate) const MARKDOWN_PIPELINE_VERSION: &str = "1";
+const OCR_DOCUMENT_TIMEOUT_SECONDS: &str = "840";
+pub(crate) const DOCUMENT_MAX_PAGES: u32 = 2_000;
+const OCR_PROCESS_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const OCR_PROCESS_OUTPUT_LIMIT: usize = 64 * 1024;
 #[cfg(not(feature = "runtime-fixture"))]
-pub(crate) const MAX_DOCLING_JSON_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_MARKDOWN_BYTES: u64 = 64 * 1024 * 1024;
 #[cfg(feature = "runtime-fixture")]
-pub(crate) const MAX_DOCLING_JSON_BYTES: u64 = 64 * 1024;
+pub(crate) const MAX_MARKDOWN_BYTES: u64 = 64 * 1024;
 pub(crate) const MAX_EVIDENCE_LOCATIONS: usize = 100_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
@@ -55,6 +52,20 @@ pub struct SearchEvidenceCommand {
     pub tender_id: String,
     #[garde(length(bytes, min = 1, max = 512))]
     pub query: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct SearchEvidenceSemanticCommand {
+    #[garde(length(bytes, min = 32, max = 32), ascii)]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 1, max = 512))]
+    pub query: String,
+    #[garde(range(min = 0.0, max = 2.0))]
+    pub distance_threshold: f32,
+    #[garde(range(min = 1, max = 100))]
+    pub limit: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -285,8 +296,8 @@ pub struct DocumentParseResult {
     pub location_count: u32,
     pub language: EvidenceLanguage,
     pub direction: TextDirection,
-    pub docling_schema_version: Option<String>,
-    pub docling_json_sha256: Option<String>,
+    pub pipeline_version: Option<String>,
+    pub markdown_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -299,8 +310,8 @@ pub struct EvidenceDocument {
     pub exception: Option<ParseExceptionCode>,
     pub language: EvidenceLanguage,
     pub direction: TextDirection,
-    pub docling_schema_version: Option<String>,
-    pub docling_json_sha256: Option<String>,
+    pub pipeline_version: Option<String>,
+    pub markdown_sha256: Option<String>,
     pub locations: Vec<EvidenceLocation>,
 }
 
@@ -322,6 +333,25 @@ pub struct EvidenceSearchResult {
     pub matches: Vec<EvidenceSearchHit>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct EvidenceSemanticSearchHit {
+    pub distance: f32,
+    pub artifact_id: String,
+    pub version: u32,
+    pub package_path: String,
+    pub location: EvidenceLocation,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct EvidenceSemanticSearchResult {
+    pub query: String,
+    pub matches: Vec<EvidenceSemanticSearchHit>,
+}
+
 pub(crate) struct ParseJob {
     pub attempt_id: String,
     pub tender_id: TenderId,
@@ -334,11 +364,18 @@ pub(crate) struct ParseJob {
 }
 
 pub(crate) struct PreparedParseOutput {
-    pub json_bytes: Vec<u8>,
-    pub schema_version: String,
+    pub markdown_bytes: Vec<u8>,
     pub language: EvidenceLanguage,
     pub direction: TextDirection,
     pub locations: Vec<EvidenceLocation>,
+    pub embeddings: Vec<Vec<f32>>,
+}
+
+enum ConversionOutcome {
+    Prepared(PreparedParseOutput),
+    Interrupted,
+    Failed(ParseExceptionCode),
+    Quarantined(ParseExceptionCode),
 }
 
 struct StagingCleanup(PathBuf);
@@ -391,60 +428,66 @@ impl QuantixHost {
             Err(error) => return Err(error),
         };
         let _staging_cleanup = StagingCleanup(job.staging_root.clone());
-        let output = self
-            .process_supervisor()
-            .run(docling_process_spec(self, &job), cancellation)
-            .await;
+        let outcome = self.convert_source_artifact(&job, cancellation).await;
 
-        let result = match output {
-            Ok(output)
-                if output.termination == ProcessTermination::Exited
-                    && output.exit_code == Some(0) =>
-            {
-                match validate_candidate_output(&job) {
-                    Ok(prepared) => {
-                        let mut store = store.lock().map_err(|_| {
-                            TenderCommandError::new(TenderErrorCode::StoreUnavailable)
-                        })?;
-                        match store.publish_parse(&job, prepared) {
-                            Ok(result) => Ok(result),
-                            Err(_) => store.fail_parse(
-                                &job,
-                                ParseState::Failed,
-                                ParseExceptionCode::PublicationFailed,
-                            ),
-                        }
-                    }
-                    Err(exception) => store
+        match outcome {
+            ConversionOutcome::Prepared(mut prepared) => {
+                if let Err(exception) = validate_prepared_output(&job, &prepared) {
+                    return store
                         .lock()
                         .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-                        .fail_parse(&job, ParseState::Quarantined, exception),
+                        .fail_parse(&job, ParseState::Quarantined, exception);
+                }
+                let texts = prepared
+                    .locations
+                    .iter()
+                    .map(|location| location.original_text.clone())
+                    .collect();
+                prepared.embeddings =
+                    match crate::embedding::embed_evidence_locations(self, texts).await {
+                        Ok(embeddings) => embeddings,
+                        Err(_) => {
+                            return store
+                                .lock()
+                                .map_err(|_| {
+                                    TenderCommandError::new(TenderErrorCode::StoreUnavailable)
+                                })?
+                                .fail_parse(
+                                    &job,
+                                    ParseState::Failed,
+                                    ParseExceptionCode::ProcessFailed,
+                                );
+                        }
+                    };
+                let mut store = store
+                    .lock()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+                match store.publish_parse(&job, prepared) {
+                    Ok(result) => Ok(result),
+                    Err(_) => store.fail_parse(
+                        &job,
+                        ParseState::Failed,
+                        ParseExceptionCode::PublicationFailed,
+                    ),
                 }
             }
-            Ok(output) => {
-                let (state, exception) = match output.termination {
-                    ProcessTermination::Cancelled | ProcessTermination::TimedOut => {
-                        (ParseState::Interrupted, ParseExceptionCode::Interrupted)
-                    }
-                    ProcessTermination::OutputLimitExceeded => (
-                        ParseState::Quarantined,
-                        ParseExceptionCode::OutputLimitExceeded,
-                    ),
-                    ProcessTermination::Exited => {
-                        (ParseState::Failed, ParseExceptionCode::ProcessFailed)
-                    }
-                };
-                store
-                    .lock()
-                    .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-                    .fail_parse(&job, state, exception)
-            }
-            Err(_) => store
+            ConversionOutcome::Interrupted => store
                 .lock()
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-                .fail_parse(&job, ParseState::Failed, ParseExceptionCode::ProcessFailed),
-        };
-        result
+                .fail_parse(
+                    &job,
+                    ParseState::Interrupted,
+                    ParseExceptionCode::Interrupted,
+                ),
+            ConversionOutcome::Failed(exception) => store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                .fail_parse(&job, ParseState::Failed, exception),
+            ConversionOutcome::Quarantined(exception) => store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                .fail_parse(&job, ParseState::Quarantined, exception),
+        }
     }
 
     pub fn cancel_source_artifact_parse(
@@ -495,51 +538,272 @@ impl QuantixHost {
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .search_evidence(&command)
     }
+
+    pub async fn search_evidence_semantic(
+        &self,
+        command: SearchEvidenceSemanticCommand,
+    ) -> Result<EvidenceSemanticSearchResult, TenderCommandError> {
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if command.query.trim().is_empty() || !command.distance_threshold.is_finite() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        self.require_runtime_verified()?;
+        crate::tender_store::require_setup(self)?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let query_embedding =
+            crate::embedding::embed_search_query(self, command.query.clone()).await?;
+        self.tender_store(&tender_id)?
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .search_evidence_semantic(&command, &query_embedding)
+    }
+
+    async fn convert_source_artifact(
+        &self,
+        job: &ParseJob,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> ConversionOutcome {
+        #[cfg(feature = "runtime-fixture")]
+        {
+            // Fixture tests own the conversion pipeline end to end through the
+            // supervised OCR process so every deterministic scenario is
+            // reproducible without real document bytes.
+            return self.convert_scanned_document(job, cancellation).await;
+        }
+        #[cfg(not(feature = "runtime-fixture"))]
+        {
+            let digital = self.convert_digital_document(job, &cancellation).await;
+            match digital {
+                Ok((markdown, locations)) => match prepare_digital_output(&markdown, locations) {
+                    Ok(prepared) => ConversionOutcome::Prepared(prepared),
+                    Err(exception) => ConversionOutcome::Quarantined(exception),
+                },
+                Err(ConversionError::NeedsOcr) => {
+                    if cancellation.is_cancelled() {
+                        return ConversionOutcome::Interrupted;
+                    }
+                    self.convert_scanned_document(job, cancellation).await
+                }
+                Err(ConversionError::Malformed) => {
+                    ConversionOutcome::Failed(ParseExceptionCode::MalformedOutput)
+                }
+                Err(ConversionError::OutputLimit) => {
+                    ConversionOutcome::Failed(ParseExceptionCode::OutputLimitExceeded)
+                }
+            }
+        }
+    }
+
+    #[cfg(not(feature = "runtime-fixture"))]
+    async fn convert_digital_document(
+        &self,
+        job: &ParseJob,
+        cancellation: &tokio_util::sync::CancellationToken,
+    ) -> Result<(String, Option<Vec<EvidenceLocation>>), ConversionError> {
+        let input_path = job.input_path.clone();
+        let input_format = job.input_format.clone();
+        let converted = tokio::task::spawn_blocking(
+            move || -> Result<(String, Option<Vec<EvidenceLocation>>), ConversionError> {
+                let bytes = fs::read(&input_path).map_err(|_| ConversionError::Malformed)?;
+                if bytes.len() as u64 > crate::tender_intake::MAX_INTAKE_FILE_BYTES {
+                    return Err(ConversionError::OutputLimit);
+                }
+                match input_format.as_str() {
+                    "pdf" | "docx" => {
+                        let converted =
+                            anydoc::to_markdown(&input_path).map_err(map_anydoc_error)?;
+                        Ok((converted, None))
+                    }
+                    "xlsx" => {
+                        let (markdown, locations) = convert_spreadsheet(&bytes)?;
+                        Ok((markdown, Some(locations)))
+                    }
+                    _ => Err(ConversionError::Malformed),
+                }
+            },
+        )
+        .await
+        .map_err(|_| ConversionError::Malformed)?;
+        if cancellation.is_cancelled() {
+            return Err(ConversionError::NeedsOcr);
+        }
+        converted
+    }
+
+    async fn convert_scanned_document(
+        &self,
+        job: &ParseJob,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> ConversionOutcome {
+        let output = self
+            .process_supervisor()
+            .run(ocr_process_spec(self, job), cancellation)
+            .await;
+        match output {
+            Ok(output)
+                if output.termination == ProcessTermination::Exited
+                    && output.exit_code == Some(0) =>
+            {
+                match validate_ocr_candidate_output(job) {
+                    Ok(prepared) => ConversionOutcome::Prepared(prepared),
+                    Err(exception) => ConversionOutcome::Quarantined(exception),
+                }
+            }
+            Ok(output) => match output.termination {
+                ProcessTermination::Cancelled | ProcessTermination::TimedOut => {
+                    ConversionOutcome::Interrupted
+                }
+                ProcessTermination::OutputLimitExceeded => {
+                    ConversionOutcome::Failed(ParseExceptionCode::OutputLimitExceeded)
+                }
+                ProcessTermination::Exited => {
+                    ConversionOutcome::Failed(ParseExceptionCode::ProcessFailed)
+                }
+            },
+            Err(_) => ConversionOutcome::Failed(ParseExceptionCode::ProcessFailed),
+        }
+    }
 }
 
-fn docling_process_spec(host: &QuantixHost, job: &ParseJob) -> ProcessSpec {
+#[cfg(not(feature = "runtime-fixture"))]
+enum ConversionError {
+    NeedsOcr,
+    Malformed,
+    OutputLimit,
+}
+
+#[cfg(not(feature = "runtime-fixture"))]
+fn map_anydoc_error(error: ConvertError) -> ConversionError {
+    match error {
+        ConvertError::Unsupported(_) => ConversionError::NeedsOcr,
+        ConvertError::ResourceLimit { .. } => ConversionError::OutputLimit,
+        _ => ConversionError::Malformed,
+    }
+}
+
+fn ocr_process_spec(host: &QuantixHost, job: &ParseJob) -> ProcessSpec {
     let arguments = vec![
         host.runtime_layout()
-            .docling_project()
-            .join("convert_document.py")
+            .ocr_project()
+            .join("ocr_document.py")
             .into_os_string(),
-        OsString::from("--input"),
+        std::ffi::OsString::from("--input"),
         job.input_path.clone().into_os_string(),
-        OsString::from("--input-format"),
-        OsString::from(&job.input_format),
-        OsString::from("--output-dir"),
+        std::ffi::OsString::from("--output-dir"),
         job.candidate_directory.clone().into_os_string(),
-        OsString::from("--artifacts-path"),
+        std::ffi::OsString::from("--artifacts-path"),
         host.application_home()
             .join("models")
-            .join("docling")
+            .join("ocr")
             .into_os_string(),
-        OsString::from("--document-timeout"),
-        OsString::from(DOCLING_DOCUMENT_TIMEOUT_SECONDS),
-        OsString::from("--max-file-size"),
-        OsString::from(crate::tender_intake::MAX_INTAKE_FILE_BYTES.to_string()),
-        OsString::from("--max-num-pages"),
-        OsString::from(DOCLING_MAX_NUM_PAGES.to_string()),
-        OsString::from("--num-threads"),
-        // Document conversion can briefly hold several full-page image and
-        // layout tensors at once. A single worker is slower but avoids
-        // memory-pressure data loss on ordinary desktop hardware.
-        OsString::from("1"),
+        std::ffi::OsString::from("--document-timeout"),
+        std::ffi::OsString::from(OCR_DOCUMENT_TIMEOUT_SECONDS),
+        std::ffi::OsString::from("--max-file-size"),
+        std::ffi::OsString::from(crate::tender_intake::MAX_INTAKE_FILE_BYTES.to_string()),
+        std::ffi::OsString::from("--max-num-pages"),
+        std::ffi::OsString::from(DOCUMENT_MAX_PAGES.to_string()),
+        std::ffi::OsString::from("--num-threads"),
+        // OCR conversion holds a rendered page image plus the detection and
+        // recognition tensors at once. A single worker keeps that memory
+        // footprint bounded on ordinary desktop hardware.
+        std::ffi::OsString::from("1"),
     ];
     ProcessSpec {
         executable: python_executable(host.application_home()),
         arguments,
         current_directory: Some(job.staging_root.clone()),
-        environment: docling_environment(host.application_home()),
+        environment: ocr_environment(host.application_home()),
         inherit_environment: false,
         stdin: Vec::new(),
-        timeout: DOCLING_PROCESS_TIMEOUT,
-        stdout_limit: DOCLING_PROCESS_OUTPUT_LIMIT,
-        stderr_limit: DOCLING_PROCESS_OUTPUT_LIMIT,
+        timeout: OCR_PROCESS_TIMEOUT,
+        stdout_limit: OCR_PROCESS_OUTPUT_LIMIT,
+        stderr_limit: OCR_PROCESS_OUTPUT_LIMIT,
     }
 }
 
-fn validate_candidate_output(job: &ParseJob) -> Result<PreparedParseOutput, ParseExceptionCode> {
+fn validate_prepared_output(
+    job: &ParseJob,
+    prepared: &PreparedParseOutput,
+) -> Result<(), ParseExceptionCode> {
+    let markdown = std::str::from_utf8(&prepared.markdown_bytes)
+        .map_err(|_| ParseExceptionCode::MalformedOutput)?;
+    if prepared.locations.is_empty()
+        || prepared.locations.len() > MAX_EVIDENCE_LOCATIONS
+        || markdown.is_empty()
+        || prepared.markdown_bytes.len() as u64 > MAX_MARKDOWN_BYTES
+    {
+        return Err(ParseExceptionCode::LossDetected);
+    }
+    for location in &prepared.locations {
+        for region in &location.provenance {
+            if region.page_number == 0
+                || matches!(
+                    (region.char_start, region.char_end),
+                    (Some(start), Some(end)) if end < start
+                )
+                || matches!(
+                    (region.char_start, region.char_end),
+                    (Some(_), None) | (None, Some(_))
+                )
+            {
+                return Err(ParseExceptionCode::MalformedOutput);
+            }
+            if let Some(end) = region.char_end {
+                if usize::try_from(end)
+                    .ok()
+                    .is_none_or(|end| end > markdown.chars().count())
+                {
+                    return Err(ParseExceptionCode::MalformedOutput);
+                }
+            }
+        }
+    }
+    if job
+        .input_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        != Some(job.input_format.as_str())
+    {
+        return Err(ParseExceptionCode::MalformedOutput);
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "runtime-fixture"))]
+fn prepare_digital_output(
+    markdown: &str,
+    spreadsheet_locations: Option<Vec<EvidenceLocation>>,
+) -> Result<PreparedParseOutput, ParseExceptionCode> {
+    if markdown.trim().is_empty() || markdown.len() as u64 > MAX_MARKDOWN_BYTES {
+        return Err(ParseExceptionCode::LossDetected);
+    }
+    let locations = match spreadsheet_locations {
+        Some(locations) => locations,
+        None => extract_markdown_locations(markdown)?,
+    };
+    if locations.is_empty() || locations.len() > MAX_EVIDENCE_LOCATIONS {
+        return Err(ParseExceptionCode::LossDetected);
+    }
+    let combined = locations
+        .iter()
+        .map(|location| location.original_text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (language, direction) = classify_text(&combined);
+    Ok(PreparedParseOutput {
+        markdown_bytes: markdown.as_bytes().to_vec(),
+        language,
+        direction,
+        locations,
+        embeddings: Vec::new(),
+    })
+}
+
+fn validate_ocr_candidate_output(
+    job: &ParseJob,
+) -> Result<PreparedParseOutput, ParseExceptionCode> {
     for directory in [&job.staging_root, &job.candidate_directory] {
         let metadata =
             fs::symlink_metadata(directory).map_err(|_| ParseExceptionCode::MalformedOutput)?;
@@ -552,73 +816,39 @@ fn validate_candidate_output(job: &ParseJob) -> Result<PreparedParseOutput, Pars
     if metadata_is_unsafe_storage_link(&input_metadata) || !input_metadata.is_file() {
         return Err(ParseExceptionCode::MalformedOutput);
     }
-    let mut entries =
-        fs::read_dir(&job.candidate_directory).map_err(|_| ParseExceptionCode::MalformedOutput)?;
-    let entry = entries
-        .next()
-        .ok_or(ParseExceptionCode::MalformedOutput)?
-        .map_err(|_| ParseExceptionCode::MalformedOutput)?;
-    if entries.next().is_some() {
-        return Err(ParseExceptionCode::MalformedOutput);
-    }
-    let metadata =
-        fs::symlink_metadata(entry.path()).map_err(|_| ParseExceptionCode::MalformedOutput)?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(ParseExceptionCode::MalformedOutput);
-    }
-    if metadata.len() > MAX_DOCLING_JSON_BYTES {
-        return Err(ParseExceptionCode::OutputLimitExceeded);
-    }
-    let expected_name = job
-        .input_path
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .map(|name| format!("{name}.json"))
-        .ok_or(ParseExceptionCode::MalformedOutput)?;
-    if entry.file_name() != expected_name.as_str() {
-        return Err(ParseExceptionCode::MalformedOutput);
-    }
-    let mut file = fs::File::open(entry.path()).map_err(|_| ParseExceptionCode::MalformedOutput)?;
-    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
-    file.by_ref()
-        .take(MAX_DOCLING_JSON_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| ParseExceptionCode::MalformedOutput)?;
-    if bytes.len() as u64 != metadata.len() || bytes.len() as u64 > MAX_DOCLING_JSON_BYTES {
-        return Err(ParseExceptionCode::OutputLimitExceeded);
-    }
-    let value: Value =
-        serde_json::from_slice(&bytes).map_err(|_| ParseExceptionCode::MalformedOutput)?;
-    let validator = jsonschema::validator_for(&docling_document_schema())
-        .map_err(|_| ParseExceptionCode::MalformedOutput)?;
-    if !validator.is_valid(&value) {
-        return Err(ParseExceptionCode::MalformedOutput);
-    }
-    let expected_mimetype = match job.input_format.as_str() {
-        "pdf" => "application/pdf",
-        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        _ => return Err(ParseExceptionCode::MalformedOutput),
-    };
-    if value.pointer("/origin/mimetype").and_then(Value::as_str) != Some(expected_mimetype) {
-        return Err(ParseExceptionCode::MalformedOutput);
-    }
-    let expected_stem = job
+    let stem = job
         .input_path
         .file_stem()
         .and_then(|stem| stem.to_str())
         .ok_or(ParseExceptionCode::MalformedOutput)?;
-    let expected_filename = format!("{expected_stem}.{}", job.input_format);
-    if value.get("name").and_then(Value::as_str) != Some(expected_stem)
-        || value.pointer("/origin/filename").and_then(Value::as_str)
-            != Some(expected_filename.as_str())
-    {
+    let expected_markdown = format!("{stem}.md");
+    let expected_locations = format!("{stem}.locations.json");
+    let mut entries = fs::read_dir(&job.candidate_directory)
+        .map_err(|_| ParseExceptionCode::MalformedOutput)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ParseExceptionCode::MalformedOutput)?;
+    entries.sort_by_key(fs::DirEntry::file_name);
+    let names = entries
+        .iter()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    if names != [expected_locations.clone(), expected_markdown.clone()] {
         return Err(ParseExceptionCode::MalformedOutput);
     }
-    let locations = extract_locations(&value)?;
-    if locations.is_empty() || locations.len() > MAX_EVIDENCE_LOCATIONS {
-        return Err(ParseExceptionCode::LossDetected);
+    let markdown_path = job.candidate_directory.join(&expected_markdown);
+    let locations_path = job.candidate_directory.join(&expected_locations);
+    for path in [&markdown_path, &locations_path] {
+        let metadata =
+            fs::symlink_metadata(path).map_err(|_| ParseExceptionCode::MalformedOutput)?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(ParseExceptionCode::MalformedOutput);
+        }
     }
+    let markdown_bytes = read_limited_file(&markdown_path, MAX_MARKDOWN_BYTES)?;
+    let markdown =
+        std::str::from_utf8(&markdown_bytes).map_err(|_| ParseExceptionCode::MalformedOutput)?;
+    let locations_bytes = read_limited_file(&locations_path, MAX_MARKDOWN_BYTES)?;
+    let locations = parse_ocr_locations(markdown, &locations_bytes)?;
     let combined = locations
         .iter()
         .map(|location| location.original_text.as_str())
@@ -626,674 +856,787 @@ fn validate_candidate_output(job: &ParseJob) -> Result<PreparedParseOutput, Pars
         .join("\n");
     let (language, direction) = classify_text(&combined);
     Ok(PreparedParseOutput {
-        json_bytes: bytes,
-        schema_version: DOCLING_DOCUMENT_SCHEMA_VERSION.into(),
+        markdown_bytes,
         language,
         direction,
         locations,
+        embeddings: Vec::new(),
     })
 }
 
-fn docling_document_schema() -> Value {
-    json!({
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "required": [
-            "schema_name", "version", "name", "origin", "body",
-            "groups", "texts", "tables", "pages"
-        ],
-        "properties": {
-            "schema_name": { "const": "DoclingDocument" },
-            "version": { "const": DOCLING_DOCUMENT_SCHEMA_VERSION },
-            "name": { "type": "string", "minLength": 1, "maxLength": 1024 },
-            "origin": {
-                "type": "object",
-                "required": ["mimetype", "filename"],
-                "properties": {
-                    "mimetype": { "type": "string", "minLength": 1, "maxLength": 255 },
-                    "filename": { "type": "string", "maxLength": 2048 }
-                }
-            },
-            "body": {
-                "type": "object",
-                "required": ["self_ref", "children"],
-                "properties": {
-                    "self_ref": { "const": "#/body" },
-                    "children": { "$ref": "#/$defs/children" }
-                }
-            },
-            "furniture": {
-                "type": "object",
-                "required": ["self_ref", "children"],
-                "properties": {
-                    "self_ref": { "const": "#/furniture" },
-                    "children": { "$ref": "#/$defs/children" }
-                }
-            },
-            "groups": {
-                "type": "array",
-                "maxItems": MAX_EVIDENCE_LOCATIONS,
-                "items": {
-                    "type": "object",
-                    "required": ["self_ref", "parent", "children", "name", "label"],
-                    "properties": {
-                        "self_ref": { "$ref": "#/$defs/self_ref" },
-                        "parent": { "$ref": "#/$defs/reference" },
-                        "children": { "$ref": "#/$defs/children" },
-                        "name": { "type": "string", "minLength": 1, "maxLength": 2048 },
-                        "label": { "type": "string", "minLength": 1, "maxLength": 100 }
-                    }
-                }
-            },
-            "texts": {
-                "type": "array",
-                "maxItems": MAX_EVIDENCE_LOCATIONS,
-                "items": {
-                    "type": "object",
-                    "required": ["self_ref", "parent", "label", "text"],
-                    "properties": {
-                        "self_ref": { "$ref": "#/$defs/self_ref" },
-                        "parent": { "$ref": "#/$defs/reference" },
-                        "label": { "type": "string", "minLength": 1, "maxLength": 100 },
-                        "orig": { "type": "string", "maxLength": 1000000 },
-                        "text": { "type": "string", "maxLength": 1000000 },
-                        "prov": { "$ref": "#/$defs/provenance" }
-                    }
-                }
-            },
-            "tables": {
-                "type": "array",
-                "maxItems": MAX_EVIDENCE_LOCATIONS,
-                "items": {
-                    "type": "object",
-                    "required": ["self_ref", "parent", "label", "data"],
-                    "properties": {
-                        "self_ref": { "$ref": "#/$defs/self_ref" },
-                        "parent": { "$ref": "#/$defs/reference" },
-                        "label": { "const": "table" },
-                        "data": {
-                            "type": "object",
-                            "required": ["num_rows", "num_cols", "table_cells"],
-                            "properties": {
-                                "num_rows": { "type": "integer", "minimum": 1 },
-                                "num_cols": { "type": "integer", "minimum": 1 },
-                                "table_cells": {
-                                    "type": "array",
-                                    "minItems": 1,
-                                    "maxItems": MAX_EVIDENCE_LOCATIONS,
-                                    "items": { "$ref": "#/$defs/table_cell" }
-                                }
-                            }
-                        },
-                        "prov": { "$ref": "#/$defs/provenance" }
-                    }
-                }
-            },
-            "pictures": { "$ref": "#/$defs/ignored_items" },
-            "key_value_items": { "$ref": "#/$defs/ignored_items" },
-            "form_items": { "$ref": "#/$defs/ignored_items" },
-            "pages": {
-                "type": "object",
-                "maxProperties": 100000,
-                "propertyNames": { "pattern": "^[1-9][0-9]*$" },
-                "additionalProperties": {
-                    "type": "object",
-                    "required": ["page_no", "size"],
-                    "properties": {
-                        "page_no": { "type": "integer", "minimum": 1 },
-                        "size": {
-                            "type": "object",
-                            "required": ["width", "height"],
-                            "properties": {
-                                "width": { "type": "number", "exclusiveMinimum": 0 },
-                                "height": { "type": "number", "exclusiveMinimum": 0 }
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "$defs": {
-            "self_ref": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 2048,
-                "pattern": "^#/[a-z_]+/[0-9]+$"
-            },
-            "reference": {
-                "type": "object",
-                "required": ["$ref"],
-                "properties": {
-                    "$ref": { "type": "string", "minLength": 1, "maxLength": 2048 }
-                }
-            },
-            "children": {
-                "type": "array",
-                "maxItems": MAX_EVIDENCE_LOCATIONS,
-                "items": { "$ref": "#/$defs/reference" }
-            },
-            "bounding_box": {
-                "type": "object",
-                "required": ["l", "t", "r", "b", "coord_origin"],
-                "properties": {
-                    "l": { "type": "number" },
-                    "t": { "type": "number" },
-                    "r": { "type": "number" },
-                    "b": { "type": "number" },
-                    "coord_origin": { "enum": ["TOPLEFT", "BOTTOMLEFT"] }
-                }
-            },
-            "provenance": {
-                "type": "array",
-                "maxItems": 10000,
-                "items": {
-                    "type": "object",
-                    "required": ["page_no", "charspan", "bbox"],
-                    "properties": {
-                        "page_no": { "type": "integer", "minimum": 1 },
-                        "charspan": {
-                            "type": "array",
-                            "prefixItems": [
-                                { "type": "integer", "minimum": 0 },
-                                { "type": "integer", "minimum": 0 }
-                            ],
-                            "minItems": 2,
-                            "maxItems": 2
-                        },
-                        "bbox": { "$ref": "#/$defs/bounding_box" }
-                    }
-                }
-            },
-            "table_cell": {
-                "type": "object",
-                "required": [
-                    "start_row_offset_idx", "end_row_offset_idx",
-                    "start_col_offset_idx", "end_col_offset_idx", "text"
-                ],
-                "properties": {
-                    "start_row_offset_idx": { "type": "integer", "minimum": 0 },
-                    "end_row_offset_idx": { "type": "integer", "minimum": 1 },
-                    "start_col_offset_idx": { "type": "integer", "minimum": 0 },
-                    "end_col_offset_idx": { "type": "integer", "minimum": 1 },
-                    "text": { "type": "string", "maxLength": 1000000 }
-                }
-            },
-            "ignored_items": {
-                "type": "array",
-                "maxItems": MAX_EVIDENCE_LOCATIONS,
-                "items": {
-                    "type": "object",
-                    "required": ["self_ref", "parent"],
-                    "properties": {
-                        "self_ref": { "$ref": "#/$defs/self_ref" },
-                        "parent": { "$ref": "#/$defs/reference" },
-                        "children": { "$ref": "#/$defs/children" }
-                    }
-                }
-            }
-        }
-    })
-}
-#[derive(Clone, Default)]
-struct StructureContext {
-    section: Option<String>,
-    sheet_name: Option<String>,
-}
-
-struct ExtractionState<'a> {
-    groups: HashMap<String, &'a Value>,
-    texts: HashMap<String, &'a Value>,
-    tables: HashMap<String, &'a Value>,
-    ignored_items: HashMap<String, &'a Value>,
-    pages: &'a serde_json::Map<String, Value>,
-    visited: HashSet<String>,
-    locations: Vec<EvidenceLocation>,
-    paragraph_number: u32,
-    table_number: u32,
-}
-
-impl<'a> ExtractionState<'a> {
-    fn new(value: &'a Value) -> Result<Self, ParseExceptionCode> {
-        let pages = value
-            .get("pages")
-            .and_then(Value::as_object)
-            .ok_or(ParseExceptionCode::MalformedOutput)?;
-        for (key, page) in pages {
-            if required_u64(page, "page_no")?.to_string() != *key {
-                return Err(ParseExceptionCode::MalformedOutput);
-            }
-        }
-        Ok(Self {
-            groups: index_items(value, "groups")?,
-            texts: index_items(value, "texts")?,
-            tables: index_items(value, "tables")?,
-            ignored_items: ["pictures", "key_value_items", "form_items"]
-                .into_iter()
-                .map(|field| index_items(value, field))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .flatten()
-                .collect(),
-            pages,
-            visited: HashSet::new(),
-            locations: Vec::new(),
-            paragraph_number: 0,
-            table_number: 0,
-        })
+fn read_limited_file(path: &std::path::Path, limit: u64) -> Result<Vec<u8>, ParseExceptionCode> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| ParseExceptionCode::MalformedOutput)?;
+    if metadata.len() > limit {
+        return Err(ParseExceptionCode::OutputLimitExceeded);
     }
+    let mut file = fs::File::open(path).map_err(|_| ParseExceptionCode::MalformedOutput)?;
+    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
+    file.by_ref()
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ParseExceptionCode::MalformedOutput)?;
+    if bytes.len() as u64 != metadata.len() || bytes.len() as u64 > limit {
+        return Err(ParseExceptionCode::OutputLimitExceeded);
+    }
+    Ok(bytes)
+}
 
-    fn walk(
-        &mut self,
-        reference: &str,
-        expected_parent: &str,
-        context: &StructureContext,
-    ) -> Result<(), ParseExceptionCode> {
-        if !self.visited.insert(reference.to_owned()) {
+fn parse_ocr_locations(
+    markdown: &str,
+    locations_bytes: &[u8],
+) -> Result<Vec<EvidenceLocation>, ParseExceptionCode> {
+    let value: Value =
+        serde_json::from_slice(locations_bytes).map_err(|_| ParseExceptionCode::MalformedOutput)?;
+    if value.get("schema_version").and_then(Value::as_u64) != Some(1) {
+        return Err(ParseExceptionCode::MalformedOutput);
+    }
+    let entries = value
+        .get("locations")
+        .and_then(Value::as_array)
+        .ok_or(ParseExceptionCode::MalformedOutput)?;
+    if entries.is_empty() || entries.len() > MAX_EVIDENCE_LOCATIONS {
+        return Err(ParseExceptionCode::LossDetected);
+    }
+    let markdown_chars = markdown.chars().count();
+    let mut locations = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let entry = entry
+            .as_object()
+            .ok_or(ParseExceptionCode::MalformedOutput)?;
+        let kind = match entry
+            .get("kind")
+            .and_then(Value::as_str)
+            .ok_or(ParseExceptionCode::MalformedOutput)?
+        {
+            "section" => EvidenceLocationKind::Section,
+            "paragraph" => EvidenceLocationKind::Paragraph,
+            "table" => EvidenceLocationKind::Table,
+            "sheet" => EvidenceLocationKind::Sheet,
+            "cell" => EvidenceLocationKind::Cell,
+            _ => return Err(ParseExceptionCode::MalformedOutput),
+        };
+        let text = entry
+            .get("text")
+            .and_then(Value::as_str)
+            .ok_or(ParseExceptionCode::MalformedOutput)?;
+        if text.trim().is_empty() {
             return Err(ParseExceptionCode::MalformedOutput);
         }
-        if let Some(group) = self.groups.get(reference).copied() {
-            require_parent(group, expected_parent)?;
-            let label = required_str(group, "label")?;
-            let name = required_str(group, "name")?.to_owned();
-            let children = child_references(group)?;
-            let mut child_context = context.clone();
-            match label {
-                "section" => child_context.section = Some(name),
-                "sheet" => {
-                    child_context.sheet_name = Some(name.clone());
-                    let (language, direction) = classify_text(&name);
-                    self.locations.push(EvidenceLocation {
-                        ordinal: next_ordinal(&self.locations)?,
-                        kind: EvidenceLocationKind::Sheet,
-                        structural_path: reference.to_owned(),
-                        provenance: Vec::new(),
-                        section: context.section.clone(),
-                        paragraph_number: None,
-                        table_number: None,
-                        sheet_name: Some(name.clone()),
-                        cell_range: None,
-                        original_text: name,
-                        translated_text: None,
-                        language,
-                        direction,
+        let translated_text = entry
+            .get("translated_text")
+            .and_then(Value::as_str)
+            .filter(|translated| !translated.is_empty())
+            .map(str::to_owned);
+        let provenance = match entry.get("provenance") {
+            Some(provenance) => {
+                let regions = provenance
+                    .as_array()
+                    .ok_or(ParseExceptionCode::MalformedOutput)?;
+                let mut parsed = Vec::with_capacity(regions.len());
+                for region in regions {
+                    let region = region
+                        .as_object()
+                        .ok_or(ParseExceptionCode::MalformedOutput)?;
+                    let page_number: u32 = region
+                        .get("page")
+                        .and_then(Value::as_u64)
+                        .and_then(|page| page.try_into().ok())
+                        .filter(|page| *page > 0)
+                        .ok_or(ParseExceptionCode::MalformedOutput)?;
+                    let (char_start, char_end) =
+                        match (region.get("char_start"), region.get("char_end")) {
+                            (None, None) => (None, None),
+                            (Some(start), Some(end)) => {
+                                let start: u32 = start
+                                    .as_u64()
+                                    .and_then(|start| start.try_into().ok())
+                                    .ok_or(ParseExceptionCode::MalformedOutput)?;
+                                let end: u32 = end
+                                    .as_u64()
+                                    .and_then(|end| end.try_into().ok())
+                                    .ok_or(ParseExceptionCode::MalformedOutput)?;
+                                if end < start
+                                    || usize::try_from(end)
+                                        .ok()
+                                        .is_none_or(|end| end > markdown_chars)
+                                {
+                                    return Err(ParseExceptionCode::MalformedOutput);
+                                }
+                                (Some(start), Some(end))
+                            }
+                            _ => return Err(ParseExceptionCode::MalformedOutput),
+                        };
+                    parsed.push(EvidenceRegion {
+                        page_number,
+                        char_start,
+                        char_end,
+                        bounding_box: parse_bounding_box(region.get("bbox"))?,
                     });
                 }
-                _ => {}
+                parsed
             }
-            for child in children {
-                self.walk(&child, reference, &child_context)?;
+            None => {
+                let page_number: u32 = match entry.get("page") {
+                    Some(page) => page
+                        .as_u64()
+                        .and_then(|page| page.try_into().ok())
+                        .filter(|page| *page > 0)
+                        .ok_or(ParseExceptionCode::MalformedOutput)?,
+                    None => 1,
+                };
+                let (char_start, char_end) = match (entry.get("char_start"), entry.get("char_end"))
+                {
+                    (None, None) => (None, None),
+                    (Some(start), Some(end)) => {
+                        let start: u32 = start
+                            .as_u64()
+                            .and_then(|start| start.try_into().ok())
+                            .ok_or(ParseExceptionCode::MalformedOutput)?;
+                        let end: u32 = end
+                            .as_u64()
+                            .and_then(|end| end.try_into().ok())
+                            .ok_or(ParseExceptionCode::MalformedOutput)?;
+                        if end < start
+                            || usize::try_from(end)
+                                .ok()
+                                .is_none_or(|end| end > markdown_chars)
+                        {
+                            return Err(ParseExceptionCode::MalformedOutput);
+                        }
+                        (Some(start), Some(end))
+                    }
+                    _ => return Err(ParseExceptionCode::MalformedOutput),
+                };
+                vec![EvidenceRegion {
+                    page_number,
+                    char_start,
+                    char_end,
+                    bounding_box: parse_bounding_box(entry.get("bbox"))?,
+                }]
             }
-            return Ok(());
-        }
-        if let Some(text) = self.texts.get(reference).copied() {
-            require_parent(text, expected_parent)?;
-            self.push_text(text, reference, context)?;
-            return Ok(());
-        }
-        if let Some(table) = self.tables.get(reference).copied() {
-            require_parent(table, expected_parent)?;
-            self.push_table(table, reference, context)?;
-            return Ok(());
-        }
-        if let Some(item) = self.ignored_items.get(reference).copied() {
-            require_parent(item, expected_parent)?;
-            // Pictures, key-value containers, and form containers do not
-            // become Evidence Locations themselves, but Docling can attach
-            // OCR text beneath them. Walk those children so their source text
-            // and provenance are preserved and the completeness check remains
-            // meaningful.
-            if item.get("children").is_some() {
-                for child in child_references(item)? {
-                    self.walk(&child, reference, context)?;
-                }
-            }
-            return Ok(());
-        }
-        Err(ParseExceptionCode::MalformedOutput)
-    }
-
-    fn push_text(
-        &mut self,
-        text: &Value,
-        reference: &str,
-        context: &StructureContext,
-    ) -> Result<(), ParseExceptionCode> {
-        let label = required_str(text, "label")?;
-        let rendered_text = required_str(text, "text")?;
-        let original_text = text
-            .get("orig")
+        };
+        let section = entry
+            .get("section")
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
-            .unwrap_or(rendered_text)
-            .to_owned();
-        if original_text.trim().is_empty() {
-            return Ok(());
-        }
-        let kind = if label == "section_header" {
-            EvidenceLocationKind::Section
-        } else {
-            self.paragraph_number = self.paragraph_number.saturating_add(1);
-            EvidenceLocationKind::Paragraph
-        };
-        let provenance = evidence_provenance(text, self.pages)?;
-        let (language, direction) = classify_text(&original_text);
-        let translated_text = (rendered_text != original_text
-            && classify_text(rendered_text).0 != language)
-            .then(|| rendered_text.to_owned());
-        self.locations.push(EvidenceLocation {
-            ordinal: next_ordinal(&self.locations)?,
+            .map(str::to_owned);
+        let sheet_name = entry
+            .get("sheet_name")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        let cell_range = entry
+            .get("cell_range")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        let paragraph_number = entry
+            .get("paragraph_number")
+            .and_then(Value::as_u64)
+            .and_then(|number| number.try_into().ok())
+            .filter(|number: &u32| *number > 0);
+        let table_number = entry
+            .get("table_number")
+            .and_then(Value::as_u64)
+            .and_then(|number| number.try_into().ok())
+            .filter(|number: &u32| *number > 0);
+        let (language, direction) = classify_text(text);
+        locations.push(EvidenceLocation {
+            ordinal: next_ordinal(&locations)?,
             kind,
-            structural_path: reference.to_owned(),
+            structural_path: format!("markdown://{}", first_provenance_page(&provenance)),
             provenance,
-            section: context.section.clone(),
-            paragraph_number: (kind == EvidenceLocationKind::Paragraph)
-                .then_some(self.paragraph_number),
-            table_number: None,
-            sheet_name: context.sheet_name.clone(),
-            cell_range: None,
-            original_text,
+            section,
+            paragraph_number,
+            table_number,
+            sheet_name,
+            cell_range,
+            original_text: text.to_owned(),
             translated_text,
             language,
             direction,
         });
-        Ok(())
     }
+    Ok(locations)
+}
 
-    fn push_table(
-        &mut self,
-        table: &Value,
-        reference: &str,
-        context: &StructureContext,
-    ) -> Result<(), ParseExceptionCode> {
-        if required_str(table, "label")? != "table" {
-            return Err(ParseExceptionCode::MalformedOutput);
+fn first_provenance_page(provenance: &[EvidenceRegion]) -> u32 {
+    provenance.first().map_or(1, |region| region.page_number)
+}
+
+fn parse_bounding_box(
+    value: Option<&Value>,
+) -> Result<Option<EvidenceBoundingBox>, ParseExceptionCode> {
+    let Some(bbox) = value else {
+        return Ok(None);
+    };
+    let coordinates = bbox
+        .as_array()
+        .filter(|coordinates| coordinates.len() == 4 || coordinates.len() == 5)
+        .ok_or(ParseExceptionCode::MalformedOutput)?;
+    let numbers = coordinates[..4]
+        .iter()
+        .map(Value::as_f64)
+        .collect::<Option<Vec<_>>>()
+        .ok_or(ParseExceptionCode::MalformedOutput)?;
+    let coordinate_origin = match coordinates.get(4) {
+        Some(origin) => origin
+            .as_str()
+            .ok_or(ParseExceptionCode::MalformedOutput)?
+            .to_owned(),
+        None => "TOPLEFT".to_owned(),
+    };
+    Ok(Some(EvidenceBoundingBox {
+        left: numbers[0],
+        top: numbers[1],
+        right: numbers[2],
+        bottom: numbers[3],
+        coordinate_origin,
+    }))
+}
+
+#[cfg(not(feature = "runtime-fixture"))]
+fn convert_spreadsheet(bytes: &[u8]) -> Result<(String, Vec<EvidenceLocation>), ConversionError> {
+    let cursor = std::io::Cursor::new(bytes);
+    let mut workbook =
+        open_workbook_auto_from_rs(cursor).map_err(|_| ConversionError::Malformed)?;
+    let mut markdown = String::new();
+    let mut locations: Vec<EvidenceLocation> = Vec::new();
+    let mut table_number = 0_u32;
+    for sheet_name in workbook.sheet_names().to_vec() {
+        let range = workbook
+            .worksheet_range(&sheet_name)
+            .map_err(|_| ConversionError::Malformed)?;
+        let rows = range.rows().collect::<Vec<_>>();
+        if rows.is_empty() {
+            continue;
         }
-        self.table_number = self.table_number.saturating_add(1);
-        let table_number = self.table_number;
-        let cells = table
-            .pointer("/data/table_cells")
-            .and_then(Value::as_array)
-            .ok_or(ParseExceptionCode::MalformedOutput)?;
-        if cells.is_empty() {
-            return Err(ParseExceptionCode::LossDetected);
-        }
-        let num_rows = required_u64(
-            table
-                .get("data")
-                .ok_or(ParseExceptionCode::MalformedOutput)?,
-            "num_rows",
-        )?;
-        let num_cols = required_u64(
-            table
-                .get("data")
-                .ok_or(ParseExceptionCode::MalformedOutput)?,
-            "num_cols",
-        )?;
-        for cell in cells {
-            let start_row = required_u64(cell, "start_row_offset_idx")?;
-            let end_row = required_u64(cell, "end_row_offset_idx")?;
-            let start_col = required_u64(cell, "start_col_offset_idx")?;
-            let end_col = required_u64(cell, "end_col_offset_idx")?;
-            if start_row >= end_row
-                || start_col >= end_col
-                || end_row > num_rows
-                || end_col > num_cols
-            {
-                return Err(ParseExceptionCode::MalformedOutput);
+        let columns = rows.iter().map(|row| row.len()).max().unwrap_or(0);
+        let heading_start = markdown.chars().count();
+        markdown.push_str(&format!("## {sheet_name}\n\n"));
+        let heading_region = EvidenceRegion {
+            page_number: 1,
+            char_start: Some(
+                heading_start
+                    .try_into()
+                    .map_err(|_| ConversionError::OutputLimit)?,
+            ),
+            char_end: Some(
+                (heading_start + sheet_name.chars().count())
+                    .try_into()
+                    .map_err(|_| ConversionError::OutputLimit)?,
+            ),
+            bounding_box: None,
+        };
+        let (sheet_language, sheet_direction) = classify_text(&sheet_name);
+        locations.push(EvidenceLocation {
+            ordinal: next_ordinal(&locations).map_err(conversion_limit)?,
+            kind: EvidenceLocationKind::Sheet,
+            structural_path: format!("markdown://{heading_start}"),
+            provenance: vec![heading_region],
+            section: None,
+            paragraph_number: None,
+            table_number: None,
+            sheet_name: Some(sheet_name.clone()),
+            cell_range: None,
+            original_text: sheet_name.clone(),
+            translated_text: None,
+            language: sheet_language,
+            direction: sheet_direction,
+        });
+        let table_start = markdown.chars().count();
+        let mut table_block = String::new();
+        let mut cell_texts: Vec<(String, String)> = Vec::new();
+        for (row_index, row) in rows.iter().enumerate() {
+            let cells = (0..columns)
+                .map(|column| {
+                    let text = match row.get(column) {
+                        Some(Data::Empty) | None => String::new(),
+                        Some(cell) => cell
+                            .as_string()
+                            .unwrap_or_default()
+                            .replace('|', "\\|")
+                            .replace('\n', " "),
+                    };
+                    let column_index: u32 = column
+                        .try_into()
+                        .map_err(|_| ConversionError::OutputLimit)?;
+                    let cell_range = format!(
+                        "{}{}",
+                        spreadsheet_column(column_index).ok_or(ConversionError::Malformed)?,
+                        row_index + 1
+                    );
+                    Ok::<_, ConversionError>((text, cell_range))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            table_block.push_str(&format!(
+                "| {} |\n",
+                cells
+                    .iter()
+                    .map(|(text, _)| text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ));
+            if row_index == 0 {
+                table_block.push_str(&format!(
+                    "| {} |\n",
+                    (0..columns).map(|_| "---").collect::<Vec<_>>().join(" | ")
+                ));
+            }
+            for (text, cell_range) in cells {
+                if !text.trim().is_empty() {
+                    cell_texts.push((text, cell_range));
+                }
+            }
+            if cell_texts.len() > MAX_EVIDENCE_LOCATIONS {
+                return Err(ConversionError::OutputLimit);
             }
         }
-        let table_text = cells
+        markdown.push_str(&table_block);
+        markdown.push('\n');
+        let table_region = EvidenceRegion {
+            page_number: 1,
+            char_start: Some(
+                table_start
+                    .try_into()
+                    .map_err(|_| ConversionError::OutputLimit)?,
+            ),
+            char_end: Some(
+                (table_start + table_block.chars().count())
+                    .try_into()
+                    .map_err(|_| ConversionError::OutputLimit)?,
+            ),
+            bounding_box: None,
+        };
+        table_number = table_number.saturating_add(1);
+        let table_text = cell_texts
             .iter()
-            .map(|cell| required_str(cell, "text"))
-            .collect::<Result<Vec<_>, _>>()?
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>()
             .join("\n");
-        let provenance = evidence_provenance(table, self.pages)?;
-        let cell_provenance = provenance
-            .iter()
-            .map(|region| EvidenceRegion {
-                page_number: region.page_number,
-                char_start: None,
-                char_end: None,
-                bounding_box: None,
-            })
-            .collect::<Vec<_>>();
-        let (language, direction) = classify_text(&table_text);
-        self.locations.push(EvidenceLocation {
-            ordinal: next_ordinal(&self.locations)?,
+        if table_text.trim().is_empty() {
+            continue;
+        }
+        let (table_language, table_direction) = classify_text(&table_text);
+        locations.push(EvidenceLocation {
+            ordinal: next_ordinal(&locations).map_err(conversion_limit)?,
             kind: EvidenceLocationKind::Table,
-            structural_path: reference.to_owned(),
-            provenance,
-            section: context.section.clone(),
+            structural_path: format!("markdown://{table_start}"),
+            provenance: vec![table_region.clone()],
+            section: None,
             paragraph_number: None,
             table_number: Some(table_number),
-            sheet_name: context.sheet_name.clone(),
+            sheet_name: Some(sheet_name.clone()),
             cell_range: None,
             original_text: table_text,
             translated_text: None,
-            language,
-            direction,
+            language: table_language,
+            direction: table_direction,
         });
-        for (cell_index, cell) in cells.iter().enumerate() {
-            let original_text = required_str(cell, "text")?.to_owned();
-            let cell_range = cell_range(cell).ok_or(ParseExceptionCode::MalformedOutput)?;
-            let (language, direction) = classify_text(&original_text);
-            self.locations.push(EvidenceLocation {
-                ordinal: next_ordinal(&self.locations)?,
+        for (text, cell_range) in cell_texts {
+            let (cell_language, cell_direction) = classify_text(&text);
+            locations.push(EvidenceLocation {
+                ordinal: next_ordinal(&locations).map_err(conversion_limit)?,
                 kind: EvidenceLocationKind::Cell,
-                structural_path: format!("{reference}/data/table_cells/{cell_index}"),
-                provenance: cell_provenance.clone(),
-                section: context.section.clone(),
+                structural_path: format!("markdown://{table_start}"),
+                provenance: vec![table_region.clone()],
+                section: None,
                 paragraph_number: None,
                 table_number: Some(table_number),
-                sheet_name: context.sheet_name.clone(),
+                sheet_name: Some(sheet_name.clone()),
                 cell_range: Some(cell_range),
-                original_text,
+                original_text: text,
                 translated_text: None,
-                language,
-                direction,
+                language: cell_language,
+                direction: cell_direction,
             });
         }
-        Ok(())
+        if locations.len() > MAX_EVIDENCE_LOCATIONS {
+            return Err(ConversionError::OutputLimit);
+        }
     }
+    if markdown.trim().is_empty() {
+        return Err(ConversionError::Malformed);
+    }
+    Ok((markdown, locations))
+}
 
-    fn finish(self) -> Result<Vec<EvidenceLocation>, ParseExceptionCode> {
-        if self
-            .groups
-            .keys()
-            .chain(self.texts.keys())
-            .chain(self.tables.keys())
-            .chain(self.ignored_items.keys())
-            .any(|reference| !self.visited.contains(reference))
-        {
+#[cfg(not(feature = "runtime-fixture"))]
+fn conversion_limit(_: ParseExceptionCode) -> ConversionError {
+    ConversionError::OutputLimit
+}
+
+#[cfg(not(feature = "runtime-fixture"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MarkdownBlockKind {
+    Section,
+    Paragraph,
+    Table,
+}
+
+#[cfg(not(feature = "runtime-fixture"))]
+struct MarkdownBlock {
+    kind: MarkdownBlockKind,
+    start: usize,
+    end: usize,
+    text: String,
+}
+
+#[cfg(not(feature = "runtime-fixture"))]
+fn extract_markdown_locations(markdown: &str) -> Result<Vec<EvidenceLocation>, ParseExceptionCode> {
+    let blocks = markdown_blocks(markdown);
+    if blocks.is_empty() {
+        return Err(ParseExceptionCode::LossDetected);
+    }
+    let mut locations = Vec::new();
+    let mut paragraph_number = 0_u32;
+    let mut table_number = 0_u32;
+    let mut section: Option<String> = None;
+    for block in blocks {
+        let span = EvidenceRegion {
+            page_number: 1,
+            char_start: Some(
+                block
+                    .start
+                    .try_into()
+                    .map_err(|_| ParseExceptionCode::OutputLimitExceeded)?,
+            ),
+            char_end: Some(
+                block
+                    .end
+                    .try_into()
+                    .map_err(|_| ParseExceptionCode::OutputLimitExceeded)?,
+            ),
+            bounding_box: None,
+        };
+        match block.kind {
+            MarkdownBlockKind::Section => {
+                let (language, direction) = classify_text(&block.text);
+                locations.push(EvidenceLocation {
+                    ordinal: next_ordinal(&locations)?,
+                    kind: EvidenceLocationKind::Section,
+                    structural_path: format!("markdown://{}/{}", block.start, block.end),
+                    provenance: vec![span],
+                    section: None,
+                    paragraph_number: None,
+                    table_number: None,
+                    sheet_name: None,
+                    cell_range: None,
+                    original_text: block.text.clone(),
+                    translated_text: None,
+                    language,
+                    direction,
+                });
+                section = Some(block.text);
+            }
+            MarkdownBlockKind::Paragraph => {
+                paragraph_number = paragraph_number.saturating_add(1);
+                let (language, direction) = classify_text(&block.text);
+                locations.push(EvidenceLocation {
+                    ordinal: next_ordinal(&locations)?,
+                    kind: EvidenceLocationKind::Paragraph,
+                    structural_path: format!("markdown://{}/{}", block.start, block.end),
+                    provenance: vec![span],
+                    section: section.clone(),
+                    paragraph_number: Some(paragraph_number),
+                    table_number: None,
+                    sheet_name: None,
+                    cell_range: None,
+                    original_text: block.text.clone(),
+                    translated_text: None,
+                    language,
+                    direction,
+                });
+            }
+            MarkdownBlockKind::Table => {
+                table_number = table_number.saturating_add(1);
+                let rows = markdown_table_rows(&block.text);
+                let table_text = rows
+                    .iter()
+                    .flat_map(|row| row.iter())
+                    .filter(|cell| !cell.trim().is_empty())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if table_text.trim().is_empty() {
+                    return Err(ParseExceptionCode::LossDetected);
+                }
+                let (language, direction) = classify_text(&table_text);
+                locations.push(EvidenceLocation {
+                    ordinal: next_ordinal(&locations)?,
+                    kind: EvidenceLocationKind::Table,
+                    structural_path: format!("markdown://{}/{}", block.start, block.end),
+                    provenance: vec![span.clone()],
+                    section: section.clone(),
+                    paragraph_number: None,
+                    table_number: Some(table_number),
+                    sheet_name: None,
+                    cell_range: None,
+                    original_text: table_text,
+                    translated_text: None,
+                    language,
+                    direction,
+                });
+                for (row_index, row) in rows.iter().enumerate() {
+                    for (column_index, cell) in row.iter().enumerate() {
+                        if cell.trim().is_empty() {
+                            continue;
+                        }
+                        let (cell_language, cell_direction) = classify_text(cell);
+                        locations.push(EvidenceLocation {
+                            ordinal: next_ordinal(&locations)?,
+                            kind: EvidenceLocationKind::Cell,
+                            structural_path: format!(
+                                "markdown://{}/{}/row/{row_index}/cell/{column_index}",
+                                block.start, block.end
+                            ),
+                            provenance: vec![span.clone()],
+                            section: section.clone(),
+                            paragraph_number: None,
+                            table_number: Some(table_number),
+                            sheet_name: None,
+                            cell_range: None,
+                            original_text: cell.clone(),
+                            translated_text: None,
+                            language: cell_language,
+                            direction: cell_direction,
+                        });
+                    }
+                }
+            }
+        }
+        if locations.len() > MAX_EVIDENCE_LOCATIONS {
             return Err(ParseExceptionCode::LossDetected);
         }
-        Ok(self.locations)
     }
+    Ok(locations)
 }
 
-fn extract_locations(value: &Value) -> Result<Vec<EvidenceLocation>, ParseExceptionCode> {
-    let body = value
-        .get("body")
-        .ok_or(ParseExceptionCode::MalformedOutput)?;
-    if required_str(body, "self_ref")? != "#/body" {
-        return Err(ParseExceptionCode::MalformedOutput);
-    }
-    let mut state = ExtractionState::new(value)?;
-    let context = StructureContext::default();
-    for child in child_references(body)? {
-        state.walk(&child, "#/body", &context)?;
-    }
-    if let Some(furniture) = value.get("furniture") {
-        if required_str(furniture, "self_ref")? != "#/furniture" {
-            return Err(ParseExceptionCode::MalformedOutput);
+#[cfg(not(feature = "runtime-fixture"))]
+fn markdown_blocks(markdown: &str) -> Vec<MarkdownBlock> {
+    let lines = markdown.lines().collect::<Vec<_>>();
+    let mut blocks = Vec::new();
+    let mut index = 0_usize;
+    let mut offset = 0_usize;
+    while index < lines.len() {
+        let line = lines[index];
+        if line.trim().is_empty() {
+            offset += line.chars().count() + 1;
+            index += 1;
+            continue;
         }
-        for child in child_references(furniture)? {
-            state.walk(&child, "#/furniture", &context)?;
+        if let Some(heading) = line.strip_prefix('#').filter(|rest| {
+            rest.starts_with(' ')
+                || (line.len() >= 2 && rest.chars().all(|character| character == '#'))
+        }) {
+            let text = heading.trim_start_matches('#').trim().to_owned();
+            blocks.push(MarkdownBlock {
+                kind: MarkdownBlockKind::Section,
+                start: offset,
+                end: offset + text.chars().count(),
+                text,
+            });
+            offset += line.chars().count() + 1;
+            index += 1;
+            continue;
         }
+        if line.starts_with("```") || line.starts_with("~~~") {
+            let fence = &line[..3];
+            let start = offset;
+            let mut collected = Vec::new();
+            index += 1;
+            offset += line.chars().count() + 1;
+            let mut closed = false;
+            while index < lines.len() {
+                let inner = lines[index];
+                if inner.trim_start().starts_with(fence) {
+                    closed = true;
+                    offset += inner.chars().count() + 1;
+                    index += 1;
+                    break;
+                }
+                collected.push(inner);
+                offset += inner.chars().count() + 1;
+                index += 1;
+            }
+            if closed && !collected.iter().all(|inner| inner.trim().is_empty()) {
+                let text = collected.join("\n");
+                blocks.push(MarkdownBlock {
+                    kind: MarkdownBlockKind::Paragraph,
+                    start,
+                    end: start + text.chars().count(),
+                    text,
+                });
+            }
+            continue;
+        }
+        if is_table_row(line) {
+            let start = offset;
+            let mut table_lines = Vec::new();
+            while index < lines.len() && is_table_row(lines[index]) {
+                table_lines.push(lines[index]);
+                offset += lines[index].chars().count() + 1;
+                index += 1;
+            }
+            let has_separator = table_lines.len() >= 2 && is_table_separator(table_lines[1]);
+            let has_cells = table_lines
+                .iter()
+                .filter(|row| !is_table_separator(row))
+                .any(|row| row.split('|').any(|cell| !cell.trim().is_empty()));
+            if has_separator && has_cells {
+                let text = table_lines.join("\n");
+                blocks.push(MarkdownBlock {
+                    kind: MarkdownBlockKind::Table,
+                    start,
+                    end: start + text.chars().count(),
+                    text,
+                });
+                continue;
+            }
+            let text = table_lines.join(" ");
+            blocks.push(MarkdownBlock {
+                kind: MarkdownBlockKind::Paragraph,
+                start,
+                end: start + text.chars().count(),
+                text,
+            });
+            continue;
+        }
+        let trimmed = line.trim_start();
+        let is_break = trimmed == "---" || trimmed == "***" || trimmed == "___";
+        if is_break {
+            offset += line.chars().count() + 1;
+            index += 1;
+            continue;
+        }
+        if let Some(content) = trimmed
+            .strip_prefix('>')
+            .or_else(|| trimmed.strip_prefix("- "))
+            .or_else(|| trimmed.strip_prefix("* "))
+            .or_else(|| trimmed.strip_prefix("+ "))
+            .or_else(|| numbered_prefix(trimmed).map(|(_, rest)| rest))
+        {
+            let start = offset;
+            let text = content.trim().to_owned();
+            blocks.push(MarkdownBlock {
+                kind: MarkdownBlockKind::Paragraph,
+                start,
+                end: start + text.chars().count(),
+                text,
+            });
+            offset += line.chars().count() + 1;
+            index += 1;
+            continue;
+        }
+        let start = offset;
+        let mut paragraph = Vec::new();
+        while index < lines.len() {
+            let candidate = lines[index];
+            if candidate.trim().is_empty() {
+                break;
+            }
+            let candidate_trimmed = candidate.trim_start();
+            if index > 0 && is_block_start(candidate_trimmed) {
+                break;
+            }
+            paragraph.push(candidate);
+            offset += candidate.chars().count() + 1;
+            index += 1;
+        }
+        let text = paragraph.join("\n");
+        blocks.push(MarkdownBlock {
+            kind: MarkdownBlockKind::Paragraph,
+            start,
+            end: start + text.chars().count(),
+            text,
+        });
     }
-    state.finish()
+    blocks
 }
 
-fn index_items<'a>(
-    value: &'a Value,
-    field: &str,
-) -> Result<HashMap<String, &'a Value>, ParseExceptionCode> {
-    let Some(items) = value.get(field) else {
-        return Ok(HashMap::new());
-    };
-    let items = items
-        .as_array()
-        .ok_or(ParseExceptionCode::MalformedOutput)?;
-    let mut indexed = HashMap::new();
-    for (index, item) in items.iter().enumerate() {
-        let reference = required_str(item, "self_ref")?.to_owned();
-        if reference != format!("#/{field}/{index}") {
-            return Err(ParseExceptionCode::MalformedOutput);
-        }
-        if indexed.insert(reference, item).is_some() {
-            return Err(ParseExceptionCode::MalformedOutput);
-        }
+#[cfg(not(feature = "runtime-fixture"))]
+fn numbered_prefix(line: &str) -> Option<(usize, &str)> {
+    let digits = line
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .count();
+    if digits == 0 {
+        return None;
     }
-    Ok(indexed)
+    let rest = &line[digits..];
+    let rest = rest.strip_prefix('.').or_else(|| rest.strip_prefix(')'))?;
+    rest.strip_prefix(' ').map(|rest| (digits, rest))
 }
 
-fn child_references(value: &Value) -> Result<Vec<String>, ParseExceptionCode> {
-    value
-        .get("children")
-        .and_then(Value::as_array)
-        .ok_or(ParseExceptionCode::MalformedOutput)?
-        .iter()
-        .map(|child| {
-            child
-                .get("$ref")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .ok_or(ParseExceptionCode::MalformedOutput)
+#[cfg(not(feature = "runtime-fixture"))]
+fn is_block_start(trimmed: &str) -> bool {
+    let heading = trimmed
+        .strip_prefix('#')
+        .is_some_and(|rest| rest.starts_with(' '));
+    heading
+        || trimmed.starts_with("```")
+        || trimmed.starts_with("~~~")
+        || trimmed.starts_with('>')
+        || trimmed.starts_with("- ")
+        || trimmed.starts_with("* ")
+        || trimmed.starts_with("+ ")
+        || numbered_prefix(trimmed).is_some()
+        || is_table_row(trimmed)
+        || trimmed == "---"
+        || trimmed == "***"
+        || trimmed == "___"
+}
+
+#[cfg(not(feature = "runtime-fixture"))]
+fn is_table_row(line: &str) -> bool {
+    line.starts_with('|') && line.ends_with('|') && line.len() >= 2
+}
+
+#[cfg(not(feature = "runtime-fixture"))]
+fn is_table_separator(line: &str) -> bool {
+    let cells = line.split('|').filter(|cell| !cell.trim().is_empty());
+    let mut saw_dash = false;
+    for cell in cells {
+        let trimmed = cell.trim();
+        if !trimmed
+            .chars()
+            .all(|character| matches!(character, '-' | ':' | ' '))
+        {
+            return false;
+        }
+        if trimmed.contains('-') {
+            saw_dash = true;
+        }
+    }
+    saw_dash
+}
+
+#[cfg(not(feature = "runtime-fixture"))]
+fn markdown_table_rows(block: &str) -> Vec<Vec<String>> {
+    block
+        .lines()
+        .filter(|line| !is_table_separator(line))
+        .map(|line| {
+            let mut cells = line.split('|').collect::<Vec<_>>();
+            if cells.first().is_some_and(|cell| cell.trim().is_empty()) {
+                cells.remove(0);
+            }
+            if cells.last().is_some_and(|cell| cell.trim().is_empty()) {
+                cells.pop();
+            }
+            cells
+                .iter()
+                .map(|cell| cell.trim().replace("\\|", "|").to_owned())
+                .collect()
         })
         .collect()
 }
 
-fn require_parent(value: &Value, expected_parent: &str) -> Result<(), ParseExceptionCode> {
-    if value
-        .get("parent")
-        .and_then(|parent| parent.get("$ref"))
-        .and_then(Value::as_str)
-        == Some(expected_parent)
-    {
-        Ok(())
-    } else {
-        Err(ParseExceptionCode::MalformedOutput)
-    }
+fn next_ordinal(locations: &[EvidenceLocation]) -> Result<u32, ParseExceptionCode> {
+    u32::try_from(locations.len() + 1).map_err(|_| ParseExceptionCode::OutputLimitExceeded)
 }
 
-fn evidence_provenance(
-    value: &Value,
-    pages: &serde_json::Map<String, Value>,
-) -> Result<Vec<EvidenceRegion>, ParseExceptionCode> {
-    let Some(provenance) = value.get("prov") else {
-        return Ok(Vec::new());
-    };
-    let provenance = provenance
-        .as_array()
-        .ok_or(ParseExceptionCode::MalformedOutput)?;
-    let mut regions = Vec::with_capacity(provenance.len());
-    for region in provenance {
-        let region = region
-            .as_object()
-            .ok_or(ParseExceptionCode::MalformedOutput)?;
-        let page_number: u32 = region
-            .get("page_no")
-            .and_then(Value::as_u64)
-            .and_then(|value| value.try_into().ok())
-            .ok_or(ParseExceptionCode::MalformedOutput)?;
-        if !pages.contains_key(&page_number.to_string()) {
-            return Err(ParseExceptionCode::MalformedOutput);
-        }
-        let (char_start, char_end) = match region.get("charspan") {
-            Some(span) => {
-                let span = span
-                    .as_array()
-                    .filter(|span| span.len() == 2)
-                    .ok_or(ParseExceptionCode::MalformedOutput)?;
-                let start: u32 = span
-                    .first()
-                    .and_then(Value::as_u64)
-                    .and_then(|value| value.try_into().ok())
-                    .ok_or(ParseExceptionCode::MalformedOutput)?;
-                let end: u32 = span
-                    .get(1)
-                    .and_then(Value::as_u64)
-                    .and_then(|value| value.try_into().ok())
-                    .filter(|end| *end >= start)
-                    .ok_or(ParseExceptionCode::MalformedOutput)?;
-                (Some(start), Some(end))
-            }
-            None => (None, None),
-        };
-        let bounding_box = match region.get("bbox") {
-            Some(bbox) => Some(EvidenceBoundingBox {
-                left: required_number(bbox, "l")?,
-                top: required_number(bbox, "t")?,
-                right: required_number(bbox, "r")?,
-                bottom: required_number(bbox, "b")?,
-                coordinate_origin: required_str(bbox, "coord_origin")?.to_owned(),
-            }),
-            None => None,
-        };
-        regions.push(EvidenceRegion {
-            page_number,
-            char_start,
-            char_end,
-            bounding_box,
-        });
-    }
-    Ok(regions)
-}
-fn required_number(value: &Value, field: &str) -> Result<f64, ParseExceptionCode> {
-    value
-        .get(field)
-        .and_then(Value::as_f64)
-        .ok_or(ParseExceptionCode::MalformedOutput)
-}
-
-fn required_u64(value: &Value, field: &str) -> Result<u64, ParseExceptionCode> {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or(ParseExceptionCode::MalformedOutput)
-}
-fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, ParseExceptionCode> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or(ParseExceptionCode::MalformedOutput)
-}
-
-fn cell_range(cell: &Value) -> Option<String> {
-    let start_row = cell.get("start_row_offset_idx")?.as_u64()?;
-    let end_row = cell.get("end_row_offset_idx")?.as_u64()?;
-    let start_column = cell.get("start_col_offset_idx")?.as_u64()?;
-    let end_column = cell.get("end_col_offset_idx")?.as_u64()?;
-    if end_row <= start_row || end_column <= start_column {
-        return None;
-    }
-    let start = format!(
-        "{}{}",
-        spreadsheet_column(start_column.try_into().ok()?)?,
-        start_row + 1
-    );
-    let end = format!(
-        "{}{}",
-        spreadsheet_column(end_column.checked_sub(1)?.try_into().ok()?)?,
-        end_row
-    );
-    Some(if start == end {
-        start
-    } else {
-        format!("{start}:{end}")
-    })
-}
-
+#[cfg(not(feature = "runtime-fixture"))]
 fn spreadsheet_column(mut index: u32) -> Option<String> {
     let mut characters = Vec::new();
     loop {
@@ -1306,10 +1649,6 @@ fn spreadsheet_column(mut index: u32) -> Option<String> {
     }
     characters.reverse();
     Some(characters.into_iter().collect())
-}
-
-fn next_ordinal(locations: &[EvidenceLocation]) -> Result<u32, ParseExceptionCode> {
-    u32::try_from(locations.len() + 1).map_err(|_| ParseExceptionCode::OutputLimitExceeded)
 }
 
 fn classify_text(text: &str) -> (EvidenceLanguage, TextDirection) {

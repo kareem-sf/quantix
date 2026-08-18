@@ -199,7 +199,7 @@ pub struct LiveQualificationEnvironment {
     pub platform: String,
     pub codex_version: String,
     pub app_server_version: String,
-    pub docling_runtime_sha256: String,
+    pub ocr_runtime_sha256: String,
     pub model_observations: Vec<String>,
 }
 
@@ -232,7 +232,7 @@ pub struct LiveQualificationRun {
     pub oracle_sha256: String,
     pub codex_version: String,
     pub app_server_version: String,
-    pub docling_runtime_sha256: String,
+    pub ocr_runtime_sha256: String,
     pub model_observations: Vec<String>,
     pub evaluation_policy_sha256: String,
     pub deterministic_acceptance_record_sha256: String,
@@ -868,9 +868,9 @@ impl QuantixHost {
             || environment.codex_version.len() > 100
             || environment.app_server_version.trim().is_empty()
             || environment.app_server_version.len() > 100
-            || environment.docling_runtime_sha256.len() != 64
+            || environment.ocr_runtime_sha256.len() != 64
             || !environment
-                .docling_runtime_sha256
+                .ocr_runtime_sha256
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit())
             || environment.model_observations.is_empty()
@@ -953,7 +953,7 @@ impl QuantixHost {
                 || first.oracle_sha256 != acceptance_oracle_sha256()
                 || first.codex_version != environment.codex_version
                 || first.app_server_version != environment.app_server_version
-                || first.docling_runtime_sha256 != environment.docling_runtime_sha256
+                || first.ocr_runtime_sha256 != environment.ocr_runtime_sha256
                 || first.model_observations != environment.model_observations
                 || first.evaluation_policy_sha256 != acceptance_evaluation_policy_sha256()
                 || first.deterministic_acceptance_record_sha256
@@ -1009,8 +1009,8 @@ impl QuantixHost {
                 sha256: acceptance_oracle_sha256(),
             },
             AcceptanceArtifactHash {
-                name: "docling_runtime".into(),
-                sha256: environment.docling_runtime_sha256.clone(),
+                name: "ocr_runtime".into(),
+                sha256: environment.ocr_runtime_sha256.clone(),
             },
         ]);
         measurement
@@ -1134,7 +1134,7 @@ impl QuantixHost {
             oracle_sha256: acceptance_oracle_sha256(),
             codex_version: environment.codex_version,
             app_server_version: environment.app_server_version,
-            docling_runtime_sha256: environment.docling_runtime_sha256,
+            ocr_runtime_sha256: environment.ocr_runtime_sha256,
             model_observations: environment.model_observations,
             evaluation_policy_sha256: acceptance_evaluation_policy_sha256(),
             deterministic_acceptance_record_sha256: command.deterministic_acceptance_record_sha256,
@@ -1283,14 +1283,14 @@ pub fn acceptance_evaluation_policy_sha256() -> String {
     sha256_hex(&bytes)
 }
 
-pub fn measure_docling_runtime_sha256(
+pub fn measure_ocr_runtime_sha256(
     application_home: &Path,
     resource_directory: &Path,
 ) -> Result<String, TenderCommandError> {
     let paths = [
-        resource_directory.join("runtime/docling/pyproject.toml"),
-        resource_directory.join("runtime/docling/uv.lock"),
-        application_home.join("runtime/docling-readiness.json"),
+        resource_directory.join("runtime/ocr/pyproject.toml"),
+        resource_directory.join("runtime/ocr/uv.lock"),
+        application_home.join("runtime/ocr-readiness.json"),
     ];
     let mut digest = sha2::Sha256::new();
     for path in paths {

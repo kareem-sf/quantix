@@ -4,6 +4,7 @@ mod acceptance;
 mod agent_runtime;
 mod application_settings;
 mod document_parsing;
+mod embedding;
 mod host;
 mod process_supervisor;
 mod release_gate;
@@ -15,7 +16,7 @@ mod update;
 
 pub use acceptance::{
     acceptance_evaluation_policy_sha256, acceptance_fixture_sha256, acceptance_oracle_sha256,
-    measure_docling_runtime_sha256, print_candidate_acceptance_probe,
+    measure_ocr_runtime_sha256, print_candidate_acceptance_probe,
     print_candidate_acceptance_rehearsal, AcceptanceArtifactHash, AcceptanceCheckResult,
     AcceptanceStageTiming, LiveQualificationEnvironment, LiveQualificationMetrics,
     LiveQualificationRun, PrivateQualificationRecord, ProductAcceptanceOutcome,
@@ -51,7 +52,8 @@ pub use application_settings::{
 pub use document_parsing::{
     DocumentParseResult, EvidenceBoundingBox, EvidenceDocument, EvidenceLanguage, EvidenceLocation,
     EvidenceLocationKind, EvidenceRegion, EvidenceSearchHit, EvidenceSearchResult,
-    ParseExceptionCode, ParseSourceArtifactCommand, ParseState, SearchEvidenceCommand,
+    EvidenceSemanticSearchHit, EvidenceSemanticSearchResult, ParseExceptionCode,
+    ParseSourceArtifactCommand, ParseState, SearchEvidenceCommand, SearchEvidenceSemanticCommand,
     TextDirection,
 };
 pub use host::QuantixHost;
@@ -267,8 +269,8 @@ mod tauri_commands {
         DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DecisionCockpit, DeletionReceipt,
         DesignateBoqTableCommand, DisconnectAiProviderCommand, DocumentParseResult,
         DocumentRegister, EstimateWorkspaceInspection, EvidenceDocument, EvidenceSearchResult,
-        ExportApprovedExternalRfiCommand, ExportReleaseCopyCommand, ExternalRfiDraft,
-        ExternalRfiEligibleQueryPage, ExternalRfiExportRecord, ExternalRfiPage,
+        EvidenceSemanticSearchResult, ExportApprovedExternalRfiCommand, ExportReleaseCopyCommand,
+        ExternalRfiDraft, ExternalRfiEligibleQueryPage, ExternalRfiExportRecord, ExternalRfiPage,
         ExternalRfiResponseCandidatePage, ExternalRfiReviewResult, FinalReviewInspection,
         GenerateSubmissionSectionsCommand, ImportPortableTenderArchiveCommand,
         ImportTenderPackageCommand, InspectAgentRunCommand, InspectAgentRunHistoryCommand,
@@ -304,18 +306,18 @@ mod tauri_commands {
         RunPricingAdjustmentReviewCommand, RunProductionTaskCommand,
         RunSubmissionSectionReviewCommand, RunTenderRecordExtractionCommand,
         RunTenderRecordReviewCommand, RuntimePreparationProgress, RuntimeReadiness,
-        SearchEvidenceCommand, SelectManagerWorkspaceTenderCommand, SelectPricingScenarioCommand,
-        SetupOutcome, SetupState, StartManagerTenderCommand, StartProviderLoginCommand,
-        SubmissionArtifactContent, SubmissionItemContent, SubmissionPackageVersion,
-        SubmissionReleaseInspection, SubmissionSectionReviewRunResult, TenderBackupRecord,
-        TenderCatalogueEntry, TenderCommandError, TenderErrorCode, TenderIntegrityReport,
-        TenderPackageImportResult, TenderPackageSourceKind, TenderProductionInspection,
-        TenderQuery, TenderQueryPage, TenderRecordAuthority, TenderRecordDecisionResult,
-        TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult,
-        TenderRecoveryRecord, TenderRetentionDecisionCommand, TenderRetentionDecisionRecord,
-        TenderSummary, TrashedTenderDecisionCommand, TrashedTenderRecord,
-        UpdateAiExecutionSelectionCommand, UpdateGeneralApplicationPreferencesCommand,
-        WorkPlanProposalInspection,
+        SearchEvidenceCommand, SearchEvidenceSemanticCommand, SelectManagerWorkspaceTenderCommand,
+        SelectPricingScenarioCommand, SetupOutcome, SetupState, StartManagerTenderCommand,
+        StartProviderLoginCommand, SubmissionArtifactContent, SubmissionItemContent,
+        SubmissionPackageVersion, SubmissionReleaseInspection, SubmissionSectionReviewRunResult,
+        TenderBackupRecord, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
+        TenderIntegrityReport, TenderPackageImportResult, TenderPackageSourceKind,
+        TenderProductionInspection, TenderQuery, TenderQueryPage, TenderRecordAuthority,
+        TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordPage,
+        TenderRecordReviewResult, TenderRecoveryRecord, TenderRetentionDecisionCommand,
+        TenderRetentionDecisionRecord, TenderSummary, TrashedTenderDecisionCommand,
+        TrashedTenderRecord, UpdateAiExecutionSelectionCommand,
+        UpdateGeneralApplicationPreferencesCommand, WorkPlanProposalInspection,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -1308,6 +1310,14 @@ mod tauri_commands {
             .map_err(|_| TenderCommandError {
                 code: TenderErrorCode::StoreUnavailable,
             })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn search_evidence_semantic(
+        host: tauri::State<'_, QuantixHost>,
+        command: SearchEvidenceSemanticCommand,
+    ) -> Result<EvidenceSemanticSearchResult, TenderCommandError> {
+        host.inner().search_evidence_semantic(command).await
     }
 
     #[tauri::command]
@@ -2621,6 +2631,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::cancel_source_artifact_parse,
             tauri_commands::inspect_evidence,
             tauri_commands::search_evidence,
+            tauri_commands::search_evidence_semantic,
             tauri_commands::inspect_runtime_readiness,
             tauri_commands::repair_runtime_readiness,
             tauri_commands::inspect_runtime_preparation_progress,

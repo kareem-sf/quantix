@@ -1,0 +1,13 @@
+[project]
+name = "quantix-ocr-runtime"
+version = "0.0.0"
+requires-python = "==3.12.13"
+dependencies = [
+    "rapidocr==3.9.2",
+    "onnxruntime==1.28.0",
+    "pypdfium2==5.12.1",
+    "pillow==12.3.0",
+]
+
+[tool.uv]
+package = false

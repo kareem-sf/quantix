@@ -21,10 +21,10 @@ use crate::{
 };
 
 const UV_VERSION: &str = "0.12.2";
-pub(crate) const DOCLING_VERSION: &str = "2.118.0";
+pub(crate) const OCR_VERSION: &str = "3.9.2";
 const PYTHON_VERSION: &str = "3.12.13";
 pub(crate) const RUNTIME_PROVENANCE_SCHEMA: u32 = 2;
-const DOCLING_MANIFEST_SCHEMA: u32 = 2;
+const OCR_MANIFEST_SCHEMA: u32 = 3;
 const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 const ENVIRONMENT_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 const PREPARATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
@@ -34,14 +34,8 @@ const PROBE_OUTPUT_LIMIT: usize = 256 * 1024;
 const PREPARATION_OUTPUT_LIMIT: usize = 1024 * 1024;
 const MAX_SMOKE_JSON_BYTES: u64 = 16 * 1024 * 1024;
 const SMOKE_OCR_TEXT: &str =
-    "Docling bundles PDF document conversion to JSON and Markdown in an easy self contained package";
-const DOCLING_MODEL_PROFILE: [&str; 5] = [
-    "layout",
-    "tableformer",
-    "code_formula",
-    "picture_classifier",
-    "rapidocr",
-];
+    "Quantix bundles PDF document conversion to Markdown in an easy self contained package";
+const OCR_MODEL_PROFILE: [&str; 2] = ["rapidocr", "multilingual-e5-small"];
 #[derive(Debug, Clone)]
 pub struct RuntimeLayout {
     runtime_resources: PathBuf,
@@ -66,12 +60,12 @@ impl RuntimeLayout {
             .join(executable_name("uv"))
     }
 
-    pub(crate) fn docling_project(&self) -> PathBuf {
-        self.runtime_resources.join("docling")
+    pub(crate) fn ocr_project(&self) -> PathBuf {
+        self.runtime_resources.join("ocr")
     }
 
     fn readiness_document(&self) -> PathBuf {
-        self.docling_project().join("readiness.pdf")
+        self.ocr_project().join("readiness.pdf")
     }
 
     fn provenance_manifest(&self) -> PathBuf {
@@ -105,13 +99,13 @@ pub enum RuntimeReadinessIssue {
     SetupIncomplete,
     CodexExecutableMissing,
     UvExecutableMissing,
-    DoclingExecutableMissing,
+    OcrExecutableMissing,
     CodexVersionIncompatible,
     UvVersionIncompatible,
-    DoclingVersionIncompatible,
+    OcrVersionIncompatible,
     RuntimeResourceIntegrityFailed,
-    DoclingEnvironmentInvalid,
-    DoclingModelsMissing,
+    OcrEnvironmentInvalid,
+    OcrModelsMissing,
     CodexAuthenticationRequired,
     CodexSubscriptionRequired,
     RuntimePreparationActive,
@@ -127,7 +121,7 @@ pub struct RuntimeReadiness {
     pub issues: Vec<RuntimeReadinessIssue>,
     pub codex_version: Option<String>,
     pub uv_version: Option<String>,
-    pub docling_version: Option<String>,
+    pub ocr_version: Option<String>,
     pub repair_available: bool,
 }
 
@@ -159,7 +153,7 @@ pub enum RuntimePreparationStep {
     VerifyBundledTools,
     ResetEnvironment,
     SynchronizeEnvironment,
-    VerifyDocling,
+    VerifyOcr,
     PrepareDocumentModels,
     RunDocumentCheck,
     PublishRuntime,
@@ -257,7 +251,7 @@ impl RuntimePreparationProgress {
         }
         let staged_models = application_home
             .join("models")
-            .join(".docling-models-preparation");
+            .join(".ocr-models-preparation");
         let mut file_count = 0_u64;
         let mut byte_count = 0_u64;
         for entry in WalkDir::new(staged_models)
@@ -292,17 +286,17 @@ fn runtime_preparation_activities() -> Vec<RuntimePreparationActivity> {
         (
             RuntimePreparationStep::ResetEnvironment,
             "Prepare managed directories",
-            "Creating a clean, Quantix-managed Python and Docling environment.",
+            "Creating a clean, Quantix-managed Python and OCR environment.",
         ),
         (
             RuntimePreparationStep::SynchronizeEnvironment,
-            "Install Python and Docling",
-            "Synchronizing the locked Python environment and Docling dependencies.",
+            "Install Python and OCR tools",
+            "Synchronizing the locked Python environment and OCR dependencies.",
         ),
         (
-            RuntimePreparationStep::VerifyDocling,
-            "Verify Docling",
-            "Checking the installed Docling executable and exact version.",
+            RuntimePreparationStep::VerifyOcr,
+            "Verify OCR runtime",
+            "Checking the installed OCR runtime and exact version.",
         ),
         (
             RuntimePreparationStep::PrepareDocumentModels,
@@ -312,7 +306,7 @@ fn runtime_preparation_activities() -> Vec<RuntimePreparationActivity> {
         (
             RuntimePreparationStep::RunDocumentCheck,
             "Run document self-check",
-            "Converting a bundled sample document entirely with the local runtime.",
+            "Reading a bundled sample document entirely with the local OCR runtime.",
         ),
         (
             RuntimePreparationStep::PublishRuntime,
@@ -353,7 +347,7 @@ impl RuntimeReadiness {
             issues: vec![issue],
             codex_version: None,
             uv_version: None,
-            docling_version: None,
+            ocr_version: None,
             repair_available: false,
         }
     }
@@ -369,7 +363,7 @@ impl RuntimeReadiness {
             issues,
             codex_version: versions.codex.clone(),
             uv_version: versions.uv.clone(),
-            docling_version: versions.docling.clone(),
+            ocr_version: versions.ocr.clone(),
             repair_available,
         }
     }
@@ -379,7 +373,7 @@ impl RuntimeReadiness {
 struct RuntimeVersions {
     codex: Option<String>,
     uv: Option<String>,
-    docling: Option<String>,
+    ocr: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -396,11 +390,11 @@ struct PersistedPreparation {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DoclingRuntimeManifest {
+struct OcrRuntimeManifest {
     schema_version: u32,
     codex_version: String,
     uv_version: String,
-    docling_version: String,
+    ocr_version: String,
     python_version: String,
     model_profile: Vec<String>,
     project_files: Vec<HashedFile>,
@@ -434,7 +428,7 @@ struct RuntimeProvenanceManifest {
     codex: RuntimeArtifact,
     uv: RuntimeArtifact,
     codex_schema_sha256: String,
-    docling_project_files: Vec<HashedFile>,
+    ocr_project_files: Vec<HashedFile>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -444,7 +438,7 @@ struct RuntimeArtifact {
     sha256: String,
 }
 
-enum DoclingValidationError {
+enum OcrValidationError {
     Environment,
     Models,
 }
@@ -500,7 +494,7 @@ impl QuantixHost {
         if !is_real_file(&codex)
             || !is_real_file(&uv)
             || validate_runtime_provenance(layout).is_err()
-            || validate_docling_runtime(self.application_home(), layout).is_err()
+            || validate_ocr_runtime(self.application_home(), layout).is_err()
         {
             return false;
         }
@@ -525,7 +519,7 @@ impl QuantixHost {
             && uv_version
                 .as_deref()
                 .is_ok_and(|version| version == UV_VERSION)
-            && is_real_file(&docling_executable(self.application_home()));
+            && is_real_file(&python_executable(self.application_home()));
         self.set_runtime_verified(verified);
         verified
     }
@@ -568,7 +562,7 @@ impl QuantixHost {
                 issues: Vec::new(),
                 codex_version: Some(CODEX_VERSION.to_owned()),
                 uv_version: Some(UV_VERSION.to_owned()),
-                docling_version: Some(DOCLING_VERSION.to_owned()),
+                ocr_version: Some(OCR_VERSION.to_owned()),
                 repair_available: false,
             };
         }
@@ -657,7 +651,7 @@ impl QuantixHost {
         }
 
         let cancellation = preparation.cancellation();
-        let prepared = self.prepare_docling(cancellation.clone()).await;
+        let prepared = self.prepare_ocr_runtime(cancellation.clone()).await;
         match prepared {
             Ok(versions) => {
                 if cancellation.is_cancelled() {
@@ -757,7 +751,7 @@ impl QuantixHost {
             )
             .await
             .ok(),
-            docling: None,
+            ocr: None,
         };
         let mut incompatible = Vec::new();
         if versions.codex.as_deref() != Some(CODEX_VERSION) {
@@ -775,29 +769,29 @@ impl QuantixHost {
             );
         }
 
-        let docling = docling_executable(self.application_home());
-        if !is_real_file(&docling) {
+        let ocr_python = python_executable(self.application_home());
+        if !is_real_file(&ocr_python) {
             return RuntimeReadiness::with_versions(
                 RuntimeReadinessState::MissingExecutable,
-                vec![RuntimeReadinessIssue::DoclingExecutableMissing],
+                vec![RuntimeReadinessIssue::OcrExecutableMissing],
                 &versions,
                 true,
             );
         }
-        match validate_docling_runtime(self.application_home(), layout) {
+        match validate_ocr_runtime(self.application_home(), layout) {
             Ok(()) => {}
-            Err(DoclingValidationError::Environment) => {
+            Err(OcrValidationError::Environment) => {
                 return RuntimeReadiness::with_versions(
                     RuntimeReadinessState::RepairRequired,
-                    vec![RuntimeReadinessIssue::DoclingEnvironmentInvalid],
+                    vec![RuntimeReadinessIssue::OcrEnvironmentInvalid],
                     &versions,
                     true,
                 )
             }
-            Err(DoclingValidationError::Models) => {
+            Err(OcrValidationError::Models) => {
                 return RuntimeReadiness::with_versions(
                     RuntimeReadinessState::MissingModel,
-                    vec![RuntimeReadinessIssue::DoclingModelsMissing],
+                    vec![RuntimeReadinessIssue::OcrModelsMissing],
                     &versions,
                     true,
                 )
@@ -805,7 +799,7 @@ impl QuantixHost {
         }
         if run_checked(
             self.process_supervisor(),
-            docling_sync_spec(layout, self.application_home(), &uv, true),
+            ocr_sync_spec(layout, self.application_home(), &uv, true),
             cancellation.clone(),
         )
         .await
@@ -813,22 +807,22 @@ impl QuantixHost {
         {
             return RuntimeReadiness::with_versions(
                 RuntimeReadinessState::RepairRequired,
-                vec![RuntimeReadinessIssue::DoclingEnvironmentInvalid],
+                vec![RuntimeReadinessIssue::OcrEnvironmentInvalid],
                 &versions,
                 true,
             );
         }
-        versions.docling = probe_docling_version(
+        versions.ocr = probe_ocr_version(
             self.process_supervisor(),
             self.application_home(),
             cancellation.clone(),
         )
         .await
         .ok();
-        if versions.docling.as_deref() != Some(DOCLING_VERSION) {
+        if versions.ocr.as_deref() != Some(OCR_VERSION) {
             return RuntimeReadiness::with_versions(
                 RuntimeReadinessState::IncompatibleVersion,
-                vec![RuntimeReadinessIssue::DoclingVersionIncompatible],
+                vec![RuntimeReadinessIssue::OcrVersionIncompatible],
                 &versions,
                 true,
             );
@@ -861,7 +855,7 @@ impl QuantixHost {
         }
     }
 
-    async fn prepare_docling(
+    async fn prepare_ocr_runtime(
         &self,
         cancellation: CancellationToken,
     ) -> Result<RuntimeVersions, RuntimeError> {
@@ -872,11 +866,12 @@ impl QuantixHost {
         for resource in [
             &codex,
             &uv,
-            &layout.docling_project().join("pyproject.toml"),
-            &layout.docling_project().join("uv.lock"),
-            &layout.docling_project().join(".python-version"),
-            &layout.docling_project().join("python-downloads.json"),
-            &layout.docling_project().join("convert_document.py"),
+            &layout.ocr_project().join("pyproject.toml"),
+            &layout.ocr_project().join("uv.lock"),
+            &layout.ocr_project().join(".python-version"),
+            &layout.ocr_project().join("python-downloads.json"),
+            &layout.ocr_project().join("ocr_document.py"),
+            &layout.ocr_project().join("prepare_models.py"),
             &layout.readiness_document(),
         ] {
             if !is_real_file(resource) {
@@ -907,16 +902,16 @@ impl QuantixHost {
         }
 
         let runtime_root = self.application_home().join("runtimes");
-        let environment = runtime_root.join("docling");
+        let environment = runtime_root.join("ocr");
         let python = runtime_root.join("python");
         let uv_cache = runtime_root.join("uv-cache");
         let models_root = self.application_home().join("models");
-        let models = models_root.join("docling");
+        let models = models_root.join("ocr");
         for directory in [&runtime_root, &uv_cache, &models_root] {
             fs::create_dir_all(directory).map_err(|_| RuntimeError::PersistenceFailed)?;
         }
         self.activate_runtime_preparation_step(RuntimePreparationStep::ResetEnvironment);
-        runtime_fixture_trace("resetting managed Docling environment");
+        runtime_fixture_trace("resetting managed OCR environment");
         reset_managed_directory(&environment, self.application_home())?;
         runtime_fixture_trace("resetting managed Python environment");
         reset_managed_directory(&python, self.application_home())?;
@@ -925,29 +920,28 @@ impl QuantixHost {
         self.activate_runtime_preparation_step(RuntimePreparationStep::SynchronizeEnvironment);
         run_checked(
             self.process_supervisor(),
-            docling_sync_spec(layout, self.application_home(), &uv, false),
+            ocr_sync_spec(layout, self.application_home(), &uv, false),
             cancellation.clone(),
         )
         .await?;
         runtime_fixture_trace("locked environment synchronized");
 
-        let docling = docling_executable(self.application_home());
         let python = python_executable(self.application_home());
-        if !is_real_file(&docling) || !is_real_file(&python) {
+        if !is_real_file(&python) {
             return Err(RuntimeError::MissingResource);
         }
-        self.activate_runtime_preparation_step(RuntimePreparationStep::VerifyDocling);
-        let docling_version = probe_docling_version(
+        self.activate_runtime_preparation_step(RuntimePreparationStep::VerifyOcr);
+        let ocr_version = probe_ocr_version(
             self.process_supervisor(),
             self.application_home(),
             cancellation.clone(),
         )
         .await?;
-        if docling_version != DOCLING_VERSION {
+        if ocr_version != OCR_VERSION {
             return Err(RuntimeError::InvalidOutput);
         }
-        runtime_fixture_trace("Docling version verified");
-        let staged_models = prepare_model_staging(&models_root, &layout.docling_project())?;
+        runtime_fixture_trace("OCR version verified");
+        let staged_models = prepare_model_staging(&models_root, &layout.ocr_project())?;
         self.activate_runtime_preparation_step(RuntimePreparationStep::PrepareDocumentModels);
         run_checked(
             self.process_supervisor(),
@@ -955,14 +949,14 @@ impl QuantixHost {
                 executable: python.clone(),
                 arguments: vec![
                     layout
-                        .docling_project()
+                        .ocr_project()
                         .join("prepare_models.py")
                         .into_os_string(),
                     OsString::from("--output-dir"),
                     staged_models.as_os_str().to_owned(),
                 ],
                 current_directory: Some(runtime_root.clone()),
-                environment: docling_environment(self.application_home()),
+                environment: ocr_environment(self.application_home()),
                 inherit_environment: false,
                 stdin: Vec::new(),
                 timeout: MODEL_TIMEOUT,
@@ -985,40 +979,28 @@ impl QuantixHost {
                 executable: python,
                 arguments: [
                     layout
-                        .docling_project()
-                        .join("convert_document.py")
+                        .ocr_project()
+                        .join("ocr_document.py")
                         .into_os_string(),
                     OsString::from("--input"),
                     layout.readiness_document().into_os_string(),
-                    OsString::from("--input-format"),
-                    OsString::from("pdf"),
                     OsString::from("--output-dir"),
                     smoke.path().as_os_str().to_owned(),
                     OsString::from("--artifacts-path"),
                     staged_models.as_os_str().to_owned(),
-                    OsString::from("--ocr-mode"),
-                    OsString::from("full_page"),
-                    OsString::from("--ocr-lang"),
-                    OsString::from("ch"),
                     OsString::from("--document-timeout"),
                     OsString::from("120"),
                     OsString::from("--max-file-size"),
                     OsString::from(crate::tender_intake::MAX_INTAKE_FILE_BYTES.to_string()),
                     OsString::from("--max-num-pages"),
-                    OsString::from(crate::document_parsing::DOCLING_MAX_NUM_PAGES.to_string()),
+                    OsString::from(crate::document_parsing::DOCUMENT_MAX_PAGES.to_string()),
                     OsString::from("--num-threads"),
                     OsString::from("1"),
                 ]
                 .into_iter()
                 .collect(),
                 current_directory: Some(runtime_root),
-                environment: docling_environment(self.application_home())
-                    .into_iter()
-                    .chain([
-                        (OsString::from("HF_HUB_OFFLINE"), OsString::from("1")),
-                        (OsString::from("TRANSFORMERS_OFFLINE"), OsString::from("1")),
-                    ])
-                    .collect(),
+                environment: ocr_environment(self.application_home()),
                 inherit_environment: false,
                 stdin: Vec::new(),
                 timeout: SMOKE_TIMEOUT,
@@ -1035,10 +1017,10 @@ impl QuantixHost {
         let manifest = build_model_manifest(
             &staged_models,
             &environment,
-            &layout.docling_project(),
+            &layout.ocr_project(),
             &codex_version,
             &uv_version,
-            &docling_version,
+            &ocr_version,
         )?;
         runtime_fixture_trace("runtime manifest built");
         promote_model_directory(&models, &staged_models)?;
@@ -1048,7 +1030,7 @@ impl QuantixHost {
         Ok(RuntimeVersions {
             codex: Some(codex_version),
             uv: Some(uv_version),
-            docling: Some(docling_version),
+            ocr: Some(ocr_version),
         })
     }
 }
@@ -1069,35 +1051,18 @@ fn executable_name(name: &str) -> String {
     }
 }
 
-pub(crate) fn docling_executable(application_home: &Path) -> PathBuf {
-    application_home
-        .join("runtimes")
-        .join("docling")
-        .join(if cfg!(windows) { "Scripts" } else { "bin" })
-        .join(executable_name("docling"))
-}
-
 pub(crate) fn python_executable(application_home: &Path) -> PathBuf {
     application_home
         .join("runtimes")
-        .join("docling")
+        .join("ocr")
         .join(if cfg!(windows) { "Scripts" } else { "bin" })
         .join(executable_name("python"))
 }
 
-pub(crate) fn docling_environment(application_home: &Path) -> Vec<(OsString, OsString)> {
-    let cache = application_home.join("runtimes").join("huggingface-cache");
+pub(crate) fn ocr_environment(application_home: &Path) -> Vec<(OsString, OsString)> {
     controlled_environment(application_home)
         .into_iter()
-        .chain([
-            (OsString::from("HF_HOME"), cache.clone().into_os_string()),
-            (OsString::from("HF_HUB_CACHE"), cache.into_os_string()),
-            (
-                OsString::from("HF_HUB_DISABLE_TELEMETRY"),
-                OsString::from("1"),
-            ),
-            (OsString::from("PYTHONNOUSERSITE"), OsString::from("1")),
-        ])
+        .chain([(OsString::from("PYTHONNOUSERSITE"), OsString::from("1"))])
         .collect()
 }
 
@@ -1135,7 +1100,7 @@ fn os_arguments(arguments: &[&str]) -> Vec<OsString> {
     arguments.iter().map(OsString::from).collect()
 }
 
-fn docling_sync_spec(
+fn ocr_sync_spec(
     layout: &RuntimeLayout,
     application_home: &Path,
     uv: &Path,
@@ -1152,7 +1117,7 @@ fn docling_sync_spec(
         "--project",
     ]);
     arguments.extend([
-        layout.docling_project().into_os_string(),
+        layout.ocr_project().into_os_string(),
         OsString::from("--no-config"),
     ]);
     if check_only {
@@ -1163,7 +1128,7 @@ fn docling_sync_spec(
         .chain([
             (
                 OsString::from("UV_PROJECT_ENVIRONMENT"),
-                runtime_root.join("docling").into_os_string(),
+                runtime_root.join("ocr").into_os_string(),
             ),
             (
                 OsString::from("UV_PYTHON_INSTALL_DIR"),
@@ -1177,7 +1142,7 @@ fn docling_sync_spec(
             (
                 OsString::from("UV_PYTHON_DOWNLOADS_JSON_URL"),
                 layout
-                    .docling_project()
+                    .ocr_project()
                     .join("python-downloads.json")
                     .into_os_string(),
             ),
@@ -1186,7 +1151,7 @@ fn docling_sync_spec(
     ProcessSpec {
         executable: uv.to_path_buf(),
         arguments,
-        current_directory: Some(layout.docling_project()),
+        current_directory: Some(layout.ocr_project()),
         environment,
         inherit_environment: false,
         stdin: Vec::new(),
@@ -1362,7 +1327,7 @@ async fn probe_version(
     .await
 }
 
-async fn probe_docling_version(
+async fn probe_ocr_version(
     supervisor: &ProcessSupervisor,
     application_home: &Path,
     cancellation: CancellationToken,
@@ -1374,10 +1339,10 @@ async fn probe_docling_version(
             arguments: os_arguments(&[
                 "-I",
                 "-c",
-                "from importlib.metadata import version; print(version('docling'))",
+                "from importlib.metadata import version; print(version('rapidocr'))",
             ]),
             current_directory: Some(application_home.join("runtimes")),
-            environment: docling_environment(application_home),
+            environment: ocr_environment(application_home),
             inherit_environment: false,
             stdin: Vec::new(),
             timeout: ENVIRONMENT_CHECK_TIMEOUT,
@@ -1447,8 +1412,8 @@ fn build_model_manifest(
     project: &Path,
     codex_version: &str,
     uv_version: &str,
-    docling_version: &str,
-) -> Result<DoclingRuntimeManifest, RuntimeError> {
+    ocr_version: &str,
+) -> Result<OcrRuntimeManifest, RuntimeError> {
     let model_files = collect_hashed_files(models)?;
     if model_files.is_empty() {
         return Err(RuntimeError::MissingResource);
@@ -1456,16 +1421,13 @@ fn build_model_manifest(
     let runtime_root = environment
         .parent()
         .ok_or(RuntimeError::PersistenceFailed)?;
-    Ok(DoclingRuntimeManifest {
-        schema_version: DOCLING_MANIFEST_SCHEMA,
+    Ok(OcrRuntimeManifest {
+        schema_version: OCR_MANIFEST_SCHEMA,
         codex_version: codex_version.to_owned(),
         uv_version: uv_version.to_owned(),
-        docling_version: docling_version.to_owned(),
+        ocr_version: ocr_version.to_owned(),
         python_version: PYTHON_VERSION.to_owned(),
-        model_profile: DOCLING_MODEL_PROFILE
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
+        model_profile: OCR_MODEL_PROFILE.iter().map(ToString::to_string).collect(),
         project_files: collect_hashed_files(project)?,
         environment: fingerprint_tree(environment, runtime_root)?,
         managed_python: fingerprint_tree(&runtime_root.join("python"), runtime_root)?,
@@ -1654,11 +1616,11 @@ fn portable_relative_path(path: &Path) -> Result<String, RuntimeError> {
 
 fn publish_model_manifest(
     application_home: &Path,
-    manifest: &DoclingRuntimeManifest,
+    manifest: &OcrRuntimeManifest,
 ) -> Result<(), RuntimeError> {
     let runtime_root = application_home.join("runtimes");
-    let staged = runtime_root.join("docling-readiness.json.staging");
-    let published = runtime_root.join("docling-readiness.json");
+    let staged = runtime_root.join("ocr-readiness.json.staging");
+    let published = runtime_root.join("ocr-readiness.json");
     let bytes = serde_json::to_vec(manifest).map_err(|_| RuntimeError::PersistenceFailed)?;
     fs::write(&staged, bytes).map_err(|_| RuntimeError::PersistenceFailed)?;
     if published.exists() {
@@ -1672,7 +1634,7 @@ fn promote_model_directory(models: &Path, staged: &Path) -> Result<(), RuntimeEr
     if staged.parent() != Some(parent) {
         return Err(RuntimeError::PersistenceFailed);
     }
-    let backup = parent.join(".docling-models-backup");
+    let backup = parent.join(".ocr-models-backup");
     if backup.exists() {
         fs::remove_dir_all(&backup).map_err(|_| RuntimeError::PersistenceFailed)?;
     }
@@ -1691,13 +1653,10 @@ fn promote_model_directory(models: &Path, staged: &Path) -> Result<(), RuntimeEr
     Ok(())
 }
 
-fn prepare_model_staging(
-    models_root: &Path,
-    docling_project: &Path,
-) -> Result<PathBuf, RuntimeError> {
-    let staged = models_root.join(".docling-models-preparation");
-    let marker = models_root.join(".docling-models-preparation.sha256");
-    let expected = file_sha256(&docling_project.join("approved-model-sources.json"))?;
+fn prepare_model_staging(models_root: &Path, ocr_project: &Path) -> Result<PathBuf, RuntimeError> {
+    let staged = models_root.join(".ocr-models-preparation");
+    let marker = models_root.join(".ocr-models-preparation.sha256");
+    let expected = file_sha256(&ocr_project.join("approved-model-sources.json"))?;
     let can_resume = fs::read_to_string(&marker).is_ok_and(|value| value == expected)
         && fs::symlink_metadata(&staged)
             .is_ok_and(|metadata| metadata.is_dir() && !has_unsafe_link(&metadata));
@@ -1720,7 +1679,7 @@ fn prepare_model_staging(
 }
 
 fn remove_model_staging_marker(models_root: &Path) -> Result<(), RuntimeError> {
-    let marker = models_root.join(".docling-models-preparation.sha256");
+    let marker = models_root.join(".ocr-models-preparation.sha256");
     match fs::remove_file(marker) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -1755,73 +1714,93 @@ fn validate_runtime_provenance(layout: &RuntimeLayout) -> Result<(), RuntimeErro
         || manifest.codex.sha256.len() != 64
         || manifest.uv.sha256.len() != 64
         || manifest.codex_schema_sha256.len() != 64
-        || manifest.docling_project_files.is_empty()
+        || manifest.ocr_project_files.is_empty()
         || file_sha256(&layout.codex_executable())? != manifest.codex.sha256
         || file_sha256(&layout.uv_executable())? != manifest.uv.sha256
         || codex_schema_hash != manifest.codex_schema_sha256
         || embedded_schema_hash != manifest.codex_schema_sha256
-        || collect_hashed_files(&layout.docling_project())? != manifest.docling_project_files
+        || collect_hashed_files(&layout.ocr_project())? != manifest.ocr_project_files
     {
         return Err(RuntimeError::InvalidOutput);
     }
     Ok(())
 }
 
-fn validate_docling_runtime(
+fn validate_ocr_runtime(
     application_home: &Path,
     layout: &RuntimeLayout,
-) -> Result<(), DoclingValidationError> {
-    let bytes = fs::read(
-        application_home
-            .join("runtimes")
-            .join("docling-readiness.json"),
-    )
-    .map_err(|_| DoclingValidationError::Environment)?;
-    let manifest: DoclingRuntimeManifest =
-        serde_json::from_slice(&bytes).map_err(|_| DoclingValidationError::Environment)?;
-    if manifest.schema_version != DOCLING_MANIFEST_SCHEMA
+) -> Result<(), OcrValidationError> {
+    let bytes = fs::read(application_home.join("runtimes").join("ocr-readiness.json"))
+        .map_err(|_| OcrValidationError::Environment)?;
+    let manifest: OcrRuntimeManifest =
+        serde_json::from_slice(&bytes).map_err(|_| OcrValidationError::Environment)?;
+    if manifest.schema_version != OCR_MANIFEST_SCHEMA
         || manifest.codex_version != CODEX_VERSION
         || manifest.uv_version != UV_VERSION
-        || manifest.docling_version != DOCLING_VERSION
+        || manifest.ocr_version != OCR_VERSION
         || manifest.python_version != PYTHON_VERSION
         || manifest.model_profile
-            != DOCLING_MODEL_PROFILE
+            != OCR_MODEL_PROFILE
                 .iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
         || manifest.project_files.is_empty()
         || manifest.model_files.is_empty()
     {
-        return Err(DoclingValidationError::Environment);
+        return Err(OcrValidationError::Environment);
     }
     let runtime_root = application_home.join("runtimes");
-    if collect_hashed_files(&layout.docling_project())
-        .map_err(|_| DoclingValidationError::Environment)?
+    if collect_hashed_files(&layout.ocr_project()).map_err(|_| OcrValidationError::Environment)?
         != manifest.project_files
-        || fingerprint_tree(&runtime_root.join("docling"), &runtime_root)
-            .map_err(|_| DoclingValidationError::Environment)?
+        || fingerprint_tree(&runtime_root.join("ocr"), &runtime_root)
+            .map_err(|_| OcrValidationError::Environment)?
             != manifest.environment
         || fingerprint_tree(&runtime_root.join("python"), &runtime_root)
-            .map_err(|_| DoclingValidationError::Environment)?
+            .map_err(|_| OcrValidationError::Environment)?
             != manifest.managed_python
     {
-        return Err(DoclingValidationError::Environment);
+        return Err(OcrValidationError::Environment);
     }
-    let models = application_home.join("models").join("docling");
+    let models = application_home.join("models").join("ocr");
     if manifest
         .model_files
         .iter()
         .any(|file| file.sha256.len() != 64)
-        || collect_hashed_files(&models).map_err(|_| DoclingValidationError::Models)?
+        || collect_hashed_files(&models).map_err(|_| OcrValidationError::Models)?
             != manifest.model_files
     {
-        return Err(DoclingValidationError::Models);
+        return Err(OcrValidationError::Models);
     }
     Ok(())
 }
 
 fn validate_smoke_output(directory: &Path) -> Result<(), RuntimeError> {
-    let json_file = WalkDir::new(directory)
+    let markdown_file = WalkDir::new(directory)
+        .max_depth(2)
+        .into_iter()
+        .filter_map(Result::ok)
+        .find(|entry| {
+            entry.file_type().is_file()
+                && entry.path().extension().and_then(|value| value.to_str()) == Some("md")
+        })
+        .ok_or(RuntimeError::InvalidOutput)?;
+    let markdown =
+        fs::read_to_string(markdown_file.path()).map_err(|_| RuntimeError::InvalidOutput)?;
+    let compacted = markdown
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    let expected = SMOKE_OCR_TEXT
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    if markdown.is_empty()
+        || markdown.len() as u64 > MAX_SMOKE_JSON_BYTES
+        || !compacted.contains(&expected)
+    {
+        return Err(RuntimeError::InvalidOutput);
+    }
+    let locations_file = WalkDir::new(directory)
         .max_depth(2)
         .into_iter()
         .filter_map(Result::ok)
@@ -1830,38 +1809,24 @@ fn validate_smoke_output(directory: &Path) -> Result<(), RuntimeError> {
                 && entry.path().extension().and_then(|value| value.to_str()) == Some("json")
         })
         .ok_or(RuntimeError::InvalidOutput)?;
-    let metadata = json_file
+    let metadata = locations_file
         .metadata()
         .map_err(|_| RuntimeError::InvalidOutput)?;
     if metadata.len() == 0 || metadata.len() > MAX_SMOKE_JSON_BYTES {
         return Err(RuntimeError::InvalidOutput);
     }
     let value: serde_json::Value = serde_json::from_slice(
-        &fs::read(json_file.path()).map_err(|_| RuntimeError::InvalidOutput)?,
+        &fs::read(locations_file.path()).map_err(|_| RuntimeError::InvalidOutput)?,
     )
     .map_err(|_| RuntimeError::InvalidOutput)?;
-    let has_ocr_text = value
-        .get("texts")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|texts| {
-            texts.iter().any(|text| {
-                text.get("text")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|text| text.contains(SMOKE_OCR_TEXT))
-            })
-        });
-    let has_pages = value
-        .get("pages")
-        .and_then(serde_json::Value::as_object)
-        .is_some_and(|pages| !pages.is_empty());
-    if value.get("schema_name").and_then(serde_json::Value::as_str) != Some("DoclingDocument")
-        || value.get("name").and_then(serde_json::Value::as_str) != Some("readiness")
+    if value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
         || value
-            .pointer("/origin/mimetype")
-            .and_then(serde_json::Value::as_str)
-            != Some("application/pdf")
-        || !has_ocr_text
-        || !has_pages
+            .get("locations")
+            .and_then(serde_json::Value::as_array)
+            .is_none_or(|locations| locations.is_empty())
     {
         return Err(RuntimeError::InvalidOutput);
     }
@@ -1913,10 +1878,10 @@ fn write_preparation(
                status = ?1,
                codex_version = ?2,
                uv_version = ?3,
-               docling_version = ?4,
+               ocr_version = ?4,
                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
              WHERE singleton = 1",
-            params![status, versions.codex, versions.uv, versions.docling],
+            params![status, versions.codex, versions.uv, versions.ocr],
         )
         .map_err(|_| RuntimeError::PersistenceFailed)?;
     transaction
@@ -1929,24 +1894,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn smoke_output_requires_docling_schema_and_the_expected_ocr_text() {
+    fn smoke_output_requires_the_expected_ocr_text_and_locations() {
         let valid = tempfile::tempdir().expect("smoke output directory");
         fs::write(
-            valid.path().join("readiness.json"),
-            serde_json::to_vec(&serde_json::json!({
-                "schema_name": "DoclingDocument",
-                "name": "readiness",
-                "origin": { "mimetype": "application/pdf" },
-                "texts": [{ "text": SMOKE_OCR_TEXT }],
-                "pages": { "1": { "size": { "width": 1, "height": 1 } } },
-            }))
-            .expect("valid smoke JSON"),
+            valid.path().join("readiness.md"),
+            format!("{SMOKE_OCR_TEXT}\n").as_bytes(),
         )
-        .expect("write valid smoke JSON");
+        .expect("write valid smoke markdown");
+        fs::write(
+            valid.path().join("readiness.locations.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "locations": [{ "kind": "paragraph", "text": SMOKE_OCR_TEXT, "page": 1,
+                                "char_start": 0, "char_end": 78, "bbox": [0, 0, 100, 20] }],
+            }))
+            .expect("valid smoke locations"),
+        )
+        .expect("write valid smoke locations");
         assert!(validate_smoke_output(valid.path()).is_ok());
 
         let invalid = tempfile::tempdir().expect("invalid smoke output directory");
-        fs::write(invalid.path().join("readiness.json"), b"{}").expect("write invalid smoke JSON");
+        fs::write(invalid.path().join("readiness.md"), b"unrelated").expect("write invalid smoke");
+        fs::write(
+            invalid.path().join("readiness.locations.json"),
+            br#"{"schema_version": 1, "locations": [{"kind": "paragraph", "text": "x"}]}"#,
+        )
+        .expect("write invalid locations");
         assert!(matches!(
             validate_smoke_output(invalid.path()),
             Err(RuntimeError::InvalidOutput)

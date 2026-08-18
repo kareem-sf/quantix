@@ -62,7 +62,7 @@ const RELEASE_CANDIDATE_FILES: [&str; 13] = [
     "src-tauri/tauri.conf.json",
     "src-tauri/runtime/runtime-provenance.json",
     "src-tauri/runtime/codex_app_server_protocol.schemas.json",
-    "src-tauri/runtime/docling/uv.lock",
+    "src-tauri/runtime/ocr/uv.lock",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, Validate)]
@@ -87,7 +87,7 @@ pub struct NativePlatformQualificationEvidence {
     #[garde(length(bytes, min = 64, max = 64), ascii)]
     pub uv_binary_sha256: String,
     #[garde(length(bytes, min = 64, max = 64), ascii)]
-    pub docling_runtime_sha256: String,
+    pub ocr_runtime_sha256: String,
     #[garde(length(bytes, min = 64, max = 64), ascii)]
     pub model_assets_sha256: String,
     #[garde(length(bytes, min = 64, max = 64), ascii)]

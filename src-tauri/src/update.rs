@@ -21,7 +21,7 @@ use ts_rs::TS;
 
 use crate::{
     agent_runtime::CODEX_VERSION,
-    runtime_readiness::{RuntimeReadinessState, DOCLING_VERSION, RUNTIME_PROVENANCE_SCHEMA},
+    runtime_readiness::{RuntimeReadinessState, OCR_VERSION, RUNTIME_PROVENANCE_SCHEMA},
     setup::{SetupState, INSTALLATION_SCHEMA_VERSION},
     tender_store::TENDER_SCHEMA_VERSION,
     QuantixHost,
@@ -177,7 +177,7 @@ pub struct UpdateCompatibilityManifest {
     #[garde(length(bytes, min = 1, max = 64))]
     pub codex_version: String,
     #[garde(length(bytes, min = 1, max = 64))]
-    pub docling_version: String,
+    pub ocr_version: String,
     #[garde(range(min = 1))]
     pub runtime_manifest_schema_version: u32,
 }
@@ -328,7 +328,7 @@ pub enum UpdateDiagnostic {
     InstallationSchemaIncompatible,
     TenderStoreIncompatible,
     CodexIncompatible,
-    DoclingIncompatible,
+    OcrIncompatible,
     RuntimeIncompatible,
     ApprovalRequired,
     ActiveWork,
@@ -1178,8 +1178,7 @@ impl QuantixHost {
             RuntimeReadinessState::Ready | RuntimeReadinessState::AuthenticationRequired
         ) && readiness.codex_version.as_deref()
             == Some(offer.compatibility.codex_version.as_str())
-            && readiness.docling_version.as_deref()
-                == Some(offer.compatibility.docling_version.as_str())
+            && readiness.ocr_version.as_deref() == Some(offer.compatibility.ocr_version.as_str())
             && offer.compatibility.runtime_manifest_schema_version == RUNTIME_PROVENANCE_SCHEMA;
         let tenders_ready = self
             .all_tender_integrity_ready_for_update()
@@ -1261,10 +1260,8 @@ fn validate_compatibility(offer: &UpdateOffer) -> Result<(), UpdateCommandError>
     if compatibility.codex_version != CODEX_VERSION {
         return Err(UpdateCommandError::new(UpdateDiagnostic::CodexIncompatible));
     }
-    if compatibility.docling_version != DOCLING_VERSION {
-        return Err(UpdateCommandError::new(
-            UpdateDiagnostic::DoclingIncompatible,
-        ));
+    if compatibility.ocr_version != OCR_VERSION {
+        return Err(UpdateCommandError::new(UpdateDiagnostic::OcrIncompatible));
     }
     if compatibility.runtime_manifest_schema_version != RUNTIME_PROVENANCE_SCHEMA {
         return Err(UpdateCommandError::new(
@@ -2742,7 +2739,7 @@ fn diagnostic_code(value: UpdateDiagnostic) -> &'static str {
         UpdateDiagnostic::InstallationSchemaIncompatible => "installation_schema_incompatible",
         UpdateDiagnostic::TenderStoreIncompatible => "tender_store_incompatible",
         UpdateDiagnostic::CodexIncompatible => "codex_incompatible",
-        UpdateDiagnostic::DoclingIncompatible => "docling_incompatible",
+        UpdateDiagnostic::OcrIncompatible => "ocr_incompatible",
         UpdateDiagnostic::RuntimeIncompatible => "runtime_incompatible",
         UpdateDiagnostic::ApprovalRequired => "approval_required",
         UpdateDiagnostic::ActiveWork => "active_work",
@@ -2767,7 +2764,7 @@ fn parse_diagnostic(value: &str) -> Result<UpdateDiagnostic, UpdateCommandError>
         UpdateDiagnostic::InstallationSchemaIncompatible,
         UpdateDiagnostic::TenderStoreIncompatible,
         UpdateDiagnostic::CodexIncompatible,
-        UpdateDiagnostic::DoclingIncompatible,
+        UpdateDiagnostic::OcrIncompatible,
         UpdateDiagnostic::RuntimeIncompatible,
         UpdateDiagnostic::ApprovalRequired,
         UpdateDiagnostic::ActiveWork,

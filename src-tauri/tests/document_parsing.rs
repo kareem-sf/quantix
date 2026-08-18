@@ -3,8 +3,9 @@ use std::{fs, io, io::Write, path::Path, sync::Arc};
 use quantix_lib::{
     ensure_quantix_setup, CreateTenderCommand, DeviceProtection, EvidenceLanguage,
     EvidenceLocationKind, ImportTenderPackageCommand, ParseExceptionCode,
-    ParseSourceArtifactCommand, ParseState, QuantixHost, SearchEvidenceCommand, SetupPlatform,
-    SetupState, StoragePermissions, TenderErrorCode, TextDirection, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    ParseSourceArtifactCommand, ParseState, QuantixHost, SearchEvidenceCommand,
+    SearchEvidenceSemanticCommand, SetupPlatform, SetupState, StoragePermissions, TenderErrorCode,
+    TextDirection, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use rusqlite::Connection;
 use zip::{write::SimpleFileOptions, ZipWriter};
@@ -99,6 +100,62 @@ async fn exact_search_navigates_to_the_immutable_evidence_location() {
         arabic.matches[0].location.direction,
         TextDirection::RightToLeft
     );
+
+    let semantic = harness
+        .host
+        .search_evidence_semantic(SearchEvidenceSemanticCommand {
+            tender_id: harness.tender_id.clone(),
+            query: "security required".into(),
+            distance_threshold: 0.4,
+            limit: 10,
+        })
+        .await
+        .expect("search semantic evidence");
+    assert_eq!(semantic.query, "security required");
+    assert_eq!(semantic.matches.len(), 1);
+    assert_eq!(semantic.matches[0].artifact_id, document.artifact_id);
+    assert_eq!(semantic.matches[0].package_path, "conditions.pdf");
+    assert!(semantic.matches[0].distance <= 0.4);
+
+    let excluded = harness
+        .host
+        .search_evidence_semantic(SearchEvidenceSemanticCommand {
+            tender_id: harness.tender_id.clone(),
+            query: "security required".into(),
+            distance_threshold: 0.0,
+            limit: 10,
+        })
+        .await
+        .expect("apply semantic distance threshold");
+    assert!(excluded.matches.is_empty());
+
+    let invalid = harness
+        .host
+        .search_evidence_semantic(SearchEvidenceSemanticCommand {
+            tender_id: harness.tender_id.clone(),
+            query: "security required".into(),
+            distance_threshold: 0.4,
+            limit: 0,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(invalid.code, TenderErrorCode::InvalidCommand);
+
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close semantic search Tender");
+    let reopened = harness
+        .host
+        .search_evidence_semantic(SearchEvidenceSemanticCommand {
+            tender_id: harness.tender_id.clone(),
+            query: "security required".into(),
+            distance_threshold: 0.4,
+            limit: 10,
+        })
+        .await
+        .expect("search persisted semantic evidence after cold open");
+    assert_eq!(reopened.matches.len(), 1);
 }
 
 #[tokio::test]
@@ -378,7 +435,7 @@ async fn loss_and_unsupported_sources_are_explicit_and_never_become_evidence() {
 }
 
 #[tokio::test]
-async fn corrupt_or_encrypted_docling_failures_remain_attributable_and_noncanonical() {
+async fn corrupt_or_encrypted_ocr_failures_remain_attributable_and_noncanonical() {
     let harness = Harness::new();
     let source = harness._root.path().join("failed-source");
     fs::create_dir(&source).expect("failed source directory");
@@ -516,7 +573,7 @@ async fn publication_failure_becomes_terminal_and_cleans_staging() {
 }
 
 #[tokio::test]
-async fn engineer_interruption_terminates_the_docling_attempt_without_publication() {
+async fn engineer_interruption_terminates_the_ocr_attempt_without_publication() {
     let harness = Harness::new();
     let source = harness._root.path().join("interrupted-source");
     fs::create_dir(&source).expect("interrupted source directory");
@@ -679,7 +736,7 @@ impl Harness {
         let host =
             QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
         assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
-        install_docling_fixture(&application_home);
+        install_ocr_fixture(&application_home);
         let tender = host
             .create_tender(CreateTenderCommand {
                 name: "Bilingual evidence Tender".into(),
@@ -731,11 +788,8 @@ async fn registered_pdf_is_parsed_into_exact_bilingual_evidence() {
 
     assert_eq!(parsed.state, ParseState::Parsed);
     assert_eq!(parsed.location_count, 8);
-    assert_eq!(parsed.docling_schema_version.as_deref(), Some("1.10.0"));
-    assert_eq!(
-        parsed.docling_json_sha256.as_ref().map(String::len),
-        Some(64)
-    );
+    assert_eq!(parsed.pipeline_version.as_deref(), Some("1"));
+    assert_eq!(parsed.markdown_sha256.as_ref().map(String::len), Some(64));
     let evidence = harness
         .host
         .inspect_evidence(ParseSourceArtifactCommand {
@@ -832,30 +886,29 @@ async fn registered_pdf_is_parsed_into_exact_bilingual_evidence() {
         .any(|entry| entry.is_ok()));
 }
 
-fn install_docling_fixture(application_home: &Path) {
+fn install_ocr_fixture(application_home: &Path) {
     let executable = application_home
         .join("runtimes")
-        .join("docling")
+        .join("ocr")
         .join(if cfg!(windows) { "Scripts" } else { "bin" })
         .join(executable_name("python"));
-    fs::create_dir_all(executable.parent().expect("Docling executable parent"))
-        .expect("Docling executable directory");
+    fs::create_dir_all(executable.parent().expect("OCR executable parent"))
+        .expect("OCR executable directory");
     fs::copy(
         Path::new(env!("CARGO_BIN_EXE_quantix-runtime-fixture")),
         &executable,
     )
-    .expect("install Docling fixture");
-    let models = application_home.join("models").join("docling");
-    for profile in [
-        "layout",
-        "tableformer",
-        "code_formula",
-        "picture_classifier",
-        "rapidocr",
+    .expect("install OCR fixture");
+    fs::write(executable.with_extension("version"), "3.9.2\n").expect("OCR fixture version");
+    let models = application_home.join("models").join("ocr");
+    fs::create_dir_all(&models).expect("model directory");
+    for artifact in [
+        "PP-OCRv6_det_small.onnx",
+        "PP-OCRv6_rec_small.onnx",
+        "ch_ppocr_mobile_v2.0_cls_mobile.onnx",
     ] {
-        let model = models.join(profile).join("model.bin");
-        fs::create_dir_all(model.parent().expect("model parent")).expect("model directory");
-        fs::write(model, format!("{profile} fixture model")).expect("model fixture");
+        fs::write(models.join(artifact), format!("{artifact} fixture model"))
+            .expect("model fixture");
     }
 }
 

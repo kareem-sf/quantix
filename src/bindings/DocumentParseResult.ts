@@ -4,4 +4,4 @@ import type { ParseExceptionCode } from "./ParseExceptionCode";
 import type { ParseState } from "./ParseState";
 import type { TextDirection } from "./TextDirection";
 
-export type DocumentParseResult = { attempt_id: string, artifact_id: string, version: number, state: ParseState, exception: ParseExceptionCode | null, location_count: number, language: EvidenceLanguage, direction: TextDirection, docling_schema_version: string | null, docling_json_sha256: string | null, };
+export type DocumentParseResult = { attempt_id: string, artifact_id: string, version: number, state: ParseState, exception: ParseExceptionCode | null, location_count: number, language: EvidenceLanguage, direction: TextDirection, pipeline_version: string | null, markdown_sha256: string | null, };
