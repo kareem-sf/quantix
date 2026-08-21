@@ -2,6 +2,7 @@ mod authorize;
 mod callback_server;
 mod crypto;
 mod jwt;
+mod store;
 mod tokens;
 
 pub(crate) use authorize::build_authorize_url;
@@ -11,4 +12,5 @@ pub(crate) use crypto::{
     RandomError,
 };
 pub(crate) use jwt::{extract_identity, parse_jwt_claims, ChatGptIdentity};
+pub(crate) use store::{clear, load, needs_refresh, save, LoadState, StoredConnection};
 pub(crate) use tokens::{IssuedTokens, TokenClient, TokenError, TokenErrorKind};
