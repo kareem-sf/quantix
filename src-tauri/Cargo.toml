@@ -95,7 +95,7 @@ junction = { version = "2.0.0", default-features = false }
 windows-permissions = "0.2.4"
 # wmi ranges `windows` and `windows-core` independently, so pin its pair to
 # one minor line. Tauri retains its own compatible 0.61 dependency line.
-windows = { version = "=0.62.2", features = ["Win32_Storage_FileSystem", "Win32_System_Threading"] }
+windows = { version = "=0.62.2", features = ["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
 windows-core = "=0.62.2"
 wmi = { version = "0.18.4", default-features = false }
 
