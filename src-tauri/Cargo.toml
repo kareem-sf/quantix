@@ -55,6 +55,7 @@ docx-rs = "0.4.22"
 fastembed = { version = "=6.0.0", default-features = false, features = ["ort-download-binaries"] }
 fs4 = "1.1.0"
 garde = { version = "0.23.0", features = ["derive"] }
+getrandom = "0.3"
 infer = "0.19.0"
 jsonschema = { version = "0.40.0", default-features = false }
 jiff = { version = "0.2.35", default-features = false, features = ["std"] }

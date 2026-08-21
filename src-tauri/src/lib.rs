@@ -3,6 +3,7 @@
 mod acceptance;
 mod agent_runtime;
 mod application_settings;
+pub(crate) mod chatgpt_oauth;
 mod document_parsing;
 mod embedding;
 mod host;
