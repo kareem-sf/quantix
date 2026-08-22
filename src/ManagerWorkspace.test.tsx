@@ -14,9 +14,8 @@ import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProj
 
 const host = vi.hoisted(() => ({
   archiveTender: vi.fn(),
+  cancelChatGptLogin: vi.fn(),
   cancelRuntimePreparation: vi.fn(),
-  connectAnthropic: vi.fn(),
-  connectGemini: vi.fn(),
   chooseAndImportTenderPackage: vi.fn(),
   createBidDecisionPackage: vi.fn(),
   decideBidDecisionPackage: vi.fn(),
@@ -50,7 +49,7 @@ const host = vi.hoisted(() => ({
   inspectTrashedTenders: vi.fn(),
   inspectRuntimeReadiness: vi.fn(),
   inspectRuntimePreparationProgress: vi.fn(),
-  disconnectAiProvider: vi.fn(),
+  disconnectChatGpt: vi.fn(),
   rebindManagerIntakeProvider: vi.fn(),
   recordEngineerWorkspaceMessage: vi.fn(),
   refreshApplicationSettings: vi.fn(),
@@ -63,6 +62,7 @@ const host = vi.hoisted(() => ({
   restoreTrashedTender: vi.fn(),
   selectManagerWorkspaceTender: vi.fn(),
   startManagerTender: vi.fn(),
+  startChatGptDeviceLogin: vi.fn(),
   startChatGptLogin: vi.fn(),
   trashTender: vi.fn(),
   purgeTrashedTender: vi.fn(),
@@ -171,8 +171,8 @@ const applicationFacts = {
   },
   diagnostics: {
     quantix_version: "0.1.0",
-    installation_schema_version: 24,
-    tender_schema_version: 35,
+    installation_schema_version: 25,
+    tender_schema_version: 36,
   },
 };
 
@@ -342,8 +342,17 @@ beforeEach(() => {
   host.inspectApplicationSettings.mockResolvedValue({
     ...applicationFacts,
     ai_execution_selection: null,
+    ai_execution_approval: null,
     provider_connections: [],
+    chatgpt: {
+      state: "absent",
+      account_id: null,
+      plan_type: null,
+      expires_at_ms: null,
+      login_phase: "idle",
+    },
   });
+  host.cancelChatGptLogin.mockResolvedValue(undefined);
   host.resumeManagerIntakes.mockResolvedValue(undefined);
 });
 
@@ -1562,7 +1571,7 @@ describe("ManagerWorkspace", () => {
     );
   });
 
-  it("opens application Settings and saves a live provider selection atomically", async () => {
+  it("opens application Settings and saves an advanced ChatGPT model selection atomically", async () => {
     host.inspectManagerWorkspace.mockResolvedValue(projection);
     const settings = {
       ...applicationFacts,
@@ -1573,6 +1582,15 @@ describe("ManagerWorkspace", () => {
         reasoning: { kind: "codex_effort", value: "medium" },
         catalogue_fetched_at: "2026-08-15T10:00:00Z",
         adapter_version: "0.147.0",
+      },
+      ai_execution_approval: {
+        connection_id: "codex_chatgpt",
+        provider: "codex",
+        account_fingerprint: "account-fingerprint",
+        model_id: "gpt-live-a",
+        reasoning: { kind: "codex_effort", value: "medium" },
+        data_destination: "OpenAI through the connected ChatGPT account",
+        approved_at: "2026-08-15T10:01:00Z",
       },
       provider_connections: [
         {
@@ -1619,6 +1637,13 @@ describe("ManagerWorkspace", () => {
           status_summary: "Ready to run Tender work.",
         },
       ],
+      chatgpt: {
+        state: "connected",
+        account_id: "engineer-account",
+        plan_type: "plus",
+        expires_at_ms: 1_800_000_000_000n,
+        login_phase: "completed",
+      },
     };
     host.refreshApplicationSettings.mockResolvedValue(settings);
     host.updateAiExecutionSelection.mockResolvedValue({
@@ -1649,12 +1674,15 @@ describe("ManagerWorkspace", () => {
     expect(
       screen.getByRole("button", { name: "About & Diagnostics" }),
     ).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "AI & Models" }));
+    fireEvent.click(screen.getByRole("button", { name: "ChatGPT & Models" }));
+    fireEvent.click(screen.getByText("Advanced model settings"));
     fireEvent.click(screen.getByRole("button", { name: /Live model A/ }));
     expect(screen.getByRole("option", { name: /^Live model A/ })).toBeTruthy();
     expect(screen.getByRole("option", { name: /^Live model B/ })).toBeTruthy();
     fireEvent.click(screen.getByRole("option", { name: /^Live model B/ }));
-    expect(screen.getByRole("heading", { name: "AI & Models" })).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "ChatGPT & Models" }),
+    ).toBeTruthy();
 
     await waitFor(() => {
       expect(host.updateAiExecutionSelection).toHaveBeenCalledWith({
@@ -1717,6 +1745,7 @@ describe("ManagerWorkspace", () => {
     host.inspectApplicationSettings.mockResolvedValue({
       ...applicationFacts,
       ai_execution_selection: null,
+      ai_execution_approval: null,
       provider_connections: [],
     });
 
@@ -1865,13 +1894,29 @@ describe("ManagerWorkspace", () => {
     const updatedSettings = {
       ...initialSettings,
       provider_connections: [
-        tenderAiProviderConnection,
         {
           ...tenderAiProviderConnection,
-          connection_id: "anthropic_api",
-          provider: "anthropic" as const,
-          display_name: "Anthropic API key",
-          account_label: "updated@example.com",
+          models: [
+            ...tenderAiProviderConnection.models,
+            {
+              model_id: "gpt-live-c",
+              display_name: "New live model",
+              description: "Newly refreshed ChatGPT model",
+              is_default: false,
+              input_modalities: ["text"],
+              reasoning_options: [
+                {
+                  selection: {
+                    kind: "codex_effort" as const,
+                    value: "medium",
+                  },
+                  label: "medium",
+                  description: "Balanced",
+                  is_default: true,
+                },
+              ],
+            },
+          ],
         },
       ],
     };
@@ -1897,11 +1942,11 @@ describe("ManagerWorkspace", () => {
     });
     fireEvent.click(
       within(refreshedControls).getByRole("button", {
-        name: /Tender AI provider/,
+        name: /Tender AI model/,
       }),
     );
     expect(
-      await screen.findByRole("option", { name: /Anthropic API key/ }),
+      await screen.findByRole("option", { name: /New live model/ }),
     ).toBeTruthy();
     expect(refreshedControls.textContent).toContain("OpenAI account via Codex");
     expect(host.updateTenderAiExecution).not.toHaveBeenCalled();
@@ -2169,134 +2214,110 @@ describe("ManagerWorkspace", () => {
         account_id: null,
         plan_type: null,
         expires_at_ms: null,
-        login_phase: "awaiting_browser",
+        login_phase: "idle",
       },
       provider_connections: [
         {
           connection_id: "codex_chatgpt",
           provider: "codex",
-          display_name: "OpenAI account via Codex",
+          display_name: "ChatGPT",
           status: "authentication_required",
           account_label: null,
           account_plan: null,
           models: [],
           catalogue_fetched_at: null,
           adapter_version: "0.147.0",
-          status_summary: "Connect an OpenAI account.",
+          status_summary: "Connect ChatGPT.",
         },
       ],
     };
-    host.refreshApplicationSettings.mockResolvedValue(disconnected);
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnected)
+      .mockResolvedValue({
+        ...disconnected,
+        chatgpt: {
+          ...disconnected.chatgpt,
+          login_phase: "awaiting_browser",
+        },
+      });
     host.startChatGptLogin.mockResolvedValue({ status: "awaiting_browser" });
 
     render(<ManagerWorkspace />);
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
-    fireEvent.click(await screen.findByRole("button", { name: "AI & Models" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "ChatGPT & Models" }),
+    );
     fireEvent.click(
       await screen.findByRole("button", { name: "Connect ChatGPT" }),
     );
 
     expect(host.startChatGptLogin).toHaveBeenCalledWith();
     expect(
-      await screen.findByText("Finish signing in through your browser."),
+      await screen.findByText(
+        "Finish signing in in your browser. Quantix will connect automatically.",
+      ),
     ).toBeTruthy();
     expect(document.body.textContent).not.toContain("accessToken");
   });
 
-  it("submits an Anthropic key once and renders only credential-free state", async () => {
+  it("offers the explicit one-time-code fallback from ChatGPT settings", async () => {
     host.inspectManagerWorkspace.mockResolvedValue(projection);
     const disconnected = {
       ...applicationFacts,
       ai_execution_selection: null,
+      ai_execution_approval: null,
+      chatgpt: {
+        state: "absent",
+        account_id: null,
+        plan_type: null,
+        expires_at_ms: null,
+        login_phase: "idle",
+      },
       provider_connections: [
         {
           connection_id: "codex_chatgpt",
           provider: "codex",
-          display_name: "OpenAI account via Codex",
+          display_name: "ChatGPT",
           status: "authentication_required",
           account_label: null,
           account_plan: null,
           models: [],
           catalogue_fetched_at: null,
-          adapter_version: "0.147.0",
-          status_summary: "Connect an OpenAI account.",
-        },
-        {
-          connection_id: "anthropic_byok",
-          provider: "anthropic",
-          display_name: "Anthropic API key",
-          status: "authentication_required",
-          account_label: null,
-          account_plan: null,
-          models: [],
-          catalogue_fetched_at: null,
-          adapter_version: "anthropic-messages-v1",
-          status_summary: "Add an Anthropic API key to connect.",
+          adapter_version: "codex-v1",
+          status_summary: "Connect ChatGPT.",
         },
       ],
     };
-    const connected = {
-      ...disconnected,
-      provider_connections: disconnected.provider_connections.map(
-        (connection) =>
-          connection.connection_id === "anthropic_byok"
-            ? {
-                ...connection,
-                status: "ready",
-                account_label: "API key stored in the system credential vault",
-                models: [
-                  {
-                    model_id: "claude-live",
-                    display_name: "Claude Live",
-                    description: "Live Anthropic model",
-                    is_default: false,
-                    input_modalities: ["text"],
-                    reasoning_options: [
-                      {
-                        selection: { kind: "provider_default" },
-                        label: "Provider default",
-                        description: "Provider choice",
-                        is_default: true,
-                      },
-                    ],
-                  },
-                ],
-                catalogue_fetched_at: "2026-08-15T12:00:00Z",
-              }
-            : connection,
-      ),
-    };
-    host.refreshApplicationSettings.mockResolvedValue(disconnected);
-    host.connectAnthropic.mockResolvedValue(connected);
-    host.updateAiExecutionSelection.mockResolvedValue({
-      ...connected,
-      ai_execution_selection: {
-        connection_id: "anthropic_byok",
-        provider: "anthropic",
-        model_id: "claude-live",
-        reasoning: { kind: "provider_default" },
-        catalogue_fetched_at: "2026-08-15T12:00:00Z",
-        adapter_version: "anthropic-messages-v1",
-      },
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnected)
+      .mockResolvedValue({
+        ...disconnected,
+        chatgpt: {
+          ...disconnected.chatgpt,
+          login_phase: "awaiting_device",
+        },
+      });
+    host.startChatGptDeviceLogin.mockResolvedValue({
+      verification_url: "https://auth.openai.com/codex/device",
+      user_code: "BUILD-2026",
     });
 
     render(<ManagerWorkspace />);
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
-    fireEvent.click(await screen.findByRole("button", { name: "AI & Models" }));
     fireEvent.click(
-      await screen.findByRole("button", { name: /Anthropic API key/ }),
+      await screen.findByRole("button", { name: "ChatGPT & Models" }),
     );
-    fireEvent.change(screen.getByLabelText("Anthropic API key"), {
-      target: { value: "sk-ant-secret" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Connect Anthropic" }));
+    fireEvent.click(await screen.findByText("Having trouble signing in?"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in on another device" }),
+    );
 
-    await waitFor(() => {
-      expect(host.connectAnthropic).toHaveBeenCalledWith({
-        api_key: "sk-ant-secret",
-      });
-    });
-    expect(document.body.textContent).not.toContain("sk-ant-secret");
+    expect(host.startChatGptDeviceLogin).toHaveBeenCalledWith();
+    expect(await screen.findByText("BUILD-2026")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Open OpenAI sign-in page" }),
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/API key|accessToken|OAuth/i);
   });
 
   it("keeps the Host-designated meaningful message visible after routine chatter", async () => {

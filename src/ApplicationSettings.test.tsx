@@ -9,16 +9,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const host = vi.hoisted(() => ({
   cancelChatGptLogin: vi.fn(),
-  connectAnthropic: vi.fn(),
-  connectGemini: vi.fn(),
-  disconnectAiProvider: vi.fn(),
+  checkQuantixUpdate: vi.fn(),
+  confirmAiExecutionSelection: vi.fn(),
   disconnectChatGpt: vi.fn(),
   exportDiagnosticsSupportBundle: vi.fn(),
   inspectDiagnosticTimeline: vi.fn(),
   inspectDiagnosticsStatus: vi.fn(),
+  inspectQuantixDoctor: vi.fn(),
   inspectRuntimeReadiness: vi.fn(),
   openDiagnosticLogs: vi.fn(),
   refreshApplicationSettings: vi.fn(),
+  repairQuantixDoctor: vi.fn(),
+  startChatGptDeviceLogin: vi.fn(),
   startChatGptLogin: vi.fn(),
   startTenderDeepDiagnostics: vi.fn(),
   stopTenderDeepDiagnostics: vi.fn(),
@@ -51,30 +53,116 @@ const applicationFacts = {
   },
   diagnostics: {
     quantix_version: "0.1.0",
-    installation_schema_version: 21,
-    tender_schema_version: 32,
+    installation_schema_version: 25,
+    tender_schema_version: 36,
   },
 };
 
-const codexConnection = {
+const disconnectedConnection = {
   connection_id: "codex_chatgpt",
   provider: "codex" as const,
-  display_name: "OpenAI account via Codex",
+  display_name: "ChatGPT",
   status: "authentication_required" as const,
   account_label: null,
   account_plan: null,
   models: [],
   catalogue_fetched_at: null,
-  adapter_version: "0.147.0",
-  status_summary: "Connect an OpenAI account.",
+  adapter_version: "codex-v1",
+  status_summary: "Connect ChatGPT.",
 };
 
-function settingsView(chatgpt: Record<string, unknown>) {
+const readyConnection = {
+  ...disconnectedConnection,
+  status: "ready" as const,
+  account_label: "engineer@example.com",
+  account_plan: "plus",
+  catalogue_fetched_at: "2026-08-22T08:00:00Z",
+  models: [
+    {
+      model_id: "gpt-construction",
+      display_name: "Recommended",
+      description: "Balanced for everyday Tender work.",
+      is_default: true,
+      input_modalities: ["text"],
+      reasoning_options: [
+        {
+          selection: { kind: "codex_effort", value: "medium" } as const,
+          label: "Medium",
+          description: "Balanced speed and depth.",
+          is_default: true,
+        },
+      ],
+    },
+    {
+      model_id: "gpt-deep",
+      display_name: "Deep review",
+      description: "More time for difficult Tender reviews.",
+      is_default: false,
+      input_modalities: ["text"],
+      reasoning_options: [
+        {
+          selection: { kind: "codex_effort", value: "high" } as const,
+          label: "High",
+          description: "Deeper review.",
+          is_default: true,
+        },
+      ],
+    },
+  ],
+};
+
+const preparedSelection = {
+  connection_id: "codex_chatgpt",
+  provider: "codex" as const,
+  model_id: "gpt-construction",
+  reasoning: { kind: "codex_effort", value: "medium" } as const,
+  catalogue_fetched_at: "2026-08-22T08:00:00Z",
+  adapter_version: "codex-v1",
+};
+
+function disconnectedView(
+  loginPhase:
+    | "idle"
+    | "awaiting_browser"
+    | "awaiting_device"
+    | "failed"
+    | "cancelled" = "idle",
+) {
   return {
     ...applicationFacts,
     ai_execution_selection: null,
-    provider_connections: [codexConnection],
-    chatgpt: { login_phase: "idle", ...chatgpt },
+    ai_execution_approval: null,
+    provider_connections: [disconnectedConnection],
+    chatgpt: {
+      state: "absent" as const,
+      account_id: null,
+      plan_type: null,
+      expires_at_ms: null,
+      login_phase: loginPhase,
+    },
+  };
+}
+
+function connectedView(approved = false) {
+  return {
+    ...applicationFacts,
+    ai_execution_selection: preparedSelection,
+    ai_execution_approval: approved
+      ? {
+          ...preparedSelection,
+          account_fingerprint: "account-fingerprint",
+          data_destination: "OpenAI through the connected ChatGPT account",
+          approved_at: "2026-08-22T08:01:00Z",
+        }
+      : null,
+    provider_connections: [readyConnection],
+    chatgpt: {
+      state: "connected" as const,
+      account_id: "chatgpt-account",
+      plan_type: "plus",
+      expires_at_ms: 1_800_000_000_000n,
+      login_phase: "completed" as const,
+    },
   };
 }
 
@@ -86,189 +174,273 @@ function renderSettings() {
       onClose={vi.fn()}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: "AI & Models" }));
+  fireEvent.click(screen.getByRole("button", { name: "ChatGPT & Models" }));
   return rendered;
 }
 
 beforeEach(() => {
-  host.refreshApplicationSettings.mockResolvedValue(
-    settingsView({
-      state: "absent",
-      account_id: null,
-      plan_type: null,
-      expires_at_ms: null,
-    }),
-  );
+  host.refreshApplicationSettings.mockResolvedValue(disconnectedView());
+  host.cancelChatGptLogin.mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: vi.fn().mockResolvedValue(undefined) },
+  });
 });
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.clearAllMocks();
 });
 
 describe("ApplicationSettings ChatGPT connection", () => {
-  it("offers Connect ChatGPT while no ChatGPT account is connected", async () => {
+  it("shows one beginner ChatGPT card with browser sign-in as the primary action", async () => {
     renderSettings();
 
     expect(
-      await screen.findByRole("button", { name: "Connect ChatGPT" }),
+      await screen.findByRole("heading", { name: "ChatGPT & Models" }),
     ).toBeTruthy();
-    expect(host.startChatGptLogin).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        "Quantix opens ChatGPT in your browser and reconnects automatically when you finish signing in.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Connect ChatGPT" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Sign in on another device" }),
+    ).toBeNull();
+    expect(screen.getByText("Having trouble signing in?")).toBeTruthy();
   });
 
-  it("drives the Quantix-owned browser sign-in from the card", async () => {
+  it("shows the exact automatic browser waiting state and supports cancellation", async () => {
     host.startChatGptLogin.mockResolvedValue({ status: "awaiting_browser" });
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnectedView())
+      .mockResolvedValueOnce(disconnectedView("awaiting_browser"))
+      .mockResolvedValueOnce(disconnectedView("cancelled"));
     renderSettings();
 
-    await screen.findByRole("button", { name: "Connect ChatGPT" });
-    host.refreshApplicationSettings.mockResolvedValueOnce(
-      settingsView({
-        state: "absent",
-        account_id: null,
-        plan_type: null,
-        expires_at_ms: null,
-        login_phase: "awaiting_browser",
-      }),
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Connect ChatGPT" }),
     );
-
-    fireEvent.click(screen.getByRole("button", { name: "Connect ChatGPT" }));
 
     expect(host.startChatGptLogin).toHaveBeenCalledWith();
     expect(
-      await screen.findByText("Finish signing in through your browser."),
+      await screen.findByText(
+        "Finish signing in in your browser. Quantix will connect automatically.",
+      ),
     ).toBeTruthy();
-  });
-
-  it("returns to the connect offer when the browser sign-in is cancelled", async () => {
-    host.startChatGptLogin.mockResolvedValue({ status: "awaiting_browser" });
-    renderSettings();
-
-    await screen.findByRole("button", { name: "Connect ChatGPT" });
-    host.refreshApplicationSettings.mockResolvedValueOnce(
-      settingsView({
-        state: "absent",
-        account_id: null,
-        plan_type: null,
-        expires_at_ms: null,
-        login_phase: "awaiting_browser",
-      }),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Connect ChatGPT" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
-
-    expect(host.cancelChatGptLogin).toHaveBeenCalledWith();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(host.cancelChatGptLogin).toHaveBeenCalledWith());
     expect(
       await screen.findByRole("button", { name: "Connect ChatGPT" }),
     ).toBeTruthy();
   });
 
-  it("stops the browser-sign-in state when the host reports a terminal failure", async () => {
-    host.startChatGptLogin.mockResolvedValue({ status: "awaiting_browser" });
+  it("turns a blocked browser return into plain guidance and an explicit fallback", async () => {
+    host.startChatGptLogin.mockRejectedValue({ code: "oauth_port_blocked" });
     renderSettings();
 
-    await screen.findByRole("button", { name: "Connect ChatGPT" });
-    host.refreshApplicationSettings.mockResolvedValueOnce(
-      settingsView({
-        state: "absent",
-        account_id: null,
-        plan_type: null,
-        expires_at_ms: null,
-        login_phase: "failed",
-      }),
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Connect ChatGPT" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Connect ChatGPT" }));
 
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "Quantix could not receive the browser sign-in.",
+    );
+    expect(alert.textContent).not.toMatch(/port|PID|OAuth/i);
+    expect(
+      screen.getByRole("button", { name: "Sign in on another device" }),
+    ).toBeTruthy();
+  });
+
+  it("waits briefly for a cancelled browser attempt before starting the device fallback", async () => {
+    host.startChatGptLogin.mockResolvedValue({ status: "awaiting_browser" });
+    host.startChatGptDeviceLogin
+      .mockRejectedValueOnce({ code: "oauth_already_running" })
+      .mockResolvedValue({
+        verification_url: "https://auth.openai.com/codex/device",
+        user_code: "HAND-OFF",
+      });
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnectedView())
+      .mockResolvedValueOnce(disconnectedView("awaiting_browser"))
+      .mockResolvedValueOnce(disconnectedView("cancelled"))
+      .mockResolvedValueOnce(disconnectedView("awaiting_device"));
+    renderSettings();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Connect ChatGPT" }),
+    );
+    fireEvent.click(await screen.findByText("Having trouble signing in?"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in on another device" }),
+    );
+
+    expect(await screen.findByText("HAND-OFF")).toBeTruthy();
+    expect(host.cancelChatGptLogin).toHaveBeenCalledWith();
+    expect(host.startChatGptDeviceLogin).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows, copies, opens, waits on, and cancels the one-time-code fallback", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    host.startChatGptDeviceLogin.mockResolvedValue({
+      verification_url: "https://auth.openai.com/codex/device",
+      user_code: "ABCD-EFGH",
+    });
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnectedView())
+      .mockResolvedValueOnce(disconnectedView("awaiting_device"))
+      .mockResolvedValueOnce(disconnectedView("cancelled"));
+    renderSettings();
+
+    fireEvent.click(await screen.findByText("Having trouble signing in?"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in on another device" }),
+    );
+
+    expect(host.startChatGptDeviceLogin).toHaveBeenCalledWith();
     expect(
       await screen.findByText(
-        "ChatGPT sign-in did not finish. Check your browser and try connecting again.",
+        "Enter this one-time code on the OpenAI page, then return to Quantix.",
       ),
     ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
-  });
-
-  it("maps sign-in failures to truthful error copy", async () => {
-    host.startChatGptLogin.mockRejectedValueOnce({
-      code: "oauth_port_blocked",
-      port_holders: { port_1455: 4312, port_1457: null },
-    });
-    renderSettings();
-
-    const connect = async () =>
-      fireEvent.click(
-        await screen.findByRole("button", { name: "Connect ChatGPT" }),
-      );
-
-    await connect();
-    let alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("PID 4312");
-    expect(alert.textContent).toContain("1455");
-    expect(alert.textContent).not.toContain("1457");
-
-    host.startChatGptLogin.mockRejectedValueOnce({
-      code: "oauth_port_blocked",
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Connect ChatGPT" }));
-    alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("busy");
-
-    host.startChatGptLogin.mockRejectedValueOnce({
-      code: "oauth_already_running",
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Connect ChatGPT" }));
-    alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("already running");
-  });
-
-  it("shows the connected account, plan, and expiry from inspect", async () => {
-    const expiry = new Date(1_800_000_000_000);
-    host.refreshApplicationSettings.mockResolvedValue(
-      settingsView({
-        state: "connected",
-        account_id: "acc-chatgpt-123",
-        plan_type: "plus",
-        expires_at_ms: 1_800_000_000_000n,
-      }),
+    expect(screen.getByLabelText("One-time code").textContent).toBe(
+      "ABCD-EFGH",
     );
-    renderSettings();
-
-    expect(await screen.findByText(/acc-chatgpt-123/)).toBeTruthy();
-    expect(screen.getByText(/plus plan/i)).toBeTruthy();
-    expect(screen.getByText(/Expires/).textContent).toBe(
-      `plus plan · Expires ${expiry.toLocaleString()}`,
-    );
-    expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "Connect ChatGPT" }),
-    ).toBeNull();
+      screen.getByText("Waiting for you to finish signing in"),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    await waitFor(() =>
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith("ABCD-EFGH"),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open OpenAI sign-in page" }),
+    );
+    expect(open).toHaveBeenCalledWith(
+      "https://auth.openai.com/codex/device",
+      "_blank",
+      "noopener,noreferrer",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText(/sign-in was cancelled/i)).toBeTruthy();
+    expect(screen.queryByText("ABCD-EFGH")).toBeNull();
   });
 
-  it("disconnects ChatGPT through the host command", async () => {
-    host.disconnectChatGpt.mockResolvedValue(
-      settingsView({
-        state: "absent",
-        account_id: null,
-        plan_type: null,
-        expires_at_ms: null,
-      }),
+  it("clears the one-time code when the Host reports failure", async () => {
+    host.startChatGptDeviceLogin.mockResolvedValue({
+      verification_url: "https://auth.openai.com/codex/device",
+      user_code: "FAIL-CODE",
+    });
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnectedView())
+      .mockResolvedValueOnce(disconnectedView("awaiting_device"))
+      .mockResolvedValueOnce(disconnectedView("failed"));
+    renderSettings();
+
+    fireEvent.click(await screen.findByText("Having trouble signing in?"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in on another device" }),
     );
-    host.refreshApplicationSettings.mockResolvedValue(
-      settingsView({
-        state: "connected",
-        account_id: "acc-chatgpt-123",
-        plan_type: "plus",
-        expires_at_ms: 1_800_000_000_000n,
-      }),
-    );
+    expect(await screen.findByText("FAIL-CODE")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(
+      await screen.findByText(/ChatGPT sign-in did not finish/i),
+    ).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText("FAIL-CODE")).toBeNull());
+    expect(
+      screen.getByRole("button", { name: "Sign in on another device" }),
+    ).toBeTruthy();
+  });
+
+  it("shows the connected account and plan without exposing expiry", async () => {
+    host.refreshApplicationSettings.mockResolvedValue(connectedView(true));
+    renderSettings();
+
+    expect(await screen.findByText("engineer@example.com")).toBeTruthy();
+    expect(screen.getByText("plus plan")).toBeTruthy();
+    expect(screen.getAllByText("Connected")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/expires|expiry/i);
+  });
+
+  it("disconnects ChatGPT and clears the connected state", async () => {
+    host.refreshApplicationSettings.mockResolvedValue(connectedView(true));
+    host.disconnectChatGpt.mockResolvedValue(disconnectedView());
     renderSettings();
 
     fireEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
 
-    await waitFor(() => {
-      expect(host.disconnectChatGpt).toHaveBeenCalledWith();
-    });
+    await waitFor(() => expect(host.disconnectChatGpt).toHaveBeenCalledWith());
     expect(
       await screen.findByRole("button", { name: "Connect ChatGPT" }),
     ).toBeTruthy();
+  });
+
+  it("presents the prepared recommendation and requires explicit ChatGPT approval", async () => {
+    host.refreshApplicationSettings.mockResolvedValue(connectedView(false));
+    host.confirmAiExecutionSelection.mockResolvedValue(connectedView(true));
+    renderSettings();
+
+    expect(
+      await screen.findByText("ChatGPT · Recommended · medium"),
+    ).toBeTruthy();
+    expect(
+      screen.getAllByText(
+        /Tender content is sent to OpenAI through your connected ChatGPT account/,
+      ).length,
+    ).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Use ChatGPT" }));
+
+    await waitFor(() => {
+      expect(host.confirmAiExecutionSelection).toHaveBeenCalledWith({
+        connection_id: "codex_chatgpt",
+        model_id: "gpt-construction",
+        reasoning: { kind: "codex_effort", value: "medium" },
+      });
+    });
+    expect(
+      await screen.findByText("ChatGPT is ready for new Tenders."),
+    ).toBeTruthy();
+  });
+
+  it("keeps model, reasoning, provenance, and future-Tender behavior in advanced settings", async () => {
+    const initial = connectedView(true);
+    host.refreshApplicationSettings.mockResolvedValue(initial);
+    host.updateAiExecutionSelection.mockResolvedValue({
+      ...initial,
+      ai_execution_selection: {
+        ...preparedSelection,
+        model_id: "gpt-deep",
+        reasoning: { kind: "codex_effort", value: "high" },
+      },
+      ai_execution_approval: null,
+    });
+    renderSettings();
+
+    const advanced = await screen.findByText("Advanced model settings");
+    fireEvent.click(advanced);
+    expect(screen.getByText("Catalogue provenance")).toBeTruthy();
+    expect(
+      screen.getByText(/Model changes become the default for future Tenders/),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Model/ }));
+    fireEvent.click(screen.getByRole("option", { name: /^Deep review/ }));
+    await waitFor(() => {
+      expect(host.updateAiExecutionSelection).toHaveBeenCalledWith({
+        connection_id: "codex_chatgpt",
+        model_id: "gpt-deep",
+        reasoning: { kind: "codex_effort", value: "high" },
+      });
+    });
   });
 });
