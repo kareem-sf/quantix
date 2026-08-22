@@ -19,6 +19,7 @@ const host = vi.hoisted(() => ({
   inspectDiagnosticsStatus: vi.fn(),
   inspectQuantixDoctor: vi.fn(),
   inspectRuntimeReadiness: vi.fn(),
+  openChatGptDeviceLoginPage: vi.fn(),
   openDiagnosticLogs: vi.fn(),
   refreshApplicationSettings: vi.fn(),
   repairQuantixDoctor: vi.fn(),
@@ -196,6 +197,7 @@ function ClosableSettings() {
 beforeEach(() => {
   host.refreshApplicationSettings.mockResolvedValue(disconnectedView());
   host.cancelChatGptLogin.mockResolvedValue(undefined);
+  host.openChatGptDeviceLoginPage.mockResolvedValue(undefined);
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: { writeText: vi.fn().mockResolvedValue(undefined) },
@@ -365,8 +367,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
     expect(host.startChatGptDeviceLogin).toHaveBeenCalledTimes(2);
   });
 
-  it("shows, copies, opens, waits on, and cancels the one-time-code fallback", async () => {
-    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+  it("shows, automatically opens, copies, opens again, waits on, and cancels the one-time-code fallback", async () => {
     host.startChatGptDeviceLogin.mockResolvedValue({
       verification_url: "https://auth.openai.com/codex/device",
       user_code: "ABCD-EFGH",
@@ -383,6 +384,9 @@ describe("ApplicationSettings ChatGPT connection", () => {
     );
 
     expect(host.startChatGptDeviceLogin).toHaveBeenCalledWith();
+    await waitFor(() =>
+      expect(host.openChatGptDeviceLoginPage).toHaveBeenCalledTimes(1),
+    );
     expect(
       await screen.findByText(
         "Enter this one-time code on the OpenAI page, then return to Quantix.",
@@ -402,15 +406,44 @@ describe("ApplicationSettings ChatGPT connection", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Open OpenAI sign-in page" }),
     );
-    expect(open).toHaveBeenCalledWith(
-      "https://auth.openai.com/codex/device",
-      "_blank",
-      "noopener,noreferrer",
+    await waitFor(() =>
+      expect(host.openChatGptDeviceLoginPage).toHaveBeenCalledTimes(2),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(await screen.findByText(/sign-in was cancelled/i)).toBeTruthy();
     expect(screen.queryByText("ABCD-EFGH")).toBeNull();
+  });
+
+  it("keeps the one-time code visible when opening the OpenAI page fails", async () => {
+    host.startChatGptDeviceLogin.mockResolvedValue({
+      verification_url: "https://auth.openai.com/codex/device",
+      user_code: "KEEP-CODE",
+    });
+    host.openChatGptDeviceLoginPage.mockRejectedValue({
+      code: "store_unavailable",
+    });
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnectedView())
+      .mockResolvedValueOnce(disconnectedView("awaiting_device"));
+    renderSettings();
+
+    fireEvent.click(await screen.findByText("Having trouble signing in?"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in on another device" }),
+    );
+
+    expect(await screen.findByText("KEEP-CODE")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Quantix could not open the OpenAI sign-in page.",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open OpenAI sign-in page" }),
+    );
+    await waitFor(() =>
+      expect(host.openChatGptDeviceLoginPage).toHaveBeenCalledTimes(2),
+    );
+    expect(screen.getByText("KEEP-CODE")).toBeTruthy();
   });
 
   it("clears the one-time code when the Host reports failure", async () => {

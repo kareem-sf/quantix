@@ -345,6 +345,10 @@ export function startChatGptDeviceLogin(): Promise<StartChatGptDeviceLoginResult
   return invoke<StartChatGptDeviceLoginResult>("start_chatgpt_device_login");
 }
 
+export function openChatGptDeviceLoginPage(): Promise<void> {
+  return invoke<void>("open_chatgpt_device_login_page");
+}
+
 export function cancelChatGptLogin(): Promise<void> {
   return invoke<void>("cancel_chatgpt_login");
 }

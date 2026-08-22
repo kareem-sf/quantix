@@ -1223,6 +1223,13 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn open_chatgpt_device_login_page() -> Result<(), TenderCommandError> {
+        tauri::async_runtime::spawn_blocking(crate::chatgpt_login::open_chatgpt_device_login_page)
+            .await
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+    }
+
+    #[tauri::command]
     pub(super) async fn cancel_chatgpt_login(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<(), TenderCommandError> {
@@ -3332,6 +3339,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::record_renderer_diagnostic,
             tauri_commands::start_chatgpt_login,
             tauri_commands::start_chatgpt_device_login,
+            tauri_commands::open_chatgpt_device_login_page,
             tauri_commands::cancel_chatgpt_login,
             tauri_commands::disconnect_chatgpt,
             tauri_commands::inspect_manager_workspace,

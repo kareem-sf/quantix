@@ -39,6 +39,7 @@ import {
   disconnectChatGpt,
   inspectQuantixDoctor,
   inspectRuntimeReadiness,
+  openChatGptDeviceLoginPage,
   repairQuantixDoctor,
   refreshApplicationSettings,
   startChatGptDeviceLogin,
@@ -118,7 +119,6 @@ const CHATGPT_DATA_DISCLOSURE =
   "Tender content is sent to OpenAI through your connected ChatGPT account. Usage and limits belong to that account.";
 
 interface DeviceLoginDetails {
-  verificationUrl: string;
   userCode: string;
 }
 
@@ -532,14 +532,23 @@ export function ApplicationSettings({
           await cancelChatGptLogin();
           return;
         }
-        setDeviceLogin({
-          verificationUrl: result.verification_url,
-          userCode: result.user_code,
-        });
+        setDeviceLogin({ userCode: result.user_code });
+        let devicePageOpenFailure: string | null = null;
+        try {
+          await openChatGptDeviceLoginPage();
+        } catch {
+          devicePageOpenFailure =
+            "Quantix could not open the OpenAI sign-in page. Your one-time code is still ready. Use the button below, or open the OpenAI sign-in page yourself.";
+        }
         if (!(await refreshLatestSettings()) && mountedRef.current) {
-          setError(
-            "Sign-in started. Quantix will keep checking while you use the one-time code.",
-          );
+          if (devicePageOpenFailure === null) {
+            setError(
+              "Sign-in started. Quantix will keep checking while you use the one-time code.",
+            );
+          }
+        }
+        if (devicePageOpenFailure !== null && mountedRef.current) {
+          setError(devicePageOpenFailure);
         }
       } catch {
         if (!mountedRef.current) {
@@ -572,9 +581,15 @@ export function ApplicationSettings({
     }
   }, [deviceLogin]);
 
-  const openDeviceSignInPage = useCallback(() => {
+  const openDeviceSignInPage = useCallback(async () => {
     if (!deviceLogin) return;
-    window.open(deviceLogin.verificationUrl, "_blank", "noopener,noreferrer");
+    try {
+      await openChatGptDeviceLoginPage();
+    } catch {
+      setError(
+        "Quantix could not open the OpenAI sign-in page. Your one-time code is still ready. Try again, or open the OpenAI sign-in page yourself.",
+      );
+    }
   }, [deviceLogin]);
 
   const cancelChatGpt = useCallback(async () => {
@@ -992,7 +1007,7 @@ export function ApplicationSettings({
                             <button
                               type="button"
                               disabled={busy}
-                              onClick={openDeviceSignInPage}
+                              onClick={() => void openDeviceSignInPage()}
                             >
                               <ExternalLink size={15} /> Open OpenAI sign-in
                               page

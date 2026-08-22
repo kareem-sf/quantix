@@ -18,6 +18,7 @@ use crate::host::QuantixHost;
 use crate::tender_store::{TenderCommandError, TenderErrorCode};
 
 pub(crate) const PRODUCTION_ISSUER: &str = "https://auth.openai.com";
+const CHATGPT_DEVICE_LOGIN_URL: &str = "https://auth.openai.com/codex/device";
 const LOGIN_PORT_CANDIDATES: &[u16] = &[1455, 1457];
 const CANCEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const LOOPBACK_HOST: &str = "127.0.0.1";
@@ -333,6 +334,11 @@ fn all_login_ports_blocked(candidates: &[u16]) -> bool {
 
 fn open_in_system_browser(url: &str) {
     let _ = webbrowser::open(url);
+}
+
+pub(crate) fn open_chatgpt_device_login_page() -> Result<(), TenderCommandError> {
+    webbrowser::open(CHATGPT_DEVICE_LOGIN_URL)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))
 }
 
 fn now_ms() -> u64 {

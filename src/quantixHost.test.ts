@@ -12,6 +12,7 @@ import {
   cancelChatGptLogin,
   disconnectChatGpt,
   inspectCurrentPublicReleaseGate,
+  openChatGptDeviceLoginPage,
   startChatGptDeviceLogin,
   startChatGptLogin,
 } from "./quantixHost";
@@ -39,6 +40,14 @@ describe("Quantix host ChatGPT login commands", () => {
     await expect(startChatGptDeviceLogin()).resolves.toBe(result);
 
     expect(invokeMock).toHaveBeenCalledWith("start_chatgpt_device_login");
+  });
+
+  it("opens the fixed ChatGPT device sign-in page without a payload", async () => {
+    invokeMock.mockResolvedValue(undefined);
+
+    await openChatGptDeviceLoginPage();
+
+    expect(invokeMock).toHaveBeenCalledWith("open_chatgpt_device_login_page");
   });
 
   it("cancels the ChatGPT login without a payload", async () => {
