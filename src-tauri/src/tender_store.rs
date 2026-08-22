@@ -256,7 +256,7 @@ static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static CONTENT_VERIFY_PASS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 35;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 36;
 
 pub(crate) fn record_agent_run_provider_binding(
     transaction: &Transaction<'_>,
@@ -8150,7 +8150,7 @@ mod tests {
         .expect("create Tender Store");
         let selection = AiExecutionSelection {
             connection_id: "provider".into(),
-            provider: crate::application_settings::AiProviderKind::Gemini,
+            provider: crate::application_settings::AiProviderKind::Codex,
             model_id: "model".into(),
             reasoning: crate::application_settings::ProviderReasoningSelection::ProviderDefault,
             catalogue_fetched_at: "catalogue".into(),

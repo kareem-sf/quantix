@@ -59,7 +59,6 @@ getrandom = "0.3"
 infer = "0.22.0"
 jsonschema = { version = "0.49.9", default-features = false }
 jiff = { version = "0.2.35", default-features = false, features = ["std"] }
-keyring = { version = "4.1.6", features = ["v1"] }
 minisign-verify = "=0.2.5"
 processkit = { version = "=3.3.3", default-features = false }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "query", "rustls", "blocking", "form"] }

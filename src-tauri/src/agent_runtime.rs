@@ -22,9 +22,8 @@ use crate::{
         ReqwestBackend, StreamEvent, ToolRejection, TurnContext, UsageSnapshot, BACKEND_URL,
     },
     application_settings::{
-        chatgpt_connection_readiness, load_anthropic_api_key, load_gemini_api_key,
-        save_live_connection, AiExecutionSelection, AiProviderKind, ProviderConnectionView,
-        ProviderReasoningSelection,
+        chatgpt_connection_readiness, save_live_connection, AiExecutionSelection, AiProviderKind,
+        ProviderConnectionView, ProviderReasoningSelection,
     },
     chatgpt_login::PRODUCTION_ISSUER,
     chatgpt_oauth::TokenClient,
@@ -63,12 +62,10 @@ use crate::{
     process_supervisor::{ProcessError, ProcessSpec, ProcessTermination, SupervisedConversation},
 };
 
-mod anthropic;
 mod bootstrap_profile;
 #[cfg(feature = "runtime-fixture")]
 mod codex_actor;
 mod codex_protocol;
-mod gemini;
 pub(crate) mod permissions;
 pub(crate) use bootstrap_profile::{bootstrap_profile, bootstrap_task};
 #[cfg(feature = "runtime-fixture")]
@@ -81,18 +78,6 @@ use codex_protocol::{
 #[cfg(feature = "runtime-fixture")]
 use codex_protocol::{read_expected_response, write_rpc};
 use permissions::permission_duration;
-
-pub(crate) async fn inspect_anthropic_connection(
-    api_key: &str,
-) -> Result<ProviderConnectionView, ProviderFailure> {
-    anthropic::fetch_connection(api_key).await
-}
-
-pub(crate) async fn inspect_gemini_connection(
-    api_key: &str,
-) -> Result<ProviderConnectionView, ProviderFailure> {
-    gemini::fetch_connection(api_key).await
-}
 
 #[derive(Clone)]
 #[cfg(feature = "runtime-fixture")]
@@ -2972,34 +2957,6 @@ async fn execute_provider_turn_from(
                 .await
             }
         }
-        AiProviderKind::Anthropic => {
-            let api_key = match load_anthropic_api_key() {
-                Ok(api_key) => api_key,
-                Err(failure) => return failed_execution(failure, started),
-            };
-            anthropic::run_turn(
-                api_key,
-                prepared.clone(),
-                operation_limit,
-                cancellation,
-                callbacks,
-            )
-            .await
-        }
-        AiProviderKind::Gemini => {
-            let api_key = match load_gemini_api_key() {
-                Ok(api_key) => api_key,
-                Err(failure) => return failed_execution(failure, started),
-            };
-            gemini::run_turn(
-                api_key,
-                prepared.clone(),
-                operation_limit,
-                cancellation,
-                callbacks,
-            )
-            .await
-        }
     };
     host.observe_provider_usage(&execution.usage);
     execution.usage.elapsed_milliseconds =
@@ -3229,7 +3186,6 @@ fn chatgpt_reasoning_effort(
     let effort = match selection {
         ProviderReasoningSelection::ProviderDefault => return Ok(None),
         ProviderReasoningSelection::CodexEffort(value) => value.as_str(),
-        ProviderReasoningSelection::AnthropicEffort(_) => return Err(protocol_failure(false)),
     };
     let effort = match effort {
         "none" => Some(ReasoningEffort::None),
@@ -3274,13 +3230,7 @@ mod direct_backend_mapping_tests {
     }
 
     #[test]
-    fn rejects_foreign_or_unknown_chatgpt_reasoning_selections() {
-        assert!(
-            chatgpt_reasoning_effort(&ProviderReasoningSelection::AnthropicEffort(
-                "high".to_owned()
-            ))
-            .is_err()
-        );
+    fn rejects_unknown_chatgpt_reasoning_selections() {
         assert!(
             chatgpt_reasoning_effort(&ProviderReasoningSelection::CodexEffort(
                 "unsupported".to_owned()

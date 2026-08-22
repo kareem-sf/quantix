@@ -14,7 +14,7 @@ use crate::QuantixHost;
 
 pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
-pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 24;
+pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 25;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
@@ -39,7 +39,7 @@ pub(crate) const APPLICATION_SETTINGS_TABLE_SQL: &str = "CREATE TABLE applicatio
          )";
 pub(crate) const PROVIDER_CONNECTIONS_TABLE_SQL: &str = "CREATE TABLE provider_connections (
            connection_id TEXT PRIMARY KEY CHECK (length(CAST(connection_id AS BLOB)) BETWEEN 1 AND 100),
-           provider_kind TEXT NOT NULL CHECK (provider_kind IN ('codex', 'anthropic', 'gemini')),
+           provider_kind TEXT NOT NULL CHECK (provider_kind IN ('codex')),
            connection_json TEXT NOT NULL CHECK (json_valid(connection_json)),
            updated_at TEXT NOT NULL
          )";
@@ -189,7 +189,7 @@ const PROVIDER_CLEANUP_JOBS_TABLE_SQL: &str = "CREATE TABLE provider_cleanup_job
            cleanup_id TEXT PRIMARY KEY CHECK (length(cleanup_id) = 32),
            deletion_id TEXT NOT NULL CHECK (length(deletion_id) = 32),
            target_ordinal INTEGER NOT NULL CHECK (target_ordinal >= 0),
-           provider_kind TEXT NOT NULL CHECK (provider_kind IN ('codex', 'anthropic', 'gemini')),
+           provider_kind TEXT NOT NULL CHECK (provider_kind IN ('codex')),
            thread_ref TEXT CHECK (thread_ref IS NULL OR length(CAST(thread_ref AS BLOB)) BETWEEN 1 AND 1000),
            target_manifest_sha256 TEXT NOT NULL CHECK (length(target_manifest_sha256) = 64),
            status TEXT NOT NULL CHECK (status IN ('pending', 'completed')),

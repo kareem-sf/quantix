@@ -2344,7 +2344,6 @@ impl QuantixHost {
         }
         for job in pending {
             let deleted = match job.provider {
-                AiProviderKind::Anthropic | AiProviderKind::Gemini => false,
                 AiProviderKind::Codex => {
                     let provider = self.agent_provider().lock().await.as_ref().cloned();
                     match provider {
@@ -2410,8 +2409,6 @@ impl QuantixHost {
                         continue;
                     }
                 }
-                "anthropic" => AiProviderKind::Anthropic,
-                "gemini" => AiProviderKind::Gemini,
                 _ => return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
             };
             if manifest_sha256_record(&ProviderCleanupTarget {
@@ -3318,7 +3315,7 @@ fn permanent_provider_cleanup_target(
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
     let provider = match provider {
-        "chatgpt" | "anthropic" | "gemini" => None,
+        "chatgpt" => None,
         "codex" if thread_ref.starts_with("chatgpt:") => None,
         "codex" => {
             #[cfg(feature = "runtime-fixture")]
@@ -3639,8 +3636,6 @@ fn insert_provider_cleanup_jobs(
     for (target_ordinal, target) in targets.iter().enumerate() {
         let provider_kind = match target.provider {
             AiProviderKind::Codex => "codex",
-            AiProviderKind::Anthropic => "anthropic",
-            AiProviderKind::Gemini => "gemini",
         };
         transaction
             .execute(
@@ -4951,12 +4946,7 @@ mod tests {
 
     #[test]
     fn direct_provider_run_references_require_no_external_provider_cleanup() {
-        for (provider, thread_ref) in [
-            ("chatgpt", "chatgpt:run-1"),
-            ("codex", "chatgpt:run-1"),
-            ("anthropic", "anthropic:run-1"),
-            ("gemini", "gemini:run-1"),
-        ] {
+        for (provider, thread_ref) in [("chatgpt", "chatgpt:run-1"), ("codex", "chatgpt:run-1")] {
             let target = permanent_provider_cleanup_target(provider, thread_ref.into())
                 .expect("synthetic direct-provider reference is valid");
             assert!(target.is_none(), "{provider} is a local synthetic thread");

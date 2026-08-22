@@ -820,7 +820,6 @@ async fn send_turn(
     let effort = match &run.prepared.provider_selection.reasoning {
         ProviderReasoningSelection::CodexEffort(effort) => Some(effort.as_str()),
         ProviderReasoningSelection::ProviderDefault => None,
-        ProviderReasoningSelection::AnthropicEffort(_) => return Err(protocol_failure(false)),
     };
     let on_requested = std::mem::replace(
         &mut run.callbacks.on_requested,
