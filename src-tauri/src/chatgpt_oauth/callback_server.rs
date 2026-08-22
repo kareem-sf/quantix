@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use super::authorize::build_authorize_url;
 use super::crypto::{generate_pkce, generate_state};
-use super::tokens::{TokenClient, TokenError, TokenErrorKind};
+use super::tokens::{TokenClient, TokenError};
 use super::{IssuedTokens, PkceCodes};
 
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
@@ -27,7 +27,6 @@ pub(crate) enum CallbackOutcome {
 pub(crate) enum CallbackFailure {
     PortBlocked,
     ProviderDenied,
-    StateMismatch,
     ExchangeRejected,
     ExchangeUnreachable,
     Persistence,
@@ -48,13 +47,19 @@ struct PendingLogin {
     redirect_uri: String,
 }
 
-const CSRF_REASON: &str = "the sign-in response could not be verified";
-const MISSING_CODE_REASON: &str = "the provider did not send an authorization code";
-const UNREACHABLE_REASON: &str = "Quantix could not reach the sign-in service";
-const DENIED_REASON: &str = "ChatGPT did not approve the sign-in request";
-const PERSISTENCE_REASON: &str = "Quantix could not save the ChatGPT connection";
-const CANCELLED_REASON: &str = "The sign-in request was cancelled";
-const CANCEL_ACK_TEXT: &str = "Login cancelled. You can close this window.";
+const ERROR_PAGE_TITLE: &str = "Quantix — Sign-in problem";
+const ERROR_PAGE_HEADING: &str = "Sign-in could not be completed";
+const CLOSE_WINDOW_TEXT: &str = "You can close this window.";
+const UNVERIFIED_RETURN_REASON: &str =
+    "This ChatGPT sign-in return could not be verified. Keep using the original sign-in window.";
+const INCOMPLETE_RETURN_REASON: &str =
+    "ChatGPT sign-in did not finish. Return to Quantix and try again.";
+const CONNECTION_FAILED_REASON: &str =
+    "Quantix could not finish connecting ChatGPT. Return to Quantix and try again.";
+const DENIED_REASON: &str = INCOMPLETE_RETURN_REASON;
+const PERSISTENCE_REASON: &str = CONNECTION_FAILED_REASON;
+const CANCELLED_REASON: &str = "ChatGPT sign-in was cancelled.";
+const CANCEL_ACK_TEXT: &str = "ChatGPT sign-in was cancelled. You can close this window.";
 const NOT_FOUND_TEXT: &str = "Not found";
 
 // Quantix palette values from src/quantixDesignSystem.css (light theme):
@@ -85,11 +90,11 @@ fn success_page() -> String {
 
 fn error_page(reason: &str) -> String {
     page_shell(
-        "Quantix — Sign-in problem",
+        ERROR_PAGE_TITLE,
         format!(
-            "<h1>Sign-in could not be completed</h1>\
+            "<h1>{ERROR_PAGE_HEADING}</h1>\
              <p style=\"color:#b13e3e\">{}</p>\
-             <p>You can close this window.</p>",
+             <p>{CLOSE_WINDOW_TEXT}</p>",
             html_escape(reason)
         )
         .as_str(),
@@ -220,13 +225,9 @@ where
         None => (target, ""),
     };
     match path {
-        CALLBACK_PATH => Some(handle_callback(
-            query,
-            pending,
-            client,
-            complete_authorization,
-            &mut stream,
-        )),
+        CALLBACK_PATH => {
+            handle_callback(query, pending, client, complete_authorization, &mut stream)
+        }
         CANCEL_PATH => {
             write_response(
                 &mut stream,
@@ -254,11 +255,21 @@ fn handle_callback<F>(
     client: &TokenClient,
     complete_authorization: &mut Option<F>,
     stream: &mut TcpStream,
-) -> CallbackOutcome
+) -> Option<CallbackOutcome>
 where
     F: FnOnce(&IssuedTokens) -> AuthorizationCompletion,
 {
     let params = parse_query(query);
+
+    if param(&params, "state") != Some(pending.state.as_str()) {
+        write_response(
+            stream,
+            "400 Bad Request",
+            "text/html; charset=utf-8",
+            &error_page(UNVERIFIED_RETURN_REASON),
+        );
+        return None;
+    }
 
     if param(&params, "error").is_some() {
         write_response(
@@ -267,17 +278,7 @@ where
             "text/html; charset=utf-8",
             &error_page(DENIED_REASON),
         );
-        return CallbackOutcome::Failed(CallbackFailure::ProviderDenied);
-    }
-
-    if param(&params, "state") != Some(pending.state.as_str()) {
-        write_response(
-            stream,
-            "400 Bad Request",
-            "text/html; charset=utf-8",
-            &error_page(CSRF_REASON),
-        );
-        return CallbackOutcome::Failed(CallbackFailure::StateMismatch);
+        return Some(CallbackOutcome::Failed(CallbackFailure::ProviderDenied));
     }
 
     let Some(code) = param(&params, "code").map(str::to_string) else {
@@ -285,9 +286,9 @@ where
             stream,
             "400 Bad Request",
             "text/html; charset=utf-8",
-            &error_page(MISSING_CODE_REASON),
+            &error_page(INCOMPLETE_RETURN_REASON),
         );
-        return CallbackOutcome::Failed(CallbackFailure::ProviderDenied);
+        return Some(CallbackOutcome::Failed(CallbackFailure::ProviderDenied));
     };
 
     match client.exchange_code(&code, &pending.redirect_uri, &pending.pkce) {
@@ -304,7 +305,7 @@ where
                         "text/html; charset=utf-8",
                         &success_page(),
                     );
-                    CallbackOutcome::Authorized(tokens)
+                    Some(CallbackOutcome::Authorized(tokens))
                 }
                 AuthorizationCompletion::Cancelled => {
                     write_response(
@@ -313,7 +314,7 @@ where
                         "text/html; charset=utf-8",
                         &error_page(CANCELLED_REASON),
                     );
-                    CallbackOutcome::Cancelled
+                    Some(CallbackOutcome::Cancelled)
                 }
                 AuthorizationCompletion::Failed => {
                     write_response(
@@ -322,38 +323,30 @@ where
                         "text/html; charset=utf-8",
                         &error_page(PERSISTENCE_REASON),
                     );
-                    CallbackOutcome::Failed(CallbackFailure::Persistence)
+                    Some(CallbackOutcome::Failed(CallbackFailure::Persistence))
                 }
             }
         }
-        Err(TokenError::Provider { kind, .. }) => {
+        Err(TokenError::Provider { .. }) => {
             write_response(
                 stream,
                 "502 Bad Gateway",
                 "text/html; charset=utf-8",
-                &error_page(rejection_reason(kind)),
+                &error_page(CONNECTION_FAILED_REASON),
             );
-            CallbackOutcome::Failed(CallbackFailure::ExchangeRejected)
+            Some(CallbackOutcome::Failed(CallbackFailure::ExchangeRejected))
         }
-        Err(TokenError::Transport(_)) => {
+        Err(TokenError::Transport(_) | TokenError::DeadlineElapsed) => {
             write_response(
                 stream,
                 "502 Bad Gateway",
                 "text/html; charset=utf-8",
-                &error_page(UNREACHABLE_REASON),
+                &error_page(CONNECTION_FAILED_REASON),
             );
-            CallbackOutcome::Failed(CallbackFailure::ExchangeUnreachable)
+            Some(CallbackOutcome::Failed(
+                CallbackFailure::ExchangeUnreachable,
+            ))
         }
-    }
-}
-
-fn rejection_reason(kind: TokenErrorKind) -> &'static str {
-    match kind {
-        TokenErrorKind::InvalidGrant => "the authorization code was rejected as invalid or expired",
-        TokenErrorKind::InvalidClient => {
-            "the application configuration was rejected by the provider"
-        }
-        TokenErrorKind::Other => "the token exchange did not succeed",
     }
 }
 
@@ -715,50 +708,74 @@ mod tests {
     }
 
     #[test]
-    fn state_mismatch_is_rejected_without_exchange() {
+    fn invalid_state_is_rejected_without_exchange_or_ending_the_attempt() {
         let (issuer_base, forms) = start_mock_issuer();
         let harness = spawn_login(&[0], &issuer_base);
-        let (port, _url) = next_authorize_url(&harness);
+        let (port, url) = next_authorize_url(&harness);
+        let state = authorize_param(&url, "state");
 
         let forged = http_get(port, "/auth/callback?code=zz&state=forged-state");
         assert!(forged.contains("could not be verified"), "page: {forged}");
         assert!(!forged.contains("ChatGPT connected to Quantix"));
+        assert!(matches!(
+            harness.outcomes.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
 
-        match harness
-            .outcomes
-            .recv_timeout(WAIT)
-            .expect("terminal outcome")
-        {
-            CallbackOutcome::Failed(CallbackFailure::StateMismatch) => {}
-            other => panic!("expected StateMismatch, got {other:?}"),
-        }
-
-        let harness = spawn_login(&[0], &issuer_base);
-        let (port, _url) = next_authorize_url(&harness);
         let absent_state = http_get(port, "/auth/callback?code=zz");
         assert!(absent_state.contains("could not be verified"));
+        assert!(matches!(
+            harness.outcomes.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+
+        let completed = http_get(
+            port,
+            &format!("/auth/callback?code=accepted-after-forgery&state={state}"),
+        );
+        assert!(completed.contains("ChatGPT connected to Quantix"));
 
         match harness
             .outcomes
             .recv_timeout(WAIT)
             .expect("terminal outcome")
         {
-            CallbackOutcome::Failed(CallbackFailure::StateMismatch) => {}
-            other => panic!("expected StateMismatch, got {other:?}"),
+            CallbackOutcome::Authorized(_) => {}
+            other => panic!("expected Authorized, got {other:?}"),
         }
 
-        assert!(forms.lock().unwrap().is_empty());
+        assert_eq!(forms.lock().unwrap().len(), 1);
     }
 
     #[test]
-    fn provider_error_param_maps_to_denied_failure_and_error_page() {
+    fn provider_error_requires_the_exact_state_before_it_can_end_the_attempt() {
         let (issuer_base, forms) = start_mock_issuer();
         let harness = spawn_login(&[0], &issuer_base);
-        let (port, _url) = next_authorize_url(&harness);
+        let (port, url) = next_authorize_url(&harness);
+        let state = authorize_param(&url, "state");
+
+        let missing_state = http_get(
+            port,
+            "/auth/callback?error=access_denied&error_description=User%20denied%20the%20request",
+        );
+        assert!(missing_state.contains(UNVERIFIED_RETURN_REASON));
+        assert!(matches!(
+            harness.outcomes.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+
+        let wrong_state = http_get(port, "/auth/callback?error=access_denied&state=wrong-state");
+        assert!(wrong_state.contains(UNVERIFIED_RETURN_REASON));
+        assert!(matches!(
+            harness.outcomes.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
 
         let page = http_get(
             port,
-            "/auth/callback?error=access_denied&error_description=User%20denied%20the%20request",
+            &format!(
+                "/auth/callback?error=access_denied&error_description=User%20denied%20the%20request&state={state}"
+            ),
         );
         assert!(page.contains(DENIED_REASON), "page: {page}");
         assert!(!page.contains("User denied the request"));
@@ -773,6 +790,40 @@ mod tests {
             other => panic!("expected ProviderDenied, got {other:?}"),
         }
         assert!(forms.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn browser_failure_copy_excludes_internal_sign_in_terminology() {
+        let visible_copy = [
+            ERROR_PAGE_TITLE,
+            ERROR_PAGE_HEADING,
+            CLOSE_WINDOW_TEXT,
+            UNVERIFIED_RETURN_REASON,
+            INCOMPLETE_RETURN_REASON,
+            CONNECTION_FAILED_REASON,
+            DENIED_REASON,
+            PERSISTENCE_REASON,
+            CANCELLED_REASON,
+            CANCEL_ACK_TEXT,
+        ]
+        .join(" ")
+        .to_ascii_lowercase();
+
+        for forbidden in [
+            "oauth",
+            "authorization",
+            "token",
+            "code",
+            "provider",
+            "port",
+            "pid",
+            "secret",
+        ] {
+            assert!(
+                !visible_copy.contains(forbidden),
+                "browser copy exposed forbidden term {forbidden}: {visible_copy}"
+            );
+        }
     }
 
     #[test]

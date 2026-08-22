@@ -14,7 +14,8 @@ use ts_rs::TS;
 use crate::{
     agent_runtime::{ProviderFailure, ProviderFailureCategory},
     chatgpt_oauth::{
-        load, needs_refresh, refresh_connection, LoadState, StoredConnection, TokenClient,
+        load, needs_refresh, refresh_connection_unlocked, with_connection_mutation, LoadState,
+        StoredConnection, TokenClient,
     },
     setup::INSTALLATION_SCHEMA_VERSION,
     tender_store::{TenderCommandError, TenderErrorCode, TenderId, TENDER_SCHEMA_VERSION},
@@ -307,17 +308,16 @@ impl QuantixHost {
     pub async fn refresh_application_settings(
         &self,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        let connection = match chatgpt_connection_readiness_async(
-            self.application_home().to_path_buf(),
-            crate::chatgpt_login::PRODUCTION_ISSUER,
-            current_time_ms(),
-        )
+        let application_home = self.application_home().to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            refresh_application_settings_projection(
+                &application_home,
+                crate::chatgpt_login::PRODUCTION_ISSUER,
+                current_time_ms(),
+            )
+        })
         .await
-        {
-            Ok(connection) => chatgpt_connection_view(&connection),
-            Err(failure) => chatgpt_connection_failure_view(failure.category),
-        };
-        save_live_connection(self.application_home(), &connection)?;
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))??;
         self.application_settings_with_chatgpt_phase()
     }
 
@@ -598,13 +598,23 @@ pub(crate) fn chatgpt_connection_readiness(
     issuer: &str,
     now_ms: u64,
 ) -> Result<StoredConnection, ProviderFailure> {
+    with_connection_mutation(|| {
+        chatgpt_connection_readiness_unlocked(application_home, issuer, now_ms)
+    })
+}
+
+fn chatgpt_connection_readiness_unlocked(
+    application_home: &Path,
+    issuer: &str,
+    now_ms: u64,
+) -> Result<StoredConnection, ProviderFailure> {
     let stored = match load(application_home) {
         LoadState::Connected(connection) => *connection,
         LoadState::Absent | LoadState::Unusable => return Err(chatgpt_authentication_failure()),
     };
     let connection = if needs_refresh(&stored, now_ms) {
         let client = TokenClient::new(issuer).map_err(|_| chatgpt_authentication_failure())?;
-        refresh_connection(application_home, &client, now_ms)
+        refresh_connection_unlocked(application_home, &client, now_ms)
             .map_err(|_| chatgpt_authentication_failure())?
     } else {
         stored
@@ -613,6 +623,29 @@ pub(crate) fn chatgpt_connection_readiness(
         return Err(chatgpt_subscription_failure());
     }
     Ok(connection)
+}
+
+fn refresh_application_settings_projection(
+    application_home: &Path,
+    issuer: &str,
+    now_ms: u64,
+) -> Result<(), TenderCommandError> {
+    refresh_application_settings_projection_with(application_home, || {
+        chatgpt_connection_readiness_unlocked(application_home, issuer, now_ms)
+    })
+}
+
+fn refresh_application_settings_projection_with(
+    application_home: &Path,
+    inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
+) -> Result<(), TenderCommandError> {
+    with_connection_mutation(|| {
+        let connection = match inspect() {
+            Ok(connection) => chatgpt_connection_view(&connection),
+            Err(failure) => chatgpt_connection_failure_view(failure.category),
+        };
+        save_live_connection_unlocked(application_home, &connection)
+    })
 }
 
 async fn chatgpt_connection_readiness_async(
@@ -624,14 +657,16 @@ async fn chatgpt_connection_readiness_async(
         chatgpt_connection_readiness(&application_home, issuer, now_ms)
     })
     .await
-    .map_err(|_| {
-        ProviderFailure::new(
-            ProviderFailureCategory::ProcessFailed,
-            true,
-            "ChatGPT connection verification could not complete.",
-            Some("The local connection task stopped unexpectedly."),
-        )
-    })?
+    .map_err(|_| connection_task_error())?
+}
+
+fn connection_task_error() -> ProviderFailure {
+    ProviderFailure::new(
+        ProviderFailureCategory::ProcessFailed,
+        true,
+        "ChatGPT connection verification could not complete.",
+        Some("The local connection task stopped unexpectedly."),
+    )
 }
 
 fn chatgpt_subscription_is_supported(plan_type: Option<&str>) -> bool {
@@ -706,7 +741,9 @@ pub(crate) fn save_chatgpt_connection_failure(
     save_live_connection(application_home, &chatgpt_connection_failure_view(category))
 }
 
-pub(crate) fn save_chatgpt_disconnected(application_home: &Path) -> Result<(), TenderCommandError> {
+pub(crate) fn save_chatgpt_disconnected_unlocked(
+    application_home: &Path,
+) -> Result<(), TenderCommandError> {
     let mut database = settings_connection(application_home)?;
     let transaction = database
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -933,33 +970,51 @@ pub(crate) fn save_live_connection(
     application_home: &Path,
     connection: &ProviderConnectionView,
 ) -> Result<(), TenderCommandError> {
+    with_connection_mutation(|| save_live_connection_unlocked(application_home, connection))
+}
+
+fn save_live_connection_unlocked(
+    application_home: &Path,
+    connection: &ProviderConnectionView,
+) -> Result<(), TenderCommandError> {
     let mut database = settings_connection(application_home)?;
     let transaction = database
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(settings_store_error)?;
     let persisted = connection.clone();
     upsert_connection(&transaction, &persisted)?;
-    let settings = load_stored_settings(&transaction)?;
-    match settings.ai_execution_selection {
+    let mut settings = load_stored_settings(&transaction)?;
+    let had_selection = settings.ai_execution_selection.is_some();
+    settings.ai_execution_selection = match settings.ai_execution_selection.clone() {
         Some(selection) if selection_is_supported(&persisted, &selection) => {
-            let rebound = AiExecutionSelection {
+            Some(AiExecutionSelection {
                 catalogue_fetched_at: persisted
                     .catalogue_fetched_at
                     .clone()
                     .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?,
                 adapter_version: persisted.adapter_version.clone(),
                 ..selection
-            };
-            store_selection(&transaction, &rebound)?;
+            })
         }
-        Some(_) => {}
+        Some(selection) => Some(selection),
         None if persisted.status == ProviderConnectionStatus::Ready => {
-            if let Some(selection) = default_selection(&persisted)? {
-                store_selection(&transaction, &selection)?;
-            }
+            default_selection(&persisted)?
         }
-        None => {}
+        None => None,
+    };
+    let approval_is_current = had_selection
+        && settings
+            .ai_execution_selection
+            .as_ref()
+            .zip(settings.ai_execution_approval.as_ref())
+            .is_some_and(|(selection, approval)| {
+                selection_is_supported(&persisted, selection)
+                    && approval_matches(&persisted, selection, approval)
+            });
+    if settings.ai_execution_approval.is_some() && !approval_is_current {
+        settings.ai_execution_approval = None;
     }
+    store_application_settings(&transaction, &settings)?;
     transaction.commit().map_err(settings_store_error)
 }
 
@@ -1124,15 +1179,6 @@ fn upsert_connection(
     Ok(())
 }
 
-fn store_selection(
-    transaction: &rusqlite::Transaction<'_>,
-    selection: &AiExecutionSelection,
-) -> Result<(), TenderCommandError> {
-    let mut stored = load_stored_settings(transaction)?;
-    stored.ai_execution_selection = Some(selection.clone());
-    store_application_settings(transaction, &stored)
-}
-
 fn store_application_settings(
     transaction: &rusqlite::Transaction<'_>,
     stored: &StoredApplicationSettings,
@@ -1292,7 +1338,9 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::path::PathBuf;
+    use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use super::*;
     use crate::chatgpt_login::PRODUCTION_ISSUER;
@@ -1316,6 +1364,187 @@ mod tests {
             plan_type: plan_type.map(str::to_owned),
             compute_residency: None,
         }
+    }
+
+    fn initialized_home(name: &str) -> PathBuf {
+        let home = temp_home(name);
+        let host = crate::QuantixHost::new(&home, &home);
+        let outcome = host.ensure_setup();
+        assert!(
+            matches!(
+                outcome.state,
+                crate::SetupState::Ready | crate::SetupState::Warning
+            ),
+            "settings database ready: {outcome:?}"
+        );
+        home
+    }
+
+    fn ready_connection(account_id: &str) -> ProviderConnectionView {
+        chatgpt_connection_view(&StoredConnection {
+            access_token: format!("at-{account_id}"),
+            refresh_token: format!("rt-{account_id}"),
+            id_token: format!("idt-{account_id}"),
+            expires_at_ms: 9_999_999,
+            account_id: account_id.to_owned(),
+            plan_type: Some("plus".to_owned()),
+            compute_residency: None,
+        })
+    }
+
+    fn store_test_approval(
+        home: &Path,
+        connection: &ProviderConnectionView,
+        data_destination: &str,
+    ) -> AiExecutionSelection {
+        save_live_connection(home, connection).unwrap();
+        let mut database = settings_connection(home).unwrap();
+        let transaction = database
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        let mut stored = load_stored_settings(&transaction).unwrap();
+        let selection = stored
+            .ai_execution_selection
+            .clone()
+            .expect("ready connection prepares a selection");
+        stored.ai_execution_approval = Some(AiExecutionApproval {
+            connection_id: selection.connection_id.clone(),
+            provider: selection.provider,
+            account_fingerprint: account_fingerprint(connection),
+            model_id: selection.model_id.clone(),
+            reasoning: selection.reasoning.clone(),
+            data_destination: data_destination.to_owned(),
+            approved_at: "2026-08-22T00:00:00Z".to_owned(),
+        });
+        store_application_settings(&transaction, &stored).unwrap();
+        transaction.commit().unwrap();
+        selection
+    }
+
+    #[test]
+    fn ready_refresh_projection_cannot_finish_after_disconnect_projection() {
+        let home = initialized_home("refresh-disconnect-serialization");
+        let stored = stored_connection(9_999_999, Some("plus"));
+        save(&home, &stored).unwrap();
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let refresh_home = home.clone();
+        let refresh = std::thread::spawn(move || {
+            refresh_application_settings_projection_with(&refresh_home, || {
+                observed_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(stored)
+            })
+        });
+        observed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let (attempting_tx, attempting_rx) = mpsc::channel();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let disconnect_home = home.clone();
+        let disconnect = std::thread::spawn(move || {
+            attempting_tx.send(()).unwrap();
+            crate::chatgpt_oauth::with_connection_mutation(|| {
+                entered_tx.send(()).unwrap();
+                crate::chatgpt_oauth::clear_unlocked(&disconnect_home).unwrap();
+                save_chatgpt_disconnected_unlocked(&disconnect_home).unwrap();
+            });
+        });
+        attempting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(entered_rx.recv_timeout(Duration::from_millis(150)).is_err());
+
+        release_tx.send(()).unwrap();
+        refresh.join().unwrap().unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        disconnect.join().unwrap();
+
+        assert!(matches!(load(&home), LoadState::Absent));
+        let view = load_application_settings(&home).unwrap();
+        assert_eq!(
+            view.provider_connections[0].status,
+            ProviderConnectionStatus::AuthenticationRequired
+        );
+        assert!(view.ai_execution_selection.is_none());
+        assert!(view.ai_execution_approval.is_none());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn absent_refresh_projection_cannot_finish_after_login_persistence() {
+        let home = initialized_home("refresh-login-serialization");
+        let connected = stored_connection(9_999_999, Some("plus"));
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let refresh_home = home.clone();
+        let refresh = std::thread::spawn(move || {
+            refresh_application_settings_projection_with(&refresh_home, || {
+                observed_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Err(chatgpt_authentication_failure())
+            })
+        });
+        observed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let (attempting_tx, attempting_rx) = mpsc::channel();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let login_home = home.clone();
+        let login = std::thread::spawn(move || {
+            attempting_tx.send(()).unwrap();
+            crate::chatgpt_oauth::with_connection_mutation(|| {
+                entered_tx.send(()).unwrap();
+                crate::chatgpt_oauth::save_unlocked(&login_home, &connected).unwrap();
+            });
+        });
+        attempting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(entered_rx.recv_timeout(Duration::from_millis(150)).is_err());
+
+        release_tx.send(()).unwrap();
+        refresh.join().unwrap().unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        login.join().unwrap();
+
+        assert!(matches!(load(&home), LoadState::Connected(_)));
+        assert_eq!(
+            load_application_settings(&home)
+                .unwrap()
+                .provider_connections[0]
+                .status,
+            ProviderConnectionStatus::AuthenticationRequired,
+            "the absent projection linearized before the later login save"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn live_connection_account_change_invalidates_execution_approval() {
+        let home = initialized_home("approval-account-change");
+        let original = ready_connection("account-a");
+        let selection = store_test_approval(&home, &original, "ChatGPT subscription");
+        assert!(load_application_settings(&home)
+            .unwrap()
+            .ai_execution_approval
+            .is_some());
+
+        save_live_connection(&home, &ready_connection("account-b")).unwrap();
+
+        let view = load_application_settings(&home).unwrap();
+        assert_eq!(view.ai_execution_selection.as_ref(), Some(&selection));
+        assert!(view.ai_execution_approval.is_none());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn live_connection_data_destination_mismatch_invalidates_execution_approval() {
+        let home = initialized_home("approval-destination-change");
+        let connection = ready_connection("account-a");
+        store_test_approval(&home, &connection, "A different destination");
+
+        save_live_connection(&home, &connection).unwrap();
+
+        assert!(load_application_settings(&home)
+            .unwrap()
+            .ai_execution_approval
+            .is_none());
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

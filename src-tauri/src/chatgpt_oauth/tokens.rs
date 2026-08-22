@@ -1,7 +1,10 @@
+use std::time::{Duration, Instant};
+
 use super::PkceCodes;
 
 const TOKEN_ENDPOINT_SUFFIX: &str = "/oauth/token";
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 pub(crate) struct IssuedTokens {
@@ -22,6 +25,7 @@ pub(crate) enum TokenErrorKind {
 pub(crate) enum TokenError {
     Provider { status: u16, kind: TokenErrorKind },
     Transport(String),
+    DeadlineElapsed,
 }
 
 impl std::fmt::Display for TokenError {
@@ -34,6 +38,7 @@ impl std::fmt::Display for TokenError {
                 )
             }
             TokenError::Transport(detail) => write!(f, "token transport error: {detail}"),
+            TokenError::DeadlineElapsed => f.write_str("token request deadline elapsed"),
         }
     }
 }
@@ -50,7 +55,7 @@ impl TokenClient {
         Ok(Self {
             issuer_base: issuer_base.trim_end_matches('/').to_string(),
             http: reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(REQUEST_TIMEOUT)
                 .build()?,
         })
     }
@@ -70,19 +75,23 @@ impl TokenClient {
         ])
     }
 
-    pub(crate) fn exchange_device_code(
+    pub(crate) fn exchange_device_code_before(
         &self,
         authorization_code: &str,
         code_verifier: &str,
+        deadline: Instant,
     ) -> Result<IssuedTokens, TokenError> {
         let redirect_uri = format!("{}/deviceauth/callback", self.issuer_base);
-        self.post_form(&[
-            ("grant_type", "authorization_code"),
-            ("code", authorization_code),
-            ("redirect_uri", redirect_uri.as_str()),
-            ("client_id", CLIENT_ID),
-            ("code_verifier", code_verifier),
-        ])
+        self.post_form_before(
+            &[
+                ("grant_type", "authorization_code"),
+                ("code", authorization_code),
+                ("redirect_uri", redirect_uri.as_str()),
+                ("client_id", CLIENT_ID),
+                ("code_verifier", code_verifier),
+            ],
+            deadline,
+        )
     }
 
     pub(crate) fn refresh(&self, refresh_token: &str) -> Result<IssuedTokens, TokenError> {
@@ -94,10 +103,28 @@ impl TokenClient {
     }
 
     fn post_form(&self, form: &[(&str, &str)]) -> Result<IssuedTokens, TokenError> {
+        self.post_form_with_timeout(form, REQUEST_TIMEOUT)
+    }
+
+    fn post_form_before(
+        &self,
+        form: &[(&str, &str)],
+        deadline: Instant,
+    ) -> Result<IssuedTokens, TokenError> {
+        let timeout = remaining_request_timeout(deadline).ok_or(TokenError::DeadlineElapsed)?;
+        self.post_form_with_timeout(form, timeout)
+    }
+
+    fn post_form_with_timeout(
+        &self,
+        form: &[(&str, &str)],
+        timeout: Duration,
+    ) -> Result<IssuedTokens, TokenError> {
         let url = format!("{}{TOKEN_ENDPOINT_SUFFIX}", self.issuer_base);
         let response = self
             .http
             .post(url)
+            .timeout(timeout.min(REQUEST_TIMEOUT))
             .form(form)
             .send()
             .map_err(|error| TokenError::Transport(error.to_string()))?;
@@ -114,6 +141,11 @@ impl TokenClient {
         parse_issued_tokens(&body)
             .ok_or_else(|| TokenError::Transport("malformed token payload".to_string()))
     }
+}
+
+fn remaining_request_timeout(deadline: Instant) -> Option<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    (!remaining.is_zero()).then(|| remaining.min(REQUEST_TIMEOUT))
 }
 
 fn rejection_kind(body: &str) -> TokenErrorKind {
@@ -144,6 +176,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     use super::{PkceCodes, TokenClient, TokenError, TokenErrorKind};
 
@@ -364,7 +397,11 @@ mod tests {
         let client = TokenClient::new(&base).unwrap();
 
         let tokens = client
-            .exchange_device_code("device-code-1", "device-verifier-1")
+            .exchange_device_code_before(
+                "device-code-1",
+                "device-verifier-1",
+                Instant::now() + Duration::from_secs(5),
+            )
             .unwrap();
 
         assert_eq!(tokens.access_token, "at-1");
@@ -441,5 +478,52 @@ mod tests {
             r#"{"access_token":"a","refresh_token":"b","id_token":"c","expires_in":"x"}"#
         )
         .is_none());
+    }
+
+    #[test]
+    fn device_exchange_refuses_to_start_after_the_shared_deadline() {
+        let (base, captured) = start_issuer(move |_| (200, SUCCESS_BODY));
+        let client = TokenClient::new(&base).unwrap();
+
+        let error = client
+            .exchange_device_code_before("device-code-1", "device-verifier-1", Instant::now())
+            .unwrap_err();
+
+        assert!(matches!(error, TokenError::DeadlineElapsed));
+        assert!(captured.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn request_timeout_is_capped_by_the_remaining_device_budget() {
+        let deadline = Instant::now() + Duration::from_millis(75);
+        let timeout = super::remaining_request_timeout(deadline).unwrap();
+
+        assert!(timeout <= Duration::from_millis(75));
+        assert!(timeout < super::REQUEST_TIMEOUT);
+        assert!(super::remaining_request_timeout(Instant::now()).is_none());
+    }
+
+    #[test]
+    fn device_exchange_network_wait_cannot_extend_the_shared_deadline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_request(&mut stream);
+            std::thread::sleep(Duration::from_secs(1));
+        });
+        let client = TokenClient::new(&base).unwrap();
+        let started = Instant::now();
+
+        let error = client
+            .exchange_device_code_before(
+                "device-code-1",
+                "device-verifier-1",
+                started + Duration::from_millis(50),
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, TokenError::Transport(_)));
+        assert!(started.elapsed() < Duration::from_millis(500));
     }
 }

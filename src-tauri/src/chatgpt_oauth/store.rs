@@ -1,7 +1,8 @@
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, TryLockError};
+use std::time::{Duration, Instant};
 
 use super::{extract_identity, ChatGptIdentity, IssuedTokens, TokenClient};
 use serde::{Deserialize, Serialize};
@@ -12,14 +13,44 @@ const REFRESH_MARGIN_MS: u64 = 120_000;
 
 static CONNECTION_MUTATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const MUTATION_LOCK_POLL: Duration = Duration::from_millis(10);
 
 /// Serializes a complete connection mutation. Refresh/login/disconnect callers
 /// hold this boundary from their initial read until the final save or clear so
 /// a rotating refresh token cannot be used by a competing operation.
 pub(crate) fn with_connection_mutation<T>(operation: impl FnOnce() -> T) -> T {
-    let lock = CONNECTION_MUTATION_LOCK.get_or_init(|| Mutex::new(()));
+    let lock = connection_mutation_lock();
     let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     operation()
+}
+
+/// Acquires the same serialization boundary without allowing a bounded flow
+/// to wait beyond its deadline for an unrelated connection mutation.
+pub(crate) fn with_connection_mutation_before<T>(
+    deadline: Instant,
+    operation: impl FnOnce() -> T,
+) -> Option<T> {
+    let lock = connection_mutation_lock();
+    loop {
+        match lock.try_lock() {
+            Ok(_guard) => return Some(operation()),
+            Err(TryLockError::Poisoned(poisoned)) => {
+                let _guard = poisoned.into_inner();
+                return Some(operation());
+            }
+            Err(TryLockError::WouldBlock) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return None;
+                }
+                std::thread::sleep(remaining.min(MUTATION_LOCK_POLL));
+            }
+        }
+    }
+}
+
+fn connection_mutation_lock() -> &'static Mutex<()> {
+    CONNECTION_MUTATION_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 #[derive(Debug)]
@@ -173,22 +204,31 @@ pub(crate) fn refresh_connection(
     token_client: &TokenClient,
     now_ms: u64,
 ) -> Result<StoredConnection, ()> {
-    with_connection_mutation(|| {
-        let current = match load(home) {
-            LoadState::Connected(connection) => *connection,
-            LoadState::Absent | LoadState::Unusable => return Err(()),
-        };
-        if !needs_refresh(&current, now_ms) {
-            return Ok(current);
-        }
-        let issued = token_client
-            .refresh(&current.refresh_token)
-            .map_err(|_| ())?;
-        let identity = extract_identity(&issued.id_token).ok_or(())?;
-        let refreshed = StoredConnection::from_issued(&issued, &identity, now_ms);
-        save_unlocked(home, &refreshed).map_err(|_| ())?;
-        Ok(refreshed)
-    })
+    with_connection_mutation(|| refresh_connection_unlocked(home, token_client, now_ms))
+}
+
+/// Refreshes while the caller already owns the connection mutation boundary.
+/// This keeps auth observation, any network refresh, and a related settings
+/// projection inside one lock without recursively acquiring the global mutex.
+pub(crate) fn refresh_connection_unlocked(
+    home: &Path,
+    token_client: &TokenClient,
+    now_ms: u64,
+) -> Result<StoredConnection, ()> {
+    let current = match load(home) {
+        LoadState::Connected(connection) => *connection,
+        LoadState::Absent | LoadState::Unusable => return Err(()),
+    };
+    if !needs_refresh(&current, now_ms) {
+        return Ok(current);
+    }
+    let issued = token_client
+        .refresh(&current.refresh_token)
+        .map_err(|_| ())?;
+    let identity = extract_identity(&issued.id_token).ok_or(())?;
+    let refreshed = StoredConnection::from_issued(&issued, &identity, now_ms);
+    save_unlocked(home, &refreshed).map_err(|_| ())?;
+    Ok(refreshed)
 }
 
 fn unique_temporary_path(home: &Path) -> PathBuf {
@@ -257,6 +297,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::path::PathBuf;
+    use std::time::{Duration, Instant};
 
     fn temp_home(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -492,5 +533,22 @@ mod tests {
             state => panic!("expected the rotated connection, got {state:?}"),
         }
         let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn bounded_connection_mutation_wait_stops_at_its_deadline() {
+        let started = Instant::now();
+        let waiter = with_connection_mutation(|| {
+            std::thread::spawn(move || {
+                super::with_connection_mutation_before(started + Duration::from_millis(50), || {
+                    "entered"
+                })
+            })
+            .join()
+            .unwrap()
+        });
+
+        assert!(waiter.is_none());
+        assert!(started.elapsed() < Duration::from_millis(500));
     }
 }

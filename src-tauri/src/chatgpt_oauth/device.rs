@@ -8,8 +8,13 @@ const TOKEN_POLL_ENDPOINT: &str = "/api/accounts/deviceauth/token";
 const DEVICE_PATH: &str = "/codex/device";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_SAFETY_MARGIN: Duration = Duration::from_secs(3);
-const POLL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const DEVICE_LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const CANCEL_CHECK_INTERVAL: Duration = Duration::from_millis(100);
+
+pub(crate) fn device_login_deadline() -> Instant {
+    let started = Instant::now();
+    started.checked_add(DEVICE_LOGIN_TIMEOUT).unwrap_or(started)
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct DeviceAuthorization {
@@ -37,6 +42,7 @@ pub(crate) enum DeviceError {
     Provider { status: u16 },
     Transport,
     InvalidPayload,
+    TimedOut,
 }
 
 impl std::fmt::Display for DeviceError {
@@ -49,6 +55,7 @@ impl std::fmt::Display for DeviceError {
             Self::InvalidPayload => {
                 formatter.write_str("device authorization returned an invalid response")
             }
+            Self::TimedOut => formatter.write_str("device authorization timed out"),
         }
     }
 }
@@ -83,22 +90,42 @@ impl DeviceClient {
         })
     }
 
-    pub(crate) fn initiate(&self) -> Result<DeviceAuthorization, DeviceError> {
-        let response = self
+    pub(crate) fn initiate(&self, deadline: Instant) -> Result<DeviceAuthorization, DeviceError> {
+        let timeout = remaining_request_timeout(deadline).ok_or(DeviceError::TimedOut)?;
+        let response = match self
             .http
             .post(format!("{}{USER_CODE_ENDPOINT}", self.issuer_base))
+            .timeout(timeout)
             .json(&UserCodeRequest {
                 client_id: CLIENT_ID,
             })
             .send()
-            .map_err(|_| DeviceError::Transport)?;
+        {
+            Ok(response) => response,
+            Err(error) if error.is_timeout() || Instant::now() >= deadline => {
+                return Err(DeviceError::TimedOut);
+            }
+            Err(_) => return Err(DeviceError::Transport),
+        };
+        if Instant::now() >= deadline {
+            return Err(DeviceError::TimedOut);
+        }
         let status = response.status();
         if !status.is_success() {
             return Err(DeviceError::Provider {
                 status: status.as_u16(),
             });
         }
-        let value: serde_json::Value = response.json().map_err(|_| DeviceError::InvalidPayload)?;
+        let value: serde_json::Value = response.json().map_err(|error| {
+            if error.is_timeout() || Instant::now() >= deadline {
+                DeviceError::TimedOut
+            } else {
+                DeviceError::InvalidPayload
+            }
+        })?;
+        if Instant::now() >= deadline {
+            return Err(DeviceError::TimedOut);
+        }
         let device_auth_id = required_string(&value, "device_auth_id")?;
         let user_code = required_string(&value, "user_code")?;
         let interval_secs = parsed_interval(&value).max(1);
@@ -113,25 +140,24 @@ impl DeviceClient {
     pub(crate) fn poll(
         &self,
         authorization: &DeviceAuthorization,
+        deadline: Instant,
         cancelled: impl Fn() -> bool,
     ) -> Result<DevicePollOutcome, DeviceError> {
-        self.poll_with_limits(
+        self.poll_with_deadline(
             authorization,
             cancelled,
-            POLL_TIMEOUT,
-            authorization.interval.saturating_add(POLL_SAFETY_MARGIN),
+            deadline,
+            pending_poll_delay(authorization.interval),
         )
     }
 
-    fn poll_with_limits(
+    fn poll_with_deadline(
         &self,
         authorization: &DeviceAuthorization,
         cancelled: impl Fn() -> bool,
-        timeout: Duration,
+        deadline: Instant,
         pending_delay: Duration,
     ) -> Result<DevicePollOutcome, DeviceError> {
-        let started = Instant::now();
-        let deadline = started.checked_add(timeout).unwrap_or(started);
         loop {
             if cancelled() {
                 return Ok(DevicePollOutcome::Cancelled);
@@ -139,14 +165,13 @@ impl DeviceClient {
             if Instant::now() >= deadline {
                 return Ok(DevicePollOutcome::TimedOut);
             }
+            let Some(request_timeout) = remaining_request_timeout(deadline) else {
+                return Ok(DevicePollOutcome::TimedOut);
+            };
             let response = match self
                 .http
                 .post(format!("{}{TOKEN_POLL_ENDPOINT}", self.issuer_base))
-                .timeout(
-                    deadline
-                        .saturating_duration_since(Instant::now())
-                        .min(REQUEST_TIMEOUT),
-                )
+                .timeout(request_timeout)
                 .json(&TokenPollRequest {
                     device_auth_id: &authorization.device_auth_id,
                     user_code: &authorization.user_code,
@@ -154,15 +179,32 @@ impl DeviceClient {
                 .send()
             {
                 Ok(response) => response,
-                Err(_) if Instant::now() >= deadline => {
+                Err(error) if error.is_timeout() || Instant::now() >= deadline => {
                     return Ok(DevicePollOutcome::TimedOut);
                 }
                 Err(_) => return Err(DeviceError::Transport),
             };
+            if cancelled() {
+                return Ok(DevicePollOutcome::Cancelled);
+            }
+            if Instant::now() >= deadline {
+                return Ok(DevicePollOutcome::TimedOut);
+            }
             let status = response.status();
             if status.is_success() {
-                let value: serde_json::Value =
-                    response.json().map_err(|_| DeviceError::InvalidPayload)?;
+                let value: serde_json::Value = response.json().map_err(|error| {
+                    if error.is_timeout() || Instant::now() >= deadline {
+                        DeviceError::TimedOut
+                    } else {
+                        DeviceError::InvalidPayload
+                    }
+                })?;
+                if cancelled() {
+                    return Ok(DevicePollOutcome::Cancelled);
+                }
+                if Instant::now() >= deadline {
+                    return Ok(DevicePollOutcome::TimedOut);
+                }
                 return Ok(DevicePollOutcome::Authorized(DeviceCodeGrant {
                     authorization_code: required_string(&value, "authorization_code")?,
                     code_verifier: required_string(&value, "code_verifier")?,
@@ -182,6 +224,15 @@ impl DeviceClient {
             }
         }
     }
+}
+
+fn pending_poll_delay(interval: Duration) -> Duration {
+    interval.saturating_add(POLL_SAFETY_MARGIN)
+}
+
+fn remaining_request_timeout(deadline: Instant) -> Option<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    (!remaining.is_zero()).then(|| remaining.min(REQUEST_TIMEOUT))
 }
 
 fn required_string(value: &serde_json::Value, field: &str) -> Result<String, DeviceError> {
@@ -314,7 +365,9 @@ mod tests {
         )]);
         let client = DeviceClient::new(&base).unwrap();
 
-        let pending = client.initiate().unwrap();
+        let pending = client
+            .initiate(Instant::now() + Duration::from_secs(5))
+            .unwrap();
 
         assert_eq!(pending.verification_url, format!("{base}/codex/device"));
         assert_eq!(pending.user_code, "CODE-123");
@@ -337,7 +390,7 @@ mod tests {
         let client = DeviceClient::new(&base).unwrap();
 
         assert!(matches!(
-            client.initiate(),
+            client.initiate(Instant::now() + Duration::from_secs(5)),
             Err(DeviceError::InvalidPayload)
         ));
     }
@@ -355,10 +408,10 @@ mod tests {
         let client = DeviceClient::new(&base).unwrap();
 
         let outcome = client
-            .poll_with_limits(
+            .poll_with_deadline(
                 &authorization(&base),
                 || false,
-                Duration::from_secs(5),
+                Instant::now() + Duration::from_secs(5),
                 Duration::ZERO,
             )
             .unwrap();
@@ -388,10 +441,10 @@ mod tests {
         let client = DeviceClient::new(&base).unwrap();
         assert_eq!(
             client
-                .poll_with_limits(
+                .poll_with_deadline(
                     &authorization(&base),
                     || true,
-                    Duration::from_secs(5),
+                    Instant::now() + Duration::from_secs(5),
                     Duration::ZERO,
                 )
                 .unwrap(),
@@ -399,10 +452,10 @@ mod tests {
         );
         assert_eq!(
             client
-                .poll_with_limits(
+                .poll_with_deadline(
                     &authorization(&base),
                     || false,
-                    Duration::ZERO,
+                    Instant::now(),
                     Duration::ZERO,
                 )
                 .unwrap(),
@@ -418,15 +471,53 @@ mod tests {
         let client = DeviceClient::new(&base).unwrap();
 
         let error = client
-            .poll_with_limits(
+            .poll_with_deadline(
                 &authorization(&base),
                 || false,
-                Duration::from_secs(5),
+                Instant::now() + Duration::from_secs(5),
                 Duration::ZERO,
             )
             .unwrap_err();
 
         assert!(matches!(&error, DeviceError::Provider { status: 500 }));
         assert!(!error.to_string().contains(sentinel));
+    }
+
+    #[test]
+    fn initiation_request_cannot_outlive_the_shared_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_request(&mut stream);
+            std::thread::sleep(Duration::from_secs(1));
+        });
+        let client = DeviceClient::new(&base).unwrap();
+        let started = Instant::now();
+
+        let error = client
+            .initiate(started + Duration::from_millis(50))
+            .unwrap_err();
+
+        assert!(matches!(error, DeviceError::TimedOut));
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn polling_uses_interval_plus_three_seconds_within_the_existing_deadline() {
+        assert_eq!(
+            pending_poll_delay(Duration::from_secs(2)),
+            Duration::from_secs(5)
+        );
+
+        let (base, captured) = start_server(Vec::new());
+        let client = DeviceClient::new(&base).unwrap();
+        let deadline = Instant::now();
+        let outcome = client
+            .poll(&authorization(&base), deadline, || false)
+            .unwrap();
+
+        assert_eq!(outcome, DevicePollOutcome::TimedOut);
+        assert!(captured.lock().unwrap().is_empty());
     }
 }
