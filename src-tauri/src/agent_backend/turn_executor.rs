@@ -37,15 +37,38 @@ pub(crate) struct ProviderTurnResult {
 }
 const QUARANTINE_ACTION: &str = "Resolve the quarantined Agent Run before retrying.";
 
+/// Generous bound on consecutive tool rounds inside one Provider Turn. A hostile
+/// or broken backend can otherwise sustain endless follow-ups (denied calls
+/// consume no reservations), so exceeding this budget quarantines the run.
+const MAX_TOOL_ROUNDS: u32 = 32;
+
+/// Drives one Provider Turn against the ChatGPT backend until it completes
+/// without outstanding tool calls, fails, or is interrupted.
+///
+/// # Panics
+///
+/// Panics when polled inside a current-thread tokio runtime: the transport seam
+/// (`ChatGptBackend::create_response`) and the OAuth token refresh are blocking
+/// calls parked via [`tokio::task::block_in_place`], which requires a
+/// multi-thread runtime (the Tauri default). When in doubt, call this function
+/// through `tokio::task::spawn_blocking`. Debug builds assert the runtime flavor.
 pub(crate) async fn execute_provider_turn(
     ctx: TurnContext<'_>,
 ) -> Result<ProviderTurnResult, ProviderFailure> {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        debug_assert_ne!(
+            handle.runtime_flavor(),
+            tokio::runtime::RuntimeFlavor::CurrentThread,
+            "execute_provider_turn requires a multi-thread tokio runtime"
+        );
+    }
     let mut request = ctx.request;
     request.session_id = ctx.session_id.clone();
     let mut items = request.input_items.clone();
     let mut auth = cloned_connection(ctx.auth);
     let mut usage_snapshots = Vec::new();
     let mut denied_tool_calls = 0u32;
+    let mut tool_rounds = 0u32;
     let mut turn_advanced = false;
     let mut refreshed = false;
     let mut cancelled = false;
@@ -102,6 +125,10 @@ pub(crate) async fn execute_provider_turn(
                 usage: accumulated_usage(&usage_snapshots),
                 denied_tool_calls,
             });
+        }
+        tool_rounds += 1;
+        if tool_rounds > MAX_TOOL_ROUNDS {
+            return Err(tool_round_budget_exhausted());
         }
         let mut outputs = Vec::with_capacity(response.function_calls.len());
         for call in &response.function_calls {
@@ -329,6 +356,15 @@ fn interruption_failure(turn_advanced: bool) -> ProviderFailure {
     )
 }
 
+fn tool_round_budget_exhausted() -> ProviderFailure {
+    ProviderFailure::new(
+        ProviderFailureCategory::OutcomeUnknown,
+        false,
+        QUARANTINE_ACTION,
+        Some("The ChatGPT Provider Turn exceeded its consecutive tool-round budget."),
+    )
+}
+
 fn backend_failure(error: BackendError, turn_advanced: bool) -> ProviderFailure {
     match error {
         BackendError::AuthenticationRequired => authentication_failure(),
@@ -549,9 +585,25 @@ mod tests {
             .block_on(future)
     }
 
+    struct AlwaysFunctionCallBackend {
+        requests: Mutex<Vec<serde_json::Value>>,
+    }
+
+    impl ChatGptBackend for AlwaysFunctionCallBackend {
+        fn create_response(
+            &self,
+            _auth: &StoredConnection,
+            req: &BackendRequest,
+            on_event: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnDisposition, BackendError> {
+            self.requests.lock().unwrap().push(build_request_body(req));
+            parse_stream_bytes(&sse(TOOL_RESPONSE_ONE), on_event)
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn run_turn<'a>(
-        backend: &'a ScriptedBackend,
+        backend: &'a dyn ChatGptBackend,
         auth: &'a StoredConnection,
         token_client: &'a TokenClient,
         home: &'a Path,
@@ -777,6 +829,53 @@ mod tests {
         assert_eq!(
             output["output"],
             json!({"error": "tool_failed", "reason": "quota_exhausted"}).to_string()
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn consecutive_tool_rounds_terminate_at_the_cap_with_quarantine() {
+        let backend = AlwaysFunctionCallBackend {
+            requests: Mutex::new(Vec::new()),
+        };
+        let auth = stored_connection("at-1");
+        let (token_client, _bodies) = mock_issuer(ISSUER_BODY);
+        let home = temp_home("tool-cap");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let closure_attempts = Arc::clone(&attempts);
+        let approve_all = move |_name: &str, _arguments: &str| -> Result<Value, ToolRejection> {
+            closure_attempts.fetch_add(1, Ordering::SeqCst);
+            Ok(json!({"ok": true}))
+        };
+        let mut sink = |_: BackendEvent| {};
+
+        let failure = run_turn(
+            &backend,
+            &auth,
+            &token_client,
+            &home,
+            &approve_all,
+            &|| false,
+            &mut sink,
+        )
+        .expect_err("an endless tool loop must hit the cap");
+
+        assert_eq!(failure.category, ProviderFailureCategory::OutcomeUnknown);
+        assert!(!failure.retry_safe);
+        assert_eq!(failure.required_user_action, QUARANTINE_ACTION);
+        assert_eq!(
+            failure.redacted_detail.as_deref(),
+            Some("The ChatGPT Provider Turn exceeded its consecutive tool-round budget.")
+        );
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            MAX_TOOL_ROUNDS as usize,
+            "the round past the cap must not authorize any tool"
+        );
+        assert_eq!(
+            backend.requests.lock().unwrap().len(),
+            MAX_TOOL_ROUNDS as usize + 1,
+            "initial request plus one follow-up per capped round"
         );
         let _ = std::fs::remove_dir_all(&home);
     }

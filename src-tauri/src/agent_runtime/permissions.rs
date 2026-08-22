@@ -999,31 +999,42 @@ pub(crate) fn one_run_grant_authorizes_tool(
         )
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ToolCallDecision<'a> {
+    Authorized(&'a OneRunAccessGrant),
+    Denied(PermissionDenialReason),
+}
+
 pub(crate) fn authorize_tool_call<'a>(
     grant: &PermissionGrant,
     profile_capabilities: &[String],
     approved_requests: &'a [(String, OneRunAccessGrant)],
     now: Timestamp,
     tool_name: &str,
-) -> Result<&'a OneRunAccessGrant, PermissionDenialReason> {
+) -> Result<ToolCallDecision<'a>, TenderCommandError> {
     let Some(definition) = bootstrap_tool_catalogue()
         .into_iter()
         .find(|tool| tool.name == tool_name)
     else {
-        return Err(PermissionDenialReason::ToolNotGranted);
+        return Ok(ToolCallDecision::Denied(
+            PermissionDenialReason::ToolNotGranted,
+        ));
     };
     for (request_id, supplement) in approved_requests {
-        let Ok(expires_at) = supplement.expires_at.parse::<Timestamp>() else {
-            continue;
-        };
+        let expires_at = supplement
+            .expires_at
+            .parse::<Timestamp>()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
         if supplement.request_id == *request_id
             && expires_at > now
             && one_run_grant_authorizes_tool(grant, profile_capabilities, supplement, &definition)
         {
-            return Ok(supplement);
+            return Ok(ToolCallDecision::Authorized(supplement));
         }
     }
-    Err(PermissionDenialReason::ToolNotGranted)
+    Ok(ToolCallDecision::Denied(
+        PermissionDenialReason::ToolNotGranted,
+    ))
 }
 
 fn request_covers_tool_authority(
@@ -1284,7 +1295,6 @@ mod tests {
         };
         (grant, supplement)
     }
-
     #[test]
     fn authorize_tool_call_matches_an_active_approved_request() {
         let (grant, supplement) = tool_authorization_fixture();
@@ -1297,8 +1307,11 @@ mod tests {
             "2026-08-08T06:00:00Z".parse().unwrap(),
             TENDER_METADATA_TOOL_NAME,
         )
-        .expect("tool call must be authorized");
+        .expect("tool call authorization must not fail");
 
+        let ToolCallDecision::Authorized(authorized) = authorized else {
+            panic!("expected an authorized decision, got {authorized:?}");
+        };
         assert_eq!(authorized.approval_id, "77777777777777777777777777777777");
     }
 
@@ -1312,8 +1325,12 @@ mod tests {
             &[],
             "2026-08-08T06:00:00Z".parse().unwrap(),
             "undeclared_shell",
+        )
+        .expect("unknown tool must deny without an integrity failure");
+        assert_eq!(
+            unknown,
+            ToolCallDecision::Denied(PermissionDenialReason::ToolNotGranted)
         );
-        assert_eq!(unknown, Err(PermissionDenialReason::ToolNotGranted));
 
         let expired_requests = [("66666666666666666666666666666666".to_owned(), supplement)];
         let expired = authorize_tool_call(
@@ -1322,7 +1339,29 @@ mod tests {
             &expired_requests,
             "2026-08-08T07:00:00Z".parse().unwrap(),
             TENDER_METADATA_TOOL_NAME,
+        )
+        .expect("an expired but well-formed supplement must deny");
+        assert_eq!(
+            expired,
+            ToolCallDecision::Denied(PermissionDenialReason::ToolNotGranted)
         );
-        assert_eq!(expired, Err(PermissionDenialReason::ToolNotGranted));
+    }
+
+    #[test]
+    fn authorize_tool_call_fails_loud_on_an_unparseable_supplement_expiry() {
+        let (grant, mut supplement) = tool_authorization_fixture();
+        supplement.expires_at = "corrupt-supplement-expiry".into();
+        let approved = [("66666666666666666666666666666666".to_owned(), supplement)];
+
+        let error = authorize_tool_call(
+            &grant,
+            &["analyze_tender_intake_readiness".into()],
+            &approved,
+            "2026-08-08T06:00:00Z".parse().unwrap(),
+            TENDER_METADATA_TOOL_NAME,
+        )
+        .expect_err("a corrupt supplement must fail loud");
+
+        assert_eq!(error.code, TenderErrorCode::IntegrityFailed);
     }
 }

@@ -9,7 +9,7 @@ use crate::agent_runtime::{
     approve_one_run_access, bootstrap_profile, bootstrap_task,
     permissions::{
         authorize_tool_call, bootstrap_tool_catalogue, derive_bootstrap_grant, permission_duration,
-        BootstrapGrantRequest,
+        BootstrapGrantRequest, ToolCallDecision,
     },
     AccessApproval, AccessRequest, AgentAccessRequestStatus, AgentAccessRequestView,
     AgentProfileStatus, AgentProfileVersionView, AgentRunActivity, AgentRunHistoryItem,
@@ -2447,8 +2447,11 @@ impl TenderStore {
             now_timestamp,
             tool_name,
         ) {
-            Ok(authorized) => authorized.clone(),
-            Err(_) => return Ok(false),
+            Ok(ToolCallDecision::Authorized(authorized)) => authorized.clone(),
+            Ok(ToolCallDecision::Denied(_)) => return Ok(false),
+            Err(_) => {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
         };
         let inserted = transaction
             .execute(
