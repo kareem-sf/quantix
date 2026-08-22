@@ -77,3 +77,39 @@ These test sources were deliberately not executed under the task constraint.
 - Authentication-file and SQLite updates are serialized against competing in-process connection mutations, but they are separate durable stores and therefore are not crash-atomic as a pair.
 - A final local filesystem synchronization that starts within the device budget can finish marginally after the deadline; all prior network waits, polling waits, cancellation checks, and mutation-lock acquisition are deadline-bounded.
 - The pre-existing unstaged whitespace change in `docs/superpowers/specs/2026-08-22-codex-only-beginner-connection-design.md` was left untouched and excluded from the implementation commit.
+
+## Independent-review follow-up
+
+### Commit
+
+`5eb57786e35fef7ae907b9e1cc7fdfff1450b75f` (`fix: serialize connection publication`)
+
+### Design and scope
+
+- Browser and device persistence now write `auth.json` and the matching ready provider/default-selection projection while retaining one connection-mutation boundary. A projection failure restores the previous authorization state; cancellation and the device deadline are checked before and after projection, and a post-projection cancellation also restores the prior settings projection.
+- Selection update and confirmation now run their current-auth observation/refresh, projection, selection validation, SQLite transaction, approval creation or invalidation, and returned settings load inside one connection-mutation closure. Confirmation constructs its account fingerprint only from the revalidated connection held by that closure.
+- Production subscription inspection and production provider-turn readiness now use one shared observe/refresh-and-project primitive. Provider success and failure projections occur before the connection boundary is released; the runtime-fixture provider path remains separate.
+- Auth refresh is restored to its preceding state if the matching SQLite projection cannot be persisted. Lock order remains connection mutation before auth-file and SQLite operations. Login-state and tender-store mutexes are not retained while the connection boundary is held.
+
+### Static regression sources
+
+- Browser completion asserts connected auth, a ready matching provider, and the default model selection immediately after persistence.
+- Projection failure asserts restoration of the prior authorized connection.
+- Runtime failure projection versus later login asserts that the later serialized login leaves connected, ready settings instead of a split state.
+- Deterministic update-versus-disconnect and confirmation-versus-account-replacement interleavings assert that stale selection or approval cannot publish after the later mutation.
+
+### Static evidence and limitations
+
+- `rustfmt --edition 2021` completed successfully on the five follow-up Rust files. This is parser/format evidence only.
+- `git diff --check` and `git diff --cached --check` reported no whitespace errors, and read-only symbol audits confirmed both production runtime readiness call sites use `project_chatgpt_connection_readiness`; the removed separate runtime failure save and asynchronous selection-readiness helper are absent.
+- No tests, Cargo checks, builds, Clippy, development servers, application commands, or generators were run. The new regression sources remain unexecuted and uncompiled by explicit instruction.
+- A cancelled production runtime inspection can stop awaiting its blocking worker, but that worker still completes observation and its matching projection under one boundary. Cancellation therefore cannot leave a half-published runtime observation.
+- Auth-file and SQLite writes remain separate durable stores and are not crash-atomic, although in-process publication, rollback, and competing mutations are serialized.
+
+### Follow-up file SHA-256 hashes
+
+- `agent_runtime.rs`: `ED43B06D2DCA7DCAADBA2EEF4688D0B18BB42AD37921E1D45EB8545B82F0A1D6`
+- `application_settings.rs`: `7135B430F1156D1EAE245320BC9FC851CE10C9F7FA4A060D8C84B6989A1512F3`
+- `chatgpt_login.rs`: `762CF28DF8A38718CF606964D308BC37DEA1851D692056860A5D8FF5815B0DCE`
+- `chatgpt_oauth/mod.rs`: `93A3C5842C9C514702C79BFC8EEFF76311CCCF2C2FD48D726D3EF89E89FC6E49`
+- `chatgpt_oauth/store.rs`: `1CAD2FC995134C981E86524345C041CFC407CF38532651F00E964D5133CD176B`
