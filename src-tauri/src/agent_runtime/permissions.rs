@@ -999,6 +999,33 @@ pub(crate) fn one_run_grant_authorizes_tool(
         )
 }
 
+pub(crate) fn authorize_tool_call<'a>(
+    grant: &PermissionGrant,
+    profile_capabilities: &[String],
+    approved_requests: &'a [(String, OneRunAccessGrant)],
+    now: Timestamp,
+    tool_name: &str,
+) -> Result<&'a OneRunAccessGrant, PermissionDenialReason> {
+    let Some(definition) = bootstrap_tool_catalogue()
+        .into_iter()
+        .find(|tool| tool.name == tool_name)
+    else {
+        return Err(PermissionDenialReason::ToolNotGranted);
+    };
+    for (request_id, supplement) in approved_requests {
+        let Ok(expires_at) = supplement.expires_at.parse::<Timestamp>() else {
+            continue;
+        };
+        if supplement.request_id == *request_id
+            && expires_at > now
+            && one_run_grant_authorizes_tool(grant, profile_capabilities, supplement, &definition)
+        {
+            return Ok(supplement);
+        }
+    }
+    Err(PermissionDenialReason::ToolNotGranted)
+}
+
 fn request_covers_tool_authority(
     grant: &PermissionGrant,
     request: &AccessRequest,
@@ -1222,5 +1249,80 @@ mod tests {
         .expect("remaining Permission Grant duration");
 
         assert_eq!(remaining, Duration::from_secs(30));
+    }
+
+    fn tool_authorization_fixture() -> (PermissionGrant, OneRunAccessGrant) {
+        let (mut grant, request, approval) =
+            access_fixture(DataClassification::TenderInternal, false);
+        let exact_input = AgentTaskInputReference {
+            kind: "tender_revision".into(),
+            reference: "11111111111111111111111111111111".into(),
+            version: 1,
+        };
+        grant.access_ceiling.allowed_tools = vec![TENDER_METADATA_TOOL_NAME.into()];
+        grant.data_views = vec![DataViewManifest {
+            view_id: "tender-metadata-v1".into(),
+            schema_version: 1,
+            relative_path: "inputs/tender-metadata-v1.json".into(),
+            sha256: "0".repeat(64),
+            data_scope: TENDER_METADATA_SCOPE.into(),
+            data_classification: DataClassification::TenderInternal,
+            exact_inputs: vec![exact_input.clone()],
+        }];
+        let supplement = OneRunAccessGrant {
+            approval_id: approval.approval_id,
+            request_id: request.request_id,
+            run_id: request.run_id,
+            exact_inputs: vec![exact_input],
+            data_scopes: vec![TENDER_METADATA_SCOPE.into()],
+            data_classifications: vec![DataClassification::TenderInternal],
+            allowed_actions: vec!["propose_intake_readiness".into()],
+            allowed_tools: vec![TENDER_METADATA_TOOL_NAME.into()],
+            purpose: request.purpose,
+            approved_by: approval.approved_by,
+            expires_at: approval.expires_at,
+        };
+        (grant, supplement)
+    }
+
+    #[test]
+    fn authorize_tool_call_matches_an_active_approved_request() {
+        let (grant, supplement) = tool_authorization_fixture();
+        let approved = vec![("66666666666666666666666666666666".into(), supplement)];
+
+        let authorized = authorize_tool_call(
+            &grant,
+            &["analyze_tender_intake_readiness".into()],
+            &approved,
+            "2026-08-08T06:00:00Z".parse().unwrap(),
+            TENDER_METADATA_TOOL_NAME,
+        )
+        .expect("tool call must be authorized");
+
+        assert_eq!(authorized.approval_id, "77777777777777777777777777777777");
+    }
+
+    #[test]
+    fn authorize_tool_call_rejects_unknown_tools_and_stale_supplements() {
+        let (grant, supplement) = tool_authorization_fixture();
+
+        let unknown = authorize_tool_call(
+            &grant,
+            &["analyze_tender_intake_readiness".into()],
+            &[],
+            "2026-08-08T06:00:00Z".parse().unwrap(),
+            "undeclared_shell",
+        );
+        assert_eq!(unknown, Err(PermissionDenialReason::ToolNotGranted));
+
+        let expired_requests = [("66666666666666666666666666666666".to_owned(), supplement)];
+        let expired = authorize_tool_call(
+            &grant,
+            &["analyze_tender_intake_readiness".into()],
+            &expired_requests,
+            "2026-08-08T07:00:00Z".parse().unwrap(),
+            TENDER_METADATA_TOOL_NAME,
+        );
+        assert_eq!(expired, Err(PermissionDenialReason::ToolNotGranted));
     }
 }

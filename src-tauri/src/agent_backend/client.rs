@@ -53,6 +53,7 @@ impl std::fmt::Display for RedactedFailure {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum StreamEvent {
     ItemAdded(serde_json::Value),
+    ItemDone(serde_json::Value),
     TextDelta(String),
     FunctionCallDelta {
         call_id: String,
@@ -74,8 +75,6 @@ pub(crate) enum StreamEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TurnDisposition {
     Completed,
-    #[allow(dead_code)] // consumed by the turn executor mapping (next task)
-    Interrupted,
     Failed,
 }
 
@@ -287,6 +286,7 @@ impl<'a> SseParser<'a> {
                 let Some(item) = value.get("item") else {
                     return;
                 };
+                (self.on_event)(StreamEvent::ItemDone(value.clone()));
                 if item.get("type").and_then(serde_json::Value::as_str) != Some("function_call") {
                     return;
                 }
@@ -522,7 +522,7 @@ mod tests {
         parser.finish();
 
         let events = collected.lock().unwrap();
-        assert_eq!(events.len(), 4, "unexpected event count: {events:?}");
+        assert_eq!(events.len(), 5, "unexpected event count: {events:?}");
         assert!(matches!(
             &events[0],
             StreamEvent::ItemAdded(value)
@@ -534,7 +534,12 @@ mod tests {
             }
             other => panic!("expected two text deltas, got {other:?}"),
         }
-        match &events[3] {
+        assert!(matches!(
+            &events[3],
+            StreamEvent::ItemDone(value)
+                if value["item"]["type"] == "message" && value["output_index"] == 0
+        ));
+        match &events[4] {
             StreamEvent::Completed { response_id, usage } => {
                 assert_eq!(response_id, "resp_text_1");
                 assert_eq!(

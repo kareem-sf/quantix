@@ -8,8 +8,8 @@ use serde_json::{json, Value};
 use crate::agent_runtime::{
     approve_one_run_access, bootstrap_profile, bootstrap_task,
     permissions::{
-        bootstrap_tool_catalogue, derive_bootstrap_grant, one_run_grant_authorizes_tool,
-        permission_duration, BootstrapGrantRequest,
+        authorize_tool_call, bootstrap_tool_catalogue, derive_bootstrap_grant, permission_duration,
+        BootstrapGrantRequest,
     },
     AccessApproval, AccessRequest, AgentAccessRequestStatus, AgentAccessRequestView,
     AgentProfileStatus, AgentProfileVersionView, AgentRunActivity, AgentRunHistoryItem,
@@ -2434,30 +2434,21 @@ impl TenderStore {
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(sql_error)?;
         drop(statement);
-        let mut authorized_grant = None;
+        let mut approved_requests = Vec::with_capacity(grants.len());
         for (request_id, supplement_json) in grants {
             let supplement: crate::agent_runtime::OneRunAccessGrant =
                 parse_canonical_json(&supplement_json)?;
-            let expires_at: Timestamp = supplement
-                .expires_at
-                .parse()
-                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-            if supplement.request_id == request_id
-                && supplement.run_id == run_id
-                && expires_at > now_timestamp
-                && one_run_grant_authorizes_tool(
-                    &grant,
-                    &profile_capabilities,
-                    &supplement,
-                    &definition,
-                )
-            {
-                authorized_grant = Some(supplement);
-                break;
-            }
+            approved_requests.push((request_id, supplement));
         }
-        let Some(authorized_grant) = authorized_grant else {
-            return Ok(false);
+        let authorized_grant = match authorize_tool_call(
+            &grant,
+            &profile_capabilities,
+            &approved_requests,
+            now_timestamp,
+            tool_name,
+        ) {
+            Ok(authorized) => authorized.clone(),
+            Err(_) => return Ok(false),
         };
         let inserted = transaction
             .execute(
