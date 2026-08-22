@@ -278,7 +278,7 @@ Output ends with a GO/NO-GO for REST+SSE and the catalogue decision (built-in ve
 
 **Interfaces:**
 - Produces:
-  - `pub(crate) struct BackendRequest { pub model: String, pub instructions: String, pub input_items: Vec<serde_json::Value>, pub tools: Vec<serde_json::Value>, pub previous_response_id: Option<String>, pub store: bool /* always false */, pub include_reasoning: bool /* always true */ }`
+  - `pub(crate) struct BackendRequest { pub model: String, pub instructions: String, pub input_items: Vec<serde_json::Value>, pub tools: Vec<serde_json::Value>, pub store: bool /* always false */, pub include_reasoning: bool /* always true */ }`
   - `pub(crate) enum StreamEvent { ItemAdded(Value), TextDelta(String), FunctionCallDelta{call_id:String, name:String, args_delta:String}, FunctionCallDone{call_id:String, name:String, arguments:String}, Completed{response_id:String, usage:UsageSnapshot}, Errored(RedactedFailure) }`
   - `pub(crate) trait ChatGptBackend: Send { fn create_response(&self, auth: &StoredConnection, req: &BackendRequest, on_event: &mut dyn FnMut(StreamEvent)) -> Result<TurnDisposition, BackendError>; }`
   - `TurnDisposition::{Completed, Interrupted, Failed}` aligning with existing Provider Turn outcomes.
@@ -298,7 +298,7 @@ Reqwest impl: POST SSE (`text/event-stream`), parse `data:` lines incrementally,
 - Consumes: `ChatGptBackend`, `permissions.rs` reservations, existing `prepare_*_run` staging/workspace/grant rows, existing candidate-validation + `complete_agent_run` persistence
 - Produces: `pub(crate) async fn execute_provider_turn(ctx: TurnContext<'_>) -> Result<ProviderTurnResult, ProviderFailure>` — same signature family as today's codex path so the cutover in Task 13 is a routing change.
 
-Behavior: build `BackendRequest` from Provider Turn Request (instructions bundle → `instructions`, Data Views/input manifest → initial `input_items`, Typed Tools → `tools` with JSON schemas from grant); loop on `FunctionCallDone`: validate reservation → execute Typed Tool → append `{type:"function_call_output", call_id, output}` → issue follow-up request (same `response_id` chaining via `previous_response_id`, `store:false`, encrypted reasoning included); map dispositions to existing outcome enums; interruption = cooperative cancel flag checked between events (stream dropped → `Interrupted`; uncertainty → existing Indeterminate quarantine path); usage recorded per existing Provider Usage records.
+Behavior: build `BackendRequest` from Provider Turn Request (instructions bundle → `instructions`, Data Views/input manifest → initial `input_items`, Typed Tools → `tools` with JSON schemas from grant); loop on `FunctionCallDone`: validate reservation → execute Typed Tool → append `{type:"function_call_output", call_id, output}` → issue a stateless follow-up request that replays the original input plus ID-stripped response items, encrypted reasoning, function calls and tool outputs under `store:false`; map dispositions to existing outcome enums; interruption = cooperative cancel flag checked between events (stream dropped → `Interrupted`; uncertainty → existing Indeterminate quarantine path); usage recorded per existing Provider Usage records.
 
 - [ ] Steps: fixture-scripted tests: (a) straight text answer completes + artifacts validated; (b) one tool roundtrip executes grant-approved tool, denies out-of-grant call with audited denial event; (c) mid-stream abort → Interrupted; (d) 401 → refresh-once-then-`AuthenticationRequired`. Implement until GREEN. Commit `feat: host-executed chatgpt turns`
 

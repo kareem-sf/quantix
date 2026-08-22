@@ -37,7 +37,6 @@ const diagnosticCopy: Record<UpdateDiagnostic, string> = {
   installation_schema_incompatible:
     "The Application Home schema is incompatible.",
   tender_store_incompatible: "The Tender Store schema is incompatible.",
-  codex_incompatible: "The bundled Codex runtime is incompatible.",
   ocr_incompatible: "The locked OCR runtime is incompatible.",
   runtime_incompatible: "The locked runtime manifest is incompatible.",
   approval_required: "The exact update has not been approved.",
@@ -196,8 +195,7 @@ export function UpdatePanel({
               <dt>Compatibility</dt>
               <dd>
                 Home schema {offer.compatibility.installation_schema_version};
-                Tender schema {offer.compatibility.tender_schema_version}; Codex{" "}
-                {offer.compatibility.codex_version}; OCR{" "}
+                Tender schema {offer.compatibility.tender_schema_version}; OCR{" "}
                 {offer.compatibility.ocr_version}; runtime manifest schema{" "}
                 {offer.compatibility.runtime_manifest_schema_version}
               </dd>

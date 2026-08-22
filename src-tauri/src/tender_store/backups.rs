@@ -515,6 +515,7 @@ struct PermanentDeletionPlan {
     provider_reference_discovery: ProviderReferenceDiscoveryState,
 }
 
+#[cfg(feature = "runtime-fixture")]
 struct PendingProviderCleanup {
     cleanup_id: String,
     provider: AiProviderKind,
@@ -2324,6 +2325,7 @@ impl QuantixHost {
         Ok(receipts)
     }
 
+    #[cfg(feature = "runtime-fixture")]
     pub(crate) async fn retry_pending_provider_cleanup(&self) -> Result<(), TenderCommandError> {
         let _execution = self.provider_cleanup_execution().lock().await;
         let pending = self.pending_provider_cleanup_jobs()?;
@@ -2358,6 +2360,12 @@ impl QuantixHost {
         Ok(())
     }
 
+    #[cfg(not(feature = "runtime-fixture"))]
+    pub(crate) async fn retry_pending_provider_cleanup(&self) -> Result<(), TenderCommandError> {
+        Ok(())
+    }
+
+    #[cfg(feature = "runtime-fixture")]
     fn pending_provider_cleanup_jobs(
         &self,
     ) -> Result<Vec<PendingProviderCleanup>, TenderCommandError> {
@@ -2392,7 +2400,16 @@ impl QuantixHost {
             let (cleanup_id, provider, thread_ref, target_manifest_sha256) =
                 row.map_err(sql_error)?;
             let provider = match provider.as_str() {
-                "codex" => AiProviderKind::Codex,
+                "codex" => {
+                    #[cfg(feature = "runtime-fixture")]
+                    {
+                        AiProviderKind::Codex
+                    }
+                    #[cfg(not(feature = "runtime-fixture"))]
+                    {
+                        continue;
+                    }
+                }
                 "anthropic" => AiProviderKind::Anthropic,
                 "gemini" => AiProviderKind::Gemini,
                 _ => return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
@@ -2413,6 +2430,7 @@ impl QuantixHost {
         Ok(jobs)
     }
 
+    #[cfg(feature = "runtime-fixture")]
     fn record_provider_cleanup_attempt(
         &self,
         job: &PendingProviderCleanup,
@@ -2676,19 +2694,9 @@ impl QuantixHost {
         let mut provider_cleanup_targets = Vec::new();
         for row in provider_rows {
             let (provider, thread_ref) = row.map_err(sql_error)?;
-            let provider = match provider.as_str() {
-                "codex" => AiProviderKind::Codex,
-                "anthropic" => AiProviderKind::Anthropic,
-                "gemini" => AiProviderKind::Gemini,
-                _ => return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
-            };
-            if thread_ref.is_empty() || thread_ref.len() > 1000 {
-                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            if let Some(target) = permanent_provider_cleanup_target(&provider, thread_ref)? {
+                provider_cleanup_targets.push(target);
             }
-            provider_cleanup_targets.push(ProviderCleanupTarget {
-                provider,
-                thread_ref,
-            });
         }
 
         let _guard = self
@@ -3302,6 +3310,34 @@ impl QuantixHost {
     }
 }
 
+fn permanent_provider_cleanup_target(
+    provider: &str,
+    thread_ref: String,
+) -> Result<Option<ProviderCleanupTarget>, TenderCommandError> {
+    if thread_ref.is_empty() || thread_ref.len() > 1000 {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let provider = match provider {
+        "chatgpt" | "anthropic" | "gemini" => None,
+        "codex" if thread_ref.starts_with("chatgpt:") => None,
+        "codex" => {
+            #[cfg(feature = "runtime-fixture")]
+            {
+                Some(AiProviderKind::Codex)
+            }
+            #[cfg(not(feature = "runtime-fixture"))]
+            {
+                None
+            }
+        }
+        _ => return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+    };
+    Ok(provider.map(|provider| ProviderCleanupTarget {
+        provider,
+        thread_ref,
+    }))
+}
+
 pub(crate) fn reconcile_interrupted_backup_operations(
     application_home: &Path,
 ) -> Result<(), TenderCommandError> {
@@ -3888,23 +3924,13 @@ fn discover_recovery_provider_cleanup_targets(
                 continue;
             }
         };
-        let provider = match provider.as_str() {
-            "codex" => AiProviderKind::Codex,
-            "anthropic" => AiProviderKind::Anthropic,
-            "gemini" => AiProviderKind::Gemini,
-            _ => {
+        match permanent_provider_cleanup_target(&provider, thread_ref) {
+            Ok(Some(target)) => targets.push(target),
+            Ok(None) => {}
+            Err(_) => {
                 discovery = ProviderReferenceDiscoveryState::Incomplete;
-                continue;
             }
-        };
-        if thread_ref.is_empty() || thread_ref.len() > 1000 {
-            discovery = ProviderReferenceDiscoveryState::Incomplete;
-            continue;
         }
-        targets.push(ProviderCleanupTarget {
-            provider,
-            thread_ref,
-        });
     }
     Ok((targets, discovery))
 }
@@ -4922,6 +4948,30 @@ fn backup_integrity_failed(stage: &str) -> TenderCommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_provider_run_references_require_no_external_provider_cleanup() {
+        for (provider, thread_ref) in [
+            ("chatgpt", "chatgpt:run-1"),
+            ("codex", "chatgpt:run-1"),
+            ("anthropic", "anthropic:run-1"),
+            ("gemini", "gemini:run-1"),
+        ] {
+            let target = permanent_provider_cleanup_target(provider, thread_ref.into())
+                .expect("synthetic direct-provider reference is valid");
+            assert!(target.is_none(), "{provider} is a local synthetic thread");
+        }
+    }
+
+    #[cfg(feature = "runtime-fixture")]
+    #[test]
+    fn legacy_fixture_codex_thread_still_requires_external_provider_cleanup() {
+        let target = permanent_provider_cleanup_target("codex", "fixture-thread-1".into())
+            .expect("fixture provider reference is valid")
+            .expect("fixture actor owns an external thread");
+        assert_eq!(target.provider, AiProviderKind::Codex);
+        assert_eq!(target.thread_ref, "fixture-thread-1");
+    }
 
     #[test]
     fn recovery_lock_queue_respects_the_operation_deadline() {

@@ -2085,6 +2085,81 @@ impl TenderStore {
         transaction.commit().map_err(sql_error)
     }
 
+    pub(crate) fn checkpoint_agent_control_denial(
+        &mut self,
+        run_id: &str,
+        event: &PendingProviderEvent,
+    ) -> Result<(), TenderCommandError> {
+        if !self.active_change_allows_run(run_id)?
+            && !self.unresolved_change_allows_unaffected_run(run_id)?
+        {
+            self.require_change_intake_writable()?;
+        }
+        if event.kind != ProviderEventKind::ControlRequestDenied {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let correlation_id = event
+            .correlation_id
+            .as_deref()
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let request_fingerprint = event
+            .request_fingerprint
+            .as_deref()
+            .filter(|value| value.len() == 64)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let denial_reason = event
+            .denial_reason
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let method = event
+            .opaque_reference
+            .as_deref()
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let (tender_id, tender_revision): (String, u32) = transaction
+            .query_row(
+                "SELECT tender_id, current_revision FROM tender WHERE singleton = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(sql_error)?;
+        let running: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM agent_runs
+                 WHERE run_id = ?1 AND status = 'running'
+                   AND NOT EXISTS (
+                     SELECT 1 FROM agent_run_cancellations
+                     WHERE agent_run_cancellations.run_id = agent_runs.run_id
+                   ))",
+                [run_id],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if !running {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let created_at = sqlite_timestamp(&transaction)?;
+        let sequence = next_provider_event_sequence(&transaction, run_id)?;
+        insert_event(&transaction, run_id, sequence, event.clone(), &created_at)?;
+        append_audit_event(
+            &transaction,
+            &tender_id,
+            "provider_control_request_denied",
+            tender_revision,
+            json!({
+                "correlation_id": correlation_id,
+                "method": method,
+                "reason": denial_reason.as_str(),
+                "request_fingerprint": request_fingerprint,
+                "run_id": run_id,
+            }),
+            &created_at,
+        )?;
+        transaction.commit().map_err(sql_error)
+    }
+
     pub(crate) fn create_agent_access_request(
         &mut self,
         tender_id: &TenderId,

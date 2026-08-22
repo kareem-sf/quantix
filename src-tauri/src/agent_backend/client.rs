@@ -1,10 +1,14 @@
 use std::collections::HashMap;
-use std::io::Read;
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Duration;
 
 use crate::chatgpt_oauth::StoredConnection;
 
+#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
 pub(crate) const BACKEND_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 const ORIGINATOR: &str = "quantix";
+const COMPUTE_RESIDENCY_HEADER: &str = "x-openai-internal-codex-residency";
 
 #[derive(Debug)]
 pub(crate) struct BackendRequest {
@@ -12,10 +16,31 @@ pub(crate) struct BackendRequest {
     pub instructions: String,
     pub input_items: Vec<serde_json::Value>,
     pub tools: Vec<serde_json::Value>,
-    pub previous_response_id: Option<String>,
     pub store: bool,
     pub include_reasoning: bool,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub session_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReasoningEffort {
+    None,
+    Low,
+    Medium,
+    High,
+    XHigh,
+}
+
+impl ReasoningEffort {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +77,9 @@ impl std::fmt::Display for RedactedFailure {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum StreamEvent {
+    Created {
+        response_id: String,
+    },
     ItemAdded(serde_json::Value),
     ItemDone(serde_json::Value),
     TextDelta(String),
@@ -84,6 +112,8 @@ pub(crate) enum BackendError {
     RateLimited { retry_after_ms: Option<u64> },
     Protocol(String),
     Transport(String),
+    Interrupted,
+    EventDelivery,
 }
 
 impl std::fmt::Display for BackendError {
@@ -96,6 +126,8 @@ impl std::fmt::Display for BackendError {
             },
             BackendError::Protocol(detail) => write!(f, "chatgpt protocol error: {detail}"),
             BackendError::Transport(detail) => write!(f, "chatgpt transport error: {detail}"),
+            BackendError::Interrupted => write!(f, "chatgpt request interrupted"),
+            BackendError::EventDelivery => write!(f, "chatgpt event delivery failed"),
         }
     }
 }
@@ -103,12 +135,13 @@ impl std::fmt::Display for BackendError {
 impl std::error::Error for BackendError {}
 
 pub(crate) trait ChatGptBackend: Send + Sync {
-    fn create_response(
-        &self,
-        auth: &StoredConnection,
-        req: &BackendRequest,
-        on_event: &mut dyn FnMut(StreamEvent),
-    ) -> Result<TurnDisposition, BackendError>;
+    fn create_response<'a>(
+        &'a self,
+        auth: &'a StoredConnection,
+        req: &'a BackendRequest,
+        is_cancelled: &'a (dyn Fn() -> bool + Sync),
+        on_event: &'a mut (dyn FnMut(StreamEvent) -> Result<(), BackendError> + Send),
+    ) -> Pin<Box<dyn Future<Output = Result<TurnDisposition, BackendError>> + Send + 'a>>;
 }
 
 fn user_agent() -> &'static str {
@@ -121,9 +154,6 @@ pub(crate) fn build_request_body(req: &BackendRequest) -> serde_json::Value {
     body.insert("instructions".into(), req.instructions.clone().into());
     body.insert("input".into(), req.input_items.clone().into());
     body.insert("tools".into(), req.tools.clone().into());
-    if let Some(previous) = &req.previous_response_id {
-        body.insert("previous_response_id".into(), previous.clone().into());
-    }
     body.insert("store".into(), req.store.into());
     body.insert("stream".into(), true.into());
     if req.include_reasoning {
@@ -132,20 +162,18 @@ pub(crate) fn build_request_body(req: &BackendRequest) -> serde_json::Value {
             serde_json::json!(["reasoning.encrypted_content"]),
         );
     }
+    if let Some(effort) = req.reasoning_effort {
+        body.insert(
+            "reasoning".into(),
+            serde_json::json!({"effort": effort.as_str(), "summary": "auto"}),
+        );
+    }
     serde_json::Value::Object(body)
 }
 
 enum Terminal {
     Completed,
     Failed,
-}
-
-fn str_field(value: &serde_json::Value, field: &str) -> String {
-    value
-        .get(field)
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_string()
 }
 
 fn opt_str_field(value: &serde_json::Value, field: &str) -> Option<String> {
@@ -172,16 +200,17 @@ fn parse_usage(response: &serde_json::Value) -> UsageSnapshot {
 }
 
 struct SseParser<'a> {
-    on_event: &'a mut dyn FnMut(StreamEvent),
+    on_event: &'a mut (dyn FnMut(StreamEvent) -> Result<(), BackendError> + Send),
     buffer: Vec<u8>,
     data_lines: Vec<String>,
     pending_calls: HashMap<String, (String, String)>,
     terminal: Option<Terminal>,
     done_seen: bool,
+    response_id: Option<String>,
 }
 
 impl<'a> SseParser<'a> {
-    fn new(on_event: &'a mut dyn FnMut(StreamEvent)) -> Self {
+    fn new(on_event: &'a mut (dyn FnMut(StreamEvent) -> Result<(), BackendError> + Send)) -> Self {
         Self {
             on_event,
             buffer: Vec::new(),
@@ -189,12 +218,13 @@ impl<'a> SseParser<'a> {
             pending_calls: HashMap::new(),
             terminal: None,
             done_seen: false,
+            response_id: None,
         }
     }
 
-    fn feed(&mut self, chunk: &[u8]) {
+    fn feed(&mut self, chunk: &[u8]) -> Result<(), BackendError> {
         if self.terminal.is_some() || self.done_seen {
-            return;
+            return Ok(());
         }
         self.buffer.extend_from_slice(chunk);
         while let Some(newline) = self.buffer.iter().position(|byte| *byte == b'\n') {
@@ -203,74 +233,104 @@ impl<'a> SseParser<'a> {
             if line.last() == Some(&b'\r') {
                 line.pop();
             }
-            self.process_line(&line);
+            self.process_line(&line)?;
             if self.terminal.is_some() || self.done_seen {
                 self.buffer.clear();
-                return;
+                return Ok(());
             }
         }
+        Ok(())
     }
 
-    fn finish(&mut self) {
+    fn finish(&mut self) -> Result<(), BackendError> {
         if self.terminal.is_none() && !self.done_seen && !self.buffer.is_empty() {
             let line = std::mem::take(&mut self.buffer);
-            self.process_line(&line);
+            self.process_line(&line)?;
         } else {
             self.buffer.clear();
         }
-        self.dispatch_frame();
+        self.dispatch_frame()
     }
 
-    fn process_line(&mut self, line: &[u8]) {
+    fn process_line(&mut self, line: &[u8]) -> Result<(), BackendError> {
         if line.is_empty() {
-            self.dispatch_frame();
-            return;
+            return self.dispatch_frame();
         }
         if line[0] == b':' {
-            return;
+            return Ok(());
         }
         let text = String::from_utf8_lossy(line);
         if let Some(rest) = text.strip_prefix("data:") {
             let value = rest.strip_prefix(' ').unwrap_or(rest);
             self.data_lines.push(value.to_string());
         }
+        Ok(())
     }
 
-    fn dispatch_frame(&mut self) {
+    fn dispatch_frame(&mut self) -> Result<(), BackendError> {
         if self.data_lines.is_empty() || self.terminal.is_some() || self.done_seen {
             self.data_lines.clear();
-            return;
+            return Ok(());
         }
         let data = self.data_lines.join("\n");
         self.data_lines.clear();
         if data == "[DONE]" {
             self.done_seen = true;
-            return;
+            return Ok(());
         }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) else {
-            return;
-        };
-        let Some(event_type) = value.get("type").and_then(serde_json::Value::as_str) else {
-            return;
-        };
+        let value = serde_json::from_str::<serde_json::Value>(&data)
+            .map_err(|_| BackendError::Protocol("malformed SSE JSON frame".to_string()))?;
+        let event_type = required_str(&value, "type", "SSE event")?;
         match event_type {
-            "response.output_item.added" => {
-                if let Some(item) = value.get("item") {
-                    if item.get("type").and_then(serde_json::Value::as_str) == Some("function_call")
-                    {
-                        self.pending_calls.insert(
-                            str_field(item, "id"),
-                            (str_field(item, "call_id"), str_field(item, "name")),
-                        );
-                    }
+            "response.created" => {
+                let response_id = value
+                    .get("response")
+                    .and_then(|response| response.get("id"))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| {
+                        BackendError::Protocol("malformed response.created event".to_string())
+                    })?
+                    .to_string();
+                if self
+                    .response_id
+                    .as_deref()
+                    .is_some_and(|seen| seen != response_id)
+                {
+                    return Err(BackendError::Protocol(
+                        "inconsistent response id in stream".to_string(),
+                    ));
                 }
-                (self.on_event)(StreamEvent::ItemAdded(value));
+                self.response_id = Some(response_id.clone());
+                (self.on_event)(StreamEvent::Created { response_id })?;
+            }
+            "response.output_item.added" => {
+                let item = value.get("item").ok_or_else(|| {
+                    BackendError::Protocol("malformed response.output_item.added event".to_string())
+                })?;
+                if item.get("type").and_then(serde_json::Value::as_str) == Some("function_call") {
+                    self.pending_calls.insert(
+                        required_str(item, "id", "function call item")?.to_string(),
+                        (
+                            required_str(item, "call_id", "function call item")?.to_string(),
+                            required_str(item, "name", "function call item")?.to_string(),
+                        ),
+                    );
+                }
+                (self.on_event)(StreamEvent::ItemAdded(value))?;
             }
             "response.output_text.delta" => {
-                (self.on_event)(StreamEvent::TextDelta(str_field(&value, "delta")));
+                (self.on_event)(StreamEvent::TextDelta(
+                    required_str(&value, "delta", "response.output_text.delta event")?.to_string(),
+                ))?;
             }
             "response.function_call_arguments.delta" => {
-                let item_id = str_field(&value, "item_id");
+                let item_id = required_str(
+                    &value,
+                    "item_id",
+                    "response.function_call_arguments.delta event",
+                )?
+                .to_string();
                 let (call_id, name) = self
                     .pending_calls
                     .get(&item_id)
@@ -279,39 +339,65 @@ impl<'a> SseParser<'a> {
                 (self.on_event)(StreamEvent::FunctionCallDelta {
                     call_id,
                     name,
-                    args_delta: str_field(&value, "delta"),
-                });
+                    args_delta: required_str(
+                        &value,
+                        "delta",
+                        "response.function_call_arguments.delta event",
+                    )?
+                    .to_string(),
+                })?;
             }
             "response.output_item.done" => {
-                let Some(item) = value.get("item") else {
-                    return;
-                };
-                (self.on_event)(StreamEvent::ItemDone(value.clone()));
+                let item = value.get("item").ok_or_else(|| {
+                    BackendError::Protocol("malformed response.output_item.done event".to_string())
+                })?;
+                (self.on_event)(StreamEvent::ItemDone(value.clone()))?;
                 if item.get("type").and_then(serde_json::Value::as_str) != Some("function_call") {
-                    return;
+                    return Ok(());
                 }
-                let fallback = self.pending_calls.remove(&str_field(item, "id"));
+                let fallback =
+                    self.pending_calls
+                        .remove(required_str(item, "id", "function call item")?);
                 let (fallback_call_id, fallback_name) = fallback.unwrap_or_default();
+                let call_id = opt_str_field(item, "call_id").unwrap_or(fallback_call_id);
+                let name = opt_str_field(item, "name").unwrap_or(fallback_name);
+                let arguments = required_str(item, "arguments", "function call item")?.to_string();
+                if call_id.is_empty() || name.is_empty() {
+                    return Err(BackendError::Protocol(
+                        "malformed function call item".to_string(),
+                    ));
+                }
                 (self.on_event)(StreamEvent::FunctionCallDone {
-                    call_id: opt_str_field(item, "call_id").unwrap_or(fallback_call_id),
-                    name: opt_str_field(item, "name").unwrap_or(fallback_name),
-                    arguments: str_field(item, "arguments"),
-                });
+                    call_id,
+                    name,
+                    arguments,
+                })?;
             }
             "response.completed" => {
-                let empty = serde_json::Value::Null;
-                let response = value.get("response").unwrap_or(&empty);
+                let response = value.get("response").ok_or_else(|| {
+                    BackendError::Protocol("malformed response.completed event".to_string())
+                })?;
+                let response_id = required_str(response, "id", "response.completed event")?;
+                if self
+                    .response_id
+                    .as_deref()
+                    .is_some_and(|seen| seen != response_id)
+                {
+                    return Err(BackendError::Protocol(
+                        "inconsistent response id in stream".to_string(),
+                    ));
+                }
                 (self.on_event)(StreamEvent::Completed {
-                    response_id: str_field(response, "id"),
+                    response_id: response_id.to_string(),
                     usage: parse_usage(response),
-                });
+                })?;
                 self.terminal = Some(Terminal::Completed);
             }
             "response.failed" => {
                 (self.on_event)(StreamEvent::Errored(RedactedFailure {
                     code: FailureCode::ResponseFailed,
                     detail: "provider reported response.failed".to_string(),
-                }));
+                }))?;
                 self.terminal = Some(Terminal::Failed);
             }
             "response.incomplete" => {
@@ -328,29 +414,42 @@ impl<'a> SseParser<'a> {
                 (self.on_event)(StreamEvent::Errored(RedactedFailure {
                     code: FailureCode::ResponseIncomplete,
                     detail,
-                }));
+                }))?;
                 self.terminal = Some(Terminal::Failed);
             }
             "error" => {
                 (self.on_event)(StreamEvent::Errored(RedactedFailure {
                     code: FailureCode::InBandError,
                     detail: "provider sent an in-band error event".to_string(),
-                }));
+                }))?;
                 self.terminal = Some(Terminal::Failed);
             }
             _ => {}
         }
+        Ok(())
     }
+}
+
+fn required_str<'a>(
+    value: &'a serde_json::Value,
+    field: &str,
+    event: &str,
+) -> Result<&'a str, BackendError> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| BackendError::Protocol(format!("malformed {event}")))
 }
 
 #[cfg(test)]
 pub(crate) fn parse_stream_bytes(
     bytes: &[u8],
-    on_event: &mut dyn FnMut(StreamEvent),
+    on_event: &mut (dyn FnMut(StreamEvent) -> Result<(), BackendError> + Send),
 ) -> Result<TurnDisposition, BackendError> {
     let mut parser = SseParser::new(on_event);
-    parser.feed(bytes);
-    parser.finish();
+    parser.feed(bytes)?;
+    parser.finish()?;
     finish_disposition(parser.terminal)
 }
 
@@ -364,27 +463,35 @@ fn finish_disposition(terminal: Option<Terminal>) -> Result<TurnDisposition, Bac
     }
 }
 
-fn pump_reader<R: Read>(
-    mut reader: R,
-    on_event: &mut dyn FnMut(StreamEvent),
+async fn pump_response(
+    mut response: reqwest::Response,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+    on_event: &mut (dyn FnMut(StreamEvent) -> Result<(), BackendError> + Send),
 ) -> Result<TurnDisposition, BackendError> {
     let mut parser = SseParser::new(on_event);
-    let mut buffer = [0u8; 8192];
     loop {
-        match reader.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(read) => parser.feed(&buffer[..read]),
-            Err(error) => {
-                return Err(BackendError::Transport(format!(
-                    "stream read failed: {error}"
-                )))
+        if is_cancelled() {
+            return Err(BackendError::Interrupted);
+        }
+        tokio::select! {
+            chunk = response.chunk() => match chunk {
+                Ok(Some(bytes)) => parser.feed(&bytes)?,
+                Ok(None) => break,
+                Err(_) => {
+                    return Err(BackendError::Transport(
+                        "stream read failed".to_string(),
+                    ));
+                }
+            },
+            () = tokio::time::sleep(Duration::from_millis(25)) => {
+                continue;
             }
         }
         if parser.terminal.is_some() || parser.done_seen {
             break;
         }
     }
-    parser.finish();
+    parser.finish()?;
     finish_disposition(parser.terminal)
 }
 
@@ -418,14 +525,14 @@ fn header_value(headers: &reqwest::header::HeaderMap, name: &str) -> Option<Stri
 
 pub(crate) struct ReqwestBackend {
     endpoint: String,
-    http: reqwest::blocking::Client,
+    http: reqwest::Client,
 }
 
 impl ReqwestBackend {
     pub(crate) fn new(endpoint: &str) -> Result<Self, reqwest::Error> {
         Ok(Self {
             endpoint: endpoint.to_string(),
-            http: reqwest::blocking::Client::builder()
+            http: reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(30))
                 .build()?,
         })
@@ -433,31 +540,57 @@ impl ReqwestBackend {
 }
 
 impl ChatGptBackend for ReqwestBackend {
-    fn create_response(
-        &self,
-        auth: &StoredConnection,
-        req: &BackendRequest,
-        on_event: &mut dyn FnMut(StreamEvent),
-    ) -> Result<TurnDisposition, BackendError> {
-        let response = self
-            .http
-            .post(&self.endpoint)
-            .bearer_auth(&auth.access_token)
-            .header("ChatGPT-Account-Id", &auth.account_id)
-            .header("originator", ORIGINATOR)
-            .header("session-id", &req.session_id)
-            .header("user-agent", user_agent())
-            .json(&build_request_body(req))
-            .send()
-            .map_err(|error| BackendError::Transport(error.to_string()))?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(status_error(
-                status.as_u16(),
-                retry_after_ms(response.headers()),
-            ));
-        }
-        pump_reader(response, on_event)
+    fn create_response<'a>(
+        &'a self,
+        auth: &'a StoredConnection,
+        req: &'a BackendRequest,
+        is_cancelled: &'a (dyn Fn() -> bool + Sync),
+        on_event: &'a mut (dyn FnMut(StreamEvent) -> Result<(), BackendError> + Send),
+    ) -> Pin<Box<dyn Future<Output = Result<TurnDisposition, BackendError>> + Send + 'a>> {
+        Box::pin(async move {
+            if is_cancelled() {
+                return Err(BackendError::Interrupted);
+            }
+            let mut request = self
+                .http
+                .post(&self.endpoint)
+                .bearer_auth(&auth.access_token)
+                .header("ChatGPT-Account-Id", &auth.account_id)
+                .header("originator", ORIGINATOR)
+                .header("session-id", &req.session_id)
+                .header("user-agent", user_agent());
+            if let Some(compute_residency) = auth
+                .compute_residency
+                .as_deref()
+                .filter(|value| *value != "no_constraint")
+            {
+                request = request.header(COMPUTE_RESIDENCY_HEADER, compute_residency);
+            }
+            let send = request.json(&build_request_body(req)).send();
+            tokio::pin!(send);
+            let response = loop {
+                tokio::select! {
+                    response = &mut send => {
+                        break response.map_err(|_| {
+                            BackendError::Transport("request failed".to_string())
+                        })?;
+                    }
+                    () = tokio::time::sleep(Duration::from_millis(25)) => {
+                        if is_cancelled() {
+                            return Err(BackendError::Interrupted);
+                        }
+                    }
+                }
+            };
+            let status = response.status();
+            if !status.is_success() {
+                return Err(status_error(
+                    status.as_u16(),
+                    retry_after_ms(response.headers()),
+                ));
+            }
+            pump_response(response, is_cancelled, on_event).await
+        })
     }
 }
 
@@ -492,9 +625,9 @@ mod tests {
                 "parameters": {"type": "object", "properties": {}},
                 "strict": true
             })],
-            previous_response_id: None,
             store: false,
             include_reasoning: true,
+            reasoning_effort: Some(ReasoningEffort::High),
             session_id: "ses-1234".to_string(),
         }
     }
@@ -507,6 +640,7 @@ mod tests {
             expires_at_ms: 5_000,
             account_id: "acc-77".to_string(),
             plan_type: Some("plus".to_string()),
+            compute_residency: Some("us".to_string()),
         }
     }
 
@@ -515,32 +649,39 @@ mod tests {
         let bytes = script_bytes("happy-text");
         let collected: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&collected);
-        let mut sink_fn = move |event| sink.lock().unwrap().push(event);
+        let mut sink_fn = move |event| {
+            sink.lock().unwrap().push(event);
+            Ok(())
+        };
         let mut parser = SseParser::new(&mut sink_fn);
         for chunk in bytes.chunks(7) {
-            parser.feed(chunk);
+            parser.feed(chunk).unwrap();
         }
-        parser.finish();
+        parser.finish().unwrap();
 
         let events = collected.lock().unwrap();
-        assert_eq!(events.len(), 5, "unexpected event count: {events:?}");
+        assert_eq!(events.len(), 6, "unexpected event count: {events:?}");
         assert!(matches!(
             &events[0],
+            StreamEvent::Created { response_id } if response_id == "resp_text_1"
+        ));
+        assert!(matches!(
+            &events[1],
             StreamEvent::ItemAdded(value)
                 if value["item"]["type"] == "message" && value["output_index"] == 0
         ));
-        match (&events[1], &events[2]) {
+        match (&events[2], &events[3]) {
             (StreamEvent::TextDelta(a), StreamEvent::TextDelta(b)) => {
                 assert_eq!(format!("{a}{b}"), "Hello from the fixture.");
             }
             other => panic!("expected two text deltas, got {other:?}"),
         }
         assert!(matches!(
-            &events[3],
+            &events[4],
             StreamEvent::ItemDone(value)
                 if value["item"]["type"] == "message" && value["output_index"] == 0
         ));
-        match &events[4] {
+        match &events[5] {
             StreamEvent::Completed { response_id, usage } => {
                 assert_eq!(response_id, "resp_text_1");
                 assert_eq!(
@@ -563,8 +704,11 @@ mod tests {
         let bytes = script_bytes("tool-roundtrip");
         let collected: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&collected);
-        let disposition =
-            parse_stream_bytes(&bytes, &mut move |event| sink.lock().unwrap().push(event)).unwrap();
+        let disposition = parse_stream_bytes(&bytes, &mut move |event| {
+            sink.lock().unwrap().push(event);
+            Ok(())
+        })
+        .unwrap();
 
         assert_eq!(disposition, TurnDisposition::Completed);
         let events = collected.lock().unwrap();
@@ -622,8 +766,11 @@ mod tests {
         bytes.extend_from_slice(b"\r\n\r\n");
         let collected: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&collected);
-        let disposition =
-            parse_stream_bytes(&bytes, &mut move |event| sink.lock().unwrap().push(event)).unwrap();
+        let disposition = parse_stream_bytes(&bytes, &mut move |event| {
+            sink.lock().unwrap().push(event);
+            Ok(())
+        })
+        .unwrap();
         assert_eq!(disposition, TurnDisposition::Completed);
         let events = collected.lock().unwrap();
         assert_eq!(events.len(), 2);
@@ -661,9 +808,11 @@ mod tests {
             bytes.extend_from_slice(b"\n\n");
             let collected: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(Vec::new()));
             let sink = Arc::clone(&collected);
-            let disposition =
-                parse_stream_bytes(&bytes, &mut move |event| sink.lock().unwrap().push(event))
-                    .unwrap();
+            let disposition = parse_stream_bytes(&bytes, &mut move |event| {
+                sink.lock().unwrap().push(event);
+                Ok(())
+            })
+            .unwrap();
             assert_eq!(disposition, TurnDisposition::Failed, "case {label}");
             let events = collected.lock().unwrap();
             assert_eq!(events.len(), 1, "case {label}");
@@ -681,8 +830,11 @@ mod tests {
         bytes.extend_from_slice(b"\n\n");
         let collected: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&collected);
-        let disposition =
-            parse_stream_bytes(&bytes, &mut move |event| sink.lock().unwrap().push(event)).unwrap();
+        let disposition = parse_stream_bytes(&bytes, &mut move |event| {
+            sink.lock().unwrap().push(event);
+            Ok(())
+        })
+        .unwrap();
 
         assert_eq!(disposition, TurnDisposition::Failed);
         let events = collected.lock().unwrap();
@@ -704,8 +856,11 @@ mod tests {
         let bytes = script_bytes("midstream-abort");
         let collected: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&collected);
-        let error = parse_stream_bytes(&bytes, &mut move |event| sink.lock().unwrap().push(event))
-            .unwrap_err();
+        let error = parse_stream_bytes(&bytes, &mut move |event| {
+            sink.lock().unwrap().push(event);
+            Ok(())
+        })
+        .unwrap_err();
         assert!(matches!(error, BackendError::Transport(_)));
         let events = collected.lock().unwrap();
         assert!(
@@ -720,17 +875,23 @@ mod tests {
         bytes.extend_from_slice(b"data: {not json}\n\n");
         let collected: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&collected);
-        let disposition =
-            parse_stream_bytes(&bytes, &mut move |event| sink.lock().unwrap().push(event)).unwrap();
+        let disposition = parse_stream_bytes(&bytes, &mut move |event| {
+            sink.lock().unwrap().push(event);
+            Ok(())
+        })
+        .unwrap();
         assert_eq!(disposition, TurnDisposition::Completed);
         let events = collected.lock().unwrap();
+        assert!(matches!(
+            events.first(),
+            Some(StreamEvent::Created { response_id }) if response_id == "resp_text_1"
+        ));
         assert!(matches!(events.last(), Some(StreamEvent::Completed { .. })));
     }
 
     #[test]
     fn request_body_matches_contract_shape() {
         let mut request = sample_request();
-        request.previous_response_id = Some("resp_prev".to_string());
         let body = build_request_body(&request);
         assert_eq!(body["model"], "gpt-5.5");
         assert_eq!(body["instructions"], "system prompt");
@@ -738,10 +899,17 @@ mod tests {
         assert_eq!(body["tools"][0]["name"], "read_file");
         assert_eq!(body["store"], false);
         assert_eq!(body["stream"], true);
-        assert_eq!(body["previous_response_id"], "resp_prev");
+        assert!(
+            body.get("previous_response_id").is_none(),
+            "the REST backend must receive stateless full-replay input"
+        );
         assert_eq!(
             body["include"],
             serde_json::json!(["reasoning.encrypted_content"])
+        );
+        assert_eq!(
+            body["reasoning"],
+            serde_json::json!({"effort": "high", "summary": "auto"})
         );
         for forbidden in ["max_output_tokens", "max_tokens", "metadata", "session_id"] {
             assert!(
@@ -750,7 +918,6 @@ mod tests {
             );
         }
 
-        request.previous_response_id = None;
         request.include_reasoning = false;
         let body = build_request_body(&request);
         assert!(body.get("previous_response_id").is_none());
@@ -762,6 +929,63 @@ mod tests {
             body["include"],
             serde_json::json!(["reasoning.encrypted_content"])
         );
+    }
+
+    #[test]
+    fn all_supported_reasoning_efforts_map_exactly_to_the_responses_contract() {
+        for (effort, expected) in [
+            (ReasoningEffort::None, "none"),
+            (ReasoningEffort::Low, "low"),
+            (ReasoningEffort::Medium, "medium"),
+            (ReasoningEffort::High, "high"),
+            (ReasoningEffort::XHigh, "xhigh"),
+        ] {
+            let mut request = sample_request();
+            request.reasoning_effort = Some(effort);
+            assert_eq!(
+                build_request_body(&request)["reasoning"],
+                serde_json::json!({"effort": expected, "summary": "auto"})
+            );
+        }
+        let mut request = sample_request();
+        request.reasoning_effort = None;
+        assert!(build_request_body(&request).get("reasoning").is_none());
+    }
+
+    #[test]
+    fn malformed_json_and_required_fields_are_protocol_errors() {
+        for frame in [
+            "data: {not-json}\n\n",
+            "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
+            "data: {\"type\":\"response.output_text.delta\"}\n\n",
+            "data: {\"response\":{\"id\":\"r\"}}\n\n",
+        ] {
+            let error = parse_stream_bytes(frame.as_bytes(), &mut |_| Ok(())).unwrap_err();
+            let rendered = error.to_string();
+            assert!(matches!(error, BackendError::Protocol(_)));
+            assert!(!rendered.contains("not-json"));
+        }
+    }
+
+    #[test]
+    fn inconsistent_created_and_completed_ids_are_rejected() {
+        let bytes = b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\"}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r2\"}}\n\n";
+        let error = parse_stream_bytes(bytes, &mut |_| Ok(())).unwrap_err();
+        assert!(matches!(error, BackendError::Protocol(_)));
+    }
+
+    #[test]
+    fn event_delivery_failure_stops_parsing_immediately() {
+        let bytes = script_bytes("happy-text");
+        let delivered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = Arc::clone(&delivered);
+        let error = parse_stream_bytes(&bytes, &mut move |_| {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(BackendError::EventDelivery)
+        })
+        .unwrap_err();
+        assert!(matches!(error, BackendError::EventDelivery));
+        assert_eq!(delivered.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     type Captured = Arc<Mutex<Option<CapturedRequest>>>;
@@ -875,18 +1099,22 @@ mod tests {
         })
     }
 
-    #[test]
-    fn reqwest_client_sends_contract_headers_body_and_streams_events() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reqwest_client_sends_contract_headers_body_and_streams_events() {
         let stream_body = script_bytes("happy-text");
         let server = MockServer::start(move |_| (200, Vec::new(), stream_body.clone()));
         let backend = ReqwestBackend::new(&server.base_url).unwrap();
 
         let collected: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&collected);
+        let auth = sample_auth();
+        let request_body = sample_request();
         let disposition = backend
-            .create_response(&sample_auth(), &sample_request(), &mut move |event| {
-                sink.lock().unwrap().push(event)
+            .create_response(&auth, &request_body, &|| false, &mut move |event| {
+                sink.lock().unwrap().push(event);
+                Ok(())
             })
+            .await
             .unwrap();
 
         assert_eq!(disposition, TurnDisposition::Completed);
@@ -903,6 +1131,7 @@ mod tests {
         assert_eq!(header(&request, "chatgpt-account-id"), "acc-77");
         assert_eq!(header(&request, "originator"), ORIGINATOR);
         assert_eq!(header(&request, "session-id"), "ses-1234");
+        assert_eq!(header(&request, COMPUTE_RESIDENCY_HEADER), "us");
         assert!(
             header(&request, "user-agent").starts_with("quantix/"),
             "user-agent {:?}",
@@ -913,16 +1142,64 @@ mod tests {
         assert_eq!(body["model"], "gpt-5.5");
         assert_eq!(body["stream"], true);
         assert_eq!(body["store"], false);
+        assert_eq!(
+            body["reasoning"],
+            serde_json::json!({"effort": "high", "summary": "auto"})
+        );
     }
 
-    #[test]
-    fn http_401_maps_to_authentication_required_without_leaking_token() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reqwest_client_omits_unconstrained_compute_residency() {
+        for compute_residency in [None, Some("no_constraint".to_string())] {
+            let stream_body = script_bytes("happy-text");
+            let server = MockServer::start(move |_| (200, Vec::new(), stream_body.clone()));
+            let backend = ReqwestBackend::new(&server.base_url).unwrap();
+            let mut auth = sample_auth();
+            auth.compute_residency = compute_residency;
+            let request_body = sample_request();
+
+            backend
+                .create_response(&auth, &request_body, &|| false, &mut |_| Ok(()))
+                .await
+                .unwrap();
+
+            let request = server.captured.lock().unwrap().clone().unwrap();
+            assert_eq!(header(&request, COMPUTE_RESIDENCY_HEADER), "");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reqwest_client_rejects_malformed_sse_without_echoing_payload() {
+        let server = MockServer::start(|_| {
+            (
+                200,
+                Vec::new(),
+                b"data: {private-malformed-payload}\n\n".to_vec(),
+            )
+        });
+        let backend = ReqwestBackend::new(&server.base_url).unwrap();
+        let auth = sample_auth();
+        let request = sample_request();
+        let error = backend
+            .create_response(&auth, &request, &|| false, &mut |_| Ok(()))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, BackendError::Protocol(_)));
+        assert!(!error.to_string().contains("private-malformed-payload"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn http_401_maps_to_authentication_required_without_leaking_token() {
         let server = MockServer::start(|_| (401, Vec::new(), Vec::new()));
         let backend = ReqwestBackend::new(&server.base_url).unwrap();
 
-        let mut noop = |_: StreamEvent| {};
+        let mut noop = |_: StreamEvent| Ok(());
+        let auth = sample_auth();
+        let request = sample_request();
         let error = backend
-            .create_response(&sample_auth(), &sample_request(), &mut noop)
+            .create_response(&auth, &request, &|| false, &mut noop)
+            .await
             .unwrap_err();
 
         assert!(matches!(error, BackendError::AuthenticationRequired));
@@ -933,8 +1210,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn http_429_maps_to_rate_limited_honoring_retry_after() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn http_429_maps_to_rate_limited_honoring_retry_after() {
         for (headers, expected) in [
             (vec![("retry-after-ms", "1500")], Some(1500)),
             (vec![("retry-after", "2")], Some(2000)),
@@ -947,9 +1224,12 @@ mod tests {
             let server = MockServer::start(move |_| (429, header_pairs.clone(), Vec::new()));
             let backend = ReqwestBackend::new(&server.base_url).unwrap();
 
-            let mut noop = |_: StreamEvent| {};
+            let mut noop = |_: StreamEvent| Ok(());
+            let auth = sample_auth();
+            let request = sample_request();
             let error = backend
-                .create_response(&sample_auth(), &sample_request(), &mut noop)
+                .create_response(&auth, &request, &|| false, &mut noop)
+                .await
                 .unwrap_err();
 
             match error {
@@ -961,36 +1241,42 @@ mod tests {
         }
     }
 
-    #[test]
-    fn other_non_success_status_maps_to_protocol_error() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn other_non_success_status_maps_to_protocol_error() {
         let server = MockServer::start(|_| (500, Vec::new(), Vec::new()));
         let backend = ReqwestBackend::new(&server.base_url).unwrap();
 
-        let mut noop = |_: StreamEvent| {};
+        let mut noop = |_: StreamEvent| Ok(());
+        let auth = sample_auth();
+        let request = sample_request();
         let error = backend
-            .create_response(&sample_auth(), &sample_request(), &mut noop)
+            .create_response(&auth, &request, &|| false, &mut noop)
+            .await
             .unwrap_err();
 
         assert!(matches!(error, BackendError::Protocol(_)));
     }
 
-    #[test]
-    fn socket_close_before_terminal_maps_to_transport_error() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn socket_close_after_created_is_reported_as_transport_error() {
         // The mock writes a partial SSE payload then drops the connection.
         let partial: Vec<u8> = script_bytes("midstream-abort");
         let server = MockServer::start(move |_| (200, Vec::new(), partial.clone()));
         let backend = ReqwestBackend::new(&server.base_url).unwrap();
 
-        let mut noop = |_: StreamEvent| {};
+        let mut noop = |_: StreamEvent| Ok(());
+        let auth = sample_auth();
+        let request = sample_request();
         let error = backend
-            .create_response(&sample_auth(), &sample_request(), &mut noop)
+            .create_response(&auth, &request, &|| false, &mut noop)
+            .await
             .unwrap_err();
 
         assert!(matches!(error, BackendError::Transport(_)));
     }
 
-    #[test]
-    fn connection_refusal_maps_to_transport_error() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn connection_refusal_maps_to_transport_error() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
@@ -999,11 +1285,103 @@ mod tests {
         ))
         .unwrap();
 
-        let mut noop = |_: StreamEvent| {};
+        let mut noop = |_: StreamEvent| Ok(());
+        let auth = sample_auth();
+        let request = sample_request();
         let error = backend
-            .create_response(&sample_auth(), &sample_request(), &mut noop)
+            .create_response(&auth, &request, &|| false, &mut noop)
+            .await
             .unwrap_err();
 
         assert!(matches!(error, BackendError::Transport(_)));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stalled_sse_stream_is_interrupted_promptly_after_provider_acceptance() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_request(&mut stream).unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stall\"}}\n\n",
+                )
+                .unwrap();
+            stream.flush().unwrap();
+            std::thread::sleep(Duration::from_millis(500));
+        });
+        let backend = ReqwestBackend::new(&format!(
+            "http://127.0.0.1:{port}/backend-api/codex/responses"
+        ))
+        .unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel_for_task = Arc::clone(&cancelled);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(75)).await;
+            cancel_for_task.store(true, Ordering::SeqCst);
+        });
+        let saw_created = Arc::new(AtomicBool::new(false));
+        let created_for_sink = Arc::clone(&saw_created);
+        let auth = sample_auth();
+        let request = sample_request();
+        let started = std::time::Instant::now();
+        let error = backend
+            .create_response(
+                &auth,
+                &request,
+                &|| cancelled.load(Ordering::SeqCst),
+                &mut move |event| {
+                    if matches!(event, StreamEvent::Created { .. }) {
+                        created_for_sink.store(true, Ordering::SeqCst);
+                    }
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, BackendError::Interrupted));
+        assert!(saw_created.load(Ordering::SeqCst));
+        assert!(started.elapsed() < Duration::from_millis(300));
+        server.join().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stalled_sse_stream_observes_deadline_callback_promptly() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_request(&mut stream).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n")
+                .unwrap();
+            stream.flush().unwrap();
+            std::thread::sleep(Duration::from_millis(350));
+        });
+        let backend = ReqwestBackend::new(&format!(
+            "http://127.0.0.1:{port}/backend-api/codex/responses"
+        ))
+        .unwrap();
+        let auth = sample_auth();
+        let request = sample_request();
+        let started = std::time::Instant::now();
+        let deadline = started + Duration::from_millis(75);
+        let error = backend
+            .create_response(
+                &auth,
+                &request,
+                &|| std::time::Instant::now() >= deadline,
+                &mut |_| Ok(()),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, BackendError::Interrupted));
+        assert!(started.elapsed() < Duration::from_millis(300));
+        server.join().unwrap();
     }
 }

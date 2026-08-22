@@ -6,6 +6,6 @@ node_modules
 prototypes
 src/bindings
 src-tauri/gen
-src-tauri/runtime/codex_app_server_protocol.schemas.json
+src-tauri/tests/fixtures/codex_app_server_protocol.schemas.json
 src-tauri/target*
 *.md

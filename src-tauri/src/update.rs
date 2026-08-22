@@ -20,7 +20,6 @@ use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
 use crate::{
-    agent_runtime::CODEX_VERSION,
     runtime_readiness::{RuntimeReadinessState, OCR_VERSION, RUNTIME_PROVENANCE_SCHEMA},
     setup::{SetupState, INSTALLATION_SCHEMA_VERSION},
     tender_store::TENDER_SCHEMA_VERSION,
@@ -175,8 +174,6 @@ pub struct UpdateCompatibilityManifest {
     #[garde(range(min = 1))]
     pub tender_schema_version: u32,
     #[garde(length(bytes, min = 1, max = 64))]
-    pub codex_version: String,
-    #[garde(length(bytes, min = 1, max = 64))]
     pub ocr_version: String,
     #[garde(range(min = 1))]
     pub runtime_manifest_schema_version: u32,
@@ -327,7 +324,6 @@ pub enum UpdateDiagnostic {
     UnsupportedPlatform,
     InstallationSchemaIncompatible,
     TenderStoreIncompatible,
-    CodexIncompatible,
     OcrIncompatible,
     RuntimeIncompatible,
     ApprovalRequired,
@@ -1252,9 +1248,6 @@ fn validate_compatibility(offer: &UpdateOffer) -> Result<(), UpdateCommandError>
         return Err(UpdateCommandError::new(
             UpdateDiagnostic::TenderStoreIncompatible,
         ));
-    }
-    if compatibility.codex_version != CODEX_VERSION {
-        return Err(UpdateCommandError::new(UpdateDiagnostic::CodexIncompatible));
     }
     if compatibility.ocr_version != OCR_VERSION {
         return Err(UpdateCommandError::new(UpdateDiagnostic::OcrIncompatible));
@@ -2734,7 +2727,6 @@ fn diagnostic_code(value: UpdateDiagnostic) -> &'static str {
         UpdateDiagnostic::UnsupportedPlatform => "unsupported_platform",
         UpdateDiagnostic::InstallationSchemaIncompatible => "installation_schema_incompatible",
         UpdateDiagnostic::TenderStoreIncompatible => "tender_store_incompatible",
-        UpdateDiagnostic::CodexIncompatible => "codex_incompatible",
         UpdateDiagnostic::OcrIncompatible => "ocr_incompatible",
         UpdateDiagnostic::RuntimeIncompatible => "runtime_incompatible",
         UpdateDiagnostic::ApprovalRequired => "approval_required",
@@ -2759,7 +2751,6 @@ fn parse_diagnostic(value: &str) -> Result<UpdateDiagnostic, UpdateCommandError>
         UpdateDiagnostic::UnsupportedPlatform,
         UpdateDiagnostic::InstallationSchemaIncompatible,
         UpdateDiagnostic::TenderStoreIncompatible,
-        UpdateDiagnostic::CodexIncompatible,
         UpdateDiagnostic::OcrIncompatible,
         UpdateDiagnostic::RuntimeIncompatible,
         UpdateDiagnostic::ApprovalRequired,

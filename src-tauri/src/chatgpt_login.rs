@@ -6,10 +6,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::application_settings::{load_application_settings, ApplicationSettingsView};
+use crate::application_settings::{
+    load_application_settings, save_chatgpt_disconnected, ApplicationSettingsView,
+};
 use crate::chatgpt_oauth::{
-    clear, extract_identity, load, needs_refresh, resolve_holders, run_login, save, LoadState,
-    PortHolders, StoredConnection,
+    clear_unlocked, extract_identity, load, needs_refresh, resolve_holders, run_login,
+    save_unlocked, with_connection_mutation, LoadState, PortHolders, StoredConnection,
 };
 use crate::host::QuantixHost;
 use crate::tender_store::{TenderCommandError, TenderErrorCode};
@@ -18,7 +20,7 @@ pub(crate) const PRODUCTION_ISSUER: &str = "https://auth.openai.com";
 const LOGIN_PORT_CANDIDATES: &[u16] = &[1455, 1457];
 const CANCEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const LOOPBACK_HOST: &str = "127.0.0.1";
-const REDIRECT_URI_MARKER: &str = "redirect_uri=http://127.0.0.1:";
+const REDIRECT_URI_MARKER: &str = "redirect_uri=http://localhost:";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -37,6 +39,7 @@ pub struct ChatGptConnectionStatus {
     pub account_id: Option<String>,
     pub plan_type: Option<String>,
     pub expires_at_ms: Option<u64>,
+    pub login_phase: ChatGptLoginPhase,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -98,11 +101,15 @@ impl std::fmt::Display for StartChatGptLoginError {
 
 impl std::error::Error for StartChatGptLoginError {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ChatGptLoginPhase {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ChatGptLoginPhase {
     Idle,
     AwaitingBrowser,
     Completed,
+    Failed,
+    Cancelled,
 }
 
 struct ActiveLoginFlow {
@@ -171,15 +178,26 @@ pub(crate) enum LoginOutcome {
     Failed,
 }
 
+#[cfg(test)]
 pub(crate) fn run_chatgpt_login_flow(
     home: &Path,
     port_candidates: &[u16],
     open_browser: impl FnOnce(&str),
     issuer: &str,
 ) -> LoginOutcome {
+    run_chatgpt_login_flow_for_active(home, port_candidates, open_browser, issuer, None)
+}
+
+fn run_chatgpt_login_flow_for_active(
+    home: &Path,
+    port_candidates: &[u16],
+    open_browser: impl FnOnce(&str),
+    issuer: &str,
+    active: Option<&ActiveLoginFlow>,
+) -> LoginOutcome {
     match run_login(port_candidates, open_browser, issuer) {
         crate::chatgpt_oauth::CallbackOutcome::Authorized(tokens) => {
-            persist_authorized_connection(home, &tokens)
+            persist_authorized_connection(home, &tokens, active)
         }
         crate::chatgpt_oauth::CallbackOutcome::Cancelled => LoginOutcome::Cancelled,
         crate::chatgpt_oauth::CallbackOutcome::Failed(
@@ -197,15 +215,21 @@ pub(crate) fn run_chatgpt_login_flow(
 fn persist_authorized_connection(
     home: &Path,
     tokens: &crate::chatgpt_oauth::IssuedTokens,
+    active: Option<&ActiveLoginFlow>,
 ) -> LoginOutcome {
     let Some(identity) = extract_identity(&tokens.id_token) else {
         return LoginOutcome::Failed;
     };
     let connection = StoredConnection::from_issued(tokens, &identity, now_ms());
-    match save(home, &connection) {
-        Ok(()) => LoginOutcome::Completed,
-        Err(_) => LoginOutcome::Failed,
-    }
+    with_connection_mutation(|| {
+        if active.is_some_and(|flow| flow.cancel.load(Ordering::Acquire)) {
+            return LoginOutcome::Cancelled;
+        }
+        match save_unlocked(home, &connection) {
+            Ok(()) => LoginOutcome::Completed,
+            Err(_) => LoginOutcome::Failed,
+        }
+    })
 }
 
 fn callback_port_from_authorize_url(url: &str) -> Option<u16> {
@@ -227,10 +251,11 @@ fn request_callback_cancel(port: u16) {
 }
 
 fn blocked_login_ports(candidates: &[u16]) -> Option<PortHolders> {
-    let any_blocked = candidates
-        .iter()
-        .any(|candidate| std::net::TcpListener::bind((LOOPBACK_HOST, *candidate)).is_err());
-    if any_blocked {
+    let all_blocked = !candidates.is_empty()
+        && candidates
+            .iter()
+            .all(|candidate| std::net::TcpListener::bind((LOOPBACK_HOST, *candidate)).is_err());
+    if all_blocked {
         Some(resolve_holders(candidates))
     } else {
         None
@@ -238,16 +263,7 @@ fn blocked_login_ports(candidates: &[u16]) -> Option<PortHolders> {
 }
 
 fn open_in_system_browser(url: &str) {
-    #[cfg(target_os = "windows")]
-    let attempt = std::process::Command::new("cmd")
-        .args(["/C", "start", ""])
-        .arg(url)
-        .spawn();
-    #[cfg(target_os = "macos")]
-    let attempt = std::process::Command::new("open").arg(url).spawn();
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let attempt = std::process::Command::new("xdg-open").arg(url).spawn();
-    let _ = attempt;
+    let _ = webbrowser::open(url);
 }
 
 fn now_ms() -> u64 {
@@ -258,29 +274,46 @@ fn now_ms() -> u64 {
 }
 
 pub(crate) fn chatgpt_connection_status(home: &Path) -> ChatGptConnectionStatus {
+    chatgpt_connection_status_with_phase(home, ChatGptLoginPhase::Idle)
+}
+
+pub(crate) fn chatgpt_connection_status_with_phase(
+    home: &Path,
+    login_phase: ChatGptLoginPhase,
+) -> ChatGptConnectionStatus {
     match load(home) {
         LoadState::Connected(connection) => ChatGptConnectionStatus {
             state: ChatGptConnectionState::Connected,
             account_id: Some(connection.account_id.clone()),
             plan_type: connection.plan_type.clone(),
             expires_at_ms: Some(connection.expires_at_ms),
+            login_phase,
         },
         LoadState::Absent => ChatGptConnectionStatus {
             state: ChatGptConnectionState::Absent,
             account_id: None,
             plan_type: None,
             expires_at_ms: None,
+            login_phase,
         },
         LoadState::Unusable => ChatGptConnectionStatus {
             state: ChatGptConnectionState::Unusable,
             account_id: None,
             plan_type: None,
             expires_at_ms: None,
+            login_phase,
         },
     }
 }
 
 impl QuantixHost {
+    pub(crate) fn chatgpt_login_phase(&self) -> ChatGptLoginPhase {
+        self.chatgpt_login_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .phase
+    }
+
     pub fn start_chatgpt_login(&self) -> Result<StartChatGptLoginResult, StartChatGptLoginError> {
         self.begin_chatgpt_login(
             LOGIN_PORT_CANDIDATES,
@@ -328,7 +361,13 @@ impl QuantixHost {
             .name("chatgpt-login".to_owned())
             .spawn(move || {
                 let opener = Arc::clone(&thread_active).opener(open_browser);
-                let outcome = run_chatgpt_login_flow(&flow_home, &flow_ports, opener, &flow_issuer);
+                let outcome = run_chatgpt_login_flow_for_active(
+                    &flow_home,
+                    &flow_ports,
+                    opener,
+                    &flow_issuer,
+                    Some(&thread_active),
+                );
                 flow_host.finish_chatgpt_login_flow(&thread_active, outcome);
             });
         if spawned.is_err() {
@@ -358,7 +397,8 @@ impl QuantixHost {
         state.active = None;
         state.phase = match outcome {
             LoginOutcome::Completed => ChatGptLoginPhase::Completed,
-            LoginOutcome::Cancelled | LoginOutcome::Failed => ChatGptLoginPhase::Idle,
+            LoginOutcome::Cancelled => ChatGptLoginPhase::Cancelled,
+            LoginOutcome::Failed => ChatGptLoginPhase::Failed,
         };
     }
 
@@ -374,13 +414,13 @@ impl QuantixHost {
         // machine still ends Idle.
         if let Some(active) = state.active.take() {
             active.signal_cancel();
+            state.phase = ChatGptLoginPhase::Cancelled;
+        } else if state.phase != ChatGptLoginPhase::Cancelled {
+            state.phase = ChatGptLoginPhase::Idle;
         }
-        state.phase = ChatGptLoginPhase::Idle;
     }
 
     pub fn disconnect_chatgpt(&self) -> Result<ApplicationSettingsView, TenderCommandError> {
-        clear(self.application_home())
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
         let mut state = self
             .chatgpt_login_state()
             .lock()
@@ -390,6 +430,9 @@ impl QuantixHost {
         }
         state.phase = ChatGptLoginPhase::Idle;
         drop(state);
+        with_connection_mutation(|| clear_unlocked(self.application_home()))
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        save_chatgpt_disconnected(self.application_home())?;
         load_application_settings(self.application_home())
     }
 }
@@ -406,6 +449,7 @@ mod tests {
     use super::*;
     use crate::chatgpt_oauth::authorize::build_authorize_url;
     use crate::chatgpt_oauth::crypto::{base64url_encode, generate_pkce, generate_state};
+    use crate::chatgpt_oauth::save;
 
     const WAIT: Duration = Duration::from_secs(10);
 
@@ -669,6 +713,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
+    #[test]
+    fn revoked_flow_cannot_persist_after_disconnect_has_claimed_the_mutation_boundary() {
+        let home = temp_home("revoked-persist");
+        let active = Arc::new(ActiveLoginFlow::new());
+        let tokens = crate::chatgpt_oauth::IssuedTokens {
+            access_token: "at-race".to_owned(),
+            refresh_token: "rt-race".to_owned(),
+            id_token: jwt_id_token("acc-race", Some("plus")),
+            expires_in_secs: 3_600,
+        };
+        let (started_tx, started_rx) = mpsc::channel();
+
+        let flow = with_connection_mutation(|| {
+            let flow_active = Arc::clone(&active);
+            let home = home.clone();
+            let flow = std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                persist_authorized_connection(&home, &tokens, Some(&flow_active))
+            });
+            started_rx
+                .recv_timeout(WAIT)
+                .expect("authorized flow reaches the persistence barrier");
+            active.signal_cancel();
+            flow
+        });
+
+        assert_eq!(flow.join().unwrap(), LoginOutcome::Cancelled);
+        assert!(matches!(load(&home), LoadState::Absent));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
     fn fresh_host() -> (tempfile::TempDir, crate::QuantixHost, PathBuf) {
         let dir = tempfile::tempdir().expect("temporary application home");
         let host = crate::QuantixHost::new(dir.path(), dir.path());
@@ -694,6 +769,7 @@ mod tests {
             expires_at_ms: now_ms() + 3_600_000,
             account_id: "acc-fresh".to_string(),
             plan_type: Some("plus".to_string()),
+            compute_residency: None,
         };
         save(&home, &connection).unwrap();
 
@@ -723,6 +799,7 @@ mod tests {
             expires_at_ms: now_ms().saturating_sub(1_000),
             account_id: "acc-old".to_string(),
             plan_type: None,
+            compute_residency: None,
         };
         save(&home, &stale).unwrap();
 
@@ -772,7 +849,7 @@ mod tests {
 
         host.cancel_chatgpt_login();
         assert!(wait_until(|| {
-            host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Idle
+            host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Cancelled
         }));
     }
 
@@ -786,7 +863,7 @@ mod tests {
         host.cancel_chatgpt_login();
         host.cancel_chatgpt_login();
         assert!(wait_until(|| {
-            host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Idle
+            host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Cancelled
         }));
         assert!(matches!(load(&home), LoadState::Absent));
 
@@ -796,7 +873,7 @@ mod tests {
         assert_eq!(restarted.status, StartChatGptLoginStatus::AwaitingBrowser);
         host.cancel_chatgpt_login();
         assert!(wait_until(|| {
-            host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Idle
+            host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Cancelled
         }));
     }
 
@@ -850,12 +927,42 @@ mod tests {
             expires_at_ms: now_ms() + 3_600_000,
             account_id: "acc-gone".to_string(),
             plan_type: None,
+            compute_residency: None,
         };
         save(&home, &connection).unwrap();
+        crate::application_settings::save_live_connection(
+            &home,
+            &crate::application_settings::ProviderConnectionView {
+                connection_id: crate::application_settings::CODEX_CONNECTION_ID.to_owned(),
+                provider: crate::application_settings::AiProviderKind::Codex,
+                display_name: "ChatGPT subscription".to_owned(),
+                status: crate::application_settings::ProviderConnectionStatus::Ready,
+                account_label: Some("acc-gone".to_owned()),
+                account_plan: Some("plus".to_owned()),
+                models: Vec::new(),
+                catalogue_fetched_at: Some("chatgpt-direct-v1".to_owned()),
+                adapter_version: "chatgpt-direct-v1".to_owned(),
+                status_summary: "Ready".to_owned(),
+            },
+        )
+        .unwrap();
 
         let view = host.disconnect_chatgpt().expect("disconnect succeeds");
         assert_eq!(view.chatgpt.state, ChatGptConnectionState::Absent);
         assert!(view.chatgpt.account_id.is_none());
+        let provider = view
+            .provider_connections
+            .iter()
+            .find(|candidate| {
+                candidate.connection_id == crate::application_settings::CODEX_CONNECTION_ID
+            })
+            .expect("ChatGPT provider status remains visible after disconnect");
+        assert_eq!(
+            provider.status,
+            crate::application_settings::ProviderConnectionStatus::AuthenticationRequired
+        );
+        assert!(provider.account_label.is_none());
+        assert!(provider.models.is_empty());
         assert!(matches!(load(&home), LoadState::Absent));
         assert!(!home.join("auth.json").exists());
         assert_eq!(
@@ -911,6 +1018,20 @@ mod tests {
     }
 
     #[test]
+    fn begin_uses_the_next_candidate_when_the_first_port_is_busy() {
+        let (_dir, host, _home) = fresh_host();
+        let busy = TcpListener::bind((LOOPBACK_HOST, 0)).unwrap();
+        let busy_port = busy.local_addr().unwrap().port();
+
+        let started = host
+            .begin_chatgpt_login(&[busy_port, 0], "http://127.0.0.1:9", |_url| {})
+            .expect("a free fallback candidate starts the login flow");
+
+        assert_eq!(started.status, StartChatGptLoginStatus::AwaitingBrowser);
+        host.cancel_chatgpt_login();
+    }
+
+    #[test]
     fn connection_status_maps_every_load_state() {
         let home = temp_home("status-states");
 
@@ -929,6 +1050,7 @@ mod tests {
                 expires_at_ms: 5_000,
                 account_id: "acc-status".to_string(),
                 plan_type: Some("pro".to_string()),
+                compute_residency: None,
             },
         )
         .unwrap();
@@ -955,7 +1077,7 @@ mod tests {
         let gate = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = gate.local_addr().unwrap().port();
         let url = build_authorize_url(
-            &format!("http://127.0.0.1:{port}/auth/callback"),
+            &format!("http://localhost:{port}/auth/callback"),
             &generate_pkce().unwrap(),
             &generate_state().unwrap(),
         );

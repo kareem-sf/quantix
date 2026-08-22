@@ -15,7 +15,6 @@ import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProj
 const host = vi.hoisted(() => ({
   archiveTender: vi.fn(),
   cancelRuntimePreparation: vi.fn(),
-  cancelProviderLogin: vi.fn(),
   connectAnthropic: vi.fn(),
   connectGemini: vi.fn(),
   chooseAndImportTenderPackage: vi.fn(),
@@ -51,9 +50,7 @@ const host = vi.hoisted(() => ({
   inspectTrashedTenders: vi.fn(),
   inspectRuntimeReadiness: vi.fn(),
   inspectRuntimePreparationProgress: vi.fn(),
-  logoutProvider: vi.fn(),
   disconnectAiProvider: vi.fn(),
-  openProviderLogin: vi.fn(),
   rebindManagerIntakeProvider: vi.fn(),
   recordEngineerWorkspaceMessage: vi.fn(),
   refreshApplicationSettings: vi.fn(),
@@ -72,7 +69,6 @@ const host = vi.hoisted(() => ({
   purgeRecoveryRequiredTender: vi.fn(),
   trashRecoveryRequiredTender: vi.fn(),
   prepareTenderRecovery: vi.fn(),
-  startProviderLogin: vi.fn(),
   startTenderDeepDiagnostics: vi.fn(),
   stopTenderDeepDiagnostics: vi.fn(),
   updateAiExecutionSelection: vi.fn(),
@@ -175,7 +171,7 @@ const applicationFacts = {
   },
   diagnostics: {
     quantix_version: "0.1.0",
-    installation_schema_version: 23,
+    installation_schema_version: 24,
     tender_schema_version: 35,
   },
 };
@@ -339,7 +335,6 @@ beforeEach(() => {
   host.inspectRuntimeReadiness.mockResolvedValue({
     state: "ready",
     issues: [],
-    codex_version: null,
     uv_version: "0.4.0",
     ocr_version: "1.0.0",
     repair_available: false,
@@ -348,7 +343,6 @@ beforeEach(() => {
     ...applicationFacts,
     ai_execution_selection: null,
     provider_connections: [],
-    active_provider_login: null,
   });
   host.resumeManagerIntakes.mockResolvedValue(undefined);
 });
@@ -1625,7 +1619,6 @@ describe("ManagerWorkspace", () => {
           status_summary: "Ready to run Tender work.",
         },
       ],
-      active_provider_login: null,
     };
     host.refreshApplicationSettings.mockResolvedValue(settings);
     host.updateAiExecutionSelection.mockResolvedValue({
@@ -1725,7 +1718,6 @@ describe("ManagerWorkspace", () => {
       ...applicationFacts,
       ai_execution_selection: null,
       provider_connections: [],
-      active_provider_login: null,
     });
 
     render(<ManagerWorkspace />);
@@ -1761,7 +1753,6 @@ describe("ManagerWorkspace", () => {
       ...applicationFacts,
       ai_execution_selection: null,
       provider_connections: [tenderAiProviderConnection],
-      active_provider_login: null,
     });
     host.updateTenderAiExecution.mockImplementation(
       async ({ expected_revision, selection }) => ({
@@ -1870,7 +1861,6 @@ describe("ManagerWorkspace", () => {
       ...applicationFacts,
       ai_execution_selection: null,
       provider_connections: [tenderAiProviderConnection],
-      active_provider_login: null,
     };
     const updatedSettings = {
       ...initialSettings,
@@ -1939,7 +1929,6 @@ describe("ManagerWorkspace", () => {
       ...applicationFacts,
       ai_execution_selection: null,
       provider_connections: [tenderAiProviderConnection],
-      active_provider_login: null,
     });
     host.updateTenderAiExecution.mockResolvedValue({
       ...selectedProjection.ai_execution,
@@ -2007,7 +1996,6 @@ describe("ManagerWorkspace", () => {
     host.inspectRuntimeReadiness.mockResolvedValue({
       state: "ready",
       issues: [],
-      codex_version: null,
       uv_version: "0.4.0",
       ocr_version: "1.0.0",
       repair_available: false,
@@ -2176,12 +2164,12 @@ describe("ManagerWorkspace", () => {
     const disconnected = {
       ...applicationFacts,
       ai_execution_selection: null,
-      active_provider_login: null,
       chatgpt: {
         state: "absent",
         account_id: null,
         plan_type: null,
         expires_at_ms: null,
+        login_phase: "awaiting_browser",
       },
       provider_connections: [
         {
@@ -2220,7 +2208,6 @@ describe("ManagerWorkspace", () => {
     const disconnected = {
       ...applicationFacts,
       ai_execution_selection: null,
-      active_provider_login: null,
       provider_connections: [
         {
           connection_id: "codex_chatgpt",

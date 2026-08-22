@@ -14,7 +14,6 @@
     "format": "prettier --write . && cargo fmt --manifest-path src-tauri/Cargo.toml",
     "format:check": "prettier --check . && cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "preview": "vite preview",
-    "smoke:codex": "cargo test --manifest-path src-tauri/Cargo.toml --lib agent_runtime::tests::codex_subscription_live_smoke -- --ignored --exact",
     "acceptance:deterministic": "cargo run --manifest-path src-tauri/Cargo.toml --bin quantix-product-acceptance -- deterministic",
     "acceptance:aggregate": "cargo run --manifest-path src-tauri/Cargo.toml --bin quantix-product-acceptance -- aggregate",
     "acceptance:live": "cargo run --manifest-path src-tauri/Cargo.toml --bin quantix-product-acceptance -- live",
@@ -31,14 +30,13 @@
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-notification": "^2.3.3",
-    "lucide-react": "^1.31.0",
+    "lucide-react": "^1.32.0",
     "motion": "^13.1.0",
     "react": "^19.1.0",
     "react-aria-components": "^1.20.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
-    "@openai/codex": "0.147.0",
     "@tauri-apps/cli": "^2",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.1.8",

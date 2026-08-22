@@ -10,5 +10,10 @@ pub(crate) use callback_server::{
 };
 pub(crate) use crypto::PkceCodes;
 pub(crate) use jwt::{extract_identity, ChatGptIdentity};
-pub(crate) use store::{clear, load, needs_refresh, save, LoadState, StoredConnection};
+#[cfg(test)]
+pub(crate) use store::save;
+pub(crate) use store::{
+    clear_unlocked, load, needs_refresh, refresh_connection, save_unlocked,
+    with_connection_mutation, LoadState, StoredConnection,
+};
 pub(crate) use tokens::{IssuedTokens, TokenClient};

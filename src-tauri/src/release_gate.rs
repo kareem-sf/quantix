@@ -33,7 +33,7 @@ const REQUIRED_NATIVE_CHECKS: [&str; 8] = [
     "export",
     "uninstall",
 ];
-const CODEX_APP_SERVER_PRODUCTION_SUPPORTED: bool = false;
+const DIRECT_CHATGPT_PRODUCTION_SUPPORTED: bool = false;
 // Public release remains impossible until the build produces a signer-verified
 // attestation that binds the measured source manifest to each native binary.
 const SIGNED_BUILD_PROVENANCE_SUPPORTED: bool = false;
@@ -49,7 +49,7 @@ const RELEASE_CANDIDATE_DIRECTORIES: [&str; 5] = [
     "fixtures",
     "scripts",
 ];
-const RELEASE_CANDIDATE_FILES: [&str; 13] = [
+const RELEASE_CANDIDATE_FILES: [&str; 12] = [
     "package.json",
     "package-lock.json",
     "index.html",
@@ -61,11 +61,11 @@ const RELEASE_CANDIDATE_FILES: [&str; 13] = [
     "src-tauri/build.rs",
     "src-tauri/tauri.conf.json",
     "src-tauri/runtime/runtime-provenance.json",
-    "src-tauri/runtime/codex_app_server_protocol.schemas.json",
     "src-tauri/runtime/ocr/uv.lock",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
 #[ts(export)]
 pub struct NativePlatformQualificationEvidence {
     #[garde(length(bytes, min = 1, max = 100))]
@@ -82,8 +82,10 @@ pub struct NativePlatformQualificationEvidence {
     pub signed_binary_sha256: String,
     #[garde(length(bytes, min = 64, max = 64), ascii)]
     pub dependency_lock_sha256: String,
-    #[garde(length(bytes, min = 64, max = 64), ascii)]
-    pub codex_binary_sha256: String,
+    #[garde(length(bytes, min = 1, max = 100), ascii)]
+    pub direct_provider_adapter_version: String,
+    #[garde(length(bytes, min = 1, max = 100), ascii)]
+    pub direct_provider_catalogue_version: String,
     #[garde(length(bytes, min = 64, max = 64), ascii)]
     pub uv_binary_sha256: String,
     #[garde(length(bytes, min = 64, max = 64), ascii)]
@@ -146,7 +148,7 @@ pub struct LicenseDistributionReview {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, Validate)]
 #[ts(export)]
-pub struct CodexProductionAssuranceEvidence {
+pub struct ChatGptProductionAssuranceEvidence {
     #[garde(skip)]
     pub production_supported: bool,
     #[garde(length(bytes, min = 1, max = 500))]
@@ -204,7 +206,7 @@ pub struct EvaluatePublicReleaseGateCommand {
     #[garde(dive)]
     pub license_review: LicenseDistributionReview,
     #[garde(dive)]
-    pub codex_production_assurance: CodexProductionAssuranceEvidence,
+    pub chatgpt_production_assurance: ChatGptProductionAssuranceEvidence,
     #[garde(dive)]
     pub integration_terms: IntegrationTermsDecision,
     #[garde(length(max = 16), dive)]
@@ -232,7 +234,7 @@ pub struct PublicReleaseGateRecord {
     pub private_qualification_sha256: String,
     pub native_platforms: Vec<NativePlatformQualificationRecord>,
     pub license_review: LicenseDistributionReview,
-    pub codex_production_assurance: CodexProductionAssuranceEvidence,
+    pub chatgpt_production_assurance: ChatGptProductionAssuranceEvidence,
     pub integration_terms: IntegrationTermsDecision,
     pub technical_risks: Vec<TechnicalRiskAcceptance>,
     pub release_artifacts: Vec<AcceptanceArtifactHash>,
@@ -362,7 +364,7 @@ impl QuantixHost {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
         if command.license_review.reviewed_by != "engineer_user"
-            || command.codex_production_assurance.verified_by != "engineer_user"
+            || command.chatgpt_production_assurance.verified_by != "engineer_user"
             || command.integration_terms.decided_by != "engineer_user"
             || command.approver != "engineer_user"
         {
@@ -373,8 +375,8 @@ impl QuantixHost {
             &command.license_review.expires_at,
         )?;
         validate_timestamp_order(
-            &command.codex_production_assurance.verified_at,
-            &command.codex_production_assurance.expires_at,
+            &command.chatgpt_production_assurance.verified_at,
+            &command.chatgpt_production_assurance.expires_at,
         )?;
         validate_timestamp_order(
             &command.integration_terms.decided_at,
@@ -488,11 +490,11 @@ impl QuantixHost {
         if !command.license_review.passed || evidence_expired(&command.license_review.expires_at) {
             blockers.push("license_distribution_review_failed_or_expired".into());
         }
-        if !CODEX_APP_SERVER_PRODUCTION_SUPPORTED
-            || !command.codex_production_assurance.production_supported
-            || evidence_expired(&command.codex_production_assurance.expires_at)
+        if !DIRECT_CHATGPT_PRODUCTION_SUPPORTED
+            || !command.chatgpt_production_assurance.production_supported
+            || evidence_expired(&command.chatgpt_production_assurance.expires_at)
         {
-            blockers.push("codex_production_assurance_absent_or_expired".into());
+            blockers.push("chatgpt_production_assurance_absent_or_expired".into());
         }
         if !command
             .integration_terms
@@ -520,7 +522,7 @@ impl QuantixHost {
             private_qualification_sha256: command.private_qualification_sha256,
             native_platforms: command.native_platforms,
             license_review: command.license_review,
-            codex_production_assurance: command.codex_production_assurance,
+            chatgpt_production_assurance: command.chatgpt_production_assurance,
             integration_terms: command.integration_terms,
             technical_risks: command.technical_risks,
             release_artifacts: command.release_artifacts,
@@ -595,7 +597,7 @@ impl QuantixHost {
             .iter()
             .any(|record| evidence_expired(&record.evidence.expires_at))
             || evidence_expired(&record.license_review.expires_at)
-            || evidence_expired(&record.codex_production_assurance.expires_at)
+            || evidence_expired(&record.chatgpt_production_assurance.expires_at)
             || evidence_expired(&record.integration_terms.expires_at);
         let authoritative_records_current = record.native_platforms.iter().all(|native| {
             connection

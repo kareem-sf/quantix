@@ -14,7 +14,6 @@ use ts_rs::TS;
 use walkdir::WalkDir;
 
 use crate::{
-    agent_runtime::{CODEX_PROTOCOL_SCHEMA, CODEX_VERSION},
     process_supervisor::{ProcessOutput, ProcessSpec, ProcessSupervisor, ProcessTermination},
     setup::{SetupState, MINIMUM_SETUP_FREE_SPACE_BYTES},
     QuantixHost,
@@ -24,7 +23,7 @@ const UV_VERSION: &str = "0.12.2";
 pub(crate) const OCR_VERSION: &str = "3.9.2";
 const PYTHON_VERSION: &str = "3.12.13";
 pub(crate) const RUNTIME_PROVENANCE_SCHEMA: u32 = 3;
-const OCR_MANIFEST_SCHEMA: u32 = 3;
+const OCR_MANIFEST_SCHEMA: u32 = 4;
 const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 const ENVIRONMENT_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 const RUNTIME_INSPECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -49,6 +48,7 @@ impl RuntimeLayout {
         }
     }
 
+    #[cfg(feature = "runtime-fixture")]
     pub(crate) fn codex_executable(&self) -> PathBuf {
         self.runtime_resources
             .join("bin")
@@ -71,11 +71,6 @@ impl RuntimeLayout {
 
     fn provenance_manifest(&self) -> PathBuf {
         self.runtime_resources.join("runtime-provenance.json")
-    }
-
-    fn codex_schema(&self) -> PathBuf {
-        self.runtime_resources
-            .join("codex_app_server_protocol.schemas.json")
     }
 }
 
@@ -379,7 +374,6 @@ impl RuntimeReadiness {
 
 #[derive(Default)]
 struct RuntimeVersions {
-    codex: Option<String>,
     uv: Option<String>,
     ocr: Option<String>,
 }
@@ -402,7 +396,6 @@ struct PersistedPreparation {
 #[serde(deny_unknown_fields)]
 struct OcrRuntimeManifest {
     schema_version: u32,
-    codex_version: String,
     uv_version: String,
     ocr_version: String,
     python_version: String,
@@ -435,9 +428,7 @@ struct RuntimeProvenanceManifest {
     schema_version: u32,
     platform: String,
     architecture: String,
-    codex: RuntimeArtifact,
     uv: RuntimeArtifact,
-    codex_schema_sha256: String,
     ocr_project_files: Vec<HashedFile>,
 }
 
@@ -846,10 +837,7 @@ impl QuantixHost {
             );
         }
 
-        // The bundled Codex artifact is no longer executed or gated here; its
-        // version is pinned by the hash-validated provenance manifest.
         let mut versions = RuntimeVersions {
-            codex: Some(CODEX_VERSION.to_owned()),
             uv: probe_version(
                 self.process_supervisor(),
                 self.application_home(),
@@ -958,8 +946,6 @@ impl QuantixHost {
         }
         validate_runtime_provenance(layout)?;
         self.activate_runtime_preparation_step(RuntimePreparationStep::VerifyBundledTools);
-        // Do not execute or authenticate through Codex while preparing local
-        // document tools. Provider discovery and account checks are separate.
         let uv_version = probe_version(
             self.process_supervisor(),
             self.application_home(),
@@ -1096,7 +1082,6 @@ impl QuantixHost {
             &staged_models,
             &environment,
             &layout.ocr_project(),
-            CODEX_VERSION,
             &uv_version,
             &ocr_version,
         )?;
@@ -1107,7 +1092,6 @@ impl QuantixHost {
         runtime_fixture_trace("runtime readiness published");
         candidate.commit()?;
         Ok(RuntimeVersions {
-            codex: Some(CODEX_VERSION.to_owned()),
             uv: Some(uv_version),
             ocr: Some(ocr_version),
         })
@@ -1489,7 +1473,6 @@ fn build_model_manifest(
     models: &Path,
     environment: &Path,
     project: &Path,
-    codex_version: &str,
     uv_version: &str,
     ocr_version: &str,
 ) -> Result<OcrRuntimeManifest, RuntimeError> {
@@ -1502,7 +1485,6 @@ fn build_model_manifest(
         .ok_or(RuntimeError::PersistenceFailed)?;
     Ok(OcrRuntimeManifest {
         schema_version: OCR_MANIFEST_SCHEMA,
-        codex_version: codex_version.to_owned(),
         uv_version: uv_version.to_owned(),
         ocr_version: ocr_version.to_owned(),
         python_version: PYTHON_VERSION.to_owned(),
@@ -1768,10 +1750,8 @@ fn remove_model_staging_marker(models_root: &Path) -> Result<(), RuntimeError> {
 
 fn validate_runtime_provenance(layout: &RuntimeLayout) -> Result<(), RuntimeError> {
     let provenance = layout.provenance_manifest();
-    let schema = layout.codex_schema();
-    let codex = layout.codex_executable();
     let uv = layout.uv_executable();
-    for resource in [&provenance, &schema, &codex, &uv] {
+    for resource in [&provenance, &uv] {
         if !is_real_file(resource) {
             return Err(RuntimeError::MissingResource);
         }
@@ -1779,25 +1759,13 @@ fn validate_runtime_provenance(layout: &RuntimeLayout) -> Result<(), RuntimeErro
     let bytes = fs::read(provenance).map_err(|_| RuntimeError::MissingResource)?;
     let manifest: RuntimeProvenanceManifest =
         serde_json::from_slice(&bytes).map_err(|_| RuntimeError::InvalidOutput)?;
-    let codex_schema_hash = file_sha256(&schema)?;
-    let embedded_schema_hash = {
-        let mut digest = Sha256::new();
-        digest.update(CODEX_PROTOCOL_SCHEMA.as_bytes());
-        hex_digest(digest.finalize())
-    };
     if manifest.schema_version != RUNTIME_PROVENANCE_SCHEMA
         || manifest.platform != std::env::consts::OS
         || manifest.architecture != std::env::consts::ARCH
-        || manifest.codex.version != CODEX_VERSION
         || manifest.uv.version != UV_VERSION
-        || manifest.codex.sha256.len() != 64
         || manifest.uv.sha256.len() != 64
-        || manifest.codex_schema_sha256.len() != 64
         || manifest.ocr_project_files.is_empty()
-        || file_sha256(&layout.codex_executable())? != manifest.codex.sha256
         || file_sha256(&layout.uv_executable())? != manifest.uv.sha256
-        || codex_schema_hash != manifest.codex_schema_sha256
-        || embedded_schema_hash != manifest.codex_schema_sha256
         || collect_hashed_files(&layout.ocr_project())? != manifest.ocr_project_files
     {
         return Err(RuntimeError::InvalidOutput);
@@ -1821,7 +1789,6 @@ fn validate_ocr_runtime(
     let manifest: OcrRuntimeManifest =
         serde_json::from_slice(&bytes).map_err(|_| OcrValidationError::Environment)?;
     if manifest.schema_version != OCR_MANIFEST_SCHEMA
-        || manifest.codex_version != CODEX_VERSION
         || manifest.uv_version != UV_VERSION
         || manifest.ocr_version != OCR_VERSION
         || manifest.python_version != PYTHON_VERSION
@@ -1966,12 +1933,11 @@ fn write_preparation(
         .execute(
             "UPDATE runtime_preparation SET
                status = ?1,
-               codex_version = ?2,
-               uv_version = ?3,
-               ocr_version = ?4,
+               uv_version = ?2,
+               ocr_version = ?3,
                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
              WHERE singleton = 1",
-            params![status, versions.codex, versions.uv, versions.ocr],
+            params![status, versions.uv, versions.ocr],
         )
         .map_err(|_| RuntimeError::PersistenceFailed)?;
     transaction

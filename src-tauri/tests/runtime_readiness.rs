@@ -46,12 +46,7 @@ impl RuntimeHarness {
         fs::create_dir_all(&ocr_project).expect("OCR project");
 
         let fixture = Path::new(env!("CARGO_BIN_EXE_quantix-runtime-fixture"));
-        for tool in ["codex", "uv"] {
-            fs::copy(fixture, runtime_bin.join(executable_name(tool))).expect("copy fixture tool");
-        }
-        fs::write(runtime_bin.join("codex.version"), "0.147.0\n").expect("Codex version");
-        fs::write(runtime_bin.join("codex.auth"), "chatgpt\n").expect("Codex auth");
-        fs::write(runtime_bin.join("codex.plan"), "plus\n").expect("Codex plan");
+        fs::copy(fixture, runtime_bin.join(executable_name("uv"))).expect("copy fixture tool");
         fs::write(runtime_bin.join("uv.version"), "0.12.2\n").expect("uv version");
         fs::write(runtime_bin.join("ocr.version"), "3.9.2\n").expect("OCR version");
 
@@ -70,27 +65,16 @@ impl RuntimeHarness {
         ] {
             fs::copy(source.join(name), ocr_project.join(name)).expect("copy runtime source");
         }
-        let schema_name = "codex_app_server_protocol.schemas.json";
-        let schema_source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("runtime")
-            .join(schema_name);
-        let schema = runtime.join(schema_name);
-        fs::copy(&schema_source, &schema).expect("copy Codex schema");
         fs::write(
             runtime.join("runtime-provenance.json"),
             serde_json::to_vec(&serde_json::json!({
                 "schema_version": 3,
                 "platform": std::env::consts::OS,
                 "architecture": std::env::consts::ARCH,
-                "codex": {
-                    "version": "0.147.0",
-                    "sha256": sha256(&runtime_bin.join(executable_name("codex"))),
-                },
                 "uv": {
                     "version": "0.12.2",
                     "sha256": sha256(&runtime_bin.join(executable_name("uv"))),
                 },
-                "codex_schema_sha256": sha256(&schema),
                 "ocr_project_files": hashed_files(&ocr_project),
             }))
             .expect("serialize runtime provenance"),
@@ -109,11 +93,6 @@ impl RuntimeHarness {
             runtime_bin,
             host,
         }
-    }
-
-    fn write_auth(&self, state: &str) {
-        fs::write(self.runtime_bin.join("codex.auth"), format!("{state}\n"))
-            .expect("write Codex auth state");
     }
 
     fn managed_ocr_python(&self) -> std::path::PathBuf {
@@ -135,9 +114,8 @@ fn application_only_update() -> UpdateCandidate {
             signature_sha256: "b".repeat(64),
         },
         compatibility: UpdateCompatibilityManifest {
-            installation_schema_version: 23,
+            installation_schema_version: 24,
             tender_schema_version: 35,
-            codex_version: "0.147.0".into(),
             ocr_version: "3.9.2".into(),
             runtime_manifest_schema_version: 3,
         },
@@ -151,12 +129,6 @@ fn application_only_update() -> UpdateCandidate {
             stored_data_may_change: false,
         },
     }
-}
-
-#[test]
-fn runtime_provenance_schema_matches_packaging_provisioner() {
-    let provisioner = include_str!("../../scripts/prepare-runtime.mjs");
-    assert!(provisioner.contains("schema_version: 3"));
 }
 
 #[tokio::test]
@@ -189,22 +161,6 @@ async fn readiness_reports_each_engineer_actionable_runtime_state() {
     assert_eq!(unlisted_model.state, RuntimeReadinessState::MissingModel);
     fs::remove_file(unexpected_model).expect("remove unexpected model file");
 
-    harness.write_auth("none");
-    let signed_out = harness.host.inspect_runtime_readiness().await;
-    assert_eq!(
-        signed_out.state,
-        RuntimeReadinessState::Ready,
-        "{signed_out:?}"
-    );
-
-    harness.write_auth("malformed");
-    let malformed = harness.host.inspect_runtime_readiness().await;
-    assert_eq!(
-        malformed.state,
-        RuntimeReadinessState::Ready,
-        "{malformed:?}"
-    );
-
     fs::write(harness.runtime_bin.join("uv.version"), "0.11.1\n").expect("incompatible uv version");
     let incompatible = harness.host.inspect_runtime_readiness().await;
     assert_eq!(
@@ -234,8 +190,6 @@ async fn readiness_reports_each_engineer_actionable_runtime_state() {
     );
     assert!(missing_model.repair_available);
 
-    fs::remove_file(harness.runtime_bin.join(executable_name("codex")))
-        .expect("remove Codex fixture");
     fs::remove_file(harness.runtime_bin.join(executable_name("uv"))).expect("remove uv fixture");
     let missing_bundled_tools = harness.host.inspect_runtime_readiness().await;
     assert_eq!(
@@ -359,14 +313,15 @@ async fn interrupted_preparation_is_fail_closed_after_restart() {
 }
 
 #[tokio::test]
-async fn bundled_runtime_provenance_is_verified_before_execution() {
+async fn bundled_ocr_provenance_is_verified_before_execution() {
     let harness = RuntimeHarness::new();
-    let schema = harness
+    let project_file = harness
         .runtime_bin
         .parent()
         .expect("runtime root")
-        .join("codex_app_server_protocol.schemas.json");
-    fs::write(&schema, b"{}\n").expect("alter bundled schema");
+        .join("ocr")
+        .join("pyproject.toml");
+    fs::write(&project_file, b"[project]\nname = 'altered'\n").expect("alter bundled OCR project");
 
     let readiness = harness.host.inspect_runtime_readiness().await;
     assert_eq!(readiness.state, RuntimeReadinessState::RepairRequired);

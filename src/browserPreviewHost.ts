@@ -456,9 +456,9 @@ function applicationSettings(): ApplicationSettingsView {
       account_id: null,
       plan_type: null,
       expires_at_ms: null,
+      login_phase: "idle",
     },
     provider_connections: [],
-    active_provider_login: null,
     storage: {
       application_home: "Browser preview (no local files)",
       tender_backups_are_preserved: true,
@@ -466,7 +466,7 @@ function applicationSettings(): ApplicationSettingsView {
     },
     diagnostics: {
       quantix_version: "browser-preview",
-      installation_schema_version: 23n,
+      installation_schema_version: 24n,
       tender_schema_version: 35n,
     },
   };

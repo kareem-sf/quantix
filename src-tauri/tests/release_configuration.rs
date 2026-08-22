@@ -2,7 +2,10 @@ use std::{fs, path::PathBuf};
 
 use serde_json::Value;
 
-use quantix_lib::EvaluatePublicReleaseGateCommand;
+use quantix_lib::{
+    release_candidate_manifest_sha256, EvaluatePublicReleaseGateCommand,
+    RecordNativePlatformQualificationCommand,
+};
 
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -119,6 +122,115 @@ fn windows_candidate_workflow_creates_only_private_windows_installers() {
 }
 
 #[test]
+fn native_qualification_accepts_versioned_direct_provider_evidence() {
+    let hash = |value: char| value.to_string().repeat(64);
+    let command =
+        serde_json::from_value::<RecordNativePlatformQualificationCommand>(serde_json::json!({
+            "evidence": {
+                "platform": "windows_11_x64",
+                "signed_binary_path": "candidate.exe",
+                "signature_path": "candidate.exe.sig",
+                "signature_public_key_path": "candidate.pub",
+                "release_candidate_manifest_sha256": hash('a'),
+                "signed_binary_sha256": hash('b'),
+                "dependency_lock_sha256": hash('c'),
+                "direct_provider_adapter_version": "chatgpt-direct-v1",
+                "direct_provider_catalogue_version": "chatgpt-direct-v1",
+                "uv_binary_sha256": hash('d'),
+                "ocr_runtime_sha256": hash('e'),
+                "model_assets_sha256": hash('f'),
+                "fixture_sha256": hash('1'),
+                "completed_checks": ["setup"],
+                "product_acceptance_run_sha256": hash('2'),
+                "findings": [],
+                "qualified_by": "engineer_user",
+                "qualified_at": "2026-08-16T00:00:00Z",
+                "expires_at": "2027-08-16T00:00:00Z"
+            }
+        }));
+
+    assert!(
+        command.is_ok(),
+        "native qualification must bind the stable direct-provider adapter and catalogue instead of a removed Codex binary: {command:?}",
+    );
+}
+
+#[test]
+fn native_qualification_rejects_removed_codex_binary_evidence() {
+    let hash = |value: char| value.to_string().repeat(64);
+    let command =
+        serde_json::from_value::<RecordNativePlatformQualificationCommand>(serde_json::json!({
+            "evidence": {
+                "platform": "windows_11_x64",
+                "signed_binary_path": "candidate.exe",
+                "signature_path": "candidate.exe.sig",
+                "signature_public_key_path": "candidate.pub",
+                "release_candidate_manifest_sha256": hash('a'),
+                "signed_binary_sha256": hash('b'),
+                "dependency_lock_sha256": hash('c'),
+                "direct_provider_adapter_version": "chatgpt-direct-v1",
+                "direct_provider_catalogue_version": "chatgpt-direct-v1",
+                "codex_binary_sha256": hash('d'),
+                "uv_binary_sha256": hash('e'),
+                "ocr_runtime_sha256": hash('f'),
+                "model_assets_sha256": hash('1'),
+                "fixture_sha256": hash('2'),
+                "completed_checks": ["setup"],
+                "product_acceptance_run_sha256": hash('3'),
+                "findings": [],
+                "qualified_by": "engineer_user",
+                "qualified_at": "2026-08-16T00:00:00Z",
+                "expires_at": "2027-08-16T00:00:00Z"
+            }
+        }));
+
+    assert!(
+        command.is_err(),
+        "native qualification must reject obsolete Codex-binary evidence instead of silently accepting it",
+    );
+}
+
+#[test]
+fn release_candidate_manifest_does_not_require_fixture_only_codex_schema() {
+    let repository = tempfile::tempdir().expect("temporary repository");
+    for directory in [
+        "src",
+        "src-tauri/src",
+        "src-tauri/capabilities",
+        "fixtures",
+        "scripts",
+    ] {
+        fs::create_dir_all(repository.path().join(directory)).expect("create candidate directory");
+    }
+    for file in [
+        "package.json",
+        "package-lock.json",
+        "index.html",
+        "tsconfig.json",
+        "tsconfig.node.json",
+        "vite.config.ts",
+        "src-tauri/Cargo.toml",
+        "src-tauri/Cargo.lock",
+        "src-tauri/build.rs",
+        "src-tauri/tauri.conf.json",
+        "src-tauri/runtime/runtime-provenance.json",
+        "src-tauri/runtime/ocr/uv.lock",
+    ] {
+        let path = repository.path().join(file);
+        fs::create_dir_all(path.parent().expect("candidate file parent"))
+            .expect("create candidate file parent");
+        fs::write(path, b"fixture").expect("write candidate file");
+    }
+
+    let manifest = release_candidate_manifest_sha256(repository.path());
+
+    assert!(
+        manifest.is_ok(),
+        "a production release candidate must not require a fixture-only Codex app-server schema: {manifest:?}",
+    );
+}
+
+#[test]
 fn public_release_command_distinguishes_source_manifest_from_windows_binary() {
     let hash = |value: char| value.to_string().repeat(64);
     let command = serde_json::from_value::<EvaluatePublicReleaseGateCommand>(serde_json::json!({
@@ -142,9 +254,9 @@ fn public_release_command_distinguishes_source_manifest_from_windows_binary() {
             "reviewed_at": "2026-08-16T00:00:00Z",
             "expires_at": "2027-08-16T00:00:00Z"
         },
-        "codex_production_assurance": {
+        "chatgpt_production_assurance": {
             "production_supported": false,
-            "evidence_reference": "No production assurance is currently available.",
+            "evidence_reference": "No direct ChatGPT production assurance is currently available.",
             "evidence_sha256": hash('e'),
             "verified_by": "engineer_user",
             "verified_at": "2026-08-16T00:00:00Z",
@@ -165,6 +277,6 @@ fn public_release_command_distinguishes_source_manifest_from_windows_binary() {
 
     assert!(
         command.is_ok(),
-        "the public release boundary must receive distinct source-manifest and private Windows binary identities: {command:?}",
+        "the public release boundary must accept direct ChatGPT production-assurance evidence while keeping source-manifest and private Windows binary identities distinct: {command:?}",
     );
 }

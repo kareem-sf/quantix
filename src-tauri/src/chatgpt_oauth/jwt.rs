@@ -9,6 +9,7 @@ pub(crate) fn parse_jwt_claims(token: &str) -> Option<serde_json::Value> {
 pub(crate) struct ChatGptIdentity {
     pub account_id: String,
     pub plan_type: Option<String>,
+    pub compute_residency: Option<String>,
 }
 
 pub(crate) fn extract_identity(token: &str) -> Option<ChatGptIdentity> {
@@ -33,9 +34,15 @@ pub(crate) fn extract_identity(token: &str) -> Option<ChatGptIdentity> {
         .and_then(|value| value.get("chatgpt_plan_type"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
+    let compute_residency = auth
+        .and_then(|value| value.get("chatgpt_compute_residency"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("no_constraint"))
+        .map(str::to_string);
     Some(ChatGptIdentity {
         account_id,
         plan_type,
+        compute_residency,
     })
 }
 
@@ -63,13 +70,15 @@ mod tests {
             "chatgpt_account_id": "acc-root",
             "https://api.openai.com/auth": {
                 "chatgpt_account_id": "acc-nested",
-                "chatgpt_plan_type": "plus"
+                "chatgpt_plan_type": "plus",
+                "chatgpt_compute_residency": "us"
             },
             "organizations": [{"id": "acc-org"}]
         }));
         let identity = super::extract_identity(&token).unwrap();
         assert_eq!(identity.account_id, "acc-root");
         assert_eq!(identity.plan_type.as_deref(), Some("plus"));
+        assert_eq!(identity.compute_residency.as_deref(), Some("us"));
     }
 
     #[test]
@@ -84,6 +93,7 @@ mod tests {
         let identity = super::extract_identity(&token).unwrap();
         assert_eq!(identity.account_id, "acc-nested");
         assert_eq!(identity.plan_type.as_deref(), Some("team"));
+        assert_eq!(identity.compute_residency, None);
     }
 
     #[test]
@@ -97,6 +107,22 @@ mod tests {
         let identity = super::extract_identity(&token).unwrap();
         assert_eq!(identity.account_id, "acc-org");
         assert_eq!(identity.plan_type, None);
+        assert_eq!(identity.compute_residency, None);
+    }
+
+    #[test]
+    fn no_constraint_compute_residency_is_treated_as_absent() {
+        let token = token_for(json!({
+            "chatgpt_account_id": "acc-root",
+            "https://api.openai.com/auth": {
+                "chatgpt_plan_type": "enterprise",
+                "chatgpt_compute_residency": "no_constraint"
+            }
+        }));
+
+        let identity = super::extract_identity(&token).unwrap();
+
+        assert_eq!(identity.compute_residency, None);
     }
 
     #[test]

@@ -1,19 +1,17 @@
 use std::{fs, io, path::Path, process::Command, sync::Arc};
 
 use quantix_lib::{
-    ensure_quantix_setup, AiProviderKind, BidDecisionApprovalDecision, CancelProviderLoginCommand,
-    CodexReadiness, ComplianceDisposition, ComplianceDispositionUpdate,
-    ConfirmAiExecutionSelectionCommand, CreateBidDecisionPackageCommand,
-    CreatePortableTenderArchiveCommand, CreateTenderBackupCommand, CreateTenderCommand,
-    DecideBidDecisionPackageCommand, ErasedTenderCopyClass, ImportTenderPackageCommand,
-    InspectManagerWorkspaceCommand, InspectTenderAiExecutionCommand, IntakeExceptionCode,
-    ManagerIntakeStage, ManagerIntakeStatusKind, ManagerWorkspaceTenderState,
-    ProviderCleanupStatus, ProviderConnectionStatus, ProviderLoginMethod, ProviderLoginStatus,
-    ProviderReasoningSelection, PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand,
-    QuantixHost, RecordEngineerWorkspaceMessageCommand, RegistrationState,
-    RunBidDecisionPackageReviewCommand, RuntimeLayout, SelectManagerWorkspaceTenderCommand,
-    SetupPlatform, SetupState, StartProviderLoginCommand, StoragePermissions,
-    TenderAiSelectionReadiness, TenderErrorCode, TenderOfficeMessageAuthor,
+    ensure_quantix_setup, AiProviderKind, BidDecisionApprovalDecision, CodexReadiness,
+    ComplianceDisposition, ComplianceDispositionUpdate, ConfirmAiExecutionSelectionCommand,
+    CreateBidDecisionPackageCommand, CreatePortableTenderArchiveCommand, CreateTenderBackupCommand,
+    CreateTenderCommand, DecideBidDecisionPackageCommand, ErasedTenderCopyClass,
+    ImportTenderPackageCommand, InspectManagerWorkspaceCommand, InspectTenderAiExecutionCommand,
+    IntakeExceptionCode, ManagerIntakeStage, ManagerIntakeStatusKind, ManagerWorkspaceTenderState,
+    ProviderCleanupStatus, ProviderConnectionStatus, ProviderReasoningSelection,
+    PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand, QuantixHost,
+    RecordEngineerWorkspaceMessageCommand, RegistrationState, RunBidDecisionPackageReviewCommand,
+    RuntimeLayout, SelectManagerWorkspaceTenderCommand, SetupPlatform, SetupState,
+    StoragePermissions, TenderAiSelectionReadiness, TenderErrorCode, TenderOfficeMessageAuthor,
     TenderOfficeMessageKind, TenderRecordInspection, TenderRecordKind,
     TenderRecordVersionReference, TenderRetentionDecisionCommand, TenderRetentionState,
     TrashedTenderDecisionCommand, TrashedTenderState, UpdateAiExecutionSelectionCommand,
@@ -924,139 +922,6 @@ async fn approving_global_ai_selection_refreshes_existing_tender_binding() {
         })
         .expect("inspect refreshed Tender binding");
     assert_eq!(after.readiness, TenderAiSelectionReadiness::Ready);
-}
-
-#[tokio::test]
-async fn public_host_completes_managed_browser_login_refreshes_catalogue_and_logs_out() {
-    let user_home = tempfile::tempdir().expect("temporary user home");
-    let application_home = user_home.path().join(".quantix");
-    let resources = user_home.path().join("resources");
-    install_codex_fixture(&resources, "managed-login");
-    let host = QuantixHost::with_setup_platform_and_runtime(
-        &application_home,
-        Arc::new(ReadySetupPlatform),
-        RuntimeLayout::bundled(resources),
-    );
-    host.accept_runtime_fixture();
-    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
-    assert_eq!(
-        host.inspect_codex_subscription(tokio_util::sync::CancellationToken::new())
-            .await,
-        CodexReadiness::AuthenticationRequired
-    );
-
-    let started = host
-        .start_provider_login(StartProviderLoginCommand {
-            method: ProviderLoginMethod::Browser,
-        })
-        .await
-        .expect("start managed browser login");
-    assert_eq!(
-        started
-            .active_provider_login
-            .expect("active managed login")
-            .status,
-        ProviderLoginStatus::AwaitingUser
-    );
-
-    let mut connected = None;
-    for _ in 0..1_000 {
-        let settings = host
-            .refresh_application_settings()
-            .await
-            .expect("refresh managed login");
-        if settings.provider_connections.iter().any(|connection| {
-            connection.connection_id == "codex_chatgpt"
-                && connection.status == ProviderConnectionStatus::Ready
-        }) {
-            connected = Some(settings);
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
-    let connected = connected.expect("managed login completed");
-    let connection = connected
-        .provider_connections
-        .iter()
-        .find(|connection| connection.connection_id == "codex_chatgpt")
-        .expect("connected Codex account");
-    assert_eq!(
-        connection.account_label.as_deref(),
-        Some("engineer@example.com")
-    );
-    assert_eq!(connection.account_plan.as_deref(), Some("plus"));
-    assert_eq!(connection.models[0].model_id, "gpt-5.6-terra");
-
-    let disconnected = host
-        .logout_provider()
-        .await
-        .expect("logout managed account");
-    let connection = disconnected
-        .provider_connections
-        .iter()
-        .find(|connection| connection.connection_id == "codex_chatgpt")
-        .expect("disconnected Codex connection");
-    assert_eq!(
-        connection.status,
-        ProviderConnectionStatus::AuthenticationRequired
-    );
-    assert!(disconnected.active_provider_login.is_none());
-}
-
-#[tokio::test]
-async fn public_host_cancels_the_exact_managed_device_login() {
-    let user_home = tempfile::tempdir().expect("temporary user home");
-    let application_home = user_home.path().join(".quantix");
-    let resources = user_home.path().join("resources");
-    install_codex_fixture(&resources, "managed-login");
-    let host = QuantixHost::with_setup_platform_and_runtime(
-        &application_home,
-        Arc::new(ReadySetupPlatform),
-        RuntimeLayout::bundled(resources),
-    );
-    host.accept_runtime_fixture();
-    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
-    assert_eq!(
-        host.inspect_codex_subscription(tokio_util::sync::CancellationToken::new())
-            .await,
-        CodexReadiness::AuthenticationRequired
-    );
-
-    let started = host
-        .start_provider_login(StartProviderLoginCommand {
-            method: ProviderLoginMethod::DeviceCode,
-        })
-        .await
-        .expect("start managed device login");
-    let login = started.active_provider_login.expect("active device login");
-    assert_eq!(login.user_code.as_deref(), Some("ABCD-EFGH"));
-    host.cancel_provider_login(CancelProviderLoginCommand {
-        login_id: login.login_id,
-    })
-    .await
-    .expect("cancel exact managed login");
-
-    let mut cancelled = None;
-    for _ in 0..1_000 {
-        let settings = host
-            .refresh_application_settings()
-            .await
-            .expect("refresh cancelled login");
-        if settings
-            .active_provider_login
-            .as_ref()
-            .is_some_and(|login| login.status == ProviderLoginStatus::Cancelled)
-        {
-            cancelled = Some(settings);
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
-    let cancelled = cancelled.expect("managed device login cancelled");
-    assert_eq!(
-        cancelled.provider_connections[0].status,
-        ProviderConnectionStatus::AuthenticationRequired
-    );
 }
 
 #[tokio::test]

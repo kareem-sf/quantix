@@ -1,13 +1,26 @@
-use std::io;
-use std::path::Path;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
-use super::{ChatGptIdentity, IssuedTokens};
+use super::{extract_identity, ChatGptIdentity, IssuedTokens, TokenClient};
 use serde::{Deserialize, Serialize};
 
 const STORE_FILE: &str = "auth.json";
-const STORE_TMP_FILE: &str = "auth.json.tmp";
-const STORE_VERSION: u64 = 1;
+const STORE_VERSION: u64 = 2;
 const REFRESH_MARGIN_MS: u64 = 120_000;
+
+static CONNECTION_MUTATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Serializes a complete connection mutation. Refresh/login/disconnect callers
+/// hold this boundary from their initial read until the final save or clear so
+/// a rotating refresh token cannot be used by a competing operation.
+pub(crate) fn with_connection_mutation<T>(operation: impl FnOnce() -> T) -> T {
+    let lock = CONNECTION_MUTATION_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    operation()
+}
 
 #[derive(Debug)]
 pub(crate) enum LoadState {
@@ -23,6 +36,7 @@ pub(crate) struct StoredConnection {
     pub expires_at_ms: u64,
     pub account_id: String,
     pub plan_type: Option<String>,
+    pub compute_residency: Option<String>,
 }
 
 impl std::fmt::Debug for StoredConnection {
@@ -34,6 +48,7 @@ impl std::fmt::Debug for StoredConnection {
             .field("expires_at_ms", &self.expires_at_ms)
             .field("account_id", &self.account_id)
             .field("plan_type", &self.plan_type)
+            .field("compute_residency", &self.compute_residency)
             .finish()
     }
 }
@@ -47,6 +62,7 @@ struct StoreRecord {
     expires_at_ms: u64,
     account_id: String,
     plan_type: Option<String>,
+    compute_residency: Option<String>,
 }
 
 impl StoreRecord {
@@ -59,6 +75,7 @@ impl StoreRecord {
             expires_at_ms: conn.expires_at_ms,
             account_id: conn.account_id.clone(),
             plan_type: conn.plan_type.clone(),
+            compute_residency: conn.compute_residency.clone(),
         }
     }
 
@@ -70,6 +87,7 @@ impl StoreRecord {
             expires_at_ms: self.expires_at_ms,
             account_id: self.account_id,
             plan_type: self.plan_type,
+            compute_residency: self.compute_residency,
         }
     }
 }
@@ -87,6 +105,7 @@ impl StoredConnection {
             expires_at_ms: now_ms.saturating_add(issued.expires_in_secs.saturating_mul(1_000)),
             account_id: identity.account_id.clone(),
             plan_type: identity.plan_type.clone(),
+            compute_residency: identity.compute_residency.clone(),
         }
     }
 }
@@ -105,33 +124,125 @@ pub(crate) fn load(home: &Path) -> LoadState {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn save(home: &Path, conn: &StoredConnection) -> io::Result<()> {
-    let payload =
-        serde_json::to_string(&StoreRecord::from_connection(conn)).map_err(io::Error::other)?;
-    let tmp_path = home.join(STORE_TMP_FILE);
-    let target_path = home.join(STORE_FILE);
-    std::fs::write(&tmp_path, payload)?;
-    if std::fs::rename(&tmp_path, &target_path).is_ok() {
-        return Ok(());
-    }
-    match std::fs::remove_file(&target_path) {
-        Ok(()) => std::fs::rename(&tmp_path, &target_path),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            std::fs::rename(&tmp_path, &target_path)
-        }
-        Err(error) => {
-            let _ = std::fs::remove_file(&tmp_path);
-            Err(error)
-        }
-    }
+    with_connection_mutation(|| save_unlocked(home, conn))
 }
 
+pub(crate) fn save_unlocked(home: &Path, conn: &StoredConnection) -> io::Result<()> {
+    let payload =
+        serde_json::to_string(&StoreRecord::from_connection(conn)).map_err(io::Error::other)?;
+    let tmp_path = unique_temporary_path(home);
+    let target_path = home.join(STORE_FILE);
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp_path)?;
+        file.write_all(payload.as_bytes())?;
+        file.flush()?;
+        file.sync_all()?;
+        drop(file);
+        atomic_replace_file(&target_path, &tmp_path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+    result
+}
+
+#[cfg(test)]
 pub(crate) fn clear(home: &Path) -> io::Result<()> {
+    with_connection_mutation(|| clear_unlocked(home))
+}
+
+pub(crate) fn clear_unlocked(home: &Path) -> io::Result<()> {
     match std::fs::remove_file(home.join(STORE_FILE)) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
+}
+
+/// Refreshes the currently persisted connection as one serialized operation.
+/// Callers retry with the returned value; a stale in-memory token is
+/// deliberately not an input because another operation may have rotated it.
+#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
+pub(crate) fn refresh_connection(
+    home: &Path,
+    token_client: &TokenClient,
+    now_ms: u64,
+) -> Result<StoredConnection, ()> {
+    with_connection_mutation(|| {
+        let current = match load(home) {
+            LoadState::Connected(connection) => *connection,
+            LoadState::Absent | LoadState::Unusable => return Err(()),
+        };
+        if !needs_refresh(&current, now_ms) {
+            return Ok(current);
+        }
+        let issued = token_client
+            .refresh(&current.refresh_token)
+            .map_err(|_| ())?;
+        let identity = extract_identity(&issued.id_token).ok_or(())?;
+        let refreshed = StoredConnection::from_issued(&issued, &identity, now_ms);
+        save_unlocked(home, &refreshed).map_err(|_| ())?;
+        Ok(refreshed)
+    })
+}
+
+fn unique_temporary_path(home: &Path) -> PathBuf {
+    home.join(format!(
+        ".auth.json.{}.{}.tmp",
+        std::process::id(),
+        TEMPORARY_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+    ))
+}
+
+#[cfg(windows)]
+fn atomic_replace_file(target: &Path, replacement: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::{
+        MoveFileExW, ReplaceFileW, MOVEFILE_WRITE_THROUGH, REPLACEFILE_WRITE_THROUGH,
+    };
+    use windows_core::PCWSTR;
+
+    let target_wide = target
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let replacement_wide = replacement
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let result = if target.exists() {
+        unsafe {
+            ReplaceFileW(
+                PCWSTR(target_wide.as_ptr()),
+                PCWSTR(replacement_wide.as_ptr()),
+                PCWSTR::null(),
+                REPLACEFILE_WRITE_THROUGH,
+                None,
+                None,
+            )
+        }
+    } else {
+        unsafe {
+            MoveFileExW(
+                PCWSTR(replacement_wide.as_ptr()),
+                PCWSTR(target_wide.as_ptr()),
+                MOVEFILE_WRITE_THROUGH,
+            )
+        }
+    };
+    result.map_err(|error| io::Error::other(error.to_string()))
+}
+
+#[cfg(not(windows))]
+fn atomic_replace_file(target: &Path, replacement: &Path) -> io::Result<()> {
+    std::fs::rename(replacement, target)
 }
 
 pub(crate) fn needs_refresh(conn: &StoredConnection, now_ms: u64) -> bool {
@@ -141,8 +252,10 @@ pub(crate) fn needs_refresh(conn: &StoredConnection, now_ms: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{clear, load, needs_refresh, save, LoadState, StoredConnection};
-    use crate::chatgpt_oauth::{ChatGptIdentity, IssuedTokens};
+    use crate::chatgpt_oauth::{refresh_connection, ChatGptIdentity, IssuedTokens, TokenClient};
     use std::fs;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     use std::path::PathBuf;
 
     fn temp_home(name: &str) -> PathBuf {
@@ -163,7 +276,29 @@ mod tests {
             expires_at_ms: 5_000,
             account_id: "acc-1".to_string(),
             plan_type: Some("plus".to_string()),
+            compute_residency: Some("us".to_string()),
         }
+    }
+
+    fn jwt_id_token(
+        account_id: &str,
+        plan_type: Option<&str>,
+        compute_residency: Option<&str>,
+    ) -> String {
+        let header =
+            crate::chatgpt_oauth::crypto::base64url_encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let payload = crate::chatgpt_oauth::crypto::base64url_encode(
+            serde_json::json!({
+                "chatgpt_account_id": account_id,
+                "https://api.openai.com/auth": {
+                    "chatgpt_plan_type": plan_type,
+                    "chatgpt_compute_residency": compute_residency,
+                },
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        format!("{header}.{payload}.signature")
     }
 
     #[test]
@@ -176,7 +311,7 @@ mod tests {
         let raw = fs::read_to_string(home.join("auth.json")).unwrap();
         assert_eq!(
             raw,
-            r#"{"version":1,"access":"access-1","refresh":"refresh-1","id_token":"id-1","expires_at_ms":5000,"account_id":"acc-1","plan_type":"plus"}"#
+            r#"{"version":2,"access":"access-1","refresh":"refresh-1","id_token":"id-1","expires_at_ms":5000,"account_id":"acc-1","plan_type":"plus","compute_residency":"us"}"#
         );
 
         match load(&home) {
@@ -187,6 +322,7 @@ mod tests {
                 assert_eq!(loaded.expires_at_ms, 5_000);
                 assert_eq!(loaded.account_id, "acc-1");
                 assert_eq!(loaded.plan_type.as_deref(), Some("plus"));
+                assert_eq!(loaded.compute_residency.as_deref(), Some("us"));
             }
             other => panic!("expected connected state, got {other:?}"),
         }
@@ -204,7 +340,13 @@ mod tests {
         connection.plan_type = None;
         save(&home, &connection).unwrap();
 
-        assert!(!home.join("auth.json.tmp").exists());
+        assert!(fs::read_dir(&home).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
         match load(&home) {
             LoadState::Connected(loaded) => {
                 assert_eq!(loaded.access_token, "access-2");
@@ -246,7 +388,7 @@ mod tests {
             let body = match name {
                 "truncated" => r#"{"version":1,"access":"a","refr"#.to_string(),
                 "garbage" => "<html>not json</html>".to_string(),
-                "wrong-version" => r#"{"version":2,"access":"a","refresh":"b","id_token":"c","expires_at_ms":1,"account_id":"d","plan_type":null}"#.to_string(),
+                "wrong-version" => r#"{"version":3,"access":"a","refresh":"b","id_token":"c","expires_at_ms":1,"account_id":"d","plan_type":null,"compute_residency":null}"#.to_string(),
                 _ => r#"{"version":1,"access":"a"}"#.to_string(),
             };
             fs::write(home.join("auth.json"), body).unwrap();
@@ -269,6 +411,7 @@ mod tests {
         let identity = ChatGptIdentity {
             account_id: "acc-9".to_string(),
             plan_type: Some("team".to_string()),
+            compute_residency: Some("eu".to_string()),
         };
 
         let connection = StoredConnection::from_issued(&issued, &identity, 1_000);
@@ -279,6 +422,7 @@ mod tests {
         assert_eq!(connection.expires_at_ms, 3_601_000);
         assert_eq!(connection.account_id, "acc-9");
         assert_eq!(connection.plan_type.as_deref(), Some("team"));
+        assert_eq!(connection.compute_residency.as_deref(), Some("eu"));
     }
 
     #[test]
@@ -291,5 +435,62 @@ mod tests {
         assert!(needs_refresh(&connection, 80_000 + 1));
         assert!(needs_refresh(&connection, 200_000));
         assert!(needs_refresh(&connection, 300_000));
+    }
+
+    #[test]
+    fn serialized_refresh_reloads_and_persists_the_rotated_connection() {
+        let home = temp_home("serialized-refresh");
+        save(&home, &sample_connection()).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let issuer = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 512];
+            loop {
+                let read = stream.read(&mut buffer).unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let body = serde_json::json!({
+                "access_token": "access-2",
+                "refresh_token": "refresh-2",
+                "id_token": jwt_id_token("acc-2", Some("team"), Some("eu")),
+                "expires_in": 3600,
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8(request).unwrap()
+        });
+
+        let client = TokenClient::new(&format!("http://127.0.0.1:{port}")).unwrap();
+        let refreshed = refresh_connection(&home, &client, 1_000_000).unwrap();
+
+        assert_eq!(refreshed.access_token, "access-2");
+        assert_eq!(refreshed.refresh_token, "refresh-2");
+        assert_eq!(refreshed.account_id, "acc-2");
+        assert_eq!(refreshed.plan_type.as_deref(), Some("team"));
+        assert_eq!(refreshed.compute_residency.as_deref(), Some("eu"));
+        assert_eq!(refreshed.expires_at_ms, 4_600_000);
+        assert!(issuer.join().unwrap().contains("refresh_token=refresh-1"));
+        match load(&home) {
+            LoadState::Connected(persisted) => {
+                assert_eq!(persisted.refresh_token, "refresh-2");
+                assert_eq!(persisted.account_id, "acc-2");
+                assert_eq!(persisted.plan_type.as_deref(), Some("team"));
+                assert_eq!(persisted.compute_residency.as_deref(), Some("eu"));
+            }
+            state => panic!("expected the rotated connection, got {state:?}"),
+        }
+        let _ = fs::remove_dir_all(&home);
     }
 }

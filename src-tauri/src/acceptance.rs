@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use garde::Validate;
@@ -197,10 +197,18 @@ pub struct RecordLiveQualificationRunCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveQualificationEnvironment {
     pub platform: String,
-    pub codex_version: String,
-    pub app_server_version: String,
+    pub direct_provider_adapter_version: String,
+    pub direct_provider_catalogue_version: String,
+    pub chatgpt_account_plan: String,
     pub ocr_runtime_sha256: String,
     pub model_observations: Vec<String>,
+}
+
+struct DirectProviderQualificationEvidence {
+    adapter_version: String,
+    catalogue_version: String,
+    account_plan: String,
+    model_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,8 +238,9 @@ pub struct LiveQualificationRun {
     pub outcome: ProductAcceptanceOutcome,
     pub fixture_sha256: String,
     pub oracle_sha256: String,
-    pub codex_version: String,
-    pub app_server_version: String,
+    pub direct_provider_adapter_version: String,
+    pub direct_provider_catalogue_version: String,
+    pub chatgpt_account_plan: String,
     pub ocr_runtime_sha256: String,
     pub model_observations: Vec<String>,
     pub evaluation_policy_sha256: String,
@@ -266,6 +275,22 @@ pub struct PrivateQualificationRecord {
 }
 
 impl QuantixHost {
+    pub fn measure_live_qualification_environment(
+        &self,
+        platform: String,
+        ocr_runtime_sha256: String,
+    ) -> Result<LiveQualificationEnvironment, TenderCommandError> {
+        let evidence = direct_provider_qualification_evidence(self.application_home())?;
+        Ok(LiveQualificationEnvironment {
+            platform,
+            direct_provider_adapter_version: evidence.adapter_version,
+            direct_provider_catalogue_version: evidence.catalogue_version,
+            chatgpt_account_plan: evidence.account_plan,
+            ocr_runtime_sha256,
+            model_observations: evidence.model_ids,
+        })
+    }
+
     pub fn run_deterministic_product_acceptance(
         &self,
         command: RunDeterministicAcceptanceCommand,
@@ -659,7 +684,7 @@ impl QuantixHost {
                 bootstrap_team_ready
                     && has("fixture_import")
                     && (!live_provider || has("provider_live_task")),
-                "measured the seeded pre-bid EITL team, exact fixture intake, and (for live qualification) four managed provider turns",
+                "measured the seeded pre-bid EITL team, exact fixture intake, and (for live qualification) four direct provider turns",
             ),
             measured_check(
                 "evidence",
@@ -685,7 +710,7 @@ impl QuantixHost {
                     } else {
                         has("provider_fake_outcomes")
                     },
-                "the exact challenged application executed either deterministic success/failure provider adapters or four managed live app-server tasks",
+                "the exact challenged application executed either deterministic success/failure provider adapters or four live tasks through Quantix's direct provider",
             ),
             measured_check(
                 "queries",
@@ -903,10 +928,18 @@ impl QuantixHost {
             || environment.platform != "windows_11_x64"
             || std::env::consts::OS != "windows"
             || std::env::consts::ARCH != "x86_64"
-            || environment.codex_version.trim().is_empty()
-            || environment.codex_version.len() > 100
-            || environment.app_server_version.trim().is_empty()
-            || environment.app_server_version.len() > 100
+            || environment
+                .direct_provider_adapter_version
+                .trim()
+                .is_empty()
+            || environment.direct_provider_adapter_version.len() > 100
+            || environment
+                .direct_provider_catalogue_version
+                .trim()
+                .is_empty()
+            || environment.direct_provider_catalogue_version.len() > 100
+            || environment.chatgpt_account_plan.trim().is_empty()
+            || environment.chatgpt_account_plan.len() > 100
             || environment.ocr_runtime_sha256.len() != 64
             || !environment
                 .ocr_runtime_sha256
@@ -990,8 +1023,11 @@ impl QuantixHost {
             if first.platform != environment.platform
                 || first.fixture_sha256 != acceptance_fixture_sha256()
                 || first.oracle_sha256 != acceptance_oracle_sha256()
-                || first.codex_version != environment.codex_version
-                || first.app_server_version != environment.app_server_version
+                || first.direct_provider_adapter_version
+                    != environment.direct_provider_adapter_version
+                || first.direct_provider_catalogue_version
+                    != environment.direct_provider_catalogue_version
+                || first.chatgpt_account_plan != environment.chatgpt_account_plan
                 || first.ocr_runtime_sha256 != environment.ocr_runtime_sha256
                 || first.model_observations != environment.model_observations
                 || first.evaluation_policy_sha256 != acceptance_evaluation_policy_sha256()
@@ -1060,7 +1096,7 @@ impl QuantixHost {
             .dedup_by(|left, right| left.name == right.name);
         let required_installed_checks = [
             "empty_setup",
-            "codex_login",
+            "chatgpt_direct_readiness",
             "import",
             "processing",
             "interruption",
@@ -1089,7 +1125,7 @@ impl QuantixHost {
         if completed.contains("empty_setup") {
             installed_checks.push("empty_setup".into());
         }
-        installed_checks.push("codex_login".into());
+        installed_checks.push("chatgpt_direct_readiness".into());
         if completed.contains("fixture_import") {
             installed_checks.extend(["import".into(), "processing".into()]);
         }
@@ -1171,14 +1207,15 @@ impl QuantixHost {
             },
             fixture_sha256: acceptance_fixture_sha256(),
             oracle_sha256: acceptance_oracle_sha256(),
-            codex_version: environment.codex_version,
-            app_server_version: environment.app_server_version,
+            direct_provider_adapter_version: environment.direct_provider_adapter_version,
+            direct_provider_catalogue_version: environment.direct_provider_catalogue_version,
+            chatgpt_account_plan: environment.chatgpt_account_plan,
             ocr_runtime_sha256: environment.ocr_runtime_sha256,
             model_observations: environment.model_observations,
             evaluation_policy_sha256: acceptance_evaluation_policy_sha256(),
             deterministic_acceptance_record_sha256: command.deterministic_acceptance_record_sha256,
             authentication_observation:
-                "Codex-managed authentication observed locally; no credential material recorded"
+                "Quantix-owned ChatGPT OAuth connection observed locally; no credential material recorded"
                     .into(),
             metrics,
             installed_checks,
@@ -1655,6 +1692,59 @@ pub fn print_candidate_acceptance_probe(challenge: &str) -> Result<(), TenderCom
     Ok(())
 }
 
+fn direct_provider_qualification_evidence(
+    application_home: &Path,
+) -> Result<DirectProviderQualificationEvidence, TenderCommandError> {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?
+        .as_millis()
+        .try_into()
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
+    let connection = crate::application_settings::chatgpt_connection_readiness(
+        application_home,
+        crate::chatgpt_login::PRODUCTION_ISSUER,
+        now_ms,
+    )
+    .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
+    let view = crate::application_settings::chatgpt_connection_view(&connection);
+    let catalogue_version = view
+        .catalogue_fetched_at
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
+    let account_plan = view
+        .account_plan
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
+    let account_ready = view
+        .account_label
+        .as_deref()
+        .is_some_and(|label| !label.trim().is_empty());
+    let catalogue_ready = !view.adapter_version.trim().is_empty()
+        && !catalogue_version.trim().is_empty()
+        && !view.models.is_empty()
+        && view.models.iter().any(|model| model.is_default)
+        && view.models.iter().all(|model| {
+            !model.model_id.trim().is_empty()
+                && !model.reasoning_options.is_empty()
+                && model
+                    .reasoning_options
+                    .iter()
+                    .any(|reasoning| reasoning.is_default)
+        });
+    if view.status != crate::ProviderConnectionStatus::Ready || !account_ready || !catalogue_ready {
+        return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
+    }
+    Ok(DirectProviderQualificationEvidence {
+        adapter_version: view.adapter_version,
+        catalogue_version,
+        account_plan,
+        model_ids: view
+            .models
+            .into_iter()
+            .map(|model| model.model_id)
+            .collect(),
+    })
+}
+
 pub async fn print_candidate_acceptance_rehearsal(
     challenge: &str,
     mode: &str,
@@ -1677,13 +1767,8 @@ pub async fn print_candidate_acceptance_rehearsal(
             TenderErrorCode::LocalDocumentToolsRequired,
         ));
     }
-    if mode == "live"
-        && host
-            .inspect_codex_subscription(tokio_util::sync::CancellationToken::new())
-            .await
-            != crate::CodexReadiness::Ready
-    {
-        return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
+    if mode == "live" {
+        direct_provider_qualification_evidence(host.application_home())?;
     }
     let mut measurement = host.drive_candidate_host_lifecycle(mode == "live").await;
     let runtime_provenance = resource_directory
@@ -2200,4 +2285,105 @@ fn parse_record<T: for<'de> Deserialize<'de> + Serialize>(
 
 fn sql_error(_: rusqlite::Error) -> TenderCommandError {
     TenderCommandError::new(TenderErrorCode::StoreUnavailable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LiveQualificationMetrics, LiveQualificationRun, ProductAcceptanceOutcome};
+    use crate::{
+        chatgpt_oauth::{save, StoredConnection},
+        QuantixHost,
+    };
+
+    #[test]
+    fn live_environment_qualifies_quantix_owned_chatgpt_connection_without_exposing_tokens() {
+        let home = tempfile::tempdir().unwrap();
+        save(
+            home.path(),
+            &StoredConnection {
+                access_token: "secret-access".into(),
+                refresh_token: "secret-refresh".into(),
+                id_token: "secret-id".into(),
+                expires_at_ms: u64::MAX,
+                account_id: "account-123".into(),
+                plan_type: Some("plus".into()),
+                compute_residency: None,
+            },
+        )
+        .unwrap();
+        let host = QuantixHost::new(home.path(), home.path());
+
+        let environment = host
+            .measure_live_qualification_environment("windows_11_x64".into(), "a".repeat(64))
+            .unwrap();
+
+        assert_eq!(
+            environment.direct_provider_adapter_version,
+            "chatgpt-direct-v1"
+        );
+        assert_eq!(
+            environment.direct_provider_catalogue_version,
+            "chatgpt-direct-v1"
+        );
+        assert_eq!(environment.chatgpt_account_plan, "plus");
+        assert_eq!(
+            environment.model_observations,
+            vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
+        );
+        let evidence = format!("{environment:?}");
+        assert!(!evidence.contains("secret-access"));
+        assert!(!evidence.contains("secret-refresh"));
+        assert!(!evidence.contains("secret-id"));
+        assert!(!evidence.contains("account-123"));
+    }
+
+    #[test]
+    fn live_qualification_record_exposes_direct_provider_evidence() {
+        let record = LiveQualificationRun {
+            run_id: "run-1".into(),
+            release_candidate_sha256: "a".repeat(64),
+            platform: "windows_11_x64".into(),
+            sequence_number: 1,
+            outcome: ProductAcceptanceOutcome::Passed,
+            fixture_sha256: "b".repeat(64),
+            oracle_sha256: "c".repeat(64),
+            direct_provider_adapter_version: "chatgpt-direct-v1".into(),
+            direct_provider_catalogue_version: "chatgpt-direct-v1".into(),
+            chatgpt_account_plan: "plus".into(),
+            ocr_runtime_sha256: "d".repeat(64),
+            model_observations: vec!["gpt-5.5".into()],
+            evaluation_policy_sha256: "e".repeat(64),
+            deterministic_acceptance_record_sha256: "f".repeat(64),
+            authentication_observation: "local authentication observed".into(),
+            metrics: LiveQualificationMetrics {
+                critical_recall_percent: 100,
+                unsupported_critical_count: 0,
+                boq_accounting_percent: 100,
+                calculation_reproduction_percent: 100,
+                material_provenance_percent: 100,
+                non_critical_recall_percent: 100,
+                hard_gate_violations: 0,
+            },
+            installed_checks: Vec::new(),
+            artifacts: Vec::new(),
+            findings: Vec::new(),
+            exceptions: Vec::new(),
+            timings: Vec::new(),
+            hard_gate_failures: Vec::new(),
+            manifest_sha256: String::new(),
+            created_at: "2026-08-22T00:00:00Z".into(),
+        };
+
+        let serialized = serde_json::to_value(record).unwrap();
+
+        assert_eq!(
+            serialized["direct_provider_adapter_version"],
+            "chatgpt-direct-v1"
+        );
+        assert_eq!(
+            serialized["direct_provider_catalogue_version"],
+            "chatgpt-direct-v1"
+        );
+        assert_eq!(serialized["chatgpt_account_plan"], "plus");
+    }
 }

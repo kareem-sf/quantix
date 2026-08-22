@@ -514,8 +514,8 @@ DETERMINISTIC_RECORD_SHA256="$(json_last_field "$AGGREGATE_LOG" manifest_sha256)
 write_env DETERMINISTIC_RECORD_SHA256 "$DETERMINISTIC_RECORD_SHA256"
 fi
 
-stage "Record five clean live Codex runs" 55
-say "Each opted-in run uses your existing Codex login, exercises the full candidate, and then uninstalls it."
+stage "Record five clean live ChatGPT direct runs" 55
+say "Each opted-in run qualifies the ChatGPT OAuth connection owned by Quantix, exercises the full candidate through the direct provider, and then uninstalls it."
 say "A failure invalidates the candidate. Fix the problem and start with a new candidate."
 LIVE_COMMAND="$WORK_DIRECTORY/live-command.json"
 LIVE_RUN_COUNT="$(_existing LIVE_RUN_COUNT || true)"
@@ -529,8 +529,9 @@ if [[ -n "$PRIVATE_QUALIFICATION_SHA256" && ( "$LIVE_RUN_COUNT" != "5" || -z "$C
 fi
 while (( LIVE_RUN_COUNT < 5 )); do
   NEXT_RUN=$((LIVE_RUN_COUNT + 1))
-  step "Install the same downloaded candidate again for live run $NEXT_RUN of 5, launch it once, then close it."
-  pause "Press Enter when the exact candidate is installed."
+  step "Install the same downloaded candidate again for live run $NEXT_RUN of 5 and launch it."
+  step "In Quantix Settings, connect your ChatGPT subscription if needed, confirm that the Quantix-owned connection is Ready, and approve the exact Tender AI model and reasoning selection; then close Quantix."
+  pause "Press Enter when the exact candidate, ChatGPT connection, and Tender AI selection are Ready."
   require_path "$APPLICATION_ARTIFACT_PATH"
   require_path "$APPLICATION_RESOURCE_DIRECTORY_PATH"
   require_path "$APPLICATION_UNINSTALLER_PATH"
@@ -578,7 +579,7 @@ SKIPPED+=("record signed native lifecycle evidence for macOS 14+ Apple Silicon")
 SKIPPED+=("record signed native lifecycle evidence for Ubuntu 24.04 x64")
 SKIPPED+=("implement signer-verified provenance binding the source manifest to every native binary")
 SKIPPED+=("complete license-distribution review and approved signer allowlists")
-SKIPPED+=("obtain production assurance and permitted subscription-integration terms for Codex app-server")
+SKIPPED+=("obtain production assurance and permitted subscription-integration terms for the Quantix-owned ChatGPT direct provider")
 SKIPPED+=("configure and test a production updater endpoint")
 say "Private v0 is qualified. Public distribution remains blocked until every item below is independently evidenced."
 open_url "https://github.com/kareem-sf/quantix/blob/main/docs/adr/0010-qualify-v0-through-layered-product-acceptance.md"

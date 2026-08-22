@@ -3,8 +3,8 @@ use quantix_lib::{
     AgentRunSummary, AiExecutionApproval, AiExecutionSelection, AiProviderKind,
     AppearancePreference, ApplicationDiagnostics, ApplicationSettingsView, ApplicationStorageFacts,
     ApproveSubmissionReleaseCommand, BootstrapRole, CancelPackageIntakeCommand,
-    CancelProviderLoginCommand, ChatGptConnectionState, ChatGptConnectionStatus,
-    ChatGptPortHolders, CodexProductionAssuranceEvidence, ConfirmAiExecutionSelectionCommand,
+    ChatGptConnectionState, ChatGptConnectionStatus, ChatGptPortHolders,
+    ChatGptProductionAssuranceEvidence, ConfirmAiExecutionSelectionCommand,
     ConnectAnthropicCommand, ConnectGeminiCommand, CreatePortableTenderArchiveCommand,
     DeepDiagnosticsSession, DeletionReceipt, DiagnosticComponent, DiagnosticCorrelation,
     DiagnosticEvent, DiagnosticHealth, DiagnosticScope, DiagnosticSeverity,
@@ -20,14 +20,13 @@ use quantix_lib::{
     ManagerIntakeStatusKind, ManagerWorkspaceProjection, ManagerWorkspaceTender,
     ManagerWorkspaceTenderState, NativePlatformQualificationEvidence,
     NativePlatformQualificationRecord, OpenDiagnosticLogsCommand, OpenDiagnosticLogsResult,
-    OpenProviderLoginCommand, PackageIntakeOperationKind, PackageIntakeProgress,
-    PackageIntakeStage, PortableTenderArchiveRecord, PrivateQualificationRecord,
-    ProductAcceptanceOutcome, ProductAcceptanceRecord, ProductAcceptanceRun, ProviderCleanupStatus,
-    ProviderConnectionStatus, ProviderConnectionView, ProviderLoginMethod, ProviderLoginStatus,
-    ProviderLoginView, ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
-    ProviderReferenceDiscoveryState, PublicReleaseGateOutcome, PublicReleaseGateRecord,
-    PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand, QuantixDoctorArea,
-    QuantixDoctorFinding, QuantixDoctorRepairAction, QuantixDoctorRepairCommand,
+    PackageIntakeOperationKind, PackageIntakeProgress, PackageIntakeStage,
+    PortableTenderArchiveRecord, PrivateQualificationRecord, ProductAcceptanceOutcome,
+    ProductAcceptanceRecord, ProductAcceptanceRun, ProviderCleanupStatus, ProviderConnectionStatus,
+    ProviderConnectionView, ProviderModelOption, ProviderReasoningOption,
+    ProviderReasoningSelection, ProviderReferenceDiscoveryState, PublicReleaseGateOutcome,
+    PublicReleaseGateRecord, PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand,
+    QuantixDoctorArea, QuantixDoctorFinding, QuantixDoctorRepairAction, QuantixDoctorRepairCommand,
     QuantixDoctorRepairTarget, QuantixDoctorReport, QuantixDoctorSeverity,
     RebindManagerIntakeProviderCommand, RecordEngineerWorkspaceMessageCommand,
     RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand,
@@ -37,14 +36,14 @@ use quantix_lib::{
     RuntimePreparationStep, RuntimeReadiness, RuntimeReadinessIssue, RuntimeReadinessState,
     SearchManagerWorkspaceCommand, SelectManagerWorkspaceTenderCommand, SetupIssue,
     StartChatGptLoginError, StartChatGptLoginResult, StartChatGptLoginStatus,
-    StartManagerTenderCommand, StartProviderLoginCommand, StartTenderDeepDiagnosticsCommand,
-    StopTenderDeepDiagnosticsCommand, SubmissionReleaseApproval, SubmissionReleaseInspection,
-    SubmissionReleaseState, TechnicalRiskAcceptance, TenderAiExecutionBinding,
-    TenderAiSelectionReadiness, TenderDeletionSourceState, TenderErrorCode, TenderOfficeMessage,
-    TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderRetentionDecisionCommand,
-    TenderRetentionDecisionRecord, TenderRetentionState, TrashRecoveryRequiredTenderCommand,
-    TrashedTenderDecisionCommand, TrashedTenderRecord, TrashedTenderState,
-    UpdateAiExecutionSelectionCommand, UpdateGeneralApplicationPreferencesCommand,
+    StartManagerTenderCommand, StartTenderDeepDiagnosticsCommand, StopTenderDeepDiagnosticsCommand,
+    SubmissionReleaseApproval, SubmissionReleaseInspection, SubmissionReleaseState,
+    TechnicalRiskAcceptance, TenderAiExecutionBinding, TenderAiSelectionReadiness,
+    TenderDeletionSourceState, TenderErrorCode, TenderOfficeMessage, TenderOfficeMessageAuthor,
+    TenderOfficeMessageKind, TenderRetentionDecisionCommand, TenderRetentionDecisionRecord,
+    TenderRetentionState, TrashRecoveryRequiredTenderCommand, TrashedTenderDecisionCommand,
+    TrashedTenderRecord, TrashedTenderState, UpdateAiExecutionSelectionCommand,
+    UpdateCompatibilityManifest, UpdateDiagnostic, UpdateGeneralApplicationPreferencesCommand,
     UpdateTenderAiExecutionSelectionCommand, WorkspaceActionKind, WorkspaceAgentReference,
     WorkspaceAgentRunReference, WorkspaceCapabilityReadiness, WorkspaceCapabilityReadinessState,
     WorkspaceCurrentAction, WorkspaceDoctorBlockerArea, WorkspaceDoctorBlockerSummary,
@@ -93,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     LiveQualificationRun::export_all(&config)?;
     PrivateQualificationRecord::export_all(&config)?;
     RecordLiveQualificationRunCommand::export_all(&config)?;
-    CodexProductionAssuranceEvidence::export_all(&config)?;
+    ChatGptProductionAssuranceEvidence::export_all(&config)?;
     EvaluatePublicReleaseGateCommand::export_all(&config)?;
     IntegrationTermsDecision::export_all(&config)?;
     LicenseDistributionReview::export_all(&config)?;
@@ -103,6 +102,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     PublicReleaseGateOutcome::export_all(&config)?;
     PublicReleaseGateRecord::export_all(&config)?;
     TechnicalRiskAcceptance::export_all(&config)?;
+    UpdateCompatibilityManifest::export_all(&config)?;
+    UpdateDiagnostic::export_all(&config)?;
     InspectManagerWorkspaceCommand::export_all(&config)?;
     SearchManagerWorkspaceCommand::export_all(&config)?;
     CancelPackageIntakeCommand::export_all(&config)?;
@@ -152,9 +153,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ProviderReasoningOption::export_all(&config)?;
     ProviderModelOption::export_all(&config)?;
     ProviderConnectionView::export_all(&config)?;
-    ProviderLoginMethod::export_all(&config)?;
-    ProviderLoginStatus::export_all(&config)?;
-    ProviderLoginView::export_all(&config)?;
     AiExecutionApproval::export_all(&config)?;
     AiExecutionSelection::export_all(&config)?;
     TenderAiSelectionReadiness::export_all(&config)?;
@@ -169,9 +167,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     InspectTenderAiExecutionCommand::export_all(&config)?;
     UpdateTenderAiExecutionSelectionCommand::export_all(&config)?;
     ConfirmAiExecutionSelectionCommand::export_all(&config)?;
-    StartProviderLoginCommand::export_all(&config)?;
-    CancelProviderLoginCommand::export_all(&config)?;
-    OpenProviderLoginCommand::export_all(&config)?;
     ConnectAnthropicCommand::export_all(&config)?;
     ConnectGeminiCommand::export_all(&config)?;
     DisconnectAiProviderCommand::export_all(&config)?;

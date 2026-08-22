@@ -345,7 +345,7 @@ mod tests {
     use super::*;
     use crate::{
         application_settings::{AppearancePreference, GeneralApplicationPreferences},
-        chatgpt_login::{ChatGptConnectionState, ChatGptConnectionStatus},
+        chatgpt_login::{ChatGptConnectionState, ChatGptConnectionStatus, ChatGptLoginPhase},
         runtime_readiness::RuntimeReadinessIssue,
         setup::SetupIssue,
     };
@@ -361,9 +361,9 @@ mod tests {
             ai_execution_selection: None,
             ai_execution_approval: None,
             provider_connections: Vec::new(),
-            active_provider_login: None,
             chatgpt: ChatGptConnectionStatus {
                 state: ChatGptConnectionState::Absent,
+                login_phase: ChatGptLoginPhase::Idle,
                 account_id: None,
                 plan_type: None,
                 expires_at_ms: None,

@@ -226,7 +226,11 @@ export function ApplicationSettings({
 
   const chatgpt = settings?.chatgpt ?? null;
   const chatgptConnected = chatgpt?.state === "connected";
-  const chatgptSignInPending = chatgptAwaiting && !chatgptConnected;
+  const chatgptLoginPhase = chatgpt?.login_phase ?? "idle";
+  const chatgptSignInPending =
+    chatgptAwaiting &&
+    !chatgptConnected &&
+    chatgptLoginPhase === "awaiting_browser";
   useEffect(() => {
     if (!chatgptSignInPending) return;
     const timer = window.setInterval(() => {
@@ -236,6 +240,18 @@ export function ApplicationSettings({
     }, 1_200);
     return () => window.clearInterval(timer);
   }, [acceptSettings, chatgptSignInPending]);
+
+  useEffect(() => {
+    if (
+      chatgptAwaiting &&
+      (chatgptConnected ||
+        chatgptLoginPhase === "completed" ||
+        chatgptLoginPhase === "failed" ||
+        chatgptLoginPhase === "cancelled")
+    ) {
+      setChatgptAwaiting(false);
+    }
+  }, [chatgptAwaiting, chatgptConnected, chatgptLoginPhase]);
 
   const persistedSelection = settings?.ai_execution_selection;
   const connection = settings?.provider_connections.find(
@@ -802,6 +818,38 @@ export function ApplicationSettings({
                             onClick={() => void cancelChatGpt()}
                           >
                             Cancel
+                          </button>
+                        </div>
+                      </>
+                    ) : chatgptLoginPhase === "failed" ? (
+                      <>
+                        <p role="alert">
+                          ChatGPT sign-in did not finish. Check your browser and
+                          try connecting again.
+                        </p>
+                        <div className="application-settings__login-actions">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void connectChatGpt()}
+                          >
+                            Connect ChatGPT
+                          </button>
+                        </div>
+                      </>
+                    ) : chatgptLoginPhase === "cancelled" ? (
+                      <>
+                        <p>
+                          ChatGPT sign-in was cancelled. Connect again when
+                          ready.
+                        </p>
+                        <div className="application-settings__login-actions">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void connectChatGpt()}
+                          >
+                            Connect ChatGPT
                           </button>
                         </div>
                       </>

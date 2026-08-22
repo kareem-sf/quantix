@@ -73,9 +73,8 @@ function settingsView(chatgpt: Record<string, unknown>) {
   return {
     ...applicationFacts,
     ai_execution_selection: null,
-    active_provider_login: null,
     provider_connections: [codexConnection],
-    chatgpt,
+    chatgpt: { login_phase: "idle", ...chatgpt },
   };
 }
 
@@ -121,9 +120,18 @@ describe("ApplicationSettings ChatGPT connection", () => {
     host.startChatGptLogin.mockResolvedValue({ status: "awaiting_browser" });
     renderSettings();
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Connect ChatGPT" }),
+    await screen.findByRole("button", { name: "Connect ChatGPT" });
+    host.refreshApplicationSettings.mockResolvedValueOnce(
+      settingsView({
+        state: "absent",
+        account_id: null,
+        plan_type: null,
+        expires_at_ms: null,
+        login_phase: "awaiting_browser",
+      }),
     );
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect ChatGPT" }));
 
     expect(host.startChatGptLogin).toHaveBeenCalledWith();
     expect(
@@ -135,15 +143,48 @@ describe("ApplicationSettings ChatGPT connection", () => {
     host.startChatGptLogin.mockResolvedValue({ status: "awaiting_browser" });
     renderSettings();
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Connect ChatGPT" }),
+    await screen.findByRole("button", { name: "Connect ChatGPT" });
+    host.refreshApplicationSettings.mockResolvedValueOnce(
+      settingsView({
+        state: "absent",
+        account_id: null,
+        plan_type: null,
+        expires_at_ms: null,
+        login_phase: "awaiting_browser",
+      }),
     );
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect ChatGPT" }));
     fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
 
     expect(host.cancelChatGptLogin).toHaveBeenCalledWith();
     expect(
       await screen.findByRole("button", { name: "Connect ChatGPT" }),
     ).toBeTruthy();
+  });
+
+  it("stops the browser-sign-in state when the host reports a terminal failure", async () => {
+    host.startChatGptLogin.mockResolvedValue({ status: "awaiting_browser" });
+    renderSettings();
+
+    await screen.findByRole("button", { name: "Connect ChatGPT" });
+    host.refreshApplicationSettings.mockResolvedValueOnce(
+      settingsView({
+        state: "absent",
+        account_id: null,
+        plan_type: null,
+        expires_at_ms: null,
+        login_phase: "failed",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Connect ChatGPT" }));
+
+    expect(
+      await screen.findByText(
+        "ChatGPT sign-in did not finish. Check your browser and try connecting again.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
   });
 
   it("maps sign-in failures to truthful error copy", async () => {

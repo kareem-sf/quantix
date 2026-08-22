@@ -14,7 +14,7 @@ use crate::QuantixHost;
 
 pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
-pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 23;
+pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 24;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
@@ -30,7 +30,7 @@ const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
 ];
 const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 23)
+           schema_version INTEGER NOT NULL CHECK (schema_version = 24)
          )";
 pub(crate) const APPLICATION_SETTINGS_TABLE_SQL: &str = "CREATE TABLE application_settings (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -330,7 +330,6 @@ const PUBLIC_RELEASE_GATE_RECORDS_NO_DELETE_SQL: &str =
 pub(crate) const RUNTIME_PREPARATION_TABLE_SQL: &str = "CREATE TABLE runtime_preparation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
            status TEXT NOT NULL CHECK (status IN ('not_started', 'preparing', 'ready', 'failed')),
-           codex_version TEXT,
            uv_version TEXT,
            ocr_version TEXT,
            updated_at TEXT NOT NULL
@@ -906,8 +905,8 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     )?;
     transaction.execute(
         "INSERT INTO runtime_preparation (
-           singleton, status, codex_version, uv_version, ocr_version, updated_at
-         ) VALUES (1, 'not_started', NULL, NULL, NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+           singleton, status, uv_version, ocr_version, updated_at
+         ) VALUES (1, 'not_started', NULL, NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
         [],
     )?;
     transaction.execute(

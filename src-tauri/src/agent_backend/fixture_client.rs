@@ -32,17 +32,25 @@ fn status_directive(bytes: &[u8]) -> Option<u16> {
 }
 
 impl ChatGptBackend for FixtureBackend {
-    fn create_response(
-        &self,
+    fn create_response<'a>(
+        &'a self,
         _auth: &StoredConnection,
         _req: &BackendRequest,
-        on_event: &mut dyn FnMut(StreamEvent),
-    ) -> Result<TurnDisposition, BackendError> {
-        let bytes = self.load_script()?;
-        if let Some(status) = status_directive(&bytes) {
-            return Err(status_error(status, None));
-        }
-        parse_stream_bytes(&bytes, on_event)
+        is_cancelled: &'a (dyn Fn() -> bool + Sync),
+        on_event: &'a mut (dyn FnMut(StreamEvent) -> Result<(), BackendError> + Send),
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<TurnDisposition, BackendError>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            if is_cancelled() {
+                return Err(BackendError::Interrupted);
+            }
+            let bytes = self.load_script()?;
+            if let Some(status) = status_directive(&bytes) {
+                return Err(status_error(status, None));
+            }
+            parse_stream_bytes(&bytes, on_event)
+        })
     }
 }
 
@@ -57,9 +65,9 @@ mod tests {
             instructions: "system prompt".to_string(),
             input_items: Vec::new(),
             tools: Vec::new(),
-            previous_response_id: None,
             store: false,
             include_reasoning: true,
+            reasoning_effort: None,
             session_id: "ses-fixture".to_string(),
         }
     }
@@ -72,17 +80,20 @@ mod tests {
             expires_at_ms: 0,
             account_id: "acc-1".to_string(),
             plan_type: None,
+            compute_residency: None,
         }
     }
 
-    #[test]
-    fn replays_happy_text_script_to_completed() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn replays_happy_text_script_to_completed() {
         let backend = FixtureBackend::new("happy-text");
         let mut events = Vec::new();
         let disposition = backend
-            .create_response(&sample_auth(), &sample_request(), &mut |event| {
-                events.push(event)
+            .create_response(&sample_auth(), &sample_request(), &|| false, &mut |event| {
+                events.push(event);
+                Ok(())
             })
+            .await
             .unwrap();
 
         assert_eq!(disposition, TurnDisposition::Completed);
@@ -101,14 +112,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn replays_tool_roundtrip_script() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn replays_tool_roundtrip_script() {
         let backend = FixtureBackend::new("tool-roundtrip");
         let mut events = Vec::new();
         let disposition = backend
-            .create_response(&sample_auth(), &sample_request(), &mut |event| {
-                events.push(event)
+            .create_response(&sample_auth(), &sample_request(), &|| false, &mut |event| {
+                events.push(event);
+                Ok(())
             })
+            .await
             .unwrap();
 
         assert_eq!(disposition, TurnDisposition::Completed);
@@ -119,51 +132,62 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn midstream_abort_script_maps_to_transport_error() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn midstream_abort_script_maps_to_transport_error() {
         let backend = FixtureBackend::new("midstream-abort");
         let mut delivered = 0;
         let error = backend
-            .create_response(&sample_auth(), &sample_request(), &mut |_event| {
-                delivered += 1;
-            })
+            .create_response(
+                &sample_auth(),
+                &sample_request(),
+                &|| false,
+                &mut |_event| {
+                    delivered += 1;
+                    Ok(())
+                },
+            )
+            .await
             .unwrap_err();
 
         assert!(matches!(error, BackendError::Transport(_)));
         assert!(delivered > 0, "pre-abort events must be delivered");
     }
 
-    #[test]
-    fn status_directive_maps_unauthorized_401_to_authentication_required() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_directive_maps_unauthorized_401_to_authentication_required() {
         let backend = FixtureBackend::new("unauthorized-401");
-        let mut noop = |_: StreamEvent| {};
+        let mut noop = |_: StreamEvent| Ok(());
         let error = backend
-            .create_response(&sample_auth(), &sample_request(), &mut noop)
+            .create_response(&sample_auth(), &sample_request(), &|| false, &mut noop)
+            .await
             .unwrap_err();
 
         assert!(matches!(error, BackendError::AuthenticationRequired));
     }
 
-    #[test]
-    fn failed_response_script_yields_failed_disposition() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_response_script_yields_failed_disposition() {
         let backend = FixtureBackend::new("failed-response");
         let mut events = Vec::new();
         let disposition = backend
-            .create_response(&sample_auth(), &sample_request(), &mut |event| {
-                events.push(event)
+            .create_response(&sample_auth(), &sample_request(), &|| false, &mut |event| {
+                events.push(event);
+                Ok(())
             })
+            .await
             .unwrap();
 
         assert_eq!(disposition, TurnDisposition::Failed);
         assert!(matches!(events.last(), Some(StreamEvent::Errored(_))));
     }
 
-    #[test]
-    fn missing_script_file_maps_to_protocol_error() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn missing_script_file_maps_to_protocol_error() {
         let backend = FixtureBackend::new("does-not-exist");
-        let mut noop = |_: StreamEvent| {};
+        let mut noop = |_: StreamEvent| Ok(());
         let error = backend
-            .create_response(&sample_auth(), &sample_request(), &mut noop)
+            .create_response(&sample_auth(), &sample_request(), &|| false, &mut noop)
+            .await
             .unwrap_err();
 
         assert!(matches!(error, BackendError::Protocol(_)));

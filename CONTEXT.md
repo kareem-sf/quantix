@@ -17,11 +17,11 @@ The open-source tender operating system defined by this repository.
 _Avoid_: Context (obsolete working name)
 
 **Quantix Application Home**:
-The Tendering Engineer's single local `~/.quantix` root containing every Quantix-managed Tender Store, non-secret setting, workspace, backup, archive, and operational record. Connected Tender Packages, provider-managed authentication stores, and Provider Credentials held by the operating-system credential vault remain outside it.
-_Avoid_: Provider credential store, connected project directory, arbitrary application-data folders
+The Tendering Engineer's single local `~/.quantix` root containing every Quantix-managed Tender Store, non-secret setting, workspace, backup, archive, operational record, and the direct ChatGPT OAuth credential file `auth.json`. Connected Tender Packages and Provider Credentials held by the operating-system credential vault remain outside it.
+_Avoid_: General provider credential store, connected project directory, arbitrary application-data folders
 
 **Quantix Setup**:
-The first-run operation that establishes the Quantix Application Home and verifies the local capabilities required to begin Tender work. It neither copies Provider Credentials into the Quantix Application Home nor depends on unverified system runtimes.
+The first-run operation that establishes the Quantix Application Home and verifies the local capabilities required to begin Tender work. It neither performs provider login nor depends on unverified system runtimes; a later direct ChatGPT connection may create `auth.json` in the Application Home.
 _Avoid_: Tender intake, provider login, installer
 
 **Application Settings**:
@@ -53,16 +53,16 @@ A connected AI execution service that performs bounded Agent Profile work and re
 _Avoid_: Tender Office, workflow engine, system of record
 
 **Provider Connection**:
-The credential-free Quantix view of one configured AI Provider, including its stable identity, authentication method, readiness, account label when available, live capability state, and compatibility with required capabilities. Quantix initially supports one OpenAI account connection through Codex-managed ChatGPT login, one Anthropic BYOK connection, and one Gemini BYOK connection; connecting several does not create automatic routing or fallback.
+The credential-free Quantix view of one configured AI Provider, including its stable identity, authentication method, readiness, account label when available, capability state, and compatibility with required capabilities. Quantix initially supports one OpenAI account connection through Quantix-owned ChatGPT OAuth, one Anthropic BYOK connection, and one Gemini BYOK connection; connecting several does not create automatic routing or fallback.
 _Avoid_: Provider Credential, model router, fallback chain
 
 **Provider Credential**:
-A Secret authenticating one Provider Connection. Codex-managed ChatGPT credentials remain owned by the supervised Codex runtime, while Anthropic and Gemini BYOK secrets remain in the operating-system credential vault; no Provider Credential enters Application Settings, a Tender Store, provider-visible context, logs, diagnostics, or exports.
+A Secret authenticating one Provider Connection. Quantix stores the direct ChatGPT OAuth tokens in `<Quantix Application Home>/auth.json`; Anthropic and Gemini BYOK secrets remain in the operating-system credential vault. No Provider Credential enters Application Settings, a Tender Store, provider-visible context, logs, diagnostics, backups, archives, exports, or generated artifacts.
 _Avoid_: Provider Connection, API key record, Tender data
 
 **Provider Capability Catalogue**:
-The credential-free model and capability facts reported by one ready Provider Connection, including provider-qualified model identities and only the reasoning choices the provider reports for each model. A cached catalogue may explain an unavailable prior choice, but only a current live catalogue may authorize a new Agent Run; absence of an exact machine-readable capability means Quantix does not offer that control.
-_Avoid_: Hard-coded model list, compatibility table, stale authorization
+The credential-free model and capability facts authorized by one ready Provider Connection, including provider-qualified model identities and exact supported reasoning choices. A catalogue may be reported live by the provider or supplied as an explicitly versioned built-in contract when Quantix has no validated live discovery dependency; the direct ChatGPT adapter uses built-in catalogue `chatgpt-direct-v1`. Only the adapter's current catalogue for a ready connection may authorize a new Agent Run, while a prior catalogue may explain an unavailable earlier selection.
+_Avoid_: Unversioned model list, inferred compatibility table, stale authorization
 
 **AI Execution Selection**:
 The Tender-scoped choice of one ready Provider Connection, one provider-qualified model, and one provider-native reasoning setting for future Agent Runs in that Tender. Application Settings holds only the default copied into a newly created Tender. Every new Agent Run captures the effective selection and its Provider Capability Catalogue provenance; changing either default or Tender selection never rewrites active, queued, interrupted, or indeterminate work, and Quantix never silently substitutes another provider, model, or reasoning setting.
@@ -377,7 +377,7 @@ The mandatory Active Production Workstream that develops quantities, rate build-
 _Avoid_: LLM arithmetic, one-step price generation, final price decision
 
 **Calculation Engine**:
-The Quantix authority that validates exact numeric inputs, dimensions, units, currencies, rule versions, precision, and policy before computing and registering canonical calculated values. Codex may prepare inputs, request scenarios, and explain results but cannot supply authoritative arithmetic.
+The Quantix authority that validates exact numeric inputs, dimensions, units, currencies, rule versions, precision, and policy before computing and registering canonical calculated values. Agent Profiles may prepare inputs, request scenarios, and explain results but cannot supply authoritative arithmetic.
 _Avoid_: LLM calculator, spreadsheet as system of record, agent-generated total
 
 **Calculation**:
@@ -417,7 +417,7 @@ The versioned rules specifying where, how, and to what scale a quantity, rate, p
 _Avoid_: Default formatting, hidden precision loss, balancing adjustment
 
 **Engineering Calculation**:
-A design- or safety-related calculated result produced by an approved discipline-specific Calculation Rule or verified external engineering tool. Without either, Quantix may register an external result as Evidence but cannot substitute Codex arithmetic.
+A design- or safety-related calculated result produced by an approved discipline-specific Calculation Rule or verified external engineering tool. Without either, Quantix may register an external result as Evidence but cannot substitute AI-generated arithmetic.
 _Avoid_: AI engineering answer, unchecked formula, narrative estimate
 
 **Query and RFI Control Workstream**:
@@ -573,15 +573,15 @@ An immutable execution of one exact product acceptance suite against an exact Qu
 _Avoid_: Package Validation Run, ordinary test log, Tender approval
 
 **Product Acceptance Record**:
-The immutable aggregate of the Product Acceptance Runs and release evidence required for one Quantix release candidate, including fixture and binary hashes, application, Codex and OCR versions, platform results, evaluation metrics, known non-blocking findings, approved exceptions, and attributable release approval. It qualifies software; it does not approve a Tender or Submission Package.
+The immutable aggregate of the Product Acceptance Runs and release evidence required for one Quantix release candidate, including fixture and binary hashes, application, AI Provider adapter and catalogue versions, OCR versions, platform results, evaluation metrics, known non-blocking findings, approved exceptions, and attributable release approval. It qualifies software; it does not approve a Tender or Submission Package.
 _Avoid_: Release Readiness Report, Final Approval, CI dashboard
 
 **Private v0 Qualification**:
-The product gate allowing an engineer-operated, non-public Quantix v0 to proceed after deterministic verification, five consecutive qualifying live Codex runs, and a full packaged Windows 11 end-to-end Product Acceptance Run. It grants no public-production claim.
+The product gate allowing an engineer-operated, non-public Quantix v0 to proceed after deterministic verification, five consecutive qualifying live-provider runs through the direct ChatGPT connection, and a full packaged Windows 11 end-to-end Product Acceptance Run. It grants no public-production claim.
 _Avoid_: Public Release Gate, prototype success, production support
 
 **Public Release Gate**:
-The additional product gate that blocks public Quantix distribution until the same native packaged acceptance passes on Windows 11 x64, macOS 14+ Apple Silicon, and Ubuntu 24.04 x64, and the Codex integration has production assurance and terms permitting its intended third-party subscription-backed use. Technical risk acceptance cannot waive contractual authorization.
+The additional product gate that blocks public Quantix distribution until the same native packaged acceptance passes on Windows 11 x64, macOS 14+ Apple Silicon, and Ubuntu 24.04 x64, and the direct ChatGPT integration has production assurance and terms permitting its intended third-party subscription-backed use. Technical risk acceptance cannot waive contractual authorization.
 _Avoid_: Private v0 Qualification, Tender Final Approval, assumed entitlement
 
 **Approval Gate**:

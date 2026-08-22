@@ -1,4 +1,8 @@
-use std::{fs, path::Path, time::Duration};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use garde::Validate;
 use jiff::Timestamp;
@@ -9,10 +13,12 @@ use ts_rs::TS;
 
 use crate::{
     agent_runtime::{
-        chatgpt_subscription_is_supported, inspect_anthropic_connection, inspect_gemini_connection,
-        valid_login_url, AgentProvider, ProviderFailure, ProviderFailureCategory, CODEX_VERSION,
+        inspect_anthropic_connection, inspect_gemini_connection, ProviderFailure,
+        ProviderFailureCategory,
     },
-    chatgpt_oauth::{load, needs_refresh, save, LoadState, StoredConnection, TokenClient},
+    chatgpt_oauth::{
+        load, needs_refresh, refresh_connection, LoadState, StoredConnection, TokenClient,
+    },
     setup::INSTALLATION_SCHEMA_VERSION,
     tender_store::{TenderCommandError, TenderErrorCode, TenderId, TENDER_SCHEMA_VERSION},
     QuantixHost,
@@ -23,6 +29,8 @@ pub(crate) const ANTHROPIC_CONNECTION_ID: &str = "anthropic_byok";
 pub(crate) const ANTHROPIC_ADAPTER_VERSION: &str = "anthropic-messages-v1";
 pub(crate) const GEMINI_CONNECTION_ID: &str = "gemini_byok";
 pub(crate) const GEMINI_ADAPTER_VERSION: &str = "gemini-generate-content-v1beta";
+const CHATGPT_DIRECT_ADAPTER_VERSION: &str = "chatgpt-direct-v1";
+const CHATGPT_DIRECT_CATALOGUE_VERSION: &str = "chatgpt-direct-v1";
 const CREDENTIAL_SERVICE: &str = "com.quantix.ai-provider";
 const ANTHROPIC_CREDENTIAL_ACCOUNT: &str = "anthropic_api_key";
 const GEMINI_CREDENTIAL_ACCOUNT: &str = "gemini_api_key";
@@ -208,7 +216,6 @@ pub struct ApplicationSettingsView {
     pub ai_execution_selection: Option<AiExecutionSelection>,
     pub ai_execution_approval: Option<AiExecutionApproval>,
     pub provider_connections: Vec<ProviderConnectionView>,
-    pub active_provider_login: Option<ProviderLoginView>,
     pub chatgpt: crate::chatgpt_login::ChatGptConnectionStatus,
     pub storage: ApplicationStorageFacts,
     pub diagnostics: ApplicationDiagnostics,
@@ -220,64 +227,6 @@ pub struct ApplicationSettingsView {
 pub struct UpdateGeneralApplicationPreferencesCommand {
     #[garde(skip)]
     pub preferences: GeneralApplicationPreferences,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(export)]
-pub enum ProviderLoginMethod {
-    Browser,
-    DeviceCode,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(export)]
-pub enum ProviderLoginStatus {
-    AwaitingUser,
-    Cancelling,
-    Cancelled,
-    Completed,
-    Failed,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
-#[ts(export)]
-pub struct ProviderLoginView {
-    pub connection_id: String,
-    pub login_id: String,
-    pub method: ProviderLoginMethod,
-    pub status: ProviderLoginStatus,
-    #[serde(skip_serializing)]
-    #[ts(skip)]
-    pub authorization_url: String,
-    pub user_code: Option<String>,
-    pub status_summary: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
-#[serde(deny_unknown_fields)]
-#[ts(export)]
-pub struct StartProviderLoginCommand {
-    #[garde(skip)]
-    pub method: ProviderLoginMethod,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
-#[serde(deny_unknown_fields)]
-#[ts(export)]
-pub struct CancelProviderLoginCommand {
-    #[garde(length(bytes, min = 1, max = 200))]
-    pub login_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
-#[serde(deny_unknown_fields)]
-#[ts(export)]
-pub struct OpenProviderLoginCommand {
-    #[garde(length(bytes, min = 1, max = 200))]
-    pub login_id: String,
 }
 
 #[derive(Deserialize, TS, Validate)]
@@ -371,7 +320,7 @@ impl QuantixHost {
     pub fn inspect_application_settings(
         &self,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        load_application_settings(self.application_home())
+        self.application_settings_with_chatgpt_phase()
     }
 
     pub async fn update_general_application_preferences(
@@ -391,14 +340,7 @@ impl QuantixHost {
             store_application_settings(&transaction, &stored)?;
             transaction.commit().map_err(settings_store_error)?;
         }
-        let mut view = load_application_settings(self.application_home())?;
-        view.active_provider_login = self
-            .agent_provider()
-            .lock()
-            .await
-            .as_ref()
-            .and_then(AgentProvider::login_snapshot);
-        Ok(view)
+        self.application_settings_with_chatgpt_phase()
     }
 
     pub async fn refresh_application_settings(
@@ -424,88 +366,18 @@ impl QuantixHost {
                 )?,
             }
         }
-        let provider_missing = self.agent_provider().lock().await.is_none();
-        // Provider discovery is independent from local document-tool
-        // readiness. The workspace must be able to discover (or explain the
-        // loss of) an AI connection while a Tender remains readable and the
-        // local tools are still waiting for an explicit preparation action.
-        if provider_missing {
-            let _ = self
-                .inspect_codex_subscription(tokio_util::sync::CancellationToken::new())
-                .await;
-        }
-        let mut current_provider = self.agent_provider().lock().await.as_ref().cloned();
-        if current_provider
-            .as_ref()
-            .is_some_and(AgentProvider::is_closed)
+        let connection = match chatgpt_connection_readiness_async(
+            self.application_home().to_path_buf(),
+            crate::chatgpt_login::PRODUCTION_ISSUER,
+            current_time_ms(),
+        )
+        .await
         {
-            if let Some(provider) = current_provider.take() {
-                let failure = ProviderFailure::new(
-                    ProviderFailureCategory::ProcessFailed,
-                    true,
-                    "Retry the provider connection.",
-                    None,
-                );
-                self.retire_failed_provider(&provider, &failure).await?;
-            }
-        }
-        let Some(provider) = current_provider else {
-            let mut view = load_application_settings(self.application_home())?;
-            for connection in &mut view.provider_connections {
-                if connection.connection_id == CODEX_CONNECTION_ID
-                    && connection.status == ProviderConnectionStatus::Ready
-                {
-                    connection.status = ProviderConnectionStatus::TemporarilyUnavailable;
-                    connection.status_summary =
-                        "The local AI runtime is unavailable. Tender records remain accessible."
-                            .to_owned();
-                }
-            }
-            return Ok(view);
+            Ok(connection) => chatgpt_connection_view(&connection),
+            Err(failure) => chatgpt_connection_failure_view(failure.category),
         };
-        let login_snapshot = provider.login_snapshot();
-        if login_snapshot.as_ref().is_some_and(|login| {
-            matches!(
-                login.status,
-                ProviderLoginStatus::AwaitingUser | ProviderLoginStatus::Cancelling
-            )
-        }) {
-            let connection = provider.connection_snapshot();
-            save_live_connection(self.application_home(), &connection)?;
-            let mut view = load_application_settings(self.application_home())?;
-            view.active_provider_login = login_snapshot;
-            return Ok(view);
-        }
-        let refreshed = match provider.refresh_readiness().await {
-            Ok(refreshed) => refreshed,
-            Err(failure) => {
-                self.retire_failed_provider(&provider, &failure).await?;
-                return load_application_settings(self.application_home());
-            }
-        };
-        if !refreshed {
-            let mut view = load_application_settings(self.application_home())?;
-            view.active_provider_login = provider.login_snapshot();
-            if view.active_provider_login.is_some() {
-                return Ok(view);
-            }
-            if let Some(connection) = view
-                .provider_connections
-                .iter_mut()
-                .find(|connection| connection.connection_id == CODEX_CONNECTION_ID)
-            {
-                connection.status = ProviderConnectionStatus::TemporarilyUnavailable;
-                connection.status_summary =
-                    "A live catalog refresh will be available when current Agent Runs finish."
-                        .to_owned();
-            }
-            return Ok(view);
-        }
-        let connection = provider.connection_snapshot();
         save_live_connection(self.application_home(), &connection)?;
-        let mut view = load_application_settings(self.application_home())?;
-        view.active_provider_login = provider.login_snapshot();
-        Ok(view)
+        self.application_settings_with_chatgpt_phase()
     }
 
     pub(crate) async fn refresh_exact_ai_execution_selection(
@@ -634,15 +506,14 @@ impl QuantixHost {
         if command.connection_id != CODEX_CONNECTION_ID {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        let provider = self.agent_provider().lock().await.as_ref().cloned();
-        let Some(provider) = provider else {
-            self.invalidate_missing_provider()?;
-            return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
-        };
-        let connection = provider.connection_snapshot();
-        if connection.status != ProviderConnectionStatus::Ready {
-            return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
-        }
+        let connection = chatgpt_connection_readiness_async(
+            self.application_home().to_path_buf(),
+            crate::chatgpt_login::PRODUCTION_ISSUER,
+            current_time_ms(),
+        )
+        .await
+        .map(|connection| chatgpt_connection_view(&connection))
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
         let selection = selection_from_command(&connection, &command)?;
         save_connection_and_selection(self.application_home(), &connection, &selection)?;
         load_application_settings(self.application_home())
@@ -857,165 +728,19 @@ impl QuantixHost {
         load_application_settings(self.application_home())
     }
 
-    pub async fn start_provider_login(
+    fn application_settings_with_chatgpt_phase(
         &self,
-        command: StartProviderLoginCommand,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        command
-            .validate()
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-        if !self.update_environment_is_quiescent() {
-            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
-        }
-        let provider = self
-            .agent_provider()
-            .lock()
-            .await
-            .as_ref()
-            .filter(|provider| !provider.is_closed())
-            .cloned()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-        let login = match provider.start_login(command.method).await {
-            Ok(login) => login,
-            Err(failure) if failure.category == ProviderFailureCategory::PermissionDenied => {
-                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
-            }
-            Err(failure) => {
-                self.retire_failed_provider(&provider, &failure).await?;
-                return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
-            }
-        };
         let mut view = load_application_settings(self.application_home())?;
-        view.active_provider_login = Some(login);
+        view.chatgpt = crate::chatgpt_login::chatgpt_connection_status_with_phase(
+            self.application_home(),
+            self.chatgpt_login_phase(),
+        );
         Ok(view)
-    }
-
-    pub async fn open_provider_login(
-        &self,
-        command: OpenProviderLoginCommand,
-    ) -> Result<(), TenderCommandError> {
-        command
-            .validate()
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-        let provider = self
-            .agent_provider()
-            .lock()
-            .await
-            .as_ref()
-            .filter(|provider| !provider.is_closed())
-            .cloned()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-        let login = provider
-            .login_snapshot()
-            .filter(|login| {
-                login.login_id == command.login_id
-                    && login.status == ProviderLoginStatus::AwaitingUser
-                    && valid_login_url(login.method, &login.authorization_url)
-            })
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-        tokio::task::spawn_blocking(move || webbrowser::open(&login.authorization_url))
-            .await
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))
-    }
-
-    pub async fn cancel_provider_login(
-        &self,
-        command: CancelProviderLoginCommand,
-    ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        command
-            .validate()
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-        let provider = self
-            .agent_provider()
-            .lock()
-            .await
-            .as_ref()
-            .filter(|provider| !provider.is_closed())
-            .cloned()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-        match provider.cancel_login(command.login_id).await {
-            Ok(()) => {}
-            Err(failure) if failure.category == ProviderFailureCategory::PermissionDenied => {
-                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
-            }
-            Err(failure) => {
-                self.retire_failed_provider(&provider, &failure).await?;
-                return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
-            }
-        }
-        let mut view = load_application_settings(self.application_home())?;
-        view.active_provider_login = provider.login_snapshot();
-        Ok(view)
-    }
-
-    pub async fn logout_provider(&self) -> Result<ApplicationSettingsView, TenderCommandError> {
-        if !self.update_environment_is_quiescent() {
-            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
-        }
-        let provider = self
-            .agent_provider()
-            .lock()
-            .await
-            .as_ref()
-            .filter(|provider| !provider.is_closed())
-            .cloned()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-        let connection = match provider.logout().await {
-            Ok(connection) => connection,
-            Err(failure) if failure.category == ProviderFailureCategory::PermissionDenied => {
-                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
-            }
-            Err(failure) => {
-                self.retire_failed_provider(&provider, &failure).await?;
-                return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
-            }
-        };
-        save_live_connection(self.application_home(), &connection)?;
-        load_application_settings(self.application_home())
-    }
-
-    async fn retire_failed_provider(
-        &self,
-        provider: &AgentProvider,
-        failure: &ProviderFailure,
-    ) -> Result<(), TenderCommandError> {
-        let retired = {
-            let mut provider_slot = self.agent_provider().lock().await;
-            if provider_slot
-                .as_ref()
-                .is_some_and(|current| current.same_instance(provider))
-            {
-                *provider_slot = None;
-                true
-            } else {
-                false
-            }
-        };
-        if retired {
-            let snapshot = provider.connection_snapshot();
-            if matches!(
-                snapshot.status,
-                ProviderConnectionStatus::AuthenticationRequired
-                    | ProviderConnectionStatus::SubscriptionRequired
-                    | ProviderConnectionStatus::Incompatible
-            ) {
-                save_live_connection(self.application_home(), &snapshot)?;
-            } else {
-                let (status, summary) = codex_failure_connection_status(failure.category);
-                save_codex_connection_status(self.application_home(), status, summary)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn invalidate_missing_provider(&self) -> Result<(), TenderCommandError> {
-        let (status, summary) =
-            codex_failure_connection_status(ProviderFailureCategory::ProcessFailed);
-        save_codex_connection_status(self.application_home(), status, summary)
     }
 }
 
+#[cfg(feature = "runtime-fixture")]
 pub(crate) fn codex_failure_connection_status(
     category: ProviderFailureCategory,
 ) -> (ProviderConnectionStatus, &'static str) {
@@ -1066,29 +791,174 @@ pub(crate) fn chatgpt_connection_readiness(
     issuer: &str,
     now_ms: u64,
 ) -> Result<StoredConnection, ProviderFailure> {
-    let mut connection = match load(application_home) {
+    let stored = match load(application_home) {
         LoadState::Connected(connection) => *connection,
         LoadState::Absent | LoadState::Unusable => return Err(chatgpt_authentication_failure()),
     };
-    if !chatgpt_subscription_is_supported(Some("chatgpt"), connection.plan_type.as_deref()) {
+    let connection = if needs_refresh(&stored, now_ms) {
+        let client = TokenClient::new(issuer).map_err(|_| chatgpt_authentication_failure())?;
+        refresh_connection(application_home, &client, now_ms)
+            .map_err(|_| chatgpt_authentication_failure())?
+    } else {
+        stored
+    };
+    if !chatgpt_subscription_is_supported(connection.plan_type.as_deref()) {
         return Err(chatgpt_subscription_failure());
     }
-    if needs_refresh(&connection, now_ms) {
-        let client = TokenClient::new(issuer).map_err(|_| chatgpt_authentication_failure())?;
-        let issued = client
-            .refresh(&connection.refresh_token)
-            .map_err(|_| chatgpt_authentication_failure())?;
-        connection = StoredConnection {
-            access_token: issued.access_token,
-            refresh_token: issued.refresh_token,
-            id_token: issued.id_token,
-            expires_at_ms: now_ms.saturating_add(issued.expires_in_secs.saturating_mul(1_000)),
-            account_id: connection.account_id,
-            plan_type: connection.plan_type,
-        };
-        save(application_home, &connection).map_err(|_| chatgpt_authentication_failure())?;
-    }
     Ok(connection)
+}
+
+async fn chatgpt_connection_readiness_async(
+    application_home: PathBuf,
+    issuer: &'static str,
+    now_ms: u64,
+) -> Result<StoredConnection, ProviderFailure> {
+    tokio::task::spawn_blocking(move || {
+        chatgpt_connection_readiness(&application_home, issuer, now_ms)
+    })
+    .await
+    .map_err(|_| {
+        ProviderFailure::new(
+            ProviderFailureCategory::ProcessFailed,
+            true,
+            "ChatGPT connection verification could not complete.",
+            Some("The local connection task stopped unexpectedly."),
+        )
+    })?
+}
+
+fn chatgpt_subscription_is_supported(plan_type: Option<&str>) -> bool {
+    matches!(
+        plan_type,
+        Some(
+            "go" | "plus"
+                | "pro"
+                | "prolite"
+                | "team"
+                | "self_serve_business_prolite"
+                | "self_serve_business_usage_based"
+                | "business"
+                | "ent26"
+                | "enterprise_cbp_automation"
+                | "enterprise_cbp_usage_based"
+                | "enterprise"
+                | "edu"
+        )
+    )
+}
+
+pub(crate) fn chatgpt_connection_view(connection: &StoredConnection) -> ProviderConnectionView {
+    ProviderConnectionView {
+        connection_id: CODEX_CONNECTION_ID.to_owned(),
+        provider: AiProviderKind::Codex,
+        display_name: "ChatGPT subscription".to_owned(),
+        status: ProviderConnectionStatus::Ready,
+        account_label: Some(connection.account_id.clone()),
+        account_plan: connection.plan_type.clone(),
+        models: chatgpt_direct_models(),
+        catalogue_fetched_at: Some(CHATGPT_DIRECT_CATALOGUE_VERSION.to_owned()),
+        adapter_version: CHATGPT_DIRECT_ADAPTER_VERSION.to_owned(),
+        status_summary: "Ready through the Quantix-owned ChatGPT connection.".to_owned(),
+    }
+}
+
+fn chatgpt_connection_failure_view(category: ProviderFailureCategory) -> ProviderConnectionView {
+    let (status, status_summary) = match category {
+        ProviderFailureCategory::SubscriptionRequired => (
+            ProviderConnectionStatus::SubscriptionRequired,
+            "The connected ChatGPT account does not provide an eligible subscription.",
+        ),
+        ProviderFailureCategory::AuthenticationRequired => (
+            ProviderConnectionStatus::AuthenticationRequired,
+            "Connect your ChatGPT subscription in Settings before retrying.",
+        ),
+        _ => (
+            ProviderConnectionStatus::TemporarilyUnavailable,
+            "ChatGPT is temporarily unavailable. Tender records remain accessible.",
+        ),
+    };
+    ProviderConnectionView {
+        connection_id: CODEX_CONNECTION_ID.to_owned(),
+        provider: AiProviderKind::Codex,
+        display_name: "ChatGPT subscription".to_owned(),
+        status,
+        account_label: None,
+        account_plan: None,
+        models: Vec::new(),
+        catalogue_fetched_at: None,
+        adapter_version: CHATGPT_DIRECT_ADAPTER_VERSION.to_owned(),
+        status_summary: status_summary.to_owned(),
+    }
+}
+
+#[cfg(not(feature = "runtime-fixture"))]
+pub(crate) fn save_chatgpt_connection_failure(
+    application_home: &Path,
+    category: ProviderFailureCategory,
+) -> Result<(), TenderCommandError> {
+    save_live_connection(application_home, &chatgpt_connection_failure_view(category))
+}
+
+pub(crate) fn save_chatgpt_disconnected(application_home: &Path) -> Result<(), TenderCommandError> {
+    let mut database = settings_connection(application_home)?;
+    let transaction = database
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(settings_store_error)?;
+    upsert_connection(
+        &transaction,
+        &chatgpt_connection_failure_view(ProviderFailureCategory::AuthenticationRequired),
+    )?;
+    let mut stored = load_stored_settings(&transaction)?;
+    if stored
+        .ai_execution_selection
+        .as_ref()
+        .is_some_and(|selection| selection.connection_id == CODEX_CONNECTION_ID)
+    {
+        stored.ai_execution_selection = None;
+    }
+    if stored
+        .ai_execution_approval
+        .as_ref()
+        .is_some_and(|approval| approval.connection_id == CODEX_CONNECTION_ID)
+    {
+        stored.ai_execution_approval = None;
+    }
+    store_application_settings(&transaction, &stored)?;
+    transaction.commit().map_err(settings_store_error)
+}
+
+fn chatgpt_direct_models() -> Vec<ProviderModelOption> {
+    [
+        ("gpt-5.5", "GPT-5.5", true),
+        ("gpt-5.4", "GPT-5.4", false),
+        ("gpt-5.4-mini", "GPT-5.4 mini", false),
+        ("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark", false),
+    ]
+    .into_iter()
+    .map(|(model_id, display_name, is_default)| ProviderModelOption {
+        model_id: model_id.to_owned(),
+        display_name: display_name.to_owned(),
+        description: "ChatGPT direct Responses API model.".to_owned(),
+        is_default,
+        input_modalities: vec!["text".to_owned()],
+        reasoning_options: ["none", "low", "medium", "high", "xhigh"]
+            .into_iter()
+            .map(|effort| ProviderReasoningOption {
+                selection: ProviderReasoningSelection::CodexEffort(effort.to_owned()),
+                label: effort.to_owned(),
+                description: format!("{effort} reasoning effort"),
+                is_default: effort == "medium",
+            })
+            .collect(),
+    })
+    .collect()
+}
+
+fn current_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
 }
 
 /// Returns the application-wide selection that should seed a new Tender.
@@ -1276,7 +1146,11 @@ pub(crate) fn save_live_connection(
     // Retain the last verified catalogue and account identity so an explicit
     // approval can survive reconnection without silently rebinding elsewhere.
     if persisted.status != ProviderConnectionStatus::Ready && persisted.models.is_empty() {
-        if let Some(previous) = previous {
+        if let Some(previous) = previous.filter(|previous| {
+            previous.adapter_version == persisted.adapter_version
+                && previous.connection_id == persisted.connection_id
+                && persisted.connection_id != CODEX_CONNECTION_ID
+        }) {
             persisted.models = previous.models;
             persisted.catalogue_fetched_at = previous.catalogue_fetched_at;
             persisted.adapter_version = previous.adapter_version;
@@ -1303,6 +1177,7 @@ pub(crate) fn save_live_connection(
     transaction.commit().map_err(settings_store_error)
 }
 
+#[cfg(feature = "runtime-fixture")]
 pub(crate) fn save_codex_connection_status(
     application_home: &Path,
     status: ProviderConnectionStatus,
@@ -1376,7 +1251,7 @@ fn selection_is_supported(
 
 fn data_destination(provider: AiProviderKind) -> &'static str {
     match provider {
-        AiProviderKind::Codex => "OpenAI Codex account",
+        AiProviderKind::Codex => "ChatGPT subscription",
         AiProviderKind::Anthropic => "Anthropic API account",
         AiProviderKind::Gemini => "Google Gemini API account",
     }
@@ -1568,7 +1443,6 @@ pub(crate) fn load_application_settings(
         ai_execution_selection: settings.ai_execution_selection,
         ai_execution_approval: settings.ai_execution_approval,
         provider_connections,
-        active_provider_login: None,
         chatgpt: crate::chatgpt_login::chatgpt_connection_status(application_home),
         storage: ApplicationStorageFacts {
             application_home: application_home.to_string_lossy().into_owned(),
@@ -1676,8 +1550,15 @@ fn clear_selection_for_connection(
         .is_some_and(|selection| selection.connection_id == connection_id)
     {
         stored.ai_execution_selection = None;
-        store_application_settings(&transaction, &stored)?;
     }
+    if stored
+        .ai_execution_approval
+        .as_ref()
+        .is_some_and(|approval| approval.connection_id == connection_id)
+    {
+        stored.ai_execution_approval = None;
+    }
+    store_application_settings(&transaction, &stored)?;
     transaction.commit().map_err(settings_store_error)
 }
 
@@ -1793,8 +1674,9 @@ fn settings_json_error(_: serde_json::Error) -> TenderCommandError {
     TenderCommandError::new(TenderErrorCode::IntegrityFailed)
 }
 
+#[cfg(any(test, feature = "runtime-fixture"))]
 pub(crate) fn codex_connection_version() -> String {
-    CODEX_VERSION.to_owned()
+    crate::agent_runtime::CODEX_VERSION.to_owned()
 }
 
 #[cfg(test)]
@@ -1806,8 +1688,7 @@ mod tests {
 
     use super::*;
     use crate::chatgpt_login::PRODUCTION_ISSUER;
-
-    const ISSUER_BODY: &str = r#"{"access_token":"at-new","refresh_token":"rt-new","id_token":"idt-new","expires_in":3600}"#;
+    use crate::chatgpt_oauth::save;
 
     fn temp_home(name: &str) -> PathBuf {
         let dir =
@@ -1825,20 +1706,81 @@ mod tests {
             expires_at_ms,
             account_id: "acc-77".to_owned(),
             plan_type: plan_type.map(str::to_owned),
+            compute_residency: None,
         }
     }
 
-    fn mock_issuer(body: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {
+    #[test]
+    fn direct_chatgpt_catalogue_uses_the_stored_account_and_stable_version() {
+        let connection = chatgpt_connection_view(&stored_connection(9_999_999, Some("plus")));
+
+        assert_eq!(connection.status, ProviderConnectionStatus::Ready);
+        assert_eq!(connection.account_label.as_deref(), Some("acc-77"));
+        assert_eq!(connection.account_plan.as_deref(), Some("plus"));
+        assert_eq!(connection.adapter_version, "chatgpt-direct-v1");
+        assert_eq!(
+            connection
+                .models
+                .iter()
+                .map(|model| model.model_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
+        );
+    }
+
+    fn jwt_id_token(
+        account_id: &str,
+        plan_type: Option<&str>,
+        compute_residency: Option<&str>,
+    ) -> String {
+        let header =
+            crate::chatgpt_oauth::crypto::base64url_encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let mut claims = serde_json::Map::new();
+        claims.insert(
+            "chatgpt_account_id".to_owned(),
+            serde_json::Value::String(account_id.to_owned()),
+        );
+        if let Some(plan_type) = plan_type {
+            claims.insert(
+                "https://api.openai.com/auth".to_owned(),
+                serde_json::json!({
+                    "chatgpt_plan_type": plan_type,
+                    "chatgpt_compute_residency": compute_residency,
+                }),
+            );
+        }
+        let payload = crate::chatgpt_oauth::crypto::base64url_encode(
+            serde_json::Value::Object(claims).to_string().as_bytes(),
+        );
+        format!("{header}.{payload}.signature")
+    }
+
+    fn refresh_body(
+        account_id: &str,
+        plan_type: Option<&str>,
+        compute_residency: Option<&str>,
+    ) -> String {
+        serde_json::json!({
+            "access_token": "at-new",
+            "refresh_token": "rt-new",
+            "id_token": jwt_id_token(account_id, plan_type, compute_residency),
+            "expires_in": 3600,
+        })
+        .to_string()
+    }
+
+    fn mock_issuer(body: impl Into<String>) -> (String, Arc<Mutex<Vec<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let bodies: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let shared = Arc::clone(&bodies);
+        let body = body.into();
         std::thread::spawn(move || {
             for mut stream in listener.incoming().flatten() {
                 if let Some(form) = read_form(&mut stream) {
                     shared.lock().unwrap().push(form);
                 }
-                write_body(&mut stream, body);
+                write_body(&mut stream, &body);
             }
         });
         (format!("http://127.0.0.1:{port}"), bodies)
@@ -1887,15 +1829,16 @@ mod tests {
     fn an_expired_connection_refreshes_through_the_issuer_and_persists() {
         let home = temp_home("refresh-required");
         save(&home, &stored_connection(1_000_000, Some("team"))).unwrap();
-        let (issuer, bodies) = mock_issuer(ISSUER_BODY);
+        let (issuer, bodies) = mock_issuer(refresh_body("acc-refreshed", Some("plus"), Some("eu")));
 
         let connection = chatgpt_connection_readiness(&home, &issuer, 2_000_000)
             .expect("expired connection must auto-refresh");
 
         assert_eq!(connection.access_token, "at-new");
         assert_eq!(connection.refresh_token, "rt-new");
-        assert_eq!(connection.account_id, "acc-77");
-        assert_eq!(connection.plan_type.as_deref(), Some("team"));
+        assert_eq!(connection.account_id, "acc-refreshed");
+        assert_eq!(connection.plan_type.as_deref(), Some("plus"));
+        assert_eq!(connection.compute_residency.as_deref(), Some("eu"));
         assert_eq!(connection.expires_at_ms, 2_000_000 + 3_600_000);
         let forms = bodies.lock().unwrap();
         assert_eq!(forms.len(), 1, "exactly one refresh call");
@@ -1904,9 +1847,32 @@ mod tests {
         match load(&home) {
             LoadState::Connected(persisted) => {
                 assert_eq!(persisted.refresh_token, "rt-new");
+                assert_eq!(persisted.account_id, "acc-refreshed");
+                assert_eq!(persisted.plan_type.as_deref(), Some("plus"));
+                assert_eq!(persisted.compute_residency.as_deref(), Some("eu"));
             }
             other => panic!("expected persisted refreshed store, got {other:?}"),
         }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn an_expired_stale_plan_refreshes_before_subscription_validation() {
+        let home = temp_home("stale-plan-refresh");
+        save(&home, &stored_connection(1_000, Some("free"))).unwrap();
+        let (issuer, bodies) = mock_issuer(refresh_body(
+            "acc-current",
+            Some("team"),
+            Some("no_constraint"),
+        ));
+
+        let connection = chatgpt_connection_readiness(&home, &issuer, 2_000_000)
+            .expect("the refreshed eligible identity is authoritative");
+
+        assert_eq!(connection.account_id, "acc-current");
+        assert_eq!(connection.plan_type.as_deref(), Some("team"));
+        assert_eq!(connection.compute_residency, None);
+        assert_eq!(bodies.lock().unwrap().len(), 1, "refresh is attempted");
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -1940,10 +1906,10 @@ mod tests {
     }
 
     #[test]
-    fn an_ineligible_plan_requires_a_subscription_before_any_refresh() {
+    fn a_fresh_ineligible_plan_requires_a_subscription_without_refresh() {
         let home = temp_home("blocked-plan");
-        save(&home, &stored_connection(1_000, Some("free"))).unwrap();
-        let (issuer, bodies) = mock_issuer(ISSUER_BODY);
+        save(&home, &stored_connection(9_999_999, Some("free"))).unwrap();
+        let (issuer, bodies) = mock_issuer(refresh_body("acc-current", Some("team"), None));
 
         let failure = chatgpt_connection_readiness(&home, &issuer, 2_000_000)
             .expect_err("ineligible plans must not run");
@@ -1999,6 +1965,39 @@ mod tests {
         match load(&home) {
             LoadState::Connected(persisted) => {
                 assert_eq!(persisted.refresh_token, "rt-current", "store preserved");
+            }
+            other => panic!("expected preserved store, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn refreshed_tokens_without_identity_require_authentication_without_clobbering_the_store() {
+        let home = temp_home("refresh-missing-identity");
+        save(&home, &stored_connection(1_000, Some("plus"))).unwrap();
+        let (issuer, _bodies) = mock_issuer(
+            serde_json::json!({
+                "access_token": "at-new",
+                "refresh_token": "rt-new",
+                "id_token": "not-a-jwt",
+                "expires_in": 3600,
+            })
+            .to_string(),
+        );
+
+        let failure = chatgpt_connection_readiness(&home, &issuer, 2_000_000)
+            .expect_err("a refresh without authoritative identity must fail closed");
+
+        assert_eq!(
+            failure.category,
+            ProviderFailureCategory::AuthenticationRequired
+        );
+        match load(&home) {
+            LoadState::Connected(persisted) => {
+                assert_eq!(persisted.access_token, "at-current");
+                assert_eq!(persisted.refresh_token, "rt-current");
+                assert_eq!(persisted.account_id, "acc-77");
+                assert_eq!(persisted.plan_type.as_deref(), Some("plus"));
             }
             other => panic!("expected preserved store, got {other:?}"),
         }

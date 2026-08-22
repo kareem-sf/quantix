@@ -2,9 +2,8 @@ use std::{env, fs, path::PathBuf, process::Command};
 
 use quantix_lib::{
     measure_ocr_runtime_sha256, release_candidate_manifest_sha256,
-    EvaluatePublicReleaseGateCommand, LiveQualificationEnvironment, QuantixHost,
-    RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand,
-    RunDeterministicAcceptanceCommand,
+    EvaluatePublicReleaseGateCommand, QuantixHost, RecordLiveQualificationRunCommand,
+    RecordNativePlatformQualificationCommand, RunDeterministicAcceptanceCommand,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -70,37 +69,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 serde_json::from_slice(&fs::read(input)?)?;
             let candidate_resource_directory =
                 PathBuf::from(&command.application_resource_directory_path);
-            let codex_executable = candidate_resource_directory
-                .join("runtime")
-                .join("bin")
-                .join(if cfg!(windows) { "codex.exe" } else { "codex" });
-            let login_status = Command::new(&codex_executable)
-                .args(["login", "status"])
-                .output()?;
-            if !login_status.status.success() {
-                return Err("Codex-managed authentication is not ready".into());
-            }
-            let codex_version = Command::new(&codex_executable).arg("--version").output()?;
-            if !codex_version.status.success() {
-                return Err("Bundled Codex version cannot be measured".into());
-            }
-            let codex_version = String::from_utf8(codex_version.stdout)?.trim().to_owned();
-            let run = host.record_live_qualification_run(
-                command,
-                LiveQualificationEnvironment {
-                    platform: exact_windows_platform()?,
-                    app_server_version: codex_version.clone(),
-                    codex_version,
-                    ocr_runtime_sha256: measure_ocr_runtime_sha256(
-                        &application_home,
-                        &candidate_resource_directory,
-                    )?,
-                    model_observations: vec![
-                        "managed Codex app-server model/list returned an eligible production model"
-                            .into(),
-                    ],
-                },
+            let environment = host.measure_live_qualification_environment(
+                exact_windows_platform()?,
+                measure_ocr_runtime_sha256(&application_home, &candidate_resource_directory)?,
             )?;
+            let run = host.record_live_qualification_run(command, environment)?;
             println!("{}", serde_json_canonicalizer::to_string(&run)?);
             if run.hard_gate_failures.is_empty() {
                 Ok(())

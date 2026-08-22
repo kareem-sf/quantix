@@ -129,9 +129,8 @@ fn valid_offer(data_may_change: bool) -> UpdateCandidate {
             signature_sha256: "b".repeat(64),
         },
         compatibility: UpdateCompatibilityManifest {
-            installation_schema_version: 23,
+            installation_schema_version: 24,
             tender_schema_version: 35,
-            codex_version: "0.147.0".into(),
             ocr_version: "3.9.2".into(),
             runtime_manifest_schema_version: 3,
         },
@@ -1054,14 +1053,6 @@ fn unsafe_or_incompatible_offers_are_rejected_before_approval() {
                 offer
             },
             UpdateDiagnostic::TenderStoreIncompatible,
-        ),
-        (
-            {
-                let mut offer = valid_offer(false);
-                offer.compatibility.codex_version = "0.148.0".into();
-                offer
-            },
-            UpdateDiagnostic::CodexIncompatible,
         ),
         (
             {

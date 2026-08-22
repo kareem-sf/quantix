@@ -6,6 +6,5 @@ import type { ApplicationStorageFacts } from "./ApplicationStorageFacts";
 import type { ChatGptConnectionStatus } from "./ChatGptConnectionStatus";
 import type { GeneralApplicationPreferences } from "./GeneralApplicationPreferences";
 import type { ProviderConnectionView } from "./ProviderConnectionView";
-import type { ProviderLoginView } from "./ProviderLoginView";
 
-export type ApplicationSettingsView = { general_preferences: GeneralApplicationPreferences, ai_execution_selection: AiExecutionSelection | null, ai_execution_approval: AiExecutionApproval | null, provider_connections: Array<ProviderConnectionView>, active_provider_login: ProviderLoginView | null, chatgpt: ChatGptConnectionStatus, storage: ApplicationStorageFacts, diagnostics: ApplicationDiagnostics, };
+export type ApplicationSettingsView = { general_preferences: GeneralApplicationPreferences, ai_execution_selection: AiExecutionSelection | null, ai_execution_approval: AiExecutionApproval | null, provider_connections: Array<ProviderConnectionView>, chatgpt: ChatGptConnectionStatus, storage: ApplicationStorageFacts, diagnostics: ApplicationDiagnostics, };

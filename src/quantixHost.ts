@@ -114,12 +114,9 @@ import type { WorkspaceSearchProjection } from "./bindings/WorkspaceSearchProjec
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
 import type { StartChatGptLoginResult } from "./bindings/StartChatGptLoginResult";
 import type { UpdateGeneralApplicationPreferencesCommand } from "./bindings/UpdateGeneralApplicationPreferencesCommand";
-import type { CancelProviderLoginCommand } from "./bindings/CancelProviderLoginCommand";
 import type { ConnectAnthropicCommand } from "./bindings/ConnectAnthropicCommand";
 import type { ConnectGeminiCommand } from "./bindings/ConnectGeminiCommand";
 import type { DisconnectAiProviderCommand } from "./bindings/DisconnectAiProviderCommand";
-import type { OpenProviderLoginCommand } from "./bindings/OpenProviderLoginCommand";
-import type { StartProviderLoginCommand } from "./bindings/StartProviderLoginCommand";
 import type { UpdateAiExecutionSelectionCommand } from "./bindings/UpdateAiExecutionSelectionCommand";
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
 import type { ManagerCapabilityDemandInput } from "./bindings/ManagerCapabilityDemandInput";
@@ -340,28 +337,6 @@ export function confirmAiExecutionSelection(
 
 export function clearAiExecutionSelection(): Promise<ApplicationSettingsView> {
   return invoke<ApplicationSettingsView>("clear_ai_execution_selection");
-}
-
-export function startProviderLogin(
-  command: StartProviderLoginCommand,
-): Promise<ApplicationSettingsView> {
-  return invoke<ApplicationSettingsView>("start_provider_login", { command });
-}
-
-export function cancelProviderLogin(
-  command: CancelProviderLoginCommand,
-): Promise<ApplicationSettingsView> {
-  return invoke<ApplicationSettingsView>("cancel_provider_login", { command });
-}
-
-export function openProviderLogin(
-  command: OpenProviderLoginCommand,
-): Promise<void> {
-  return invoke<void>("open_provider_login", { command });
-}
-
-export function logoutProvider(): Promise<ApplicationSettingsView> {
-  return invoke<ApplicationSettingsView>("logout_provider");
 }
 
 export function connectAnthropic(

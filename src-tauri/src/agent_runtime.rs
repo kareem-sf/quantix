@@ -1,34 +1,33 @@
 use std::{
-    ffi::OsString,
-    fs, io,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
+#[cfg(feature = "runtime-fixture")]
+use std::{ffi::OsString, fs, io, path::Path};
+
 use garde::Validate;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 
 use crate::{
     agent_backend::{
-        execute_provider_turn as execute_chatgpt_backend_turn, BackendRequest, ReqwestBackend,
-        StreamEvent, ToolRejection, TurnContext, UsageSnapshot, BACKEND_URL,
+        execute_provider_turn as execute_chatgpt_backend_turn, BackendRequest, ReasoningEffort,
+        ReqwestBackend, StreamEvent, ToolRejection, TurnContext, UsageSnapshot, BACKEND_URL,
     },
     application_settings::{
-        chatgpt_connection_readiness, codex_connection_version, codex_failure_connection_status,
-        load_anthropic_api_key, load_gemini_api_key, save_codex_connection_status,
-        save_live_connection, AiExecutionSelection, AiProviderKind, ProviderConnectionStatus,
-        ProviderConnectionView, ProviderLoginMethod, ProviderLoginView, ProviderModelOption,
-        ProviderReasoningOption, ProviderReasoningSelection, CODEX_CONNECTION_ID,
+        chatgpt_connection_readiness, load_anthropic_api_key, load_gemini_api_key,
+        save_live_connection, AiExecutionSelection, AiProviderKind, ProviderConnectionView,
+        ProviderReasoningSelection,
     },
     chatgpt_login::PRODUCTION_ISSUER,
     chatgpt_oauth::TokenClient,
-    process_supervisor::{ProcessError, ProcessSpec, ProcessTermination, SupervisedConversation},
     tender_store::{
         lock_mutex_with_check, require_setup, BasisOfEstimateReviewResult,
         BidDecisionApprovalHistoryPage, BidDecisionApprovalInvalidationResult,
@@ -54,19 +53,33 @@ use crate::{
     QuantixHost,
 };
 
+#[cfg(feature = "runtime-fixture")]
+use crate::{
+    application_settings::{
+        codex_connection_version, codex_failure_connection_status, save_codex_connection_status,
+        ProviderConnectionStatus, ProviderModelOption, ProviderReasoningOption,
+        CODEX_CONNECTION_ID,
+    },
+    process_supervisor::{ProcessError, ProcessSpec, ProcessTermination, SupervisedConversation},
+};
+
 mod anthropic;
 mod bootstrap_profile;
+#[cfg(feature = "runtime-fixture")]
 mod codex_actor;
 mod codex_protocol;
 mod gemini;
 pub(crate) mod permissions;
 pub(crate) use bootstrap_profile::{bootstrap_profile, bootstrap_task};
-pub(crate) use codex_actor::{valid_login_url, CodexProvider};
+#[cfg(feature = "runtime-fixture")]
+pub(crate) use codex_actor::CodexProvider;
 use codex_protocol::{
-    dynamic_tool_specs, execute_typed_tool, outcome_unknown, process_failure, protocol_failure,
-    provider_instruction_bundle, read_expected_response, typed_tool_arguments_are_valid,
-    typed_tool_is_known, validate_candidate, write_rpc,
+    direct_tool_specs, execute_typed_tool, outcome_unknown, process_failure, protocol_failure,
+    provider_instruction_bundle, typed_tool_arguments_are_valid, typed_tool_is_known,
+    validate_candidate,
 };
+#[cfg(feature = "runtime-fixture")]
+use codex_protocol::{read_expected_response, write_rpc};
 use permissions::permission_duration;
 
 pub(crate) async fn inspect_anthropic_connection(
@@ -82,10 +95,12 @@ pub(crate) async fn inspect_gemini_connection(
 }
 
 #[derive(Clone)]
+#[cfg(feature = "runtime-fixture")]
 pub(crate) enum AgentProvider {
     Codex(CodexProvider),
 }
 
+#[cfg(feature = "runtime-fixture")]
 impl AgentProvider {
     async fn codex_readiness(
         supervisor: &crate::process_supervisor::ProcessSupervisor,
@@ -110,36 +125,27 @@ impl AgentProvider {
         }
     }
 
-    pub(crate) fn login_snapshot(&self) -> Option<ProviderLoginView> {
-        match self {
-            Self::Codex(provider) => provider.login_snapshot(),
-        }
-    }
-
-    pub(crate) async fn start_login(
-        &self,
-        method: ProviderLoginMethod,
-    ) -> Result<ProviderLoginView, ProviderFailure> {
-        match self {
-            Self::Codex(provider) => provider.start_login(method).await,
-        }
-    }
-
-    pub(crate) async fn cancel_login(&self, login_id: String) -> Result<(), ProviderFailure> {
-        match self {
-            Self::Codex(provider) => provider.cancel_login(login_id).await,
-        }
-    }
-
-    pub(crate) async fn logout(&self) -> Result<ProviderConnectionView, ProviderFailure> {
-        match self {
-            Self::Codex(provider) => provider.logout().await,
-        }
-    }
-
+    #[cfg(feature = "runtime-fixture")]
     pub(crate) async fn delete_thread(&self, thread_ref: String) -> Result<(), ProviderFailure> {
         match self {
             Self::Codex(provider) => provider.delete_thread(thread_ref).await,
+        }
+    }
+
+    #[cfg(feature = "runtime-fixture")]
+    async fn run_turn(
+        &self,
+        prepared: PreparedAgentRun,
+        operation_limit: Duration,
+        cancellation: CancellationToken,
+        callbacks: RunCallbacks,
+    ) -> ProviderExecution {
+        match self {
+            Self::Codex(provider) => {
+                provider
+                    .run_turn(prepared, operation_limit, cancellation, callbacks)
+                    .await
+            }
         }
     }
 
@@ -174,10 +180,14 @@ const PROVIDER_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg(feature = "runtime-fixture")]
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(5);
 const PROVIDER_OUTPUT_LIMIT: usize = 1024 * 1024;
+#[cfg(feature = "runtime-fixture")]
 const PROVIDER_READINESS_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(any(test, feature = "runtime-fixture"))]
 pub(crate) const CODEX_VERSION: &str = "0.147.0";
+#[cfg(feature = "runtime-fixture")]
 pub(crate) const CODEX_PROTOCOL_SCHEMA: &str =
-    include_str!("../runtime/codex_app_server_protocol.schemas.json");
+    include_str!("../tests/fixtures/codex_app_server_protocol.schemas.json");
+#[cfg(feature = "runtime-fixture")]
 const SUPPORTED_CHATGPT_PLANS: [&str; 13] = [
     "go",
     "plus",
@@ -778,6 +788,18 @@ impl PendingProviderEvent {
             opaque_reference: opaque_reference.map(str::to_owned),
         }
     }
+
+    fn with_control_denial(
+        mut self,
+        correlation_id: String,
+        request_fingerprint: String,
+        denial_reason: PermissionDenialReason,
+    ) -> Self {
+        self.correlation_id = Some(correlation_id);
+        self.request_fingerprint = Some(request_fingerprint);
+        self.denial_reason = Some(denial_reason);
+        self
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -812,6 +834,7 @@ type TurnAcceptedCallback = dyn FnOnce(&str) -> Result<(), ProviderFailure> + Se
 type TurnRequestedCallback = dyn FnOnce() -> Result<(), ProviderFailure> + Send;
 type TurnEventCallback =
     dyn FnMut(&PendingProviderEvent, &ProviderUsage) -> Result<(), ProviderFailure> + Send;
+type TurnDeniedCallback = dyn FnMut(&PendingProviderEvent) -> Result<(), ProviderFailure> + Send;
 type TurnToolCallCallback =
     dyn FnMut(&str, &str, &Value) -> Result<Option<String>, ProviderFailure> + Send;
 type ThreadArchivedCallback = dyn FnOnce(&str) -> Result<(), ProviderFailure> + Send;
@@ -823,6 +846,7 @@ struct RunCallbacks {
     on_requested: Box<TurnRequestedCallback>,
     on_accepted: Box<TurnAcceptedCallback>,
     on_event: Box<TurnEventCallback>,
+    on_denied: Box<TurnDeniedCallback>,
     on_tool_call: Box<TurnToolCallCallback>,
 }
 
@@ -2546,6 +2570,7 @@ impl QuantixHost {
         &self,
         cancellation: CancellationToken,
     ) -> CodexReadiness {
+        #[cfg(feature = "runtime-fixture")]
         match self.try_inspect_codex_subscription(cancellation).await {
             Ok(()) => CodexReadiness::Ready,
             Err(failure) => {
@@ -2568,8 +2593,34 @@ impl QuantixHost {
                 }
             }
         }
+        #[cfg(not(feature = "runtime-fixture"))]
+        match self.try_inspect_chatgpt_subscription(cancellation).await {
+            Ok(()) => CodexReadiness::Ready,
+            Err(failure) => {
+                let readiness = match failure.category {
+                    ProviderFailureCategory::AuthenticationRequired => {
+                        CodexReadiness::AuthenticationRequired
+                    }
+                    ProviderFailureCategory::SubscriptionRequired => {
+                        CodexReadiness::SubscriptionRequired
+                    }
+                    _ => CodexReadiness::Unavailable,
+                };
+                if crate::application_settings::save_chatgpt_connection_failure(
+                    self.application_home(),
+                    failure.category,
+                )
+                .is_err()
+                {
+                    CodexReadiness::Unavailable
+                } else {
+                    readiness
+                }
+            }
+        }
     }
 
+    #[cfg(feature = "runtime-fixture")]
     pub(crate) async fn quiesce_agent_provider_for_update(&self) -> bool {
         let provider = self.agent_provider().lock().await.take();
         match provider {
@@ -2578,6 +2629,7 @@ impl QuantixHost {
         }
     }
 
+    #[cfg(feature = "runtime-fixture")]
     async fn try_inspect_codex_subscription(
         &self,
         cancellation: CancellationToken,
@@ -2630,8 +2682,29 @@ impl QuantixHost {
             .map_err(|_| process_failure(false))?;
         provider_connection_readiness(&connection)
     }
+
+    #[cfg(not(feature = "runtime-fixture"))]
+    async fn try_inspect_chatgpt_subscription(
+        &self,
+        cancellation: CancellationToken,
+    ) -> Result<(), ProviderFailure> {
+        let home = self.application_home().to_path_buf();
+        let readiness = tokio::task::spawn_blocking(move || {
+            chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, epoch_milliseconds())
+        });
+        let connection = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Err(readiness_interruption_failure()),
+            readiness = readiness => readiness.map_err(|_| process_failure(false))??,
+        };
+        let snapshot = crate::application_settings::chatgpt_connection_view(&connection);
+        save_live_connection(self.application_home(), &snapshot)
+            .map_err(|_| process_failure(false))?;
+        Ok(())
+    }
 }
 
+#[cfg(feature = "runtime-fixture")]
 fn provider_connection_readiness(
     connection: &ProviderConnectionView,
 ) -> Result<(), ProviderFailure> {
@@ -2681,6 +2754,91 @@ async fn execute_provider_turn_from(
         Ok(duration) if !duration.is_zero() => duration,
         _ => return failed_execution(permission_failure(), started),
     };
+    #[cfg(feature = "runtime-fixture")]
+    let provider = if prepared.provider_selection.provider == AiProviderKind::Codex {
+        let mut provider_slot = host.agent_provider().lock().await;
+        let provider = match provider_slot.take() {
+            Some(provider) => match provider.refresh_readiness().await {
+                Ok(_) => provider,
+                Err(failure)
+                    if failure.category == ProviderFailureCategory::ProcessFailed
+                        && failure.retry_safe =>
+                {
+                    host.record_application_diagnostic(
+                        crate::DiagnosticSeverity::Info,
+                        crate::DiagnosticComponent::Provider,
+                        "provider_readiness_retry_started",
+                        "Provider readiness retry started after a retry-safe process failure",
+                        Some(format!("provider-turn-{}", prepared.run_id)),
+                        None,
+                        Some("started"),
+                        Some(format!("{:?}", failure.category)),
+                    );
+                    match AgentProvider::codex_readiness(
+                        host.process_supervisor(),
+                        host.runtime_layout().codex_executable(),
+                        host.application_home(),
+                        cancellation.clone(),
+                    )
+                    .await
+                    {
+                        Ok(provider) => {
+                            host.record_application_diagnostic(
+                                crate::DiagnosticSeverity::Info,
+                                crate::DiagnosticComponent::Provider,
+                                "provider_readiness_retry_completed",
+                                "Provider readiness retry completed",
+                                Some(format!("provider-turn-{}", prepared.run_id)),
+                                None,
+                                Some("completed"),
+                                None,
+                            );
+                            provider
+                        }
+                        Err(failure) => {
+                            host.record_application_diagnostic(
+                                crate::DiagnosticSeverity::Error,
+                                crate::DiagnosticComponent::Provider,
+                                "provider_readiness_retry_failed",
+                                "Provider readiness retry failed",
+                                Some(format!("provider-turn-{}", prepared.run_id)),
+                                None,
+                                Some("failed"),
+                                Some(format!("{:?}", failure.category)),
+                            );
+                            return failed_execution(failure, started);
+                        }
+                    }
+                }
+                Err(failure) => return failed_execution(failure, started),
+            },
+            None => match AgentProvider::codex_readiness(
+                host.process_supervisor(),
+                host.runtime_layout().codex_executable(),
+                host.application_home(),
+                cancellation.clone(),
+            )
+            .await
+            {
+                Ok(provider) => provider,
+                Err(failure) => return failed_execution(failure, started),
+            },
+        };
+        let provider = provider.clone();
+        *provider_slot = Some(provider.clone());
+        Some(provider)
+    } else {
+        None
+    };
+    #[cfg(feature = "runtime-fixture")]
+    if let Some(provider) = provider.as_ref() {
+        if let Err(failure) = provider_connection_readiness(&provider.connection_snapshot()) {
+            return failed_execution(failure, started);
+        }
+    }
+    if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
+        return execution;
+    }
     let archive_store = Arc::clone(store);
     let archive_prepared = prepared.clone();
     let thread_store = Arc::clone(store);
@@ -2689,10 +2847,12 @@ async fn execute_provider_turn_from(
     let checkpoint_store = Arc::clone(store);
     let event_store = Arc::clone(store);
     let event_host = host.clone();
+    let denial_store = Arc::clone(store);
     let tool_store = Arc::clone(store);
     let requested_run_id = prepared.run_id.clone();
     let run_id = prepared.run_id.clone();
     let event_run_id = prepared.run_id.clone();
+    let denial_run_id = prepared.run_id.clone();
     let tool_run_id = prepared.run_id.clone();
     let tool_prepared = prepared.clone();
     let callbacks = RunCallbacks {
@@ -2730,6 +2890,13 @@ async fn execute_provider_turn_from(
                 .lock()
                 .map_err(|_| outcome_unknown())?
                 .checkpoint_agent_provider_event(&event_run_id, event, usage)
+                .map_err(|_| outcome_unknown())
+        }),
+        on_denied: Box::new(move |event| {
+            denial_store
+                .lock()
+                .map_err(|_| outcome_unknown())?
+                .checkpoint_agent_control_denial(&denial_run_id, event)
                 .map_err(|_| outcome_unknown())
         }),
         on_tool_call: Box::new(move |correlation_id, tool_name, arguments| {
@@ -2783,16 +2950,27 @@ async fn execute_provider_turn_from(
     }
     let mut execution = match prepared.provider_selection.provider {
         AiProviderKind::Codex => {
-            chatgpt_provider_turn(
-                host,
-                store,
-                prepared.clone(),
-                operation_limit,
-                cancellation,
-                callbacks,
-                started,
-            )
-            .await
+            #[cfg(feature = "runtime-fixture")]
+            {
+                provider
+                    .as_ref()
+                    .expect("Codex provider initialized above")
+                    .run_turn(prepared.clone(), operation_limit, cancellation, callbacks)
+                    .await
+            }
+            #[cfg(not(feature = "runtime-fixture"))]
+            {
+                chatgpt_provider_turn(
+                    host,
+                    store,
+                    prepared.clone(),
+                    operation_limit,
+                    cancellation,
+                    callbacks,
+                    started,
+                )
+                .await
+            }
         }
         AiProviderKind::Anthropic => {
             let api_key = match load_anthropic_api_key() {
@@ -2826,6 +3004,32 @@ async fn execute_provider_turn_from(
     host.observe_provider_usage(&execution.usage);
     execution.usage.elapsed_milliseconds =
         Some(started.elapsed().as_millis().try_into().unwrap_or(u64::MAX));
+    #[cfg(feature = "runtime-fixture")]
+    if let Some(provider) = provider.filter(AgentProvider::is_closed) {
+        let mut provider_slot = host.agent_provider().lock().await;
+        let removed = provider_slot
+            .as_ref()
+            .is_some_and(|current| current.same_instance(&provider) && current.is_closed());
+        if removed {
+            *provider_slot = None;
+        }
+        drop(provider_slot);
+        if removed {
+            host.record_application_diagnostic(
+                crate::DiagnosticSeverity::Info,
+                crate::DiagnosticComponent::Process,
+                "provider_process_cleanup_completed",
+                "Closed provider process was removed from the active supervisor slot",
+                Some(format!("provider-turn-{}", prepared.run_id)),
+                None,
+                Some("completed"),
+                None,
+            );
+            let (status, summary) =
+                codex_failure_connection_status(ProviderFailureCategory::ProcessFailed);
+            let _ = save_codex_connection_status(host.application_home(), status, summary);
+        }
+    }
     execution
 }
 
@@ -2924,6 +3128,7 @@ fn failed_execution(failure: ProviderFailure, started: Instant) -> ProviderExecu
     }
 }
 
+#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
 fn chatgpt_failure_execution(
     thread_ref: Option<String>,
     turn_ref: Option<String>,
@@ -2960,12 +3165,14 @@ fn chatgpt_failure_execution(
     }
 }
 
+#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
 fn epoch_milliseconds() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_millis() as u64)
 }
 
+#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
 fn merge_usage_snapshot(usage: &mut ProviderUsage, snapshot: &UsageSnapshot) {
     usage.input_tokens = Some(usage.input_tokens.unwrap_or(0) + snapshot.input_tokens);
     usage.output_tokens = Some(usage.output_tokens.unwrap_or(0) + snapshot.output_tokens);
@@ -2976,6 +3183,172 @@ fn merge_usage_snapshot(usage: &mut ProviderUsage, snapshot: &UsageSnapshot) {
         usage.reasoning_output_tokens = Some(
             usage.reasoning_output_tokens.unwrap_or(0)
                 + snapshot.reasoning_output_tokens.unwrap_or(0),
+        );
+    }
+}
+
+#[derive(Default)]
+struct ChatGptResponseLifecycle {
+    accepted_ref: Option<String>,
+    active_response_ref: Option<String>,
+}
+
+impl ChatGptResponseLifecycle {
+    fn created(
+        &mut self,
+        response_id: String,
+        on_accepted: &mut Option<Box<TurnAcceptedCallback>>,
+    ) -> Result<(), ProviderFailure> {
+        if self.active_response_ref.is_some() {
+            return Err(protocol_failure(true));
+        }
+        if self.accepted_ref.is_none() {
+            let Some(callback) = on_accepted.take() else {
+                return Err(protocol_failure(true));
+            };
+            callback(&response_id)?;
+            self.accepted_ref = Some(response_id.clone());
+        }
+        self.active_response_ref = Some(response_id);
+        Ok(())
+    }
+
+    fn completed(&mut self, response_id: &str) -> Result<(), ProviderFailure> {
+        if self.active_response_ref.as_deref() != Some(response_id) {
+            return Err(protocol_failure(true));
+        }
+        self.active_response_ref = None;
+        Ok(())
+    }
+}
+
+#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
+fn chatgpt_reasoning_effort(
+    selection: &ProviderReasoningSelection,
+) -> Result<Option<ReasoningEffort>, ProviderFailure> {
+    let effort = match selection {
+        ProviderReasoningSelection::ProviderDefault => return Ok(None),
+        ProviderReasoningSelection::CodexEffort(value) => value.as_str(),
+        ProviderReasoningSelection::AnthropicEffort(_) => return Err(protocol_failure(false)),
+    };
+    let effort = match effort {
+        "none" => Some(ReasoningEffort::None),
+        "low" => Some(ReasoningEffort::Low),
+        "medium" => Some(ReasoningEffort::Medium),
+        "high" => Some(ReasoningEffort::High),
+        "xhigh" => Some(ReasoningEffort::XHigh),
+        _ => return Err(protocol_failure(false)),
+    };
+    Ok(effort)
+}
+
+#[cfg(test)]
+mod direct_backend_mapping_tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    #[test]
+    fn maps_every_supported_chatgpt_reasoning_selection_exactly() {
+        let cases = [
+            ("none", ReasoningEffort::None),
+            ("low", ReasoningEffort::Low),
+            ("medium", ReasoningEffort::Medium),
+            ("high", ReasoningEffort::High),
+            ("xhigh", ReasoningEffort::XHigh),
+        ];
+
+        assert_eq!(
+            chatgpt_reasoning_effort(&ProviderReasoningSelection::ProviderDefault).unwrap(),
+            None
+        );
+        for (selection, expected) in cases {
+            assert_eq!(
+                chatgpt_reasoning_effort(&ProviderReasoningSelection::CodexEffort(
+                    selection.to_owned()
+                ))
+                .unwrap(),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_foreign_or_unknown_chatgpt_reasoning_selections() {
+        assert!(
+            chatgpt_reasoning_effort(&ProviderReasoningSelection::AnthropicEffort(
+                "high".to_owned()
+            ))
+            .is_err()
+        );
+        assert!(
+            chatgpt_reasoning_effort(&ProviderReasoningSelection::CodexEffort(
+                "unsupported".to_owned()
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn production_sink_accepts_sequential_responses_for_tool_roundtrip() {
+        let persisted = Arc::new(Mutex::new(Vec::new()));
+        let persisted_by_callback = Arc::clone(&persisted);
+        let mut on_accepted: Option<Box<TurnAcceptedCallback>> =
+            Some(Box::new(move |response_id| {
+                persisted_by_callback
+                    .lock()
+                    .expect("accepted refs lock")
+                    .push(response_id.to_owned());
+                Ok(())
+            }));
+        let mut lifecycle = ChatGptResponseLifecycle::default();
+
+        lifecycle
+            .created("resp_tool_1".to_owned(), &mut on_accepted)
+            .expect("accept initial tool response");
+        lifecycle
+            .completed("resp_tool_1")
+            .expect("complete initial tool response");
+        lifecycle
+            .created("resp_tool_2".to_owned(), &mut on_accepted)
+            .expect("accept tool-output follow-up response");
+        lifecycle
+            .completed("resp_tool_2")
+            .expect("complete tool-output follow-up response");
+
+        assert_eq!(
+            *persisted.lock().expect("accepted refs lock"),
+            vec!["resp_tool_1"],
+            "the first response remains the durable Provider Turn identity"
+        );
+        assert_eq!(lifecycle.accepted_ref.as_deref(), Some("resp_tool_1"));
+        assert_eq!(lifecycle.active_response_ref, None);
+    }
+
+    #[test]
+    fn production_sink_rejects_mismatched_follow_up_completion() {
+        let mut on_accepted: Option<Box<TurnAcceptedCallback>> = Some(Box::new(|_| Ok(())));
+        let mut lifecycle = ChatGptResponseLifecycle::default();
+        lifecycle
+            .created("resp_tool_1".to_owned(), &mut on_accepted)
+            .expect("accept initial response");
+        lifecycle
+            .completed("resp_tool_1")
+            .expect("complete initial response");
+        lifecycle
+            .created("resp_tool_2".to_owned(), &mut on_accepted)
+            .expect("accept follow-up response");
+
+        let failure = lifecycle
+            .completed("resp_foreign")
+            .expect_err("a different response cannot complete the follow-up");
+        assert_eq!(failure.category, ProviderFailureCategory::OutcomeUnknown);
+        assert!(!failure.retry_safe);
+        assert_eq!(lifecycle.accepted_ref.as_deref(), Some("resp_tool_1"));
+        assert_eq!(
+            lifecycle.active_response_ref.as_deref(),
+            Some("resp_tool_2"),
+            "a foreign completion must not consume the active response"
         );
     }
 }
@@ -2992,6 +3365,7 @@ fn merge_usage_snapshot(usage: &mut ProviderUsage, snapshot: &UsageSnapshot) {
 /// (they remain materialized workspace inputs referenced by the bundle), the
 /// output contract is enforced by candidate validation instead of a wire
 /// `outputSchema` field, and the run id doubles as the session identity.
+#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
 async fn chatgpt_provider_turn(
     host: &QuantixHost,
     store: &Arc<Mutex<TenderStore>>,
@@ -3007,6 +3381,7 @@ async fn chatgpt_provider_turn(
         on_requested,
         on_accepted,
         mut on_event,
+        mut on_denied,
         on_tool_call: _,
     } = callbacks;
     let mut on_accepted = Some(on_accepted);
@@ -3040,7 +3415,7 @@ async fn chatgpt_provider_turn(
         Ok(instruction) => instruction,
         Err(failure) => return chatgpt_failure_execution(Some(thread_ref), None, failure, started),
     };
-    let tools = match dynamic_tool_specs(&prepared.permission_grant) {
+    let tools = match direct_tool_specs(&prepared.permission_grant) {
         Ok(tools) => tools,
         Err(failure) => return chatgpt_failure_execution(Some(thread_ref), None, failure, started),
     };
@@ -3077,6 +3452,10 @@ async fn chatgpt_provider_turn(
             )
         }
     };
+    let reasoning_effort = match chatgpt_reasoning_effort(&prepared.provider_selection.reasoning) {
+        Ok(effort) => effort,
+        Err(failure) => return chatgpt_failure_execution(Some(thread_ref), None, failure, started),
+    };
     let request = BackendRequest {
         model: prepared.provider_selection.model_id.clone(),
         instructions: instruction,
@@ -3086,9 +3465,9 @@ async fn chatgpt_provider_turn(
             "content": [{"type": "input_text", "text": prepared.task.objective.clone()}],
         })],
         tools,
-        previous_response_id: None,
         store: false,
         include_reasoning: true,
+        reasoning_effort,
         session_id: String::new(),
     };
 
@@ -3153,53 +3532,71 @@ async fn chatgpt_provider_turn(
         }
     };
 
-    let mut accepted_ref: Option<String> = None;
+    let mut response_lifecycle = ChatGptResponseLifecycle::default();
     let mut streamed_usage = ProviderUsage::default();
     let mut final_text: Option<String> = None;
-    let mut persistence_failure: Option<ProviderFailure> = None;
-    let mut sink = |event: StreamEvent| match event {
-        StreamEvent::Completed { response_id, usage } => {
-            merge_usage_snapshot(&mut streamed_usage, &usage);
-            if accepted_ref.is_none() && persistence_failure.is_none() {
-                if let Some(callback) = on_accepted.take() {
-                    match callback(&response_id) {
-                        Ok(()) => accepted_ref = Some(response_id),
-                        Err(failure) => persistence_failure = Some(failure),
-                    }
-                }
+    let mut sink = |event: StreamEvent| -> Result<(), ProviderFailure> {
+        match event {
+            StreamEvent::Created { response_id } => {
+                response_lifecycle.created(response_id, &mut on_accepted)
             }
-            if persistence_failure.is_none() {
+            StreamEvent::Completed { response_id, usage } => {
+                response_lifecycle.completed(&response_id)?;
+                merge_usage_snapshot(&mut streamed_usage, &usage);
                 let observed = PendingProviderEvent::new(
                     ProviderEventKind::UsageObserved,
                     "ChatGPT usage observed",
                     None,
                 );
-                if let Err(failure) = on_event(&observed, &streamed_usage) {
-                    persistence_failure = Some(failure);
+                on_event(&observed, &streamed_usage)
+            }
+            StreamEvent::ItemDone(frame) => {
+                if frame.pointer("/item/type").and_then(Value::as_str) != Some("message") {
+                    return Ok(());
                 }
-            }
-        }
-        StreamEvent::ItemDone(frame) => {
-            if frame.pointer("/item/type").and_then(Value::as_str) != Some("message") {
-                return;
-            }
-            let mut text = String::new();
-            if let Some(parts) = frame.pointer("/item/content").and_then(Value::as_array) {
-                for part in parts {
-                    if part.get("type").and_then(Value::as_str) == Some("output_text") {
-                        if let Some(chunk) = part.get("text").and_then(Value::as_str) {
-                            text.push_str(chunk);
+                let mut text = String::new();
+                if let Some(parts) = frame.pointer("/item/content").and_then(Value::as_array) {
+                    for part in parts {
+                        if part.get("type").and_then(Value::as_str) == Some("output_text") {
+                            if let Some(chunk) = part.get("text").and_then(Value::as_str) {
+                                text.push_str(chunk);
+                            }
                         }
                     }
                 }
+                final_text = Some(text);
+                Ok(())
             }
-            final_text = Some(text);
+            StreamEvent::ItemAdded(_)
+            | StreamEvent::TextDelta(_)
+            | StreamEvent::FunctionCallDelta { .. }
+            | StreamEvent::FunctionCallDone { .. }
+            | StreamEvent::Errored(_) => Ok(()),
         }
-        StreamEvent::ItemAdded(_)
-        | StreamEvent::TextDelta(_)
-        | StreamEvent::FunctionCallDelta { .. }
-        | StreamEvent::FunctionCallDone { .. }
-        | StreamEvent::Errored(_) => {}
+    };
+    let mut denied = |call_id: &str,
+                      tool_name: &str,
+                      raw_arguments: &str,
+                      reason: &str|
+     -> Result<(), ProviderFailure> {
+        let mut fingerprint = Sha256::new();
+        fingerprint.update(tool_name.as_bytes());
+        fingerprint.update([0]);
+        fingerprint.update(raw_arguments.as_bytes());
+        let request_fingerprint = fingerprint
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let denial_reason =
+            PermissionDenialReason::parse(reason).unwrap_or(PermissionDenialReason::DefaultDeny);
+        let event = PendingProviderEvent::new(
+            ProviderEventKind::ControlRequestDenied,
+            "ChatGPT Typed Tool call denied by the Host",
+            Some(tool_name),
+        )
+        .with_control_denial(call_id.to_owned(), request_fingerprint, denial_reason);
+        on_denied(&event)
     };
 
     let turn_context = TurnContext {
@@ -3212,15 +3609,9 @@ async fn chatgpt_provider_turn(
         authorize_tool: &authorize_tool,
         is_cancelled: &is_cancelled,
         on_event: &mut sink,
+        on_tool_denied: &mut denied,
     };
     let outcome = execute_chatgpt_backend_turn(turn_context).await;
-    if let Some(failure) = persistence_failure {
-        return if accepted_ref.is_some() {
-            indeterminate_execution(&thread_ref, accepted_ref, failure, started)
-        } else {
-            chatgpt_failure_execution(Some(thread_ref), None, failure, started)
-        };
-    }
     match outcome {
         Ok(result) => {
             let candidate = validate_candidate(
@@ -3234,11 +3625,11 @@ async fn chatgpt_provider_turn(
             );
             match candidate {
                 Ok(candidate) => {
-                    let turn_ref = accepted_ref.clone();
+                    let turn_ref = response_lifecycle.accepted_ref.clone();
                     ProviderExecution {
                         state: AgentRunState::Completed,
                         provider_thread_ref: Some(thread_ref),
-                        provider_turn_ref: accepted_ref,
+                        provider_turn_ref: response_lifecycle.accepted_ref,
                         events: vec![PendingProviderEvent::new(
                             ProviderEventKind::Terminal,
                             "Provider Turn completed",
@@ -3249,12 +3640,20 @@ async fn chatgpt_provider_turn(
                         candidate_payload_json: Some(candidate),
                     }
                 }
-                Err(failure) => {
-                    chatgpt_failure_execution(Some(thread_ref), accepted_ref, failure, started)
-                }
+                Err(failure) => chatgpt_failure_execution(
+                    Some(thread_ref),
+                    response_lifecycle.accepted_ref,
+                    failure,
+                    started,
+                ),
             }
         }
-        Err(failure) => chatgpt_failure_execution(Some(thread_ref), accepted_ref, failure, started),
+        Err(failure) => chatgpt_failure_execution(
+            Some(thread_ref),
+            response_lifecycle.accepted_ref,
+            failure,
+            started,
+        ),
     }
 }
 
@@ -3316,6 +3715,7 @@ fn deterministic_provider_selection() -> AiExecutionSelection {
     }
 }
 
+#[cfg(feature = "runtime-fixture")]
 fn indeterminate_execution(
     thread_ref: &str,
     turn_ref: Option<String>,
@@ -3417,6 +3817,7 @@ fn permission_failure() -> ProviderFailure {
     )
 }
 
+#[cfg(feature = "runtime-fixture")]
 fn authentication_failure() -> ProviderFailure {
     ProviderFailure::new(
         ProviderFailureCategory::AuthenticationRequired,
@@ -3426,12 +3827,25 @@ fn authentication_failure() -> ProviderFailure {
     )
 }
 
+#[cfg(feature = "runtime-fixture")]
 fn subscription_failure() -> ProviderFailure {
     ProviderFailure::new(
         ProviderFailureCategory::SubscriptionRequired,
         true,
         "Connect an eligible Codex-managed ChatGPT subscription, then retry.",
         Some("The active Codex account is not an eligible ChatGPT subscription."),
+    )
+}
+
+#[cfg(feature = "runtime-fixture")]
+fn turn_acceptance_unknown() -> ProviderFailure {
+    ProviderFailure::new(
+        ProviderFailureCategory::OutcomeUnknown,
+        false,
+        "Resolve the quarantined Agent Run before retrying.",
+        Some(
+            "The Provider Turn may have started, but its identity and outcome could not be established.",
+        ),
     )
 }
 
@@ -3444,6 +3858,7 @@ pub enum CodexReadiness {
     Unavailable,
 }
 
+#[cfg(feature = "runtime-fixture")]
 pub(crate) fn chatgpt_subscription_is_supported(
     account_type: Option<&str>,
     plan_type: Option<&str>,
@@ -3452,6 +3867,7 @@ pub(crate) fn chatgpt_subscription_is_supported(
         && plan_type.is_some_and(|plan| SUPPORTED_CHATGPT_PLANS.contains(&plan))
 }
 
+#[cfg(feature = "runtime-fixture")]
 fn codex_user_agent_is_supported(user_agent: &str) -> bool {
     let server_identity = user_agent
         .split_once(" (")
@@ -3461,6 +3877,7 @@ fn codex_user_agent_is_supported(user_agent: &str) -> bool {
         .is_some_and(|(product, version)| !product.is_empty() && version == CODEX_VERSION)
 }
 
+#[cfg(feature = "runtime-fixture")]
 fn controlled_codex_environment(
     application_home: &Path,
 ) -> io::Result<(PathBuf, Vec<(OsString, OsString)>)> {
@@ -3498,11 +3915,13 @@ fn controlled_codex_environment(
     Ok((process_directory, environment))
 }
 
+#[cfg(feature = "runtime-fixture")]
 pub(super) struct CodexProviderProcess {
     conversation: Option<SupervisedConversation>,
     connection: ProviderConnectionView,
 }
 
+#[cfg(feature = "runtime-fixture")]
 impl CodexProviderProcess {
     pub(super) async fn readiness(
         supervisor: &crate::process_supervisor::ProcessSupervisor,
@@ -3563,10 +3982,6 @@ impl CodexProviderProcess {
 
     pub(super) fn connection_snapshot(&self) -> ProviderConnectionView {
         self.connection.clone()
-    }
-
-    pub(super) fn replace_connection(&mut self, connection: ProviderConnectionView) {
-        self.connection = connection;
     }
 
     async fn initialize(
@@ -3765,6 +4180,7 @@ impl CodexProviderProcess {
     }
 }
 
+#[cfg(feature = "runtime-fixture")]
 fn codex_connection_without_catalog(
     status: ProviderConnectionStatus,
     account_label: Option<String>,
@@ -3785,6 +4201,7 @@ fn codex_connection_without_catalog(
     }
 }
 
+#[cfg(feature = "runtime-fixture")]
 fn parse_codex_model(model: &Value) -> Option<ProviderModelOption> {
     if model.get("hidden").and_then(Value::as_bool) != Some(false) {
         return None;
@@ -3860,6 +4277,7 @@ fn parse_codex_model(model: &Value) -> Option<ProviderModelOption> {
     })
 }
 
+#[cfg(feature = "runtime-fixture")]
 fn restricted_codex_arguments() -> Vec<OsString> {
     let mut arguments = vec![
         OsString::from("app-server"),
@@ -3894,6 +4312,21 @@ fn restricted_codex_arguments() -> Vec<OsString> {
         arguments.push(OsString::from(feature));
     }
     arguments
+}
+
+#[cfg(feature = "runtime-fixture")]
+fn stream_provider_events(
+    execution: &mut ProviderExecution,
+    on_event: &mut TurnEventCallback,
+) -> Result<(), ProviderFailure> {
+    let events = std::mem::take(&mut execution.events);
+    for event in events {
+        if let Err(failure) = on_event(&event, &execution.usage) {
+            execution.events.push(event);
+            return Err(failure);
+        }
+    }
+    Ok(())
 }
 
 fn valid_identifier(value: &str) -> bool {
@@ -3984,37 +4417,5 @@ mod tests {
         );
         assert_eq!(interrupted.provider_selection, expected_selection);
         assert!(interrupted.failure.is_some());
-    }
-
-    #[tokio::test]
-    #[ignore = "explicitly contacts the Engineer User's local Codex app-server"]
-    async fn codex_subscription_live_smoke() {
-        let home_variable = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-        let engineer_home = std::env::var_os(home_variable)
-            .map(PathBuf::from)
-            .expect("the Engineer User home directory must be available");
-        let application_home = engineer_home.join(".quantix");
-        let executable = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("runtime")
-            .join("bin")
-            .join(if cfg!(windows) { "codex.exe" } else { "codex" });
-        assert!(
-            executable.is_file(),
-            "prepare the pinned Codex runtime before running the live smoke check"
-        );
-
-        let supervisor = crate::process_supervisor::ProcessSupervisor;
-        let provider = CodexProvider::readiness(
-            &supervisor,
-            executable,
-            &application_home,
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap_or_else(|failure| panic!("Codex subscription is not ready: {failure:?}"));
-        provider
-            .shutdown()
-            .await
-            .expect("the Codex app-server must shut down cleanly");
     }
 }

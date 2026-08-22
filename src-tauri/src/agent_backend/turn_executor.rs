@@ -3,13 +3,17 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::agent_runtime::{ProviderFailure, ProviderFailureCategory, ProviderUsage};
-use crate::chatgpt_oauth::{save, StoredConnection, TokenClient};
+use crate::chatgpt_oauth::{
+    refresh_connection as refresh_stored_connection, StoredConnection, TokenClient,
+};
 
 use super::client::{
     BackendError, BackendRequest, ChatGptBackend, StreamEvent, TurnDisposition, UsageSnapshot,
 };
 
 pub(crate) type BackendEvent = StreamEvent;
+type ToolDeniedCallback<'a> =
+    dyn FnMut(&str, &str, &str, &str) -> Result<(), ProviderFailure> + Send + 'a;
 
 pub(crate) struct TurnContext<'a> {
     pub backend: &'a dyn ChatGptBackend,
@@ -20,7 +24,8 @@ pub(crate) struct TurnContext<'a> {
     pub session_id: String,
     pub authorize_tool: &'a (dyn Fn(&str, &str) -> Result<Value, ToolRejection> + Sync),
     pub is_cancelled: &'a (dyn Fn() -> bool + Sync),
-    pub on_event: &'a mut (dyn FnMut(BackendEvent) + Send),
+    pub on_event: &'a mut (dyn FnMut(BackendEvent) -> Result<(), ProviderFailure> + Send),
+    pub on_tool_denied: &'a mut ToolDeniedCallback<'a>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,11 +50,10 @@ const MAX_TOOL_ROUNDS: u32 = 32;
 ///
 /// # Panics
 ///
-/// Panics when polled inside a current-thread tokio runtime: the transport seam
-/// (`ChatGptBackend::create_response`) and the OAuth token refresh are blocking
-/// calls parked via [`tokio::task::block_in_place`], which requires a
-/// multi-thread runtime (the Tauri default). When in doubt, call this function
-/// through `tokio::task::spawn_blocking`. Debug builds assert the runtime flavor.
+/// Panics when polled inside a current-thread tokio runtime: OAuth token refresh
+/// is a blocking call parked via [`tokio::task::block_in_place`], which requires
+/// a multi-thread runtime (the Tauri default). Debug builds assert the runtime
+/// flavor.
 pub(crate) async fn execute_provider_turn(
     ctx: TurnContext<'_>,
 ) -> Result<ProviderTurnResult, ProviderFailure> {
@@ -74,35 +78,48 @@ pub(crate) async fn execute_provider_turn(
             return Err(interruption_failure(turn_advanced));
         }
         let mut response = ResponseCollector::default();
-        let mut outcome = tokio::task::block_in_place(|| {
-            create_response_once(
+        let mut delivery_failure = None;
+        let mut accepted = false;
+        let mut outcome = create_response_once(
+            ctx.backend,
+            &auth,
+            &request,
+            &mut response,
+            &mut usage_snapshots,
+            &mut cancelled,
+            &mut accepted,
+            &mut delivery_failure,
+            ctx.is_cancelled,
+            &mut *ctx.on_event,
+        )
+        .await;
+        turn_advanced |= accepted;
+        if let Some(failure) = delivery_failure.take() {
+            return Err(callback_failure(failure, turn_advanced));
+        }
+        if matches!(outcome, Err(BackendError::AuthenticationRequired)) && !refreshed {
+            refreshed = true;
+            auth = tokio::task::block_in_place(|| {
+                refresh_stored_connection(ctx.home, ctx.token_client, now_ms())
+                    .map_err(|()| authentication_failure())
+            })?;
+            outcome = create_response_once(
                 ctx.backend,
                 &auth,
                 &request,
                 &mut response,
                 &mut usage_snapshots,
                 &mut cancelled,
+                &mut accepted,
+                &mut delivery_failure,
                 ctx.is_cancelled,
                 &mut *ctx.on_event,
             )
-        });
-        if matches!(outcome, Err(BackendError::AuthenticationRequired)) && !refreshed {
-            refreshed = true;
-            auth = tokio::task::block_in_place(|| {
-                refresh_connection(ctx.token_client, &auth, ctx.home)
-            })?;
-            outcome = tokio::task::block_in_place(|| {
-                create_response_once(
-                    ctx.backend,
-                    &auth,
-                    &request,
-                    &mut response,
-                    &mut usage_snapshots,
-                    &mut cancelled,
-                    ctx.is_cancelled,
-                    &mut *ctx.on_event,
-                )
-            });
+            .await;
+            turn_advanced |= accepted;
+            if let Some(failure) = delivery_failure.take() {
+                return Err(callback_failure(failure, turn_advanced));
+            }
         }
         match outcome {
             Err(error) => return Err(backend_failure(error, turn_advanced)),
@@ -113,9 +130,9 @@ pub(crate) async fn execute_provider_turn(
         if cancelled || (ctx.is_cancelled)() {
             return Err(interruption_failure(true));
         }
-        let Some(completed_id) = response.completed_id else {
+        if response.completed_id.is_none() {
             return Err(protocol_failure(turn_advanced));
-        };
+        }
         if response.function_calls.is_empty() {
             return Ok(ProviderTurnResult {
                 usage: accumulated_usage(&usage_snapshots),
@@ -130,6 +147,11 @@ pub(crate) async fn execute_provider_turn(
             let output = match (ctx.authorize_tool)(&call.name, &call.arguments) {
                 Ok(value) => value,
                 Err(ToolRejection::NotPermitted(reason)) => {
+                    if let Err(failure) =
+                        (ctx.on_tool_denied)(&call.call_id, &call.name, &call.arguments, reason)
+                    {
+                        return Err(callback_failure(failure, true));
+                    }
                     serde_json::json!({ "error": "not_permitted", "reason": reason })
                 }
                 Err(ToolRejection::Failed(reason)) => {
@@ -144,7 +166,6 @@ pub(crate) async fn execute_provider_turn(
         }
         items.extend(response.output_items.iter().cloned());
         items.extend(outputs);
-        request.previous_response_id = Some(completed_id);
         request.input_items = items.clone();
     }
 }
@@ -170,21 +191,24 @@ fn strip_item_id(mut item: Value) -> Value {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn create_response_once(
+async fn create_response_once(
     backend: &dyn ChatGptBackend,
     auth: &StoredConnection,
     request: &BackendRequest,
     response: &mut ResponseCollector,
     usage_snapshots: &mut Vec<UsageSnapshot>,
     cancelled: &mut bool,
-    is_cancelled: &dyn Fn() -> bool,
-    on_event: &mut dyn FnMut(BackendEvent),
+    accepted: &mut bool,
+    delivery_failure: &mut Option<ProviderFailure>,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+    on_event: &mut (dyn FnMut(BackendEvent) -> Result<(), ProviderFailure> + Send),
 ) -> Result<TurnDisposition, BackendError> {
-    let mut emit = |event: BackendEvent| {
+    let mut emit = |event: BackendEvent| -> Result<(), BackendError> {
         if is_cancelled() {
             *cancelled = true;
         }
         match &event {
+            StreamEvent::Created { .. } => *accepted = true,
             StreamEvent::ItemDone(frame) => {
                 if let Some(item) = frame.get("item") {
                     response.output_items.push(strip_item_id(item.clone()));
@@ -211,29 +235,14 @@ fn create_response_once(
             | StreamEvent::FunctionCallDelta { .. }
             | StreamEvent::Errored(_) => {}
         }
-        on_event(event);
+        on_event(event).map_err(|failure| {
+            *delivery_failure = Some(failure);
+            BackendError::EventDelivery
+        })
     };
-    backend.create_response(auth, request, &mut emit)
-}
-
-fn refresh_connection(
-    token_client: &TokenClient,
-    current: &StoredConnection,
-    home: &Path,
-) -> Result<StoredConnection, ProviderFailure> {
-    let issued = token_client
-        .refresh(&current.refresh_token)
-        .map_err(|_| authentication_failure())?;
-    let fresh = StoredConnection {
-        access_token: issued.access_token,
-        refresh_token: issued.refresh_token,
-        id_token: issued.id_token,
-        expires_at_ms: now_ms().saturating_add(issued.expires_in_secs.saturating_mul(1_000)),
-        account_id: current.account_id.clone(),
-        plan_type: current.plan_type.clone(),
-    };
-    save(home, &fresh).map_err(|_| authentication_failure())?;
-    Ok(fresh)
+    backend
+        .create_response(auth, request, is_cancelled, &mut emit)
+        .await
 }
 
 fn cloned_connection(conn: &StoredConnection) -> StoredConnection {
@@ -244,6 +253,7 @@ fn cloned_connection(conn: &StoredConnection) -> StoredConnection {
         expires_at_ms: conn.expires_at_ms,
         account_id: conn.account_id.clone(),
         plan_type: conn.plan_type.clone(),
+        compute_residency: conn.compute_residency.clone(),
     }
 }
 
@@ -359,12 +369,32 @@ fn tool_round_budget_exhausted() -> ProviderFailure {
     )
 }
 
+fn callback_failure(failure: ProviderFailure, turn_advanced: bool) -> ProviderFailure {
+    if turn_advanced {
+        ProviderFailure::new(
+            ProviderFailureCategory::OutcomeUnknown,
+            false,
+            QUARANTINE_ACTION,
+            Some(
+                failure
+                    .redacted_detail
+                    .as_deref()
+                    .unwrap_or("Authoritative Provider Turn persistence failed."),
+            ),
+        )
+    } else {
+        failure
+    }
+}
+
 fn backend_failure(error: BackendError, turn_advanced: bool) -> ProviderFailure {
     match error {
         BackendError::AuthenticationRequired => authentication_failure(),
         BackendError::RateLimited { retry_after_ms } => rate_limit_failure(retry_after_ms),
         BackendError::Protocol(_) => protocol_failure(turn_advanced),
         BackendError::Transport(_) => transport_failure(turn_advanced),
+        BackendError::Interrupted => interruption_failure(turn_advanced),
+        BackendError::EventDelivery => protocol_failure(turn_advanced),
     }
 }
 
@@ -382,7 +412,7 @@ mod tests {
 
     use super::super::client::{build_request_body, parse_stream_bytes};
     use super::*;
-    use crate::chatgpt_oauth::{load, LoadState};
+    use crate::chatgpt_oauth::{load, save, LoadState};
 
     fn sse(frames: &[&str]) -> Vec<u8> {
         let mut bytes = frames.join("\n\n").into_bytes();
@@ -448,24 +478,32 @@ mod tests {
     }
 
     impl ChatGptBackend for ScriptedBackend {
-        fn create_response(
-            &self,
-            auth: &StoredConnection,
-            req: &BackendRequest,
-            on_event: &mut dyn FnMut(StreamEvent),
-        ) -> Result<TurnDisposition, BackendError> {
-            self.requests.lock().unwrap().push(build_request_body(req));
-            self.access_tokens
-                .lock()
-                .unwrap()
-                .push(auth.access_token.clone());
-            match self.responses.lock().unwrap().pop_front() {
-                Some(Ok(bytes)) => parse_stream_bytes(&bytes, on_event),
-                Some(Err(error)) => Err(error),
-                None => Err(BackendError::Protocol(
-                    "script exhausted its scripted responses".to_owned(),
-                )),
-            }
+        fn create_response<'a>(
+            &'a self,
+            auth: &'a StoredConnection,
+            req: &'a BackendRequest,
+            is_cancelled: &'a (dyn Fn() -> bool + Sync),
+            on_event: &'a mut (dyn FnMut(StreamEvent) -> Result<(), BackendError> + Send),
+        ) -> std::pin::Pin<
+            Box<dyn Future<Output = Result<TurnDisposition, BackendError>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                if is_cancelled() {
+                    return Err(BackendError::Interrupted);
+                }
+                self.requests.lock().unwrap().push(build_request_body(req));
+                self.access_tokens
+                    .lock()
+                    .unwrap()
+                    .push(auth.access_token.clone());
+                match self.responses.lock().unwrap().pop_front() {
+                    Some(Ok(bytes)) => parse_stream_bytes(&bytes, on_event),
+                    Some(Err(error)) => Err(error),
+                    None => Err(BackendError::Protocol(
+                        "script exhausted its scripted responses".to_owned(),
+                    )),
+                }
+            })
         }
     }
 
@@ -477,6 +515,7 @@ mod tests {
             expires_at_ms: 5_000,
             account_id: "acc-77".to_owned(),
             plan_type: Some("plus".to_owned()),
+            compute_residency: Some("us".to_owned()),
         }
     }
 
@@ -496,9 +535,9 @@ mod tests {
                 "parameters": {"type": "object", "properties": {}},
                 "strict": true
             })],
-            previous_response_id: None,
             store: false,
             include_reasoning: true,
+            reasoning_effort: None,
             session_id: "ses-stale".to_owned(),
         }
     }
@@ -585,14 +624,22 @@ mod tests {
     }
 
     impl ChatGptBackend for AlwaysFunctionCallBackend {
-        fn create_response(
-            &self,
+        fn create_response<'a>(
+            &'a self,
             _auth: &StoredConnection,
-            req: &BackendRequest,
-            on_event: &mut dyn FnMut(StreamEvent),
-        ) -> Result<TurnDisposition, BackendError> {
-            self.requests.lock().unwrap().push(build_request_body(req));
-            parse_stream_bytes(&sse(TOOL_RESPONSE_ONE), on_event)
+            req: &'a BackendRequest,
+            is_cancelled: &'a (dyn Fn() -> bool + Sync),
+            on_event: &'a mut (dyn FnMut(StreamEvent) -> Result<(), BackendError> + Send),
+        ) -> std::pin::Pin<
+            Box<dyn Future<Output = Result<TurnDisposition, BackendError>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                if is_cancelled() {
+                    return Err(BackendError::Interrupted);
+                }
+                self.requests.lock().unwrap().push(build_request_body(req));
+                parse_stream_bytes(&sse(TOOL_RESPONSE_ONE), on_event)
+            })
         }
     }
 
@@ -606,6 +653,36 @@ mod tests {
         is_cancelled: &'a (dyn Fn() -> bool + Sync),
         on_event: &'a mut (dyn FnMut(BackendEvent) + Send),
     ) -> Result<ProviderTurnResult, ProviderFailure> {
+        let mut fallible_event = |event| {
+            on_event(event);
+            Ok(())
+        };
+        let mut denied = |_: &str, _: &str, _: &str, _: &str| Ok(());
+        block_on_future(execute_provider_turn(TurnContext {
+            backend,
+            auth,
+            token_client,
+            home,
+            request: sample_request(),
+            session_id: "ses-turn-1".to_owned(),
+            authorize_tool,
+            is_cancelled,
+            on_event: &mut fallible_event,
+            on_tool_denied: &mut denied,
+        }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_turn_with_callbacks<'a>(
+        backend: &'a dyn ChatGptBackend,
+        auth: &'a StoredConnection,
+        token_client: &'a TokenClient,
+        home: &'a Path,
+        authorize_tool: &'a (dyn Fn(&str, &str) -> Result<Value, ToolRejection> + Sync),
+        is_cancelled: &'a (dyn Fn() -> bool + Sync),
+        on_event: &'a mut (dyn FnMut(BackendEvent) -> Result<(), ProviderFailure> + Send),
+        on_tool_denied: &'a mut ToolDeniedCallback<'a>,
+    ) -> Result<ProviderTurnResult, ProviderFailure> {
         block_on_future(execute_provider_turn(TurnContext {
             backend,
             auth,
@@ -616,6 +693,7 @@ mod tests {
             authorize_tool,
             is_cancelled,
             on_event,
+            on_tool_denied,
         }))
     }
 
@@ -703,7 +781,10 @@ mod tests {
         let requests = backend.request_bodies();
         assert_eq!(requests.len(), 2, "one follow-up request expected");
         assert!(requests[0].get("previous_response_id").is_none());
-        assert_eq!(requests[1]["previous_response_id"], "resp_tool_1");
+        assert!(
+            requests[1].get("previous_response_id").is_none(),
+            "REST tool follow-ups must replay the full stateless input"
+        );
 
         let input = requests[1]["input"].as_array().expect("input array");
         assert_eq!(input[0]["role"], "user", "prior context must be replayed");
@@ -869,7 +950,7 @@ mod tests {
     }
 
     #[test]
-    fn midstream_abort_before_any_progress_maps_to_process_failed() {
+    fn midstream_abort_after_created_is_outcome_unknown() {
         let backend = ScriptedBackend::new(vec![Ok(sse(PARTIAL_STREAM))]);
         let auth = stored_connection("at-1");
         let (token_client, _bodies) = mock_issuer(ISSUER_BODY);
@@ -890,9 +971,107 @@ mod tests {
         )
         .expect_err("aborted stream must fail the turn");
 
-        assert_eq!(failure.category, ProviderFailureCategory::ProcessFailed);
-        assert!(failure.retry_safe);
+        assert_eq!(failure.category, ProviderFailureCategory::OutcomeUnknown);
+        assert!(!failure.retry_safe);
         assert_eq!(backend.request_bodies().len(), 1);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn persistence_failure_on_created_stops_delivery_and_quarantines() {
+        let backend = ScriptedBackend::new(vec![Ok(sse(TOOL_RESPONSE_ONE))]);
+        let auth = stored_connection("at-1");
+        let (token_client, _bodies) = mock_issuer(ISSUER_BODY);
+        let home = temp_home("event-persistence-failure");
+        let tool_executions = Arc::new(AtomicUsize::new(0));
+        let executions = Arc::clone(&tool_executions);
+        let authorize = move |_: &str, _: &str| -> Result<Value, ToolRejection> {
+            executions.fetch_add(1, Ordering::SeqCst);
+            Ok(json!({"unexpected": true}))
+        };
+        let delivered = Arc::new(AtomicUsize::new(0));
+        let delivery_count = Arc::clone(&delivered);
+        let mut on_event = move |_: BackendEvent| {
+            delivery_count.fetch_add(1, Ordering::SeqCst);
+            Err(ProviderFailure::new(
+                ProviderFailureCategory::ProcessFailed,
+                true,
+                "Repair persistence before retrying.",
+                Some("Authoritative event persistence failed."),
+            ))
+        };
+        let mut on_denied = |_: &str, _: &str, _: &str, _: &str| Ok(());
+
+        let failure = run_turn_with_callbacks(
+            &backend,
+            &auth,
+            &token_client,
+            &home,
+            &authorize,
+            &|| false,
+            &mut on_event,
+            &mut on_denied,
+        )
+        .unwrap_err();
+
+        assert_eq!(failure.category, ProviderFailureCategory::OutcomeUnknown);
+        assert!(!failure.retry_safe);
+        assert_eq!(delivered.load(Ordering::SeqCst), 1);
+        assert_eq!(tool_executions.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.request_bodies().len(), 1);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn denial_persistence_failure_stops_before_follow_up_request() {
+        let backend = ScriptedBackend::new(vec![Ok(sse(TOOL_RESPONSE_ONE))]);
+        let auth = stored_connection("at-1");
+        let (token_client, _bodies) = mock_issuer(ISSUER_BODY);
+        let home = temp_home("denial-persistence-failure");
+        let authorize = |_: &str, _: &str| -> Result<Value, ToolRejection> {
+            Err(ToolRejection::NotPermitted("tool_not_granted"))
+        };
+        let mut on_event = |_: BackendEvent| Ok(());
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let captured_for_callback = Arc::clone(&captured);
+        let mut on_denied = move |call_id: &str, name: &str, arguments: &str, reason: &str| {
+            captured_for_callback.lock().unwrap().push((
+                call_id.to_owned(),
+                name.to_owned(),
+                arguments.to_owned(),
+                reason.to_owned(),
+            ));
+            Err(ProviderFailure::new(
+                ProviderFailureCategory::ProcessFailed,
+                true,
+                "Repair persistence before retrying.",
+                Some("Authoritative denial persistence failed."),
+            ))
+        };
+
+        let failure = run_turn_with_callbacks(
+            &backend,
+            &auth,
+            &token_client,
+            &home,
+            &authorize,
+            &|| false,
+            &mut on_event,
+            &mut on_denied,
+        )
+        .unwrap_err();
+
+        assert_eq!(failure.category, ProviderFailureCategory::OutcomeUnknown);
+        assert_eq!(backend.request_bodies().len(), 1);
+        assert_eq!(
+            *captured.lock().unwrap(),
+            vec![(
+                "call_abc".to_owned(),
+                "read_file".to_owned(),
+                r#"{"path":"spec.md"}"#.to_owned(),
+                "tool_not_granted".to_owned(),
+            )]
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -1022,6 +1201,7 @@ mod tests {
         let auth = stored_connection("at-stale");
         let (token_client, issuer_bodies) = mock_issuer(ISSUER_BODY);
         let home = temp_home("refresh-exhausted");
+        save(&home, &auth).unwrap();
         let mut sink = |_: BackendEvent| {};
         let no_tools = |_name: &str, _arguments: &str| -> Result<Value, ToolRejection> {
             panic!("no tool call expected")

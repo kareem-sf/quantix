@@ -2,20 +2,27 @@ use std::{
     ffi::OsString,
     path::PathBuf,
     process::{ExitStatus, Stdio},
-    sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-        Arc,
-    },
     time::Duration,
+};
+
+#[cfg(any(test, feature = "runtime-fixture"))]
+use std::sync::{
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+    Arc,
 };
 
 use processkit::ProcessGroup;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
-    process::{Child, ChildStdin, ChildStdout, Command},
+    process::{Child, Command},
     sync::mpsc,
+    time::{sleep, timeout},
+};
+#[cfg(any(test, feature = "runtime-fixture"))]
+use tokio::{
+    process::{ChildStdin, ChildStdout},
     task::JoinHandle,
-    time::{sleep, sleep_until, timeout, Instant},
+    time::{sleep_until, Instant},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -59,16 +66,21 @@ pub(crate) enum ProcessError {
     SpawnFailed,
     #[error("the supervised process could not be observed")]
     ObservationFailed,
+    #[cfg(any(test, feature = "runtime-fixture"))]
     #[error("the supervised process exited")]
     Exited,
+    #[cfg(any(test, feature = "runtime-fixture"))]
     #[error("the supervised process conversation timed out")]
     TimedOut,
+    #[cfg(any(test, feature = "runtime-fixture"))]
     #[error("the supervised process conversation was cancelled")]
     Cancelled,
+    #[cfg(any(test, feature = "runtime-fixture"))]
     #[error("the supervised process conversation exceeded its output limit")]
     OutputLimitExceeded,
 }
 
+#[cfg(any(test, feature = "runtime-fixture"))]
 impl ProcessError {
     fn termination(&self) -> Option<ProcessTermination> {
         match self {
@@ -168,6 +180,7 @@ impl ProcessSupervisor {
         })
     }
 
+    #[cfg(any(test, feature = "runtime-fixture"))]
     pub async fn start_conversation(
         &self,
         spec: ProcessSpec,
@@ -262,6 +275,7 @@ struct SupervisedChild {
     child: Child,
 }
 
+#[cfg(any(test, feature = "runtime-fixture"))]
 pub(crate) struct SupervisedConversation {
     child: SupervisedChild,
     stdin: Option<ChildStdin>,
@@ -279,6 +293,7 @@ pub(crate) struct SupervisedConversation {
     observed_exit_status: Option<ExitStatus>,
 }
 
+#[cfg(any(test, feature = "runtime-fixture"))]
 impl SupervisedConversation {
     pub fn begin_operation(
         &mut self,
@@ -457,11 +472,13 @@ struct BoundedOutput {
     exceeded: bool,
 }
 
+#[cfg(any(test, feature = "runtime-fixture"))]
 struct ConversationOutputBudget {
     generation: AtomicU64,
     limit: AtomicUsize,
 }
 
+#[cfg(any(test, feature = "runtime-fixture"))]
 impl ConversationOutputBudget {
     fn new(limit: usize) -> Self {
         Self {
@@ -476,6 +493,7 @@ impl ConversationOutputBudget {
     }
 }
 
+#[cfg(any(test, feature = "runtime-fixture"))]
 async fn read_operation_bounded(
     mut reader: impl AsyncRead + Unpin,
     budget: Arc<ConversationOutputBudget>,

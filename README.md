@@ -10,6 +10,8 @@ Quantix is an engineer-controlled tender office for preparing evidence-driven co
 
 Quantix is a Tauri 2 desktop application with a React/TypeScript renderer and one trusted Rust Host. The renderer receives only named, domain-shaped commands; it has no generic filesystem, SQL, shell, process, credential, or updater interface.
 
+For ChatGPT, the Rust Host owns browser PKCE OAuth, stores the sensitive connection at `~/.quantix/auth.json`, and executes bounded Provider Turns directly over HTTPS and server-sent events at `https://chatgpt.com/backend-api/codex/responses` with `store: false`. The stable built-in `chatgpt-direct-v1` catalogue governs supported models and reasoning choices. Production builds neither bundle nor launch a Codex CLI; the `runtime-fixture` feature may retain deterministic legacy-shaped fixtures only for test coverage. See [ADR 0016](docs/adr/0016-connect-chatgpt-through-quantix-owned-oauth.md).
+
 Core design language and decisions live in [`CONTEXT.md`](CONTEXT.md), [`AGENTS.md`](AGENTS.md), and [`docs/adr/`](docs/adr/).
 
 ## Development
@@ -36,7 +38,7 @@ Live-provider and release acceptance commands are explicit and are not part of r
 
 ## Private Windows release candidate
 
-Quantix releases are intentionally layered. A draft Windows candidate is qualified first for engineer-operated, non-public use. Public distribution remains blocked until signed native acceptance passes on Windows 11 x64, macOS 14+ Apple Silicon, and Ubuntu 24.04 x64; signer-verified provenance binds the measured source to every native binary; and the legal and Codex production-assurance gates are satisfied.
+Quantix releases are intentionally layered. A draft Windows candidate is qualified first for engineer-operated, non-public use. Public distribution remains blocked until signed native acceptance passes on Windows 11 x64, macOS 14+ Apple Silicon, and Ubuntu 24.04 x64; signer-verified provenance binds the measured source to every native binary; and the legal and direct ChatGPT production-assurance gates are satisfied.
 
 On the trusted Windows 11 release workstation, open Git Bash and run the repeatable setup wizard:
 

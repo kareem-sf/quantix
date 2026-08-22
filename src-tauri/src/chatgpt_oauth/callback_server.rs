@@ -15,7 +15,8 @@ const SEND_GUARD: Duration = Duration::from_secs(5);
 const MAX_HEAD_BYTES: usize = 16 * 1024;
 const CALLBACK_PATH: &str = "/auth/callback";
 const CANCEL_PATH: &str = "/cancel";
-const LOOPBACK_HOST: &str = "127.0.0.1";
+const LOOPBACK_BIND_HOST: &str = "127.0.0.1";
+const LOOPBACK_REDIRECT_HOST: &str = "localhost";
 
 #[derive(Debug)]
 pub(crate) enum CallbackOutcome {
@@ -58,8 +59,7 @@ const NOT_FOUND_TEXT: &str = "Not found";
 // focus blue #397c9d, danger #b13e3e.
 const PAGE_STYLE: &str = "body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f4fafe;color:#3f464d;font-family:'Segoe UI Variable','Segoe UI',system-ui,sans-serif}.card{background:#ffffff;border:1px solid #d8e8f0;border-radius:12px;box-shadow:0 12px 32px rgb(63 70 77 / 10%);padding:48px 56px;text-align:center;max-width:420px}.card h1{margin:18px 0 6px;font-size:21px}.card p{margin:4px 0;font-size:14px;color:#6f7782}";
 
-const BRAND_MARK_SVG: &str =
-    "<svg width='44' height='44' viewBox='0 0 48 48' role='img' aria-label='Quantix'>\
+const BRAND_MARK_SVG: &str = "<svg width='44' height='44' viewBox='0 0 48 48' role='img' aria-label='Quantix'>\
      <path fill='#397c9d' d='M7 7h5v5H7Zm10 0h5v5h-5Zm14 9h5v5h-5ZM7 26h5v5H7Zm24 11h5v5h-5Zm-14 4h5v5h-5Z'/>\
      <path fill='#9aa3ab' d='m21.2 20.6 2.6-3.2 17.6 14.1-2.6 3.2Z'/></svg>";
 
@@ -120,7 +120,7 @@ pub(crate) fn run_login(
     let Ok(client) = TokenClient::new(issuer) else {
         return CallbackOutcome::Failed(CallbackFailure::Startup);
     };
-    let redirect_uri = format!("http://{LOOPBACK_HOST}:{port}{CALLBACK_PATH}");
+    let redirect_uri = format!("http://{LOOPBACK_REDIRECT_HOST}:{port}{CALLBACK_PATH}");
     open_browser(&build_authorize_url(&redirect_uri, &pkce, &state));
     serve_until_terminal(
         listener,
@@ -136,7 +136,7 @@ pub(crate) fn run_login(
 
 fn bind_first_free(candidates: &[u16]) -> Option<(TcpListener, u16)> {
     candidates.iter().find_map(|candidate| {
-        let listener = TcpListener::bind((LOOPBACK_HOST, *candidate)).ok()?;
+        let listener = TcpListener::bind((LOOPBACK_BIND_HOST, *candidate)).ok()?;
         let port = listener.local_addr().ok()?.port();
         Some((listener, port))
     })
@@ -499,7 +499,7 @@ mod tests {
             .expect("browser should receive the authorize URL");
         let redirect_uri = decode_component(&authorize_param(&url, "redirect_uri"));
         let port_part = redirect_uri
-            .strip_prefix("http://127.0.0.1:")
+            .strip_prefix("http://localhost:")
             .expect("loopback redirect URI")
             .trim_end_matches("/auth/callback");
         let port: u16 = port_part.parse().expect("numeric callback port");
@@ -669,7 +669,7 @@ mod tests {
         assert_eq!(form_value(form, "code"), "coded-abc");
         assert_eq!(
             form_value(form, "redirect_uri"),
-            format!("http://127.0.0.1:{port}/auth/callback")
+            format!("http://localhost:{port}/auth/callback")
         );
         assert_eq!(
             form_value(form, "client_id"),

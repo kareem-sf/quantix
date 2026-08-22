@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 mod acceptance;
 
+#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
 mod agent_backend;
 
 mod agent_runtime;
@@ -48,12 +49,10 @@ pub use agent_runtime::{
 pub use application_settings::{
     AiExecutionApproval, AiExecutionSelection, AiProviderKind, AppearancePreference,
     ApplicationDiagnostics, ApplicationSettingsView, ApplicationStorageFacts,
-    CancelProviderLoginCommand, ConfirmAiExecutionSelectionCommand, ConnectAnthropicCommand,
-    ConnectGeminiCommand, DisconnectAiProviderCommand, GeneralApplicationPreferences,
-    InspectTenderAiExecutionCommand, OpenProviderLoginCommand, ProviderConnectionStatus,
-    ProviderConnectionView, ProviderLoginMethod, ProviderLoginStatus, ProviderLoginView,
-    ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
-    StartProviderLoginCommand, TenderAiExecutionBinding, TenderAiSelectionReadiness,
+    ConfirmAiExecutionSelectionCommand, ConnectAnthropicCommand, ConnectGeminiCommand,
+    DisconnectAiProviderCommand, GeneralApplicationPreferences, InspectTenderAiExecutionCommand,
+    ProviderConnectionStatus, ProviderConnectionView, ProviderModelOption, ProviderReasoningOption,
+    ProviderReasoningSelection, TenderAiExecutionBinding, TenderAiSelectionReadiness,
     UpdateAiExecutionSelectionCommand, UpdateGeneralApplicationPreferencesCommand,
     UpdateTenderAiExecutionSelectionCommand,
 };
@@ -87,7 +86,7 @@ pub use document_parsing::{
 };
 pub use host::QuantixHost;
 pub use release_gate::{
-    release_candidate_manifest_sha256, CodexProductionAssuranceEvidence,
+    release_candidate_manifest_sha256, ChatGptProductionAssuranceEvidence,
     EvaluatePublicReleaseGateCommand, IntegrationTermsDecision, LicenseDistributionReview,
     NativePlatformQualificationEvidence, NativePlatformQualificationRecord,
     PublicReleaseGateOutcome, PublicReleaseGateRecord, RecordNativePlatformQualificationCommand,
@@ -437,9 +436,9 @@ mod tauri_commands {
         BidDecisionApprovalResult, BidDecisionPackageInspection, BidDecisionPackageRecordPage,
         BidDecisionPackageReviewResult, BidDecisionReturnReworkResult, BoqTableDesignation,
         CalculationRuleReviewResult, CalculationRuleVersion, CalculationScenarioVersion,
-        CalculationWorkspaceInspection, CancelPackageIntakeCommand, CancelProviderLoginCommand,
-        ChangeAssessment, ChangeAssessmentPage, ChooseTenderPackageCommand, CommercialStrategy,
-        ComplianceMatrixPage, ComposeTenderOfficeCommand, ConfirmAiExecutionSelectionCommand,
+        CalculationWorkspaceInspection, CancelPackageIntakeCommand, ChangeAssessment,
+        ChangeAssessmentPage, ChooseTenderPackageCommand, CommercialStrategy, ComplianceMatrixPage,
+        ComposeTenderOfficeCommand, ConfirmAiExecutionSelectionCommand,
         ConfirmSourceRelationshipCommand, ConnectAnthropicCommand, ConnectGeminiCommand,
         ControlledBoqCalculationRun, CoordinatedBidBaseline, CoordinatedBidBaselinePage,
         CostEstimatorBasisResult, CostEstimatorCalculationResult, CreateBidDecisionPackageCommand,
@@ -471,13 +470,13 @@ mod tauri_commands {
         InspectTenderAiExecutionCommand, InspectTenderQueriesCommand, InspectTenderRecordsCommand,
         InterpretExternalRfiResponseCommand, InterruptAgentRunCommand,
         InvalidateBidDecisionApprovalCommand, LiveQualificationRun, ManagerWorkspaceProjection,
-        OpenProviderLoginCommand, OpenTenderCommand, PackageIntakeOperationKind,
-        PackageIntakeProgress, PackageProductionGeneration, ParseSourceArtifactCommand,
-        PortableTenderArchiveRecord, PrepareTenderRecoveryCommand, PricedCostBaselineReviewResult,
-        PricedCostBaselineVersion, PricingAdjustmentReviewResult, PricingAdjustmentVersion,
-        PricingScenarioVersion, PricingWorkspaceInspection, PrivateQualificationRecord,
-        ProductAcceptanceRecord, ProductAcceptanceRun, ProductionTaskReviewInspection,
-        ProductionTaskRunResult, ProposeBoqCalculationRuleCommand, PublicReleaseGateRecord,
+        OpenTenderCommand, PackageIntakeOperationKind, PackageIntakeProgress,
+        PackageProductionGeneration, ParseSourceArtifactCommand, PortableTenderArchiveRecord,
+        PrepareTenderRecoveryCommand, PricedCostBaselineReviewResult, PricedCostBaselineVersion,
+        PricingAdjustmentReviewResult, PricingAdjustmentVersion, PricingScenarioVersion,
+        PricingWorkspaceInspection, PrivateQualificationRecord, ProductAcceptanceRecord,
+        ProductAcceptanceRun, ProductionTaskReviewInspection, ProductionTaskRunResult,
+        ProposeBoqCalculationRuleCommand, PublicReleaseGateRecord,
         PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand, QuantixDoctorRepairAction,
         QuantixDoctorRepairCommand, QuantixDoctorReport, QuantixHost,
         RebindManagerIntakeProviderCommand, RecordEngineerWorkspaceMessageCommand,
@@ -496,18 +495,18 @@ mod tauri_commands {
         SearchEvidenceCommand, SearchEvidenceSemanticCommand, SearchManagerWorkspaceCommand,
         SelectManagerWorkspaceTenderCommand, SelectPricingScenarioCommand, SetupOutcome,
         SetupState, StartChatGptLoginError, StartChatGptLoginResult, StartManagerTenderCommand,
-        StartProviderLoginCommand, StartupSplashPreferences, StartupSplashState,
-        SubmissionArtifactContent, SubmissionItemContent, SubmissionPackageVersion,
-        SubmissionReleaseInspection, SubmissionSectionReviewRunResult, TenderBackupRecord,
-        TenderCatalogueEntry, TenderCommandError, TenderErrorCode, TenderIntegrityReport,
-        TenderPackageImportResult, TenderPackageSourceKind, TenderProductionInspection,
-        TenderQuery, TenderQueryPage, TenderRecordAuthority, TenderRecordDecisionResult,
-        TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult,
-        TenderRecoveryRecord, TenderRetentionDecisionCommand, TenderRetentionDecisionRecord,
-        TenderSummary, TrashRecoveryRequiredTenderCommand, TrashedTenderDecisionCommand,
-        TrashedTenderRecord, UpdateAiExecutionSelectionCommand,
-        UpdateGeneralApplicationPreferencesCommand, UpdateTenderAiExecutionSelectionCommand,
-        WorkPlanProposalInspection, WorkspaceSearchProjection,
+        StartupSplashPreferences, StartupSplashState, SubmissionArtifactContent,
+        SubmissionItemContent, SubmissionPackageVersion, SubmissionReleaseInspection,
+        SubmissionSectionReviewRunResult, TenderBackupRecord, TenderCatalogueEntry,
+        TenderCommandError, TenderErrorCode, TenderIntegrityReport, TenderPackageImportResult,
+        TenderPackageSourceKind, TenderProductionInspection, TenderQuery, TenderQueryPage,
+        TenderRecordAuthority, TenderRecordDecisionResult, TenderRecordExtractionResult,
+        TenderRecordPage, TenderRecordReviewResult, TenderRecoveryRecord,
+        TenderRetentionDecisionCommand, TenderRetentionDecisionRecord, TenderSummary,
+        TrashRecoveryRequiredTenderCommand, TrashedTenderDecisionCommand, TrashedTenderRecord,
+        UpdateAiExecutionSelectionCommand, UpdateGeneralApplicationPreferencesCommand,
+        UpdateTenderAiExecutionSelectionCommand, WorkPlanProposalInspection,
+        WorkspaceSearchProjection,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -684,6 +683,7 @@ mod tauri_commands {
                 return Err(error);
             }
         };
+        #[cfg(feature = "runtime-fixture")]
         if !host.quiesce_agent_provider_for_update().await {
             let _ = host.cancel_update_installation_authorization(&command.update_id);
             *pending.0.lock().map_err(|_| {
@@ -1202,37 +1202,6 @@ mod tauri_commands {
         host.inner()
             .update_general_application_preferences(command)
             .await
-    }
-
-    #[tauri::command]
-    pub(super) async fn start_provider_login(
-        host: tauri::State<'_, QuantixHost>,
-        command: StartProviderLoginCommand,
-    ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        host.inner().start_provider_login(command).await
-    }
-
-    #[tauri::command]
-    pub(super) async fn cancel_provider_login(
-        host: tauri::State<'_, QuantixHost>,
-        command: CancelProviderLoginCommand,
-    ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        host.inner().cancel_provider_login(command).await
-    }
-
-    #[tauri::command]
-    pub(super) async fn open_provider_login(
-        host: tauri::State<'_, QuantixHost>,
-        command: OpenProviderLoginCommand,
-    ) -> Result<(), TenderCommandError> {
-        host.inner().open_provider_login(command).await
-    }
-
-    #[tauri::command]
-    pub(super) async fn logout_provider(
-        host: tauri::State<'_, QuantixHost>,
-    ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        host.inner().logout_provider().await
     }
 
     #[tauri::command]
@@ -3368,10 +3337,6 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::update_tender_ai_execution,
             tauri_commands::confirm_ai_execution_selection,
             tauri_commands::clear_ai_execution_selection,
-            tauri_commands::start_provider_login,
-            tauri_commands::cancel_provider_login,
-            tauri_commands::open_provider_login,
-            tauri_commands::logout_provider,
             tauri_commands::connect_anthropic,
             tauri_commands::disconnect_ai_provider,
             tauri_commands::connect_gemini,

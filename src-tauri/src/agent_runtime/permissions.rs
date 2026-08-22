@@ -825,6 +825,42 @@ fn store_unavailable(_error: std::io::Error) -> TenderCommandError {
     TenderCommandError::new(TenderErrorCode::StoreUnavailable)
 }
 
+#[cfg(feature = "runtime-fixture")]
+pub(crate) fn deny_provider_control_request(
+    grant: &PermissionGrant,
+    method: &str,
+    params: &serde_json::Value,
+    expired: bool,
+) -> PermissionDenialReason {
+    if expired {
+        return PermissionDenialReason::GrantExpired;
+    }
+    match method {
+        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+            PermissionDenialReason::ProhibitedAction
+        }
+        "item/permissions/requestApproval" => {
+            if params.get("permissions").is_some_and(|permissions| {
+                permissions != &serde_json::Value::Object(Default::default())
+            }) {
+                PermissionDenialReason::ProhibitedAction
+            } else {
+                PermissionDenialReason::DefaultDeny
+            }
+        }
+        "item/tool/call" => {
+            let tool = params.get("tool").and_then(serde_json::Value::as_str);
+            if tool.is_some_and(|tool| grant.typed_tools.iter().any(|allowed| allowed.name == tool))
+            {
+                PermissionDenialReason::DefaultDeny
+            } else {
+                PermissionDenialReason::ToolNotGranted
+            }
+        }
+        _ => PermissionDenialReason::DefaultDeny,
+    }
+}
+
 pub(crate) fn permission_duration(
     grant: &PermissionGrant,
     now: Timestamp,
