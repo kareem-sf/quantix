@@ -33,6 +33,7 @@ const host = vi.hoisted(() => ({
   restoreTrashedTender: vi.fn(),
   selectManagerWorkspaceTender: vi.fn(),
   startManagerTender: vi.fn(),
+  startChatGptLogin: vi.fn(),
   trashTender: vi.fn(),
   purgeTrashedTender: vi.fn(),
   startProviderLogin: vi.fn(),
@@ -564,12 +565,18 @@ describe("ManagerWorkspace", () => {
     expect(screen.queryByRole("button", { name: "Manager" })).toBeNull();
   });
 
-  it("projects Codex-managed device login without exposing credentials", async () => {
+  it("drives the Quantix-owned ChatGPT browser sign-in without exposing credentials", async () => {
     host.inspectManagerWorkspace.mockResolvedValue(projection);
     const disconnected = {
       ...applicationFacts,
       ai_execution_selection: null,
       active_provider_login: null,
+      chatgpt: {
+        state: "absent",
+        account_id: null,
+        plan_type: null,
+        expires_at_ms: null,
+      },
       provider_connections: [
         {
           connection_id: "codex_chatgpt",
@@ -586,35 +593,18 @@ describe("ManagerWorkspace", () => {
       ],
     };
     host.refreshApplicationSettings.mockResolvedValue(disconnected);
-    host.startProviderLogin.mockResolvedValue({
-      ...disconnected,
-      active_provider_login: {
-        connection_id: "codex_chatgpt",
-        login_id: "login-1",
-        method: "device_code",
-        status: "awaiting_user",
-        authorization_url: "https://auth.openai.com/codex/device",
-        user_code: "ABCD-EFGH",
-        status_summary: "Enter the one-time code.",
-      },
-    });
+    host.startChatGptLogin.mockResolvedValue({ status: "awaiting_browser" });
 
     render(<ManagerWorkspace aiAvailable={false} />);
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     fireEvent.click(
-      await screen.findByRole("button", { name: "Use device code" }),
+      await screen.findByRole("button", { name: "Connect ChatGPT" }),
     );
 
-    expect(await screen.findByText("ABCD-EFGH")).toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Continue in browser" }),
-    );
-    expect(host.openProviderLogin).toHaveBeenCalledWith({
-      login_id: "login-1",
-    });
-    expect(host.startProviderLogin).toHaveBeenCalledWith({
-      method: "device_code",
-    });
+    expect(host.startChatGptLogin).toHaveBeenCalledWith();
+    expect(
+      await screen.findByText("Finish signing in through your browser."),
+    ).toBeTruthy();
     expect(document.body.textContent).not.toContain("accessToken");
   });
 

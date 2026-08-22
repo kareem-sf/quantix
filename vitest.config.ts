@@ -8,7 +8,7 @@ export default defineConfig({
     environment: "jsdom",
     exclude: [...configDefaults.exclude, ".worktrees/**"],
     fileParallelism: false,
-    pool: "vmThreads",
+    pool: "forks",
     setupFiles: ["./src/testSetup.ts"],
   },
 });
