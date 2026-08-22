@@ -35,7 +35,7 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
-    "@openai/codex": "0.147.0",
+    "@openai/codex": "0.148.0",
     "@tauri-apps/cli": "^2",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.1.8",
