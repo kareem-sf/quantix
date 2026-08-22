@@ -415,35 +415,109 @@ describe("ApplicationSettings ChatGPT connection", () => {
     expect(screen.queryByText("ABCD-EFGH")).toBeNull();
   });
 
-  it("keeps the one-time code visible when opening the OpenAI page fails", async () => {
+  it("preserves an OpenAI page error through background polling and clears it after opening succeeds", async () => {
+    vi.useFakeTimers();
     host.startChatGptDeviceLogin.mockResolvedValue({
       verification_url: "https://auth.openai.com/codex/device",
       user_code: "KEEP-CODE",
     });
-    host.openChatGptDeviceLoginPage.mockRejectedValue({
+    host.openChatGptDeviceLoginPage.mockRejectedValueOnce({
       code: "store_unavailable",
     });
     host.refreshApplicationSettings
       .mockResolvedValueOnce(disconnectedView())
-      .mockResolvedValueOnce(disconnectedView("awaiting_device"));
+      .mockResolvedValue(disconnectedView("awaiting_device"));
     renderSettings();
 
-    fireEvent.click(await screen.findByText("Having trouble signing in?"));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Sign in on another device" }),
-    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByText("Having trouble signing in?"));
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Sign in on another device" }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
 
-    expect(await screen.findByText("KEEP-CODE")).toBeTruthy();
+    expect(screen.getByText("KEEP-CODE")).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toContain(
       "Quantix could not open the OpenAI sign-in page.",
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open OpenAI sign-in page" }),
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_200);
+      await Promise.resolve();
+    });
+    expect(host.refreshApplicationSettings).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Quantix could not open the OpenAI sign-in page.",
     );
-    await waitFor(() =>
-      expect(host.openChatGptDeviceLoginPage).toHaveBeenCalledTimes(2),
-    );
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open OpenAI sign-in page" }),
+      );
+      await Promise.resolve();
+    });
+    expect(host.openChatGptDeviceLoginPage).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByText("KEEP-CODE")).toBeTruthy();
+  });
+
+  it("preserves a copy error through background polling and clears it after copying succeeds", async () => {
+    vi.useFakeTimers();
+    host.startChatGptDeviceLogin.mockResolvedValue({
+      verification_url: "https://auth.openai.com/codex/device",
+      user_code: "COPY-CODE",
+    });
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnectedView())
+      .mockResolvedValue(disconnectedView("awaiting_device"));
+    vi.mocked(navigator.clipboard.writeText)
+      .mockRejectedValueOnce(new Error("clipboard unavailable"))
+      .mockResolvedValue(undefined);
+    renderSettings();
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByText("Having trouble signing in?"));
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Sign in on another device" }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("COPY-CODE")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Quantix could not copy the code.",
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_200);
+      await Promise.resolve();
+    });
+    expect(host.refreshApplicationSettings).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Quantix could not copy the code.",
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "Copied" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("clears the one-time code when the Host reports failure", async () => {
