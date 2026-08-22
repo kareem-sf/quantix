@@ -937,34 +937,7 @@ pub(crate) fn save_live_connection(
     let transaction = database
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(settings_store_error)?;
-    let previous = transaction
-        .query_row(
-            "SELECT connection_json FROM provider_connections WHERE connection_id = ?1",
-            [connection.connection_id.as_str()],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(settings_store_error)?
-        .map(|raw| serde_json::from_str::<ProviderConnectionView>(&raw))
-        .transpose()
-        .map_err(settings_json_error)?;
-    let mut persisted = connection.clone();
-    // A provider outage often returns only a status and no live catalogue.
-    // Retain the last verified catalogue and account identity so an explicit
-    // approval can survive reconnection without silently rebinding elsewhere.
-    if persisted.status != ProviderConnectionStatus::Ready && persisted.models.is_empty() {
-        if let Some(previous) = previous.filter(|previous| {
-            previous.adapter_version == persisted.adapter_version
-                && previous.connection_id == persisted.connection_id
-                && persisted.connection_id != CODEX_CONNECTION_ID
-        }) {
-            persisted.models = previous.models;
-            persisted.catalogue_fetched_at = previous.catalogue_fetched_at;
-            persisted.adapter_version = previous.adapter_version;
-            persisted.account_label = previous.account_label;
-            persisted.account_plan = previous.account_plan;
-        }
-    }
+    let persisted = connection.clone();
     upsert_connection(&transaction, &persisted)?;
     let settings = load_stored_settings(&transaction)?;
     match settings.ai_execution_selection {
