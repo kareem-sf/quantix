@@ -5,6 +5,7 @@ import type { PackageProductionGeneration } from "./bindings/PackageProductionGe
 import type { SubmissionDecisionReference } from "./bindings/SubmissionDecisionReference";
 import type { SubmissionPackageVersion } from "./bindings/SubmissionPackageVersion";
 import type { TenderLifecyclePhase } from "./bindings/TenderLifecyclePhase";
+import { evidenceTextAttributes } from "./evidenceTypography";
 import {
   assembleSubmissionPackage,
   generateSubmissionSections,
@@ -25,12 +26,6 @@ interface PackageProductionPanelProps {
 
 function humanize(value: string) {
   return value.replace(/_/g, " ");
-}
-
-function evidenceDirection(value: string): "ltr" | "rtl" | "auto" {
-  if (value === "right_to_left") return "rtl";
-  if (value === "left_to_right") return "ltr";
-  return "auto";
 }
 
 export function PackageProductionPanel({
@@ -475,7 +470,7 @@ export function PackageProductionPanel({
                           {evidence.location.structural_path}
                         </p>
                         <blockquote
-                          dir={evidenceDirection(evidence.location.direction)}
+                          {...evidenceTextAttributes(evidence.location)}
                         >
                           {evidence.location.original_text}
                         </blockquote>
@@ -678,7 +673,7 @@ export function PackageProductionPanel({
                             {evidence.reference.ordinal}
                           </p>
                           <blockquote
-                            dir={evidenceDirection(evidence.location.direction)}
+                            {...evidenceTextAttributes(evidence.location)}
                           >
                             {evidence.location.original_text}
                           </blockquote>

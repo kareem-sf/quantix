@@ -9,10 +9,10 @@ use std::{
 };
 
 use quantix_lib::{
-    ensure_quantix_setup, CreateTenderCommand, DeviceProtection, QuantixHost,
-    RegisterTenderContentCommand, ReviseTenderCommand, SetupPlatform, SetupState,
-    StoragePermissions, TenderErrorCode, TenderIntegrityIssue, TenderIntegrityState,
-    TenderRecoveryChoice, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    ensure_quantix_setup, CreateTenderCommand, InspectManagerWorkspaceCommand,
+    ManagerWorkspaceTenderState, QuantixHost, RegisterTenderContentCommand, ReviseTenderCommand,
+    SetupPlatform, SetupState, StoragePermissions, TenderErrorCode, TenderIntegrityIssue,
+    TenderIntegrityState, TenderRecoveryChoice, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 struct ReadySetupPlatform;
@@ -28,10 +28,6 @@ impl SetupPlatform for ReadySetupPlatform {
 
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(StoragePermissions::Restrictive)
-    }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
     }
 }
 
@@ -119,6 +115,59 @@ fn altered_tender_store_schema_is_reported_as_recovery_evidence() {
             .code,
         TenderErrorCode::RecoveryRequired
     );
+}
+
+#[test]
+fn cold_start_lists_schema_damaged_tender_as_recovery_required() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let host = QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    let tender = host
+        .create_tender(CreateTenderCommand {
+            name: "Cold Start Recovery Tender".into(),
+        })
+        .expect("create Tender");
+    host.close_tender(&tender.tender_id).expect("close Tender");
+
+    rusqlite::Connection::open(
+        application_home
+            .join("tenders")
+            .join(&tender.tender_id)
+            .join("tender.sqlite"),
+    )
+    .expect("Tender Store database")
+    .execute_batch("DROP TRIGGER audit_events_no_update")
+    .expect("alter exact Tender Store schema");
+    drop(host);
+
+    let restarted =
+        QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&restarted).state, SetupState::Ready);
+    let listed = restarted
+        .list_tenders()
+        .expect("reconcile the catalogue without erasing recovery metadata");
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].summary.is_none());
+    assert_eq!(
+        listed[0].integrity.state,
+        TenderIntegrityState::RecoveryRequired
+    );
+    let projection = restarted
+        .inspect_manager_workspace(InspectManagerWorkspaceCommand { tender_id: None })
+        .expect("cold-start workspace remains available for recovery");
+    let recovery = projection
+        .catalogue
+        .iter()
+        .find(|candidate| candidate.tender_id == tender.tender_id)
+        .expect("damaged Tender remains visible");
+    assert_eq!(recovery.name, tender.name);
+    assert_eq!(
+        recovery.state,
+        ManagerWorkspaceTenderState::RecoveryRequired
+    );
+    assert!(recovery.can_delete);
+    assert!(projection.selected_tender.is_none());
 }
 
 #[test]
@@ -805,6 +854,16 @@ fn host_death_at_tender_and_catalogue_publication_boundaries_reconciles_on_resta
             .removed_tender_candidates,
         1
     );
+    let orphaned_catalogue_rows: u32 =
+        rusqlite::Connection::open(application_home.join("installation.sqlite"))
+            .expect("installation catalogue after staged Tender reconciliation")
+            .query_row(
+                "SELECT COUNT(*) FROM tender_catalogue WHERE name = 'Lost Staged Tender'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count staged Tender catalogue rows");
+    assert_eq!(orphaned_catalogue_rows, 0);
     drop(restarted);
 
     assert!(!run_storage_fixture(

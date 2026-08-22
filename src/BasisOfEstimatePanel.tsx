@@ -5,6 +5,7 @@ import type { EstimateWorkspaceInspection } from "./bindings/EstimateWorkspaceIn
 import type { EvidenceSearchHit } from "./bindings/EvidenceSearchHit";
 import type { TenderEvidenceReference } from "./bindings/TenderEvidenceReference";
 import type { TenderQueryPage } from "./bindings/TenderQueryPage";
+import { evidenceTextAttributes } from "./evidenceTypography";
 import {
   approveBasisOfEstimate,
   designateBoqTable,
@@ -375,9 +376,11 @@ export function BasisOfEstimatePanel({
             <p className="eyebrow">
               {hit.package_path} / {hit.location.structural_path}
             </p>
-            <p>{hit.location.original_text}</p>
+            <p {...evidenceTextAttributes(hit.location)}>
+              {hit.location.original_text}
+            </p>
             {hit.location.translated_text ? (
-              <p>{hit.location.translated_text}</p>
+              <p dir="auto">{hit.location.translated_text}</p>
             ) : null}
             <button
               type="button"

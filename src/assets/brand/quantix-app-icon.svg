@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description" shape-rendering="geometricPrecision">
+  <title id="title">Quantix application icon master</title>
+  <desc id="description">A transparent dual-contrast Evidence Register with a silver Engineer authority datum.</desc>
+  <g transform="translate(48 52) scale(18.5)">
+    <g id="app-icon-counter" fill="#3F464D" stroke="#3F464D" stroke-width="2.5" stroke-linejoin="miter">
+      <path d="M6 6h6v6H6Zm9 0h6v6h-6Zm9 0h6v6h-6Zm9 0h6v6h-6ZM6 15h6v6H6Zm27 0h6v6h-6ZM6 24h6v6H6Zm27 0h6v6h-6ZM6 33h6v6H6Zm9 0h6v6h-6Z" />
+      <path d="m20.1 27.3 2.9-3.6 21.2 16.4-2.9 3.6Z" />
+    </g>
+    <g id="app-icon-face">
+      <path id="evidence-register" fill="#FFFFFF" d="M6 6h6v6H6Zm9 0h6v6h-6Zm9 0h6v6h-6Zm9 0h6v6h-6ZM6 15h6v6H6Zm27 0h6v6h-6ZM6 24h6v6H6Zm27 0h6v6h-6ZM6 33h6v6H6Zm9 0h6v6h-6Z" />
+      <path id="engineer-authority-datum" fill="#9AA3AB" d="m20.1 27.3 2.9-3.6 21.2 16.4-2.9 3.6Z" />
+    </g>
+  </g>
+</svg>

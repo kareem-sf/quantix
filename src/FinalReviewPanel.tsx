@@ -4,6 +4,7 @@ import type { FinalReviewInspection } from "./bindings/FinalReviewInspection";
 import type { ManualVerificationResult } from "./bindings/ManualVerificationResult";
 import type { SubmissionPackageVersion } from "./bindings/SubmissionPackageVersion";
 import type { SubmissionReleaseInspection } from "./bindings/SubmissionReleaseInspection";
+import { evidenceTextAttributes } from "./evidenceTypography";
 import {
   approvePackageFindingException,
   approveSubmissionRelease,
@@ -539,7 +540,9 @@ export function FinalReviewPanel({
                       >
                         {evidence.package_path} ·{" "}
                         {evidence.location.structural_path} ·{" "}
-                        {evidence.location.original_text}
+                        <span {...evidenceTextAttributes(evidence.location)}>
+                          {evidence.location.original_text}
+                        </span>
                       </li>
                     ))}
                   </ul>
@@ -619,7 +622,9 @@ export function FinalReviewPanel({
                     >
                       {evidence.package_path} ·{" "}
                       {evidence.location.structural_path} ·{" "}
-                      {evidence.location.original_text}
+                      <span {...evidenceTextAttributes(evidence.location)}>
+                        {evidence.location.original_text}
+                      </span>
                     </li>
                   ))}
                 </ul>

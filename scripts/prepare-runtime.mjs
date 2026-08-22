@@ -169,7 +169,7 @@ function writeRuntimeProvenance() {
   const architecture =
     { x64: "x86_64", arm64: "aarch64" }[process.arch] ?? process.arch;
   const manifest = {
-    schema_version: 2,
+    schema_version: 3,
     platform,
     architecture,
     codex: { version: CODEX_VERSION, sha256: digestFile(codexDestination) },

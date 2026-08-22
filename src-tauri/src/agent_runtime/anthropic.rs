@@ -530,12 +530,12 @@ async fn collect_stream(
                 Some("error") => {
                     return Err(protocol_failure(
                         message_id.is_some() || !require_message_id,
-                    ))
+                    ));
                 }
                 _ => {
                     return Err(protocol_failure(
                         message_id.is_some() || !require_message_id,
-                    ))
+                    ));
                 }
             }
         }

@@ -13,6 +13,7 @@ use crate::{
         PendingProviderEvent, PreparedAgentRun, ProviderEventKind, ProviderRateLimitState,
         ProviderUsage, TenderTaskView,
     },
+    application_settings::AiExecutionSelection,
     QuantixHost,
 };
 
@@ -1461,6 +1462,7 @@ impl TenderStore {
     pub(crate) fn prepare_production_task_run(
         &mut self,
         tender_id: &TenderId,
+        provider_selection: &AiExecutionSelection,
         production_task_id: &str,
         expected_retry_of_run_id: Option<&str>,
         subscription_capacity_exhausted: bool,
@@ -1512,8 +1514,6 @@ impl TenderStore {
             .parent()
             .and_then(std::path::Path::parent)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let provider_selection =
-            crate::application_settings::load_current_ai_execution_selection(application_home)?;
         let workspace = application_home.join("staging").join(format!(
             "agent-{}-{}",
             tender_id.as_str(),
@@ -2300,7 +2300,7 @@ impl TenderStore {
             super::record_agent_run_provider_binding(
                 &transaction,
                 &run_id,
-                &provider_selection,
+                provider_selection,
                 &created_at,
             )?;
             insert_event(
@@ -2384,7 +2384,7 @@ impl TenderStore {
             transaction.commit().map_err(sql_error)?;
             Ok(PreparedAgentRun {
                 run_id,
-                provider_selection,
+                provider_selection: provider_selection.clone(),
                 profile,
                 task,
                 permission_grant,

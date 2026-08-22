@@ -3,6 +3,9 @@ import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __QUANTIX_WINDOWS_TITLEBAR__: true,
+  },
   test: {
     clearMocks: true,
     environment: "jsdom",

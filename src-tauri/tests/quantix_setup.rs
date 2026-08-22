@@ -1,8 +1,8 @@
 use std::{io, path::Path, sync::Arc};
 
 use quantix_lib::{
-    ensure_quantix_setup, DeviceProtection, QuantixHost, SetupIssue, SetupPlatform, SetupState,
-    StoragePermissions, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    ensure_quantix_setup, QuantixHost, SetupIssue, SetupPlatform, SetupState, StoragePermissions,
+    MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 #[derive(Clone)]
@@ -10,7 +10,6 @@ struct FakeSetupPlatform {
     available_space: u64,
     writable: bool,
     permissions: StoragePermissions,
-    device_protection: DeviceProtection,
 }
 
 struct NoStorageProbePlatform;
@@ -27,10 +26,6 @@ impl SetupPlatform for NoStorageProbePlatform {
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         panic!("unsupported catalogues must be inspected before permission probes")
     }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        panic!("unsupported catalogues must be inspected before protection probes")
-    }
 }
 
 impl Default for FakeSetupPlatform {
@@ -39,7 +34,6 @@ impl Default for FakeSetupPlatform {
             available_space: MINIMUM_SETUP_FREE_SPACE_BYTES,
             writable: true,
             permissions: StoragePermissions::Restrictive,
-            device_protection: DeviceProtection::Protected,
         }
     }
 }
@@ -55,10 +49,6 @@ impl SetupPlatform for FakeSetupPlatform {
 
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(self.permissions)
-    }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        self.device_protection
     }
 }
 
@@ -187,7 +177,7 @@ fn unsafe_existing_installation_is_not_modified() {
 }
 
 #[test]
-fn insufficient_space_blocks_setup_before_creating_the_application_home() {
+fn low_space_does_not_block_opening_the_application_home() {
     let parent = tempfile::tempdir().expect("temporary user home");
     let application_home = parent.path().join(".quantix");
     let platform = FakeSetupPlatform {
@@ -198,9 +188,9 @@ fn insufficient_space_blocks_setup_before_creating_the_application_home() {
 
     let outcome = ensure_quantix_setup(&host);
 
-    assert_eq!(outcome.state, SetupState::MissingCapability);
-    assert_eq!(outcome.issues, vec![SetupIssue::InsufficientFreeSpace]);
-    assert!(!application_home.exists());
+    assert_eq!(outcome.state, SetupState::Ready);
+    assert!(outcome.issues.is_empty());
+    assert!(application_home.join("installation.sqlite").is_file());
 }
 
 #[test]
@@ -268,22 +258,6 @@ fn create_directory_link(target: &Path, link: &Path) {
 #[cfg(windows)]
 fn remove_directory_link(link: &Path) {
     junction::delete(link).expect("remove application home junction");
-}
-
-#[test]
-fn unavailable_device_protection_is_an_attributable_warning() {
-    let parent = tempfile::tempdir().expect("temporary user home");
-    let application_home = parent.path().join(".quantix");
-    let platform = FakeSetupPlatform {
-        device_protection: DeviceProtection::Unverified,
-        ..FakeSetupPlatform::default()
-    };
-    let host = host(&application_home, platform);
-
-    let outcome = ensure_quantix_setup(&host);
-
-    assert_eq!(outcome.state, SetupState::Warning);
-    assert_eq!(outcome.issues, vec![SetupIssue::DeviceProtectionUnverified]);
 }
 
 #[test]
@@ -419,7 +393,6 @@ fn setup_diagnostics_serialize_only_attributable_states_and_issues() {
     let application_home = parent.path().join(".quantix");
     let platform = FakeSetupPlatform {
         permissions: StoragePermissions::Unverified,
-        device_protection: DeviceProtection::Unverified,
         ..FakeSetupPlatform::default()
     };
     let host = host(&application_home, platform);
@@ -429,7 +402,7 @@ fn setup_diagnostics_serialize_only_attributable_states_and_issues() {
 
     assert_eq!(
         serialized,
-        r#"{"state":"warning","setup_performed":true,"issues":["storage_permissions_unverified","device_protection_unverified"]}"#
+        r#"{"state":"warning","setup_performed":true,"issues":["storage_permissions_unverified"]}"#
     );
     for forbidden in ["credential", "token", "reasoning", "content", "\\", "/"] {
         assert!(!serialized.contains(forbidden), "{forbidden}");

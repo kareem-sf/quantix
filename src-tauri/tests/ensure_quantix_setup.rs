@@ -1,8 +1,8 @@
 use std::{io, path::Path, sync::Arc};
 
 use quantix_lib::{
-    configure_tauri_builder, DeviceProtection, QuantixHost, SetupOutcome, SetupPlatform,
-    SetupState, StoragePermissions, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    configure_tauri_builder, QuantixHost, SetupOutcome, SetupPlatform, SetupState,
+    StoragePermissions, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use tauri::test::{assert_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
 
@@ -19,10 +19,6 @@ impl SetupPlatform for ReadySetupPlatform {
 
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(StoragePermissions::Restrictive)
-    }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
     }
 }
 

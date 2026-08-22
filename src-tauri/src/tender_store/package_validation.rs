@@ -4318,8 +4318,7 @@ impl TenderStore {
             .and_then(Path::parent)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
             .to_path_buf();
-        let provider_selection =
-            crate::application_settings::load_current_ai_execution_selection(&application_home)?;
+        let provider_selection = self.required_tender_ai_execution_selection()?;
         let run_id = random_identifier(&self.connection)?;
         let workspace = application_home
             .join("staging")

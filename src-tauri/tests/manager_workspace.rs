@@ -3,18 +3,22 @@ use std::{fs, io, path::Path, process::Command, sync::Arc};
 use quantix_lib::{
     ensure_quantix_setup, AiProviderKind, BidDecisionApprovalDecision, CancelProviderLoginCommand,
     CodexReadiness, ComplianceDisposition, ComplianceDispositionUpdate,
-    CreateBidDecisionPackageCommand, CreatePortableTenderArchiveCommand, CreateTenderBackupCommand,
-    CreateTenderCommand, DecideBidDecisionPackageCommand, DeviceProtection, ErasedTenderCopyClass,
-    ImportTenderPackageCommand, InspectManagerWorkspaceCommand, ManagerIntakeStage,
-    ManagerIntakeStatusKind, ManagerWorkspaceTenderState, ProviderCleanupStatus,
-    ProviderConnectionStatus, ProviderLoginMethod, ProviderLoginStatus, ProviderReasoningSelection,
-    PurgeTrashedTenderCommand, QuantixHost, RecordEngineerWorkspaceMessageCommand,
+    ConfirmAiExecutionSelectionCommand, CreateBidDecisionPackageCommand,
+    CreatePortableTenderArchiveCommand, CreateTenderBackupCommand, CreateTenderCommand,
+    DecideBidDecisionPackageCommand, ErasedTenderCopyClass, ImportTenderPackageCommand,
+    InspectManagerWorkspaceCommand, InspectTenderAiExecutionCommand, IntakeExceptionCode,
+    ManagerIntakeStage, ManagerIntakeStatusKind, ManagerWorkspaceTenderState,
+    ProviderCleanupStatus, ProviderConnectionStatus, ProviderLoginMethod, ProviderLoginStatus,
+    ProviderReasoningSelection, PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand,
+    QuantixHost, RecordEngineerWorkspaceMessageCommand, RegistrationState,
     RunBidDecisionPackageReviewCommand, RuntimeLayout, SelectManagerWorkspaceTenderCommand,
-    SetupPlatform, SetupState, StartProviderLoginCommand, StoragePermissions, TenderErrorCode,
-    TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderRecordInspection, TenderRecordKind,
+    SetupPlatform, SetupState, StartProviderLoginCommand, StoragePermissions,
+    TenderAiSelectionReadiness, TenderErrorCode, TenderOfficeMessageAuthor,
+    TenderOfficeMessageKind, TenderRecordInspection, TenderRecordKind,
     TenderRecordVersionReference, TenderRetentionDecisionCommand, TenderRetentionState,
     TrashedTenderDecisionCommand, TrashedTenderState, UpdateAiExecutionSelectionCommand,
-    WorkspaceActionKind, WorkspaceMessageReferenceKind, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    WorkspaceActionKind, WorkspaceMessageReference, WorkspaceMessageReferenceKind,
+    MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use rusqlite::Connection;
 
@@ -31,10 +35,6 @@ impl SetupPlatform for ReadySetupPlatform {
 
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(StoragePermissions::Restrictive)
-    }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
     }
 }
 
@@ -182,6 +182,32 @@ async fn establish_declined_tender(
     .expect("record authentic terminal Decline");
 }
 
+async fn approve_fixture_ai_selection(host: &QuantixHost) {
+    let settings = host
+        .refresh_application_settings()
+        .await
+        .expect("refresh fixture provider");
+    let connection = settings
+        .provider_connections
+        .iter()
+        .find(|connection| connection.status == ProviderConnectionStatus::Ready)
+        .expect("ready fixture provider");
+    let model = connection.models.first().expect("fixture model");
+    let reasoning = model
+        .reasoning_options
+        .iter()
+        .find(|option| option.is_default)
+        .or_else(|| model.reasoning_options.first())
+        .expect("fixture reasoning");
+    host.confirm_ai_execution_selection(ConfirmAiExecutionSelectionCommand {
+        connection_id: connection.connection_id.clone(),
+        model_id: model.model_id.clone(),
+        reasoning: reasoning.selection.clone(),
+    })
+    .await
+    .expect("approve fixture AI selection");
+}
+
 fn inspect_all_records(host: &QuantixHost, tender_id: &str) -> Vec<TenderRecordInspection> {
     let mut cursor = None;
     let mut records = Vec::new();
@@ -244,6 +270,7 @@ async fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_works
     );
     host.accept_runtime_fixture();
     assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    approve_fixture_ai_selection(&host).await;
     install_ocr_fixture(&application_home);
     let tender = host
         .create_tender(CreateTenderCommand {
@@ -341,6 +368,8 @@ async fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_works
         .record_engineer_workspace_message(RecordEngineerWorkspaceMessageCommand {
             tender_id: tender.tender_id.clone(),
             body: "Do not mutate archived history.".into(),
+            attachment_refs: Vec::new(),
+            context_refs: Vec::new(),
         })
         .expect_err("archived Tender stays read-only");
     assert_eq!(read_only.code, TenderErrorCode::InvalidCommand);
@@ -441,8 +470,24 @@ async fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_works
     fs::write(quarantine.join("partial.json"), b"{}").expect("write quarantine fixture");
     let log = application_home
         .join("logs")
-        .join(format!("tender-{}.log", tender.tender_id));
+        .join("tenders")
+        .join(&tender.tender_id)
+        .join("2026-08-21")
+        .join("000001.jsonl");
+    fs::create_dir_all(log.parent().expect("Tender log parent"))
+        .expect("create Tender log fixture directory");
     fs::write(&log, b"Tender-scoped diagnostic").expect("write Tender log fixture");
+    let application_log = application_home.join("logs/application/2026-08-21/000001.jsonl");
+    fs::create_dir_all(application_log.parent().expect("application log parent"))
+        .expect("create application log fixture directory");
+    fs::write(&application_log, b"Application diagnostic").expect("write application log fixture");
+    let unrelated_log = application_home
+        .join("logs/tenders")
+        .join("f".repeat(32))
+        .join("2026-08-21/000001.jsonl");
+    fs::create_dir_all(unrelated_log.parent().expect("unrelated log parent"))
+        .expect("create unrelated log fixture directory");
+    fs::write(&unrelated_log, b"Unrelated Tender diagnostic").expect("write unrelated log fixture");
 
     let permanently_trashed = host
         .trash_tender(TenderRetentionDecisionCommand {
@@ -492,6 +537,8 @@ async fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_works
     assert!(!agent_workspace.exists());
     assert!(!quarantine.exists());
     assert!(!log.exists());
+    assert!(application_log.exists());
+    assert!(unrelated_log.exists());
     assert!(host
         .inspect_trashed_tenders()
         .expect("inspect empty Trash after deletion")
@@ -515,6 +562,79 @@ async fn public_host_archives_only_a_safe_terminal_tender_and_restores_its_works
 }
 
 #[tokio::test]
+async fn recovery_purge_copies_readable_provider_references_to_pending_cleanup_jobs() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let resources = user_home.path().join("recovery-provider-resources");
+    let codex = install_codex_fixture(&resources, "manager-intake-bid");
+    let host = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(resources),
+    );
+    host.accept_runtime_fixture();
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    approve_fixture_ai_selection(&host).await;
+    install_ocr_fixture(&application_home);
+    let tender = host
+        .create_tender(CreateTenderCommand {
+            name: "Readable Provider Recovery".into(),
+        })
+        .expect("create provider recovery fixture Tender");
+    establish_declined_tender(
+        &host,
+        &codex,
+        &application_home,
+        user_home.path(),
+        &tender.tender_id,
+    )
+    .await;
+    host.close_tender(&tender.tender_id)
+        .expect("close provider recovery fixture Tender");
+    Connection::open(
+        application_home
+            .join("tenders")
+            .join(&tender.tender_id)
+            .join("tender.sqlite"),
+    )
+    .expect("open provider recovery fixture Store")
+    .execute_batch("DROP TRIGGER audit_events_no_update")
+    .expect("create schema-mismatched recovery Store");
+    assert_eq!(
+        host.inspect_tender_integrity(&tender.tender_id)
+            .expect("inspect schema-mismatched Store")
+            .state,
+        quantix_lib::TenderIntegrityState::RecoveryRequired
+    );
+
+    let receipt = host
+        .purge_recovery_required_tender(PurgeRecoveryRequiredTenderCommand {
+            tender_id: tender.tender_id.clone(),
+            rationale: "Delete the damaged Store and clean its provider threads".into(),
+            confirmation_tender_name: "Readable Provider Recovery".into(),
+        })
+        .expect("purge recovery Store with readable provider references");
+    assert!(receipt.provider_thread_count > 0);
+    assert_eq!(
+        receipt.provider_reference_discovery,
+        quantix_lib::ProviderReferenceDiscoveryState::Complete
+    );
+    assert_eq!(
+        receipt.provider_cleanup_status,
+        ProviderCleanupStatus::Pending
+    );
+    let durable_jobs: u32 = Connection::open(application_home.join("installation.sqlite"))
+        .expect("open provider cleanup ledger")
+        .query_row(
+            "SELECT COUNT(*) FROM provider_cleanup_jobs WHERE deletion_id = ?1",
+            [&receipt.deletion_id],
+            |row| row.get(0),
+        )
+        .expect("count durable provider cleanup jobs");
+    assert_eq!(durable_jobs, receipt.provider_thread_count);
+}
+
+#[tokio::test]
 async fn permanent_deletion_reconciles_each_local_publication_boundary_without_tender_content() {
     let user_home = tempfile::tempdir().expect("temporary user home");
     for failpoint in ["purge_after_decision", "purge_after_local_delete"] {
@@ -528,6 +648,7 @@ async fn permanent_deletion_reconciles_each_local_publication_boundary_without_t
         );
         host.accept_runtime_fixture();
         assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+        approve_fixture_ai_selection(&host).await;
         install_ocr_fixture(&application_home);
         let tender_name = format!("Confidential deletion fixture {failpoint}");
         let tender = host
@@ -556,6 +677,16 @@ async fn permanent_deletion_reconciles_each_local_publication_boundary_without_t
             &["purge-trash", &trashed.deletion_id, &tender_name],
             failpoint,
         ));
+        let cleanup_jobs_before_reconciliation: u32 =
+            Connection::open(application_home.join("installation.sqlite"))
+                .expect("open pre-reconciliation cleanup ledger")
+                .query_row(
+                    "SELECT COUNT(*) FROM provider_cleanup_jobs WHERE deletion_id = ?1",
+                    [&trashed.deletion_id],
+                    |row| row.get(0),
+                )
+                .expect("provider cleanup jobs are durable before local deletion completion");
+        assert!(cleanup_jobs_before_reconciliation > 0);
 
         let restarted =
             QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
@@ -580,8 +711,8 @@ async fn permanent_deletion_reconciles_each_local_publication_boundary_without_t
     }
 }
 
-#[test]
-fn public_host_projection_exposes_registered_intake_stage_and_package_provenance() {
+#[tokio::test]
+async fn public_host_projection_exposes_registered_intake_stage_and_package_provenance() {
     let user_home = tempfile::tempdir().expect("temporary user home");
     let application_home = user_home.path().join(".quantix");
     let host = QuantixHost::with_setup_platform_and_runtime(
@@ -604,6 +735,7 @@ fn public_host_projection_exposes_registered_intake_stage_and_package_provenance
         b"%PDF-1.7\n1 0 obj\n(Intake projection)\nendobj\n%%EOF\n",
     )
     .expect("write source document");
+    fs::write(package.join("legacy.bin"), b"unsupported source").expect("write exception source");
     host.import_tender_package(ImportTenderPackageCommand {
         tender_id: tender.tender_id.clone(),
         source_path: package.to_string_lossy().into_owned(),
@@ -616,20 +748,31 @@ fn public_host_projection_exposes_registered_intake_stage_and_package_provenance
         })
         .expect("inspect Manager workspace");
     let intake = projection.intake.expect("Manager intake status");
-    assert_eq!(intake.stage, ManagerIntakeStage::WaitingForProvider);
+    assert_eq!(intake.stage, ManagerIntakeStage::WaitingForLocalTools);
     assert_eq!(intake.status, ManagerIntakeStatusKind::Waiting);
     assert_eq!(
         projection.current_action.kind,
-        WorkspaceActionKind::ConfigureAiProvider
+        WorkspaceActionKind::ObserveIntake
     );
-    assert_eq!(projection.files.tender_document_count, 1);
+    assert_eq!(projection.files.tender_document_count, 2);
     let source = projection
         .files
         .tender_documents
-        .first()
+        .iter()
+        .find(|document| document.registration_state == RegistrationState::Registered)
         .expect("registered source provenance");
     assert_eq!(source.package_path, "01 Instructions/ITT.pdf");
     assert!(source.sha256.is_some());
+    assert_eq!(source.registration_state, RegistrationState::Registered);
+    assert_eq!(source.exception, None);
+    let exception = projection
+        .files
+        .tender_documents
+        .iter()
+        .find(|document| document.package_path == "legacy.bin")
+        .expect("exception source provenance");
+    assert_eq!(exception.registration_state, RegistrationState::Exception);
+    assert_eq!(exception.exception, Some(IntakeExceptionCode::Unsupported));
 }
 
 #[tokio::test]
@@ -678,6 +821,109 @@ async fn public_host_exposes_and_persists_the_live_codex_selection() {
         selection.reasoning,
         ProviderReasoningSelection::CodexEffort("medium".into())
     );
+}
+
+#[tokio::test]
+async fn public_host_confirms_codex_selection_before_document_tools_are_ready() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let resources = user_home.path().join("resources");
+    install_codex_fixture(&resources, "success");
+    let host = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(resources),
+    );
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    assert_eq!(
+        host.inspect_codex_subscription(tokio_util::sync::CancellationToken::new())
+            .await,
+        CodexReadiness::Ready
+    );
+
+    let settings = host
+        .refresh_application_settings()
+        .await
+        .expect("refresh live settings");
+    let connection = settings
+        .provider_connections
+        .iter()
+        .find(|connection| connection.connection_id == "codex_chatgpt")
+        .expect("live Codex connection");
+    let confirmed = host
+        .confirm_ai_execution_selection(ConfirmAiExecutionSelectionCommand {
+            connection_id: connection.connection_id.clone(),
+            model_id: connection.models[0].model_id.clone(),
+            reasoning: ProviderReasoningSelection::CodexEffort("medium".into()),
+        })
+        .await
+        .expect("confirm Codex selection without document tools");
+
+    assert!(confirmed.ai_execution_selection.is_some());
+    assert!(confirmed.ai_execution_approval.is_some());
+}
+
+#[tokio::test]
+async fn approving_global_ai_selection_refreshes_existing_tender_binding() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let resources = user_home.path().join("resources");
+    install_codex_fixture(&resources, "success");
+    let host = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(resources),
+    );
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    assert_eq!(
+        host.inspect_codex_subscription(tokio_util::sync::CancellationToken::new())
+            .await,
+        CodexReadiness::Ready
+    );
+    let settings = host
+        .refresh_application_settings()
+        .await
+        .expect("refresh live settings");
+    let connection = settings
+        .provider_connections
+        .iter()
+        .find(|connection| connection.connection_id == "codex_chatgpt")
+        .expect("live Codex connection");
+    host.update_ai_execution_selection(UpdateAiExecutionSelectionCommand {
+        connection_id: connection.connection_id.clone(),
+        model_id: connection.models[0].model_id.clone(),
+        reasoning: ProviderReasoningSelection::CodexEffort("medium".into()),
+    })
+    .await
+    .expect("save exact global selection");
+    let tender = host
+        .create_tender(CreateTenderCommand {
+            name: "Existing AI Binding Fixture".into(),
+        })
+        .expect("create Tender with pending approval");
+    let before = host
+        .inspect_tender_ai_execution(InspectTenderAiExecutionCommand {
+            tender_id: tender.tender_id.clone(),
+        })
+        .expect("inspect pending Tender binding");
+    assert_eq!(
+        before.readiness,
+        TenderAiSelectionReadiness::ApprovalRequired
+    );
+
+    host.confirm_ai_execution_selection(ConfirmAiExecutionSelectionCommand {
+        connection_id: connection.connection_id.clone(),
+        model_id: connection.models[0].model_id.clone(),
+        reasoning: ProviderReasoningSelection::CodexEffort("medium".into()),
+    })
+    .await
+    .expect("approve exact global selection");
+    let after = host
+        .inspect_tender_ai_execution(InspectTenderAiExecutionCommand {
+            tender_id: tender.tender_id,
+        })
+        .expect("inspect refreshed Tender binding");
+    assert_eq!(after.readiness, TenderAiSelectionReadiness::Ready);
 }
 
 #[tokio::test]
@@ -826,6 +1072,7 @@ async fn public_host_runs_real_manager_intake_while_engineer_switches_tenders() 
     );
     host.accept_runtime_fixture();
     assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    approve_fixture_ai_selection(&host).await;
     install_ocr_fixture(&application_home);
     let intake_tender = host
         .create_tender(CreateTenderCommand {
@@ -953,6 +1200,7 @@ async fn public_host_clean_intake_reaches_canonical_bid_recommendation() {
     );
     host.accept_runtime_fixture();
     assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    approve_fixture_ai_selection(&host).await;
     install_ocr_fixture(&application_home);
     let tender = host
         .create_tender(CreateTenderCommand {
@@ -1075,8 +1323,10 @@ fn public_host_projection_resumes_selection_and_persists_the_manager_conversatio
 
     let updated = host
         .record_engineer_workspace_message(RecordEngineerWorkspaceMessageCommand {
-            tender_id: first.tender_id,
+            tender_id: first.tender_id.clone(),
             body: "Check the insurance exclusions first.".into(),
+            attachment_refs: Vec::new(),
+            context_refs: Vec::new(),
         })
         .expect("record Engineer message");
     let conversation = updated.conversation.expect("durable Manager conversation");
@@ -1088,6 +1338,23 @@ fn public_host_projection_resumes_selection_and_persists_the_manager_conversatio
     assert_eq!(message.author, TenderOfficeMessageAuthor::Engineer);
     assert_eq!(message.kind, TenderOfficeMessageKind::Routine);
     assert_eq!(message.body, "Check the insurance exclusions first.");
+
+    let foreign_reference = host
+        .record_engineer_workspace_message(RecordEngineerWorkspaceMessageCommand {
+            tender_id: first.tender_id.clone(),
+            body: "Use this foreign Agent Run.".into(),
+            attachment_refs: Vec::new(),
+            context_refs: vec![WorkspaceMessageReference {
+                kind: WorkspaceMessageReferenceKind::AgentRun,
+                reference: "ffffffffffffffffffffffffffffffff".into(),
+                version: 1,
+                evidence_ordinal: None,
+                label: "Foreign run".into(),
+                detail: None,
+            }],
+        })
+        .expect_err("references must belong to the selected Tender store");
+    assert_eq!(foreign_reference.code, TenderErrorCode::InvalidCommand);
 }
 
 #[test]
@@ -1128,6 +1395,8 @@ fn selection_failure_cannot_follow_a_committed_engineer_message() {
         .record_engineer_workspace_message(RecordEngineerWorkspaceMessageCommand {
             tender_id: tender.tender_id.clone(),
             body: "Do not record this message.".into(),
+            attachment_refs: Vec::new(),
+            context_refs: Vec::new(),
         })
         .is_err());
     connection

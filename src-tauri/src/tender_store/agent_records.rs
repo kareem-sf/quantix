@@ -21,6 +21,7 @@ use crate::agent_runtime::{
     ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand, TenderTaskView,
     ThreadExposureSet, VerificationStatus,
 };
+use crate::application_settings::AiExecutionSelection;
 
 use super::bid_decisions::{
     bid_decision_package_review_target_is_current, bid_decision_package_review_target_is_open,
@@ -185,6 +186,7 @@ impl TenderStore {
     pub(crate) fn prepare_bootstrap_agent_run(
         &mut self,
         tender_id: &TenderId,
+        provider_selection: &AiExecutionSelection,
         retry_of_run_id: Option<&str>,
         subscription_capacity_exhausted: bool,
     ) -> Result<PreparedAgentRun, TenderCommandError> {
@@ -194,6 +196,7 @@ impl TenderStore {
             {
                 return self.prepare_production_task_run(
                     tender_id,
+                    provider_selection,
                     &production_task_id,
                     Some(retry_of_run_id),
                     subscription_capacity_exhausted,
@@ -207,8 +210,6 @@ impl TenderStore {
             .parent()
             .and_then(Path::parent)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let provider_selection =
-            crate::application_settings::load_current_ai_execution_selection(application_home)?;
         let workspace = agent_workspace_path(application_home, tender_id.as_str(), &run_id);
 
         let prepared = (|| {
@@ -445,7 +446,7 @@ impl TenderStore {
             super::record_agent_run_provider_binding(
                 &transaction,
                 &run_id,
-                &provider_selection,
+                provider_selection,
                 &created_at,
             )?;
             insert_event(
@@ -479,7 +480,7 @@ impl TenderStore {
             transaction.commit().map_err(sql_error)?;
             Ok(PreparedAgentRun {
                 run_id,
-                provider_selection,
+                provider_selection: provider_selection.clone(),
                 profile,
                 task,
                 permission_grant,
@@ -534,6 +535,12 @@ impl TenderStore {
             && !unaffected_continuation
         {
             self.require_change_intake_writable()?;
+        }
+        if execution.state == AgentRunState::Completed {
+            execution.candidate_payload_json = execution
+                .candidate_payload_json
+                .take()
+                .map(canonicalize_candidate_payload);
         }
         if execution.state == AgentRunState::Running
             || (execution.state == AgentRunState::Completed
@@ -645,7 +652,9 @@ impl TenderStore {
                         ProviderFailureCategory::OutputInvalid,
                         true,
                         "Review the exact Submission Package section again with bounded attributable findings.",
-                        Some("The independent Submission Package section review failed exact validation."),
+                        Some(
+                            "The independent Submission Package section review failed exact validation.",
+                        ),
                     ));
                     execution.candidate_payload_json = None;
                     if let Some(event) = execution
@@ -683,7 +692,9 @@ impl TenderStore {
                         ProviderFailureCategory::OutputInvalid,
                         true,
                         "Review the exact Bid Decision Package again with attributable bounded findings.",
-                        Some("The independent Bid Decision Package review failed Quantix validation."),
+                        Some(
+                            "The independent Bid Decision Package review failed Quantix validation.",
+                        ),
                     ));
                     execution.candidate_payload_json = None;
                     if let Some(event) = execution
@@ -815,7 +826,9 @@ impl TenderStore {
                         ProviderFailureCategory::OutputInvalid,
                         false,
                         "Start a new Cost Estimator run with the exact BOQ, quotation, Query and approved Calculation Run basket.",
-                        Some("The proposed Basis of Estimate failed exact accounting, provenance or reconciliation validation."),
+                        Some(
+                            "The proposed Basis of Estimate failed exact accounting, provenance or reconciliation validation.",
+                        ),
                     ));
                     execution.candidate_payload_json = None;
                     if let Some(event) = execution
@@ -881,7 +894,9 @@ impl TenderStore {
                         ProviderFailureCategory::OutputInvalid,
                         false,
                         "Review the exact current Priced Cost Baseline with bounded attributable findings.",
-                        Some("The independent Priced Cost Baseline review failed exact validation."),
+                        Some(
+                            "The independent Priced Cost Baseline review failed exact validation.",
+                        ),
                     ));
                     execution.candidate_payload_json = None;
                     if let Some(event) = execution
@@ -996,7 +1011,9 @@ impl TenderStore {
                 ProviderFailureCategory::OutputInvalid,
                 false,
                 "Inspect and review the current exact External RFI draft and Query evidence.",
-                Some("The External RFI draft or its exact Query evidence changed before review publication."),
+                Some(
+                    "The External RFI draft or its exact Query evidence changed before review publication.",
+                ),
             ));
             execution.candidate_payload_json = None;
             external_rfi_review = None;
@@ -1093,7 +1110,9 @@ impl TenderStore {
                 ProviderFailureCategory::OutputInvalid,
                 false,
                 "Review the current exact Basis of Estimate version.",
-                Some("The Basis was superseded, reviewed, approved, or its Work Plan authority changed before publication."),
+                Some(
+                    "The Basis was superseded, reviewed, approved, or its Work Plan authority changed before publication.",
+                ),
             ));
             execution.candidate_payload_json = None;
             basis_review = None;
@@ -1118,7 +1137,9 @@ impl TenderStore {
                 ProviderFailureCategory::OutputInvalid,
                 false,
                 "Review the current exact Priced Cost Baseline version.",
-                Some("The baseline was superseded, reviewed, approved, or its exact Basis changed before publication."),
+                Some(
+                    "The baseline was superseded, reviewed, approved, or its exact Basis changed before publication.",
+                ),
             ));
             execution.candidate_payload_json = None;
             priced_cost_baseline_review = None;
@@ -1143,7 +1164,9 @@ impl TenderStore {
                 ProviderFailureCategory::OutputInvalid,
                 false,
                 "Review the current exact Pricing Adjustment version.",
-                Some("The adjustment was superseded, reviewed, approved, or its basis changed before publication."),
+                Some(
+                    "The adjustment was superseded, reviewed, approved, or its basis changed before publication.",
+                ),
             ));
             execution.candidate_payload_json = None;
             pricing_adjustment_review = None;
@@ -1243,7 +1266,9 @@ impl TenderStore {
                 ProviderFailureCategory::OutputInvalid,
                 false,
                 "Inspect the current exact Submission Package, validation, and Final Review Plan.",
-                Some("The section assignment was reviewed, superseded, or became stale before publication."),
+                Some(
+                    "The section assignment was reviewed, superseded, or became stale before publication.",
+                ),
             ));
             execution.candidate_payload_json = None;
             submission_section_review = None;
@@ -1267,7 +1292,9 @@ impl TenderStore {
                 ProviderFailureCategory::OutputInvalid,
                 false,
                 "Inspect the current External RFI draft and its existing review or approval.",
-                Some("The External RFI target was superseded, reviewed, or approved before review publication."),
+                Some(
+                    "The External RFI target was superseded, reviewed, or approved before review publication.",
+                ),
             ));
             execution.candidate_payload_json = None;
             external_rfi_review = None;
@@ -1289,7 +1316,9 @@ impl TenderStore {
                 ProviderFailureCategory::OutputInvalid,
                 false,
                 "Inspect the current Calculation Rule and its existing review or activation.",
-                Some("The Calculation Rule was superseded, reviewed, or activated before publication."),
+                Some(
+                    "The Calculation Rule was superseded, reviewed, or activated before publication.",
+                ),
             ));
             execution.candidate_payload_json = None;
             calculation_rule_review = None;
@@ -1347,7 +1376,9 @@ impl TenderStore {
                 ProviderFailureCategory::OutputInvalid,
                 false,
                 "Select a bounded material-change batch that keeps the exact Bid Decision inventory within its limit.",
-                Some("The candidate Tender Records would exceed the exact Bid Decision inventory limit."),
+                Some(
+                    "The candidate Tender Records would exceed the exact Bid Decision inventory limit.",
+                ),
             ));
             execution.candidate_payload_json = None;
             tender_record_candidate = None;
@@ -1380,7 +1411,9 @@ impl TenderStore {
                 ProviderFailureCategory::OutputInvalid,
                 true,
                 "Run the same exact production attempt again with attributable, verified Evidence and finding lineage.",
-                Some("The production output did not satisfy the exact Artifact or Review semantics."),
+                Some(
+                    "The production output did not satisfy the exact Artifact or Review semantics.",
+                ),
             ));
             execution.candidate_payload_json = None;
             if let Some(event) = execution
@@ -2938,6 +2971,25 @@ impl TenderStore {
         self.inspect_agent_runs_with_check(&mut || Ok(()))
     }
 
+    pub(crate) fn has_unresolved_indeterminate_agent_run(
+        &self,
+    ) -> Result<bool, TenderCommandError> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM agent_runs
+                   WHERE status = 'indeterminate'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM agent_run_recovery_dispositions
+                       WHERE agent_run_recovery_dispositions.run_id = agent_runs.run_id
+                     )
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)
+    }
+
     pub(crate) fn inspect_agent_run_history(
         &self,
         before_sequence: Option<u64>,
@@ -3452,7 +3504,9 @@ impl TenderStore {
                     ProviderFailureCategory::OutcomeUnknown,
                     false,
                     "Resolve the quarantined Agent Run before retrying.",
-                    Some("The Host restarted after Provider Turn dispatch began but before its acceptance or outcome was established."),
+                    Some(
+                        "The Host restarted after Provider Turn dispatch began but before its acceptance or outcome was established.",
+                    ),
                 )
             } else {
                 ProviderFailure::new(
@@ -4251,10 +4305,40 @@ fn remove_directory_after_provider_exit(workspace: &Path) -> Result<(), TenderCo
             {
                 thread::sleep(WINDOWS_HANDLE_RELEASE_DELAY);
             }
+            Err(error) if cfg!(windows) => {
+                if residual_tree_contains_only_directories(workspace)? {
+                    return Ok(());
+                }
+                return Err(store_unavailable(error));
+            }
             Err(error) => return Err(store_unavailable(error)),
         }
     }
     Err(TenderCommandError::new(TenderErrorCode::StoreUnavailable))
+}
+
+fn residual_tree_contains_only_directories(root: &Path) -> Result<bool, TenderCommandError> {
+    let metadata = match fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(error) => return Err(store_unavailable(error)),
+    };
+    if metadata_is_unsafe_storage_link(&metadata) || !metadata.is_dir() {
+        return Ok(false);
+    }
+
+    let mut directories = vec![root.to_owned()];
+    while let Some(directory) = directories.pop() {
+        for entry in fs::read_dir(directory).map_err(store_unavailable)? {
+            let entry = entry.map_err(store_unavailable)?;
+            let metadata = fs::symlink_metadata(entry.path()).map_err(store_unavailable)?;
+            if metadata_is_unsafe_storage_link(&metadata) || !metadata.is_dir() {
+                return Ok(false);
+            }
+            directories.push(entry.path());
+        }
+    }
+    Ok(true)
 }
 
 fn canonical_json<T: Serialize>(value: &T) -> Result<String, TenderCommandError> {
@@ -4282,6 +4366,13 @@ fn ensure_canonical_value(value: &str) -> Result<(), TenderCommandError> {
     } else {
         Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed))
     }
+}
+
+fn canonicalize_candidate_payload(payload: String) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(&payload) else {
+        return payload;
+    };
+    serde_json_canonicalizer::to_string(&value).unwrap_or(payload)
 }
 
 #[cfg(test)]
@@ -4449,5 +4540,22 @@ mod tests {
                 .expect("count retained provider events"),
             256
         );
+    }
+
+    #[test]
+    fn residual_workspace_tree_accepts_only_empty_directories() {
+        let root = tempfile::tempdir().expect("temporary workspace");
+        fs::create_dir_all(root.path().join("working/nested")).expect("directory tree");
+
+        assert!(residual_tree_contains_only_directories(root.path()).expect("classify tree"));
+    }
+
+    #[test]
+    fn residual_workspace_tree_rejects_files_and_non_empty_entries() {
+        let root = tempfile::tempdir().expect("temporary workspace");
+        fs::create_dir_all(root.path().join("working")).expect("working directory");
+        fs::write(root.path().join("working/output.json"), b"data").expect("residual file");
+
+        assert!(!residual_tree_contains_only_directories(root.path()).expect("classify tree"));
     }
 }

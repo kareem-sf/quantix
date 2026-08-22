@@ -1,11 +1,11 @@
 use std::{fs, io, path::Path, sync::Arc, time::Duration};
 
 use quantix_lib::{
-    configure_tauri_builder, current_update_platform, ensure_quantix_setup, DeviceProtection,
-    QuantixHost, RuntimeLayout, RuntimeReadinessIssue, RuntimeReadinessState, SetupPlatform,
-    SetupState, SignedArtifactIdentity, StoragePermissions, UpdateCandidate,
-    UpdateCompatibilityManifest, UpdateDecision, UpdateDiagnostic, UpdateImpact,
-    UpdateReleaseInformation, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    configure_tauri_builder, current_update_platform, ensure_quantix_setup, QuantixHost,
+    RuntimeLayout, RuntimeReadinessIssue, RuntimeReadinessState, SetupPlatform, SetupState,
+    SignedArtifactIdentity, StoragePermissions, UpdateCandidate, UpdateCompatibilityManifest,
+    UpdateDecision, UpdateDiagnostic, UpdateImpact, UpdateReleaseInformation,
+    MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use sha2::{Digest, Sha256};
 use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
@@ -24,10 +24,6 @@ impl SetupPlatform for ReadySetupPlatform {
 
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(StoragePermissions::Restrictive)
-    }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
     }
 }
 
@@ -83,7 +79,7 @@ impl RuntimeHarness {
         fs::write(
             runtime.join("runtime-provenance.json"),
             serde_json::to_vec(&serde_json::json!({
-                "schema_version": 2,
+                "schema_version": 3,
                 "platform": std::env::consts::OS,
                 "architecture": std::env::consts::ARCH,
                 "codex": {
@@ -120,11 +116,6 @@ impl RuntimeHarness {
             .expect("write Codex auth state");
     }
 
-    fn write_plan(&self, plan: &str) {
-        fs::write(self.runtime_bin.join("codex.plan"), format!("{plan}\n"))
-            .expect("write Codex plan");
-    }
-
     fn managed_ocr_python(&self) -> std::path::PathBuf {
         self.application_home
             .join("runtimes")
@@ -144,11 +135,11 @@ fn application_only_update() -> UpdateCandidate {
             signature_sha256: "b".repeat(64),
         },
         compatibility: UpdateCompatibilityManifest {
-            installation_schema_version: 21,
-            tender_schema_version: 33,
+            installation_schema_version: 23,
+            tender_schema_version: 35,
             codex_version: "0.147.0".into(),
             ocr_version: "3.9.2".into(),
-            runtime_manifest_schema_version: 2,
+            runtime_manifest_schema_version: 3,
         },
         release: UpdateReleaseInformation {
             published_at: "2026-08-12T10:00:00Z".into(),
@@ -160,6 +151,12 @@ fn application_only_update() -> UpdateCandidate {
             stored_data_may_change: false,
         },
     }
+}
+
+#[test]
+fn runtime_provenance_schema_matches_packaging_provisioner() {
+    let provisioner = include_str!("../../scripts/prepare-runtime.mjs");
+    assert!(provisioner.contains("schema_version: 3"));
 }
 
 #[tokio::test]
@@ -177,34 +174,10 @@ async fn readiness_reports_each_engineer_actionable_runtime_state() {
     let ready = harness.host.repair_runtime_readiness().await;
     assert_eq!(ready.state, RuntimeReadinessState::Ready, "{ready:?}");
     assert!(ready.issues.is_empty());
-    assert_eq!(ready.codex_version.as_deref(), Some("0.147.0"));
     assert_eq!(ready.uv_version.as_deref(), Some("0.12.2"));
     assert_eq!(ready.ocr_version.as_deref(), Some("3.9.2"));
     let confirmed_ready = harness.host.inspect_runtime_readiness().await;
     assert_eq!(confirmed_ready.state, RuntimeReadinessState::Ready);
-    assert_eq!(
-        fs::read_to_string(
-            harness
-                .runtime_bin
-                .join(executable_name("codex"))
-                .with_extension("probe-start-count"),
-        )
-        .expect("read Codex app-server start count"),
-        "1",
-        "runtime checks must reuse the one app-scoped Codex process",
-    );
-    let codex_environment = fs::read_to_string(
-        harness
-            .runtime_bin
-            .join(executable_name("codex"))
-            .with_extension("probe-environment"),
-    )
-    .expect("read restricted Codex probe environment");
-    assert!(codex_environment.lines().any(|name| name == "CODEX_HOME"));
-    assert!(!codex_environment.lines().any(|name| matches!(
-        name,
-        "PATH" | "GH_TOKEN" | "GITHUB_TOKEN" | "OPENAI_API_KEY" | "AWS_SECRET_ACCESS_KEY"
-    )));
 
     let unexpected_model = harness
         .application_home
@@ -220,61 +193,19 @@ async fn readiness_reports_each_engineer_actionable_runtime_state() {
     let signed_out = harness.host.inspect_runtime_readiness().await;
     assert_eq!(
         signed_out.state,
-        RuntimeReadinessState::AuthenticationRequired
+        RuntimeReadinessState::Ready,
+        "{signed_out:?}"
     );
-    assert_eq!(
-        signed_out.issues,
-        vec![RuntimeReadinessIssue::CodexAuthenticationRequired]
-    );
-
-    harness.write_auth("apikey");
-    let wrong_account = harness.host.inspect_runtime_readiness().await;
-    assert_eq!(
-        wrong_account.state,
-        RuntimeReadinessState::AuthenticationRequired
-    );
-    assert_eq!(
-        wrong_account.issues,
-        vec![RuntimeReadinessIssue::CodexSubscriptionRequired]
-    );
-
-    harness.write_auth("chatgpt");
-    harness.write_plan("free");
-    let unsupported_plan = harness.host.inspect_runtime_readiness().await;
-    assert_eq!(
-        unsupported_plan.state,
-        RuntimeReadinessState::AuthenticationRequired
-    );
-    assert_eq!(
-        unsupported_plan.issues,
-        vec![RuntimeReadinessIssue::CodexSubscriptionRequired]
-    );
-    harness.write_plan("plus");
-
-    harness.write_plan("go");
-    let go_plan = harness.host.inspect_runtime_readiness().await;
-    assert_eq!(go_plan.state, RuntimeReadinessState::Ready, "{go_plan:?}");
-    harness.write_plan("plus");
 
     harness.write_auth("malformed");
     let malformed = harness.host.inspect_runtime_readiness().await;
-    assert_eq!(malformed.state, RuntimeReadinessState::RepairRequired);
     assert_eq!(
-        malformed.issues,
-        vec![RuntimeReadinessIssue::RuntimeProbeFailed]
+        malformed.state,
+        RuntimeReadinessState::Ready,
+        "{malformed:?}"
     );
 
-    harness.write_auth("mixed");
-    let mixed_malformed = harness.host.inspect_runtime_readiness().await;
-    assert_eq!(mixed_malformed.state, RuntimeReadinessState::RepairRequired);
-    assert_eq!(
-        mixed_malformed.issues,
-        vec![RuntimeReadinessIssue::RuntimeProbeFailed]
-    );
-
-    harness.write_auth("chatgpt");
-    fs::write(harness.runtime_bin.join("codex.version"), "0.146.1\n")
-        .expect("incompatible Codex version");
+    fs::write(harness.runtime_bin.join("uv.version"), "0.11.1\n").expect("incompatible uv version");
     let incompatible = harness.host.inspect_runtime_readiness().await;
     assert_eq!(
         incompatible.state,
@@ -282,11 +213,10 @@ async fn readiness_reports_each_engineer_actionable_runtime_state() {
     );
     assert_eq!(
         incompatible.issues,
-        vec![RuntimeReadinessIssue::CodexVersionIncompatible]
+        vec![RuntimeReadinessIssue::UvVersionIncompatible]
     );
 
-    fs::write(harness.runtime_bin.join("codex.version"), "0.147.0\n")
-        .expect("restore Codex version");
+    fs::write(harness.runtime_bin.join("uv.version"), "0.12.2\n").expect("restore uv version");
     fs::write(
         harness
             .application_home
@@ -314,10 +244,7 @@ async fn readiness_reports_each_engineer_actionable_runtime_state() {
     );
     assert_eq!(
         missing_bundled_tools.issues,
-        vec![
-            RuntimeReadinessIssue::CodexExecutableMissing,
-            RuntimeReadinessIssue::UvExecutableMissing,
-        ]
+        vec![RuntimeReadinessIssue::UvExecutableMissing,]
     );
     assert!(!missing_bundled_tools.repair_available);
 }
@@ -355,9 +282,9 @@ async fn in_flight_runtime_probe_holds_the_global_ordinary_work_lease_until_chil
             "Approve only after every readiness child exits".into(),
         )
         .expect("approve exact update");
-    fs::write(harness.runtime_bin.join("codex.version-delay"), "5000\n")
-        .expect("delay the public Codex version readiness seam");
-    let probe_ready = harness.runtime_bin.join("codex.version-ready");
+    fs::write(harness.runtime_bin.join("uv.version-delay"), "5000\n")
+        .expect("delay the public uv version readiness seam");
+    let probe_ready = harness.runtime_bin.join("uv.version-ready");
 
     let probing_host = harness.host.clone();
     let probe = tokio::spawn(async move { probing_host.inspect_runtime_readiness().await });
@@ -575,7 +502,7 @@ async fn engineer_cancellation_never_publishes_partial_readiness() {
     assert_eq!(outcome.state, RuntimeReadinessState::RepairRequired);
     assert_eq!(
         outcome.issues,
-        vec![RuntimeReadinessIssue::RuntimePreparationFailed]
+        vec![RuntimeReadinessIssue::RuntimePreparationCancelled]
     );
     assert!(!harness
         .application_home
@@ -588,9 +515,8 @@ async fn engineer_cancellation_never_publishes_partial_readiness() {
 #[tokio::test]
 async fn engineer_cancellation_during_the_final_probe_cannot_publish_ready() {
     let harness = RuntimeHarness::new();
-    fs::write(harness.runtime_bin.join("codex.probe-delay"), "5000\n")
-        .expect("Codex fixture delay");
-    let probe_ready = harness.runtime_bin.join("codex.probe-ready");
+    fs::write(harness.runtime_bin.join("uv.version-delay"), "5000\n").expect("uv fixture delay");
+    let probe_ready = harness.runtime_bin.join("uv.version-ready");
 
     let repairing_host = harness.host.clone();
     let repair = tokio::spawn(async move { repairing_host.repair_runtime_readiness().await });
@@ -600,14 +526,14 @@ async fn engineer_cancellation_during_the_final_probe_cannot_publish_ready() {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert!(probe_ready.exists(), "final Codex probe started");
+    assert!(probe_ready.exists(), "final local-tool probe started");
     assert!(harness.host.cancel_runtime_preparation());
     let outcome = repair.await.expect("repair task");
 
     assert_eq!(outcome.state, RuntimeReadinessState::RepairRequired);
     assert_eq!(
         outcome.issues,
-        vec![RuntimeReadinessIssue::RuntimePreparationFailed]
+        vec![RuntimeReadinessIssue::RuntimePreparationCancelled]
     );
     assert!(!harness.host.cancel_runtime_preparation());
 }
@@ -626,7 +552,7 @@ fn renderer_receives_only_named_runtime_readiness_facts() {
     let response = get_ipc_response(
         &webview,
         tauri::webview::InvokeRequest {
-            cmd: "inspect_runtime_readiness".into(),
+            cmd: "inspect_document_tool_readiness".into(),
             callback: tauri::ipc::CallbackFn(0),
             error: tauri::ipc::CallbackFn(1),
             url: if cfg!(any(windows, target_os = "android")) {
@@ -641,7 +567,7 @@ fn renderer_receives_only_named_runtime_readiness_facts() {
             invoke_key: INVOKE_KEY.to_string(),
         },
     )
-    .expect("inspect_runtime_readiness response")
+    .expect("inspect_document_tool_readiness response")
     .deserialize::<serde_json::Value>()
     .expect("runtime readiness JSON");
 

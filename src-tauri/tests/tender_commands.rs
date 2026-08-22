@@ -2,12 +2,14 @@ use std::{io, path::Path, sync::Arc};
 
 use quantix_lib::{
     configure_tauri_builder, AgentRunRecoveryDisposition, CreateTenderBackupCommand,
-    CreateTenderCommand, DeviceProtection, PrepareTenderRecoveryCommand, QuantixHost,
-    RuntimeLayout, SetupPlatform, StoragePermissions, TenderCommandError, TenderErrorCode,
-    TenderIntegrityIssue, TenderIntegrityReport, TenderIntegrityState, TenderRecoveryChoice,
+    CreateTenderCommand, PrepareTenderRecoveryCommand, QuantixHost, RuntimeLayout, SetupPlatform,
+    StoragePermissions, TenderCommandError, TenderErrorCode, TenderIntegrityIssue,
+    TenderIntegrityReport, TenderIntegrityState, TenderRecoveryChoice,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
-use tauri::test::{assert_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+use tauri::test::{
+    assert_ipc_response, get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY,
+};
 
 struct ReadySetupPlatform;
 
@@ -22,10 +24,6 @@ impl SetupPlatform for ReadySetupPlatform {
 
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(StoragePermissions::Restrictive)
-    }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
     }
 }
 
@@ -155,7 +153,7 @@ fn renderer_can_submit_an_engineer_recovery_disposition() {
 }
 
 #[test]
-fn renderer_cannot_start_tender_work_before_runtime_verification() {
+fn renderer_can_create_a_tender_before_document_tools_are_ready() {
     let user_home = tempfile::tempdir().expect("temporary user home");
     let application_home = user_home.path().join(".quantix");
     let host = QuantixHost::with_setup_platform_and_runtime(
@@ -164,12 +162,9 @@ fn renderer_cannot_start_tender_work_before_runtime_verification() {
         RuntimeLayout::bundled(user_home.path().join("resources")),
     );
     assert_eq!(
-        host.create_tender(quantix_lib::CreateTenderCommand {
-            name: "Cairo Metro Works".into(),
-        }),
-        Err(TenderCommandError {
-            code: TenderErrorCode::RuntimeRequired,
-        })
+        quantix_lib::ensure_quantix_setup(&host).state,
+        quantix_lib::SetupState::Ready,
+        "canonical Tender creation remains local and available"
     );
     let app = configure_tauri_builder(mock_builder())
         .manage(host)
@@ -179,16 +174,20 @@ fn renderer_cannot_start_tender_work_before_runtime_verification() {
         .build()
         .expect("test webview");
 
-    assert_ipc_response(
+    let response = get_ipc_response(
         &webview,
         request(
             "create_tender",
             serde_json::json!({ "command": { "name": "Cairo Metro Works" } }),
         ),
-        Err(TenderCommandError {
-            code: TenderErrorCode::RuntimeRequired,
-        }),
-    );
+    )
+    .expect("create Tender through Tauri IPC")
+    .deserialize::<serde_json::Value>()
+    .expect("decode created Tender");
+    assert_eq!(response["name"], "Cairo Metro Works");
+    assert!(response["tender_id"]
+        .as_str()
+        .is_some_and(|id| id.len() == 32));
 }
 
 #[test]

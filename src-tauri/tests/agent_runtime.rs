@@ -3,14 +3,14 @@ use std::{fs, io, path::Path, sync::Arc, time::Duration};
 use quantix_lib::{
     ensure_quantix_setup, AgentAccessRequestStatus, AgentAccessResolution,
     AgentRunRecoveryDisposition, AgentRunState, AiProviderKind, ApproveAgentAccessCommand,
-    CodexReadiness, CreateTenderCommand, DataClassification, DeviceProtection,
-    InspectAgentRunCommand, InspectAgentRunHistoryCommand, InterruptAgentRunCommand,
-    PermissionDenialReason, ProviderEventKind, ProviderFailureCategory, ProviderRateLimitState,
-    ProviderReasoningSelection, QuantixHost, RequestAgentAccessCommand, ResolveAgentAccessCommand,
-    ResolveIndeterminateAgentRunCommand, ReviseTenderCommand, RunBootstrapAgentCommand,
-    RuntimeLayout, SetupPlatform, SetupState, StoragePermissions, TenderErrorCode,
-    TenderIntegrityIssue, TenderIntegrityState, UpdateAiExecutionSelectionCommand,
-    VerificationStatus, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    CodexReadiness, ConfirmAiExecutionSelectionCommand, CreateTenderCommand, DataClassification,
+    InspectAgentRunCommand, InspectAgentRunHistoryCommand, InspectTenderAiExecutionCommand,
+    InterruptAgentRunCommand, PermissionDenialReason, ProviderEventKind, ProviderFailureCategory,
+    ProviderRateLimitState, ProviderReasoningSelection, QuantixHost, RequestAgentAccessCommand,
+    ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand, ReviseTenderCommand,
+    RunBootstrapAgentCommand, RuntimeLayout, SetupPlatform, SetupState, StoragePermissions,
+    TenderErrorCode, TenderIntegrityIssue, TenderIntegrityState, UpdateAiExecutionSelectionCommand,
+    UpdateTenderAiExecutionSelectionCommand, VerificationStatus, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 struct ReadySetupPlatform;
@@ -26,10 +26,6 @@ impl SetupPlatform for ReadySetupPlatform {
 
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(StoragePermissions::Restrictive)
-    }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
     }
 }
 
@@ -59,13 +55,19 @@ impl Harness {
                 name: "Cairo Metro Systems Tender".into(),
             })
             .expect("create Tender");
-        Self {
+        let harness = Self {
             _root: root,
             application_home,
             codex,
             host,
             tender_id: tender.tender_id,
-        }
+        };
+        harness.bind_current_ai_selection();
+        harness
+    }
+
+    fn bind_current_ai_selection(&self) {
+        bind_current_ai_selection(&self.host, &self.tender_id);
     }
 
     fn set_scenario(&self, scenario: &str) {
@@ -82,6 +84,24 @@ impl Harness {
         )
         .expect("open Tender Store database")
     }
+}
+
+fn bind_current_ai_selection(host: &QuantixHost, tender_id: &str) {
+    let selection = host
+        .inspect_application_settings()
+        .expect("inspect fixture AI settings")
+        .ai_execution_selection;
+    let binding = host
+        .inspect_tender_ai_execution(InspectTenderAiExecutionCommand {
+            tender_id: tender_id.to_owned(),
+        })
+        .expect("inspect Tender AI binding");
+    host.update_tender_ai_execution(UpdateTenderAiExecutionSelectionCommand {
+        tender_id: tender_id.to_owned(),
+        expected_revision: binding.revision,
+        selection,
+    })
+    .expect("bind fixture AI selection to Tender");
 }
 
 #[tokio::test]
@@ -399,6 +419,16 @@ async fn non_default_live_selection_is_bound_to_the_run_and_survives_later_chang
         })
         .await
         .expect("select non-default live model");
+    harness
+        .host
+        .confirm_ai_execution_selection(ConfirmAiExecutionSelectionCommand {
+            connection_id: "codex_chatgpt".into(),
+            model_id: "gpt-5.6-sol".into(),
+            reasoning: ProviderReasoningSelection::CodexEffort("high".into()),
+        })
+        .await
+        .expect("approve non-default live model");
+    harness.bind_current_ai_selection();
 
     let run = harness
         .host
@@ -750,7 +780,6 @@ async fn pending_provider_thread_archive_reconciles_after_a_post_ack_checkpoint_
         .execute_batch("DROP TRIGGER fail_archive_checkpoint;")
         .expect("remove fixture checkpoint failure");
     harness.set_scenario("archive-already-complete");
-
     let reconciled = harness
         .host
         .run_bootstrap_agent(RunBootstrapAgentCommand {
@@ -1455,7 +1484,6 @@ async fn close_task_disposition_never_authorizes_a_linked_retry() {
             rationale: "The Engineer closed this task without accepting quarantined output.".into(),
         })
         .expect("close the uncertain task");
-
     harness.set_scenario("success");
     let linked = harness
         .host
@@ -1716,6 +1744,45 @@ async fn provider_process_failure_before_turn_acceptance_is_retryable() {
     assert!(run.provider_thread_ref.is_none());
     assert!(run.provider_turn_ref.is_none());
     assert!(run.proposed_result.is_none());
+}
+
+#[tokio::test]
+async fn a_dead_idle_provider_is_replaced_before_the_next_turn() {
+    let harness = Harness::new("close-after-readiness");
+
+    assert_eq!(
+        harness
+            .host
+            .inspect_codex_subscription(tokio_util::sync::CancellationToken::new())
+            .await,
+        CodexReadiness::Ready
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !harness.codex.with_extension("provider-closed").exists() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("fixture provider exits after readiness");
+
+    harness.set_scenario("success");
+    let run = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("replace the dead idle provider before the turn");
+
+    assert_eq!(run.state, AgentRunState::Completed, "{run:#?}");
+    assert!(run.provider_thread_ref.is_some());
+    assert!(run.provider_turn_ref.is_some());
+    assert_eq!(
+        fs::read_to_string(harness.codex.with_extension("agent-start-count"))
+            .expect("read app-server start count"),
+        "2"
+    );
 }
 
 #[tokio::test]

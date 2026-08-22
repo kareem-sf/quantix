@@ -532,7 +532,7 @@ pub(crate) struct TenderRecordReviewCandidate {
 pub(crate) fn record_extraction_profile(profile_id: String) -> AgentProfileVersionView {
     AgentProfileVersionView {
         profile_id,
-        version: 3,
+        version: 4,
         identity: "Tender Analyst".into(),
         profession: "Tender Engineer".into(),
         seniority: "Senior".into(),
@@ -753,25 +753,20 @@ fn record_extraction_output_contract() -> String {
                             "type": "array"
                         },
                         "generation_instruction": {
-                            "oneOf": [
-                                { "type": "null" },
-                                {
-                                    "additionalProperties": false,
-                                    "properties": {
-                                        "authoring_mode": { "enum": ["docx", "xlsx", "unchanged_source", "unsupported"] },
-                                        "envelope_key": { "maxLength": 200, "minLength": 1, "type": "string" },
-                                        "evidence": { "$ref": "#/$defs/evidence_list" },
-                                        "kind": { "enum": ["mandatory_requirement", "deliverable", "addendum_instruction", "signature", "form_field", "execution_requirement", "required_file"] },
-                                        "language": { "maxLength": 100, "minLength": 1, "type": "string" },
-                                        "mandatory": { "type": "boolean" },
-                                        "package_path": { "maxLength": 1000, "minLength": 1, "type": "string" },
-                                        "requested_authoring_format": { "type": ["string", "null"], "maxLength": 200 },
-                                        "section_key": { "maxLength": 200, "minLength": 1, "type": "string" }
-                                    },
-                                    "required": ["kind", "mandatory", "section_key", "package_path", "envelope_key", "language", "authoring_mode", "requested_authoring_format", "evidence"],
-                                    "type": "object"
-                                }
-                            ]
+                            "additionalProperties": false,
+                            "properties": {
+                                "authoring_mode": { "enum": ["docx", "xlsx", "unchanged_source", "unsupported"] },
+                                "envelope_key": { "maxLength": 200, "minLength": 1, "type": "string" },
+                                "evidence": { "$ref": "#/$defs/evidence_list" },
+                                "kind": { "enum": ["mandatory_requirement", "deliverable", "addendum_instruction", "signature", "form_field", "execution_requirement", "required_file"] },
+                                "language": { "maxLength": 100, "minLength": 1, "type": "string" },
+                                "mandatory": { "type": "boolean" },
+                                "package_path": { "maxLength": 1000, "minLength": 1, "type": "string" },
+                                "requested_authoring_format": { "type": ["string", "null"], "maxLength": 200 },
+                                "section_key": { "maxLength": 200, "minLength": 1, "type": "string" }
+                            },
+                            "required": ["kind", "mandatory", "section_key", "package_path", "envelope_key", "language", "authoring_mode", "requested_authoring_format", "evidence"],
+                            "type": ["object", "null"]
                         },
                         "kind": { "enum": ["requirement", "evaluation_criterion", "deliverable", "deadline", "form", "clause", "risk", "assumption", "tender_query", "project_characteristic"] },
                         "stable_key": { "maxLength": 100, "minLength": 1, "pattern": "^[a-z0-9][a-z0-9_-]*$", "type": "string" },
@@ -909,12 +904,7 @@ impl TenderStore {
             .parent()
             .and_then(Path::parent)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let provider_selection = match manager_intake_run_id {
-            Some(intake_run_id) => self.manager_intake_provider_selection_for(intake_run_id)?,
-            None => {
-                crate::application_settings::load_current_ai_execution_selection(application_home)?
-            }
-        };
+        let provider_selection = self.required_tender_ai_execution_selection()?;
         let workspace = application_home
             .join("staging")
             .join(format!("agent-{}-{run_id}", tender_id.as_str()));
@@ -1210,12 +1200,7 @@ impl TenderStore {
             .parent()
             .and_then(Path::parent)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let provider_selection = match manager_intake_run_id {
-            Some(intake_run_id) => self.manager_intake_provider_selection_for(intake_run_id)?,
-            None => {
-                crate::application_settings::load_current_ai_execution_selection(application_home)?
-            }
-        };
+        let provider_selection = self.required_tender_ai_execution_selection()?;
         let workspace = application_home
             .join("staging")
             .join(format!("agent-{}-{run_id}", tender_id.as_str()));
@@ -3506,6 +3491,26 @@ mod tests {
                 )
                 .expect("count rejected records"),
             0
+        );
+    }
+
+    #[test]
+    fn record_extraction_schema_uses_strict_nullable_generation_instruction() {
+        let profile = record_extraction_profile("tender-analyst".into());
+        assert_eq!(profile.version, 4);
+        let contract: serde_json::Value =
+            serde_json::from_str(&profile.output_contract_json).expect("valid contract");
+        let instruction = contract
+            .pointer("/properties/records/items/properties/generation_instruction")
+            .expect("generation instruction schema");
+        assert!(instruction.get("oneOf").is_none());
+        assert_eq!(
+            instruction.get("type"),
+            Some(&serde_json::json!(["object", "null"]))
+        );
+        assert_eq!(
+            instruction.get("additionalProperties"),
+            Some(&serde_json::json!(false))
         );
     }
 }

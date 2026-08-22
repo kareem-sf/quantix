@@ -3,7 +3,11 @@ use std::{
     fs,
     io::{Cursor, Read, Seek, SeekFrom},
     path::{Component, Path, PathBuf},
-    time::{Duration, Instant},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use garde::Validate;
@@ -32,6 +36,193 @@ pub struct ImportTenderPackageCommand {
     pub tender_id: String,
     #[garde(length(bytes, min = 1, max = 4096))]
     pub source_path: String,
+}
+
+/// The operation identity and progress contract shared by the native intake
+/// worker and the renderer.  Progress is deliberately a snapshot rather than
+/// an event stream so a renderer that was suspended can resume by polling the
+/// same authoritative state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum PackageIntakeOperationKind {
+    StartTender,
+    AddPackage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum PackageIntakeStage {
+    CheckingSource,
+    ReadingPackage,
+    RecordingDocuments,
+    OpeningWorkspace,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct PackageIntakeProgress {
+    pub operation_id: String,
+    pub kind: PackageIntakeOperationKind,
+    pub stage: PackageIntakeStage,
+    pub source_kind: TenderPackageSourceKind,
+    pub source_name: String,
+    pub current_relative_path: Option<String>,
+    pub discovered_count: u32,
+    pub processed_count: u32,
+    pub registered_count: u32,
+    pub exception_count: u32,
+    pub total_count: Option<u32>,
+    pub cancellation_requested: bool,
+    pub cancellable: bool,
+    pub started_at_epoch_ms: u64,
+    pub updated_at_epoch_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct CancelPackageIntakeCommand {
+    pub operation_id: String,
+}
+
+/// Host-owned cancellation and progress control passed into synchronous
+/// package work (and clonable when the work is run on a worker thread).
+#[derive(Debug, Clone)]
+pub(crate) struct PackageIntakeControl {
+    cancelled: Arc<AtomicBool>,
+    progress: Arc<Mutex<PackageIntakeProgress>>,
+}
+
+impl PackageIntakeControl {
+    pub(crate) fn new(
+        operation_id: impl Into<String>,
+        kind: PackageIntakeOperationKind,
+        source_kind: TenderPackageSourceKind,
+        source_name: impl Into<String>,
+    ) -> Self {
+        let now = epoch_milliseconds();
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            progress: Arc::new(Mutex::new(PackageIntakeProgress {
+                operation_id: operation_id.into(),
+                kind,
+                stage: PackageIntakeStage::CheckingSource,
+                source_kind,
+                source_name: source_name.into(),
+                current_relative_path: None,
+                discovered_count: 0,
+                processed_count: 0,
+                registered_count: 0,
+                exception_count: 0,
+                total_count: None,
+                cancellation_requested: false,
+                cancellable: true,
+                started_at_epoch_ms: now,
+                updated_at_epoch_ms: now,
+            })),
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> PackageIntakeProgress {
+        self.progress
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    pub(crate) fn request_cancel(&self) {
+        let mut progress = self
+            .progress
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !progress.cancellable {
+            return;
+        }
+        self.cancelled.store(true, Ordering::Release);
+        progress.cancellation_requested = true;
+        progress.updated_at_epoch_ms = epoch_milliseconds();
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn is_cancellable(&self) -> bool {
+        self.snapshot().cancellable
+    }
+
+    pub(crate) fn set_stage(&self, stage: PackageIntakeStage) {
+        self.mutate(|progress| progress.stage = stage);
+    }
+
+    pub(crate) fn set_current_path(&self, path: Option<String>) {
+        self.mutate(|progress| progress.current_relative_path = path);
+    }
+
+    pub(crate) fn discovered(&self, total_count: Option<u32>) {
+        self.mutate(|progress| {
+            progress.discovered_count = progress.discovered_count.saturating_add(1);
+            if total_count.is_some() {
+                progress.total_count = total_count;
+            }
+        });
+    }
+
+    pub(crate) fn processed(&self, exception: bool) {
+        self.mutate(|progress| {
+            progress.processed_count = progress.processed_count.saturating_add(1);
+            if exception {
+                progress.exception_count = progress.exception_count.saturating_add(1);
+            }
+        });
+    }
+
+    pub(crate) fn set_total(&self, total_count: Option<u32>) {
+        self.mutate(|progress| progress.total_count = total_count);
+    }
+
+    pub(crate) fn record_registered(&self) {
+        self.mutate(|progress| {
+            progress.registered_count = progress.registered_count.saturating_add(1)
+        });
+    }
+
+    pub(crate) fn mark_finalization(&self) {
+        self.mutate(|progress| {
+            progress.stage = PackageIntakeStage::RecordingDocuments;
+            progress.cancellable = false;
+            progress.current_relative_path = None;
+        });
+    }
+
+    pub(crate) fn opening_workspace(&self) {
+        self.mutate(|progress| {
+            progress.stage = PackageIntakeStage::OpeningWorkspace;
+            progress.cancellable = false;
+            progress.current_relative_path = None;
+        });
+    }
+
+    fn mutate(&self, update: impl FnOnce(&mut PackageIntakeProgress)) {
+        let mut progress = self
+            .progress
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        update(&mut progress);
+        progress.updated_at_epoch_ms = epoch_milliseconds();
+    }
+}
+
+fn epoch_milliseconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
@@ -294,11 +485,30 @@ impl PreparedDocument {
     }
 }
 
-pub(crate) fn prepare_package(
+fn record_new_documents(
+    control: Option<&PackageIntakeControl>,
+    documents: &[PreparedDocument],
+    before_len: usize,
+) {
+    if let Some(control) = control {
+        for document in documents.get(before_len..).unwrap_or_default() {
+            control.processed(document.exception.is_some());
+        }
+    }
+}
+
+pub(crate) fn prepare_package_with_control(
     source: &Path,
     content_root: &Path,
-) -> Result<PreparedIntake, TenderCommandError> {
+    control: Option<&PackageIntakeControl>,
+) -> Result<Option<PreparedIntake>, TenderCommandError> {
     let started = Instant::now();
+    if let Some(control) = control {
+        control.set_stage(PackageIntakeStage::CheckingSource);
+        if control.is_cancelled() {
+            return Ok(None);
+        }
+    }
     let metadata = fs::symlink_metadata(source)
         .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
     let source_name = source
@@ -314,7 +524,7 @@ pub(crate) fn prepare_package(
         } else {
             TenderPackageSourceKind::Directory
         };
-        return Ok(PreparedIntake {
+        return Ok(Some(PreparedIntake {
             source_kind,
             source_path,
             source_name: source_name.clone(),
@@ -323,16 +533,31 @@ pub(crate) fn prepare_package(
                 0,
                 IntakeExceptionCode::UnsafeLink,
             )],
-        });
+        }));
     }
 
     let mut documents = if metadata.is_dir() {
-        prepare_directory(source, content_root)?
+        if let Some(control) = control {
+            control.set_stage(PackageIntakeStage::ReadingPackage);
+        }
+        match prepare_directory(source, content_root, control)? {
+            Some(documents) => documents,
+            None => return Ok(None),
+        }
     } else if metadata.is_file() && is_zip_path(source) {
-        prepare_zip(source, content_root)?
+        if let Some(control) = control {
+            control.set_stage(PackageIntakeStage::ReadingPackage);
+        }
+        match prepare_zip(source, content_root, control)? {
+            Some(documents) => documents,
+            None => return Ok(None),
+        }
     } else {
         return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
     };
+    if control.is_some_and(PackageIntakeControl::is_cancelled) {
+        return Ok(None);
+    }
     if started.elapsed() > MAX_INTAKE_DURATION {
         documents = vec![PreparedDocument::exception(
             "[package]".into(),
@@ -340,7 +565,7 @@ pub(crate) fn prepare_package(
             IntakeExceptionCode::DurationExceeded,
         )];
     }
-    Ok(PreparedIntake {
+    Ok(Some(PreparedIntake {
         source_kind: if metadata.is_dir() {
             TenderPackageSourceKind::Directory
         } else {
@@ -349,13 +574,14 @@ pub(crate) fn prepare_package(
         source_path,
         source_name,
         documents,
-    })
+    }))
 }
 
 fn prepare_directory(
     source: &Path,
     content_root: &Path,
-) -> Result<Vec<PreparedDocument>, TenderCommandError> {
+    control: Option<&PackageIntakeControl>,
+) -> Result<Option<Vec<PreparedDocument>>, TenderCommandError> {
     let started = Instant::now();
     let mut queue = VecDeque::from([(source.to_path_buf(), PathBuf::new(), 0_usize)]);
     let mut documents = Vec::new();
@@ -363,6 +589,9 @@ fn prepare_directory(
     let mut discovered_entries = 0_usize;
 
     while let Some((directory, relative_directory, depth)) = queue.pop_front() {
+        if control.is_some_and(PackageIntakeControl::is_cancelled) {
+            return Ok(None);
+        }
         if started.elapsed() > MAX_INTAKE_DURATION {
             documents.push(PreparedDocument::exception(
                 package_marker(&relative_directory),
@@ -395,14 +624,21 @@ fn prepare_directory(
         }
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
+            if control.is_some_and(PackageIntakeControl::is_cancelled) {
+                return Ok(None);
+            }
             discovered_entries = discovered_entries.saturating_add(1);
+            if let Some(control) = control {
+                control.discovered(None);
+            }
+            let documents_before_entry = documents.len();
             if discovered_entries > MAX_INTAKE_ENTRIES {
                 documents.push(PreparedDocument::exception(
                     "[package]".into(),
                     0,
                     IntakeExceptionCode::EntryCountExceeded,
                 ));
-                return Ok(documents);
+                return Ok(Some(documents));
             }
             let relative = relative_directory.join(entry.file_name());
             let package_path = portable_path(&relative);
@@ -412,6 +648,9 @@ fn prepare_directory(
                     0,
                     IntakeExceptionCode::PathTooLong,
                 ));
+                if let Some(control) = control {
+                    record_new_documents(Some(control), &documents, documents_before_entry);
+                }
                 continue;
             }
             let metadata = match fs::symlink_metadata(entry.path()) {
@@ -422,6 +661,9 @@ fn prepare_directory(
                         0,
                         IntakeExceptionCode::Corrupt,
                     ));
+                    if let Some(control) = control {
+                        record_new_documents(Some(control), &documents, documents_before_entry);
+                    }
                     continue;
                 }
             };
@@ -442,6 +684,9 @@ fn prepare_directory(
                     queue.push_back((entry.path(), relative, depth + 1));
                 }
             } else if metadata.is_file() {
+                if let Some(control) = control {
+                    control.set_current_path(Some(package_path.clone()));
+                }
                 let size = metadata.len();
                 let path = Path::new(&package_path);
                 if is_nested_archive(path) {
@@ -476,6 +721,9 @@ fn prepare_directory(
                             size,
                             IntakeExceptionCode::TotalSizeExceeded,
                         ));
+                        if let Some(control) = control {
+                            record_new_documents(Some(control), &documents, documents_before_entry);
+                        }
                         continue;
                     }
                     let bytes = match read_bounded_file(&entry.path(), size) {
@@ -486,6 +734,13 @@ fn prepare_directory(
                                 size,
                                 IntakeExceptionCode::FileSizeExceeded,
                             ));
+                            if let Some(control) = control {
+                                record_new_documents(
+                                    Some(control),
+                                    &documents,
+                                    documents_before_entry,
+                                );
+                            }
                             continue;
                         }
                         Err(_) => {
@@ -494,10 +749,24 @@ fn prepare_directory(
                                 size,
                                 IntakeExceptionCode::Corrupt,
                             ));
+                            if let Some(control) = control {
+                                record_new_documents(
+                                    Some(control),
+                                    &documents,
+                                    documents_before_entry,
+                                );
+                            }
                             continue;
                         }
                     };
-                    documents.push(prepare_bytes(package_path, bytes, content_root));
+                    if control.is_some_and(PackageIntakeControl::is_cancelled) {
+                        return Ok(None);
+                    }
+                    let document = prepare_bytes(package_path, bytes, content_root);
+                    if control.is_some_and(PackageIntakeControl::is_cancelled) {
+                        return Ok(None);
+                    }
+                    documents.push(document);
                 }
             } else {
                 documents.push(PreparedDocument::exception(
@@ -506,17 +775,24 @@ fn prepare_directory(
                     IntakeExceptionCode::UnsafeLink,
                 ));
             }
+            if let Some(control) = control {
+                record_new_documents(Some(control), &documents, documents_before_entry);
+            }
         }
     }
-    Ok(documents)
+    Ok(Some(documents))
 }
 
 fn prepare_zip(
     source: &Path,
     content_root: &Path,
-) -> Result<Vec<PreparedDocument>, TenderCommandError> {
+    control: Option<&PackageIntakeControl>,
+) -> Result<Option<Vec<PreparedDocument>>, TenderCommandError> {
+    if control.is_some_and(PackageIntakeControl::is_cancelled) {
+        return Ok(None);
+    }
     if fs::metadata(source).map_or(true, |metadata| metadata.len() > MAX_INTAKE_TOTAL_BYTES) {
-        return Ok(vec![PreparedDocument::exception(
+        return Ok(Some(vec![PreparedDocument::exception(
             source
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -524,10 +800,10 @@ fn prepare_zip(
                 .to_owned(),
             fs::metadata(source).map(|value| value.len()).unwrap_or(0),
             IntakeExceptionCode::TotalSizeExceeded,
-        )]);
+        )]));
     }
     let Some(preflight) = zip_preflight(source) else {
-        return Ok(vec![PreparedDocument::exception(
+        return Ok(Some(vec![PreparedDocument::exception(
             source
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -535,35 +811,35 @@ fn prepare_zip(
                 .to_owned(),
             fs::metadata(source).map(|value| value.len()).unwrap_or(0),
             IntakeExceptionCode::Corrupt,
-        )]);
+        )]));
     };
     if preflight.zip64 {
-        return Ok(vec![PreparedDocument::exception(
+        return Ok(Some(vec![PreparedDocument::exception(
             "[package]".into(),
             0,
             IntakeExceptionCode::Unsupported,
-        )]);
+        )]));
     }
     if preflight.central_directory_size > MAX_ARCHIVE_INDEX_BYTES {
-        return Ok(vec![PreparedDocument::exception(
+        return Ok(Some(vec![PreparedDocument::exception(
             "[package]".into(),
             preflight.central_directory_size,
             IntakeExceptionCode::MemoryLimitExceeded,
-        )]);
+        )]));
     }
     if preflight.entry_count > MAX_INTAKE_ENTRIES {
-        return Ok(vec![PreparedDocument::exception(
+        return Ok(Some(vec![PreparedDocument::exception(
             "[package]".into(),
             0,
             IntakeExceptionCode::EntryCountExceeded,
-        )]);
+        )]));
     }
     let file = fs::File::open(source)
         .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
     let mut archive = match ZipArchive::new(file) {
         Ok(archive) => archive,
         Err(_) => {
-            return Ok(vec![PreparedDocument::exception(
+            return Ok(Some(vec![PreparedDocument::exception(
                 source
                     .file_name()
                     .and_then(|name| name.to_str())
@@ -571,25 +847,25 @@ fn prepare_zip(
                     .to_owned(),
                 fs::metadata(source).map(|value| value.len()).unwrap_or(0),
                 IntakeExceptionCode::Corrupt,
-            )]);
+            )]));
         }
     };
     if archive.offset() != 0
         || archive.central_directory_start() != preflight.central_directory_offset
         || archive.comment() != preflight.comment.as_slice()
     {
-        return Ok(vec![PreparedDocument::exception(
+        return Ok(Some(vec![PreparedDocument::exception(
             "[package]".into(),
             0,
             IntakeExceptionCode::Corrupt,
-        )]);
+        )]));
     }
     if archive.len() > preflight.entry_count {
-        return Ok(vec![PreparedDocument::exception(
+        return Ok(Some(vec![PreparedDocument::exception(
             "[package]".into(),
             0,
             IntakeExceptionCode::Corrupt,
-        )]);
+        )]));
     }
 
     let started = Instant::now();
@@ -604,7 +880,14 @@ fn prepare_zip(
         .collect::<Vec<_>>();
     let mut paths = HashSet::new();
     let mut total_bytes = 0_u64;
+    let archive_entry_total = archive.len();
+    if let Some(control) = control {
+        control.set_total(Some(u32::try_from(archive_entry_total).unwrap_or(u32::MAX)));
+    }
     for index in 0..archive.len() {
+        if control.is_some_and(PackageIntakeControl::is_cancelled) {
+            return Ok(None);
+        }
         if started.elapsed() > MAX_INTAKE_DURATION {
             documents.push(PreparedDocument::exception(
                 "[package]".into(),
@@ -629,6 +912,10 @@ fn prepare_zip(
         }
         let raw_name = entry.name().to_owned();
         let package_path = normalize_zip_path(&raw_name);
+        if let Some(control) = control {
+            control.discovered(Some(u32::try_from(archive_entry_total).unwrap_or(u32::MAX)));
+            control.set_current_path(Some(package_path.clone()));
+        }
         let size = entry.size();
         let compressed_size = entry.compressed_size();
         let exception = if !zip_path_is_safe(&raw_name) || entry.enclosed_name().is_none() {
@@ -669,6 +956,9 @@ fn prepare_zip(
         });
         if let Some(exception) = exception {
             documents.push(PreparedDocument::exception(package_path, size, exception));
+            if let Some(control) = control {
+                control.processed(true);
+            }
             continue;
         }
 
@@ -685,11 +975,24 @@ fn prepare_zip(
                 size,
                 IntakeExceptionCode::Corrupt,
             ));
+            if let Some(control) = control {
+                control.processed(true);
+            }
             continue;
         }
-        documents.push(prepare_bytes(package_path, bytes, content_root));
+        if control.is_some_and(PackageIntakeControl::is_cancelled) {
+            return Ok(None);
+        }
+        let document = prepare_bytes(package_path, bytes, content_root);
+        if control.is_some_and(PackageIntakeControl::is_cancelled) {
+            return Ok(None);
+        }
+        if let Some(control) = control {
+            control.processed(document.exception.is_some());
+        }
+        documents.push(document);
     }
-    Ok(documents)
+    Ok(Some(documents))
 }
 
 fn prepare_bytes(package_path: String, bytes: Vec<u8>, content_root: &Path) -> PreparedDocument {
@@ -976,4 +1279,123 @@ fn zip_preflight(source: &Path) -> Option<ZipPreflight> {
                     zip64,
                 })
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn package_progress_is_monotonic_and_cancellation_stops_at_finalization() {
+        let control = PackageIntakeControl::new(
+            "operation-1",
+            PackageIntakeOperationKind::AddPackage,
+            TenderPackageSourceKind::Directory,
+            "source-package",
+        );
+        let initial = control.snapshot();
+        control.discovered(None);
+        control.set_current_path(Some("folder/spec.pdf".into()));
+        control.processed(false);
+        let updated = control.snapshot();
+        assert_eq!(updated.operation_id, "operation-1");
+        assert_eq!(
+            updated.current_relative_path.as_deref(),
+            Some("folder/spec.pdf")
+        );
+        assert_eq!(updated.discovered_count, 1);
+        assert_eq!(updated.processed_count, 1);
+        assert!(updated.updated_at_epoch_ms >= initial.updated_at_epoch_ms);
+
+        control.request_cancel();
+        assert!(control.is_cancelled());
+        assert!(control.snapshot().cancellation_requested);
+        control.mark_finalization();
+        let finalizing = control.snapshot();
+        assert!(!finalizing.cancellable);
+        control.request_cancel();
+        assert_eq!(
+            control.snapshot().updated_at_epoch_ms,
+            finalizing.updated_at_epoch_ms
+        );
+    }
+
+    #[test]
+    fn directory_progress_reports_relative_paths_and_preserves_source() {
+        let source_root = tempfile::tempdir().expect("source tempdir");
+        let content_root = tempfile::tempdir().expect("content tempdir");
+        let nested = source_root.path().join("drawings");
+        std::fs::create_dir(&nested).expect("nested source directory");
+        std::fs::write(
+            nested.join("notes.pdf"),
+            b"%PDF-1.7\n1 0 obj\n(source remains unchanged)\nendobj\n%%EOF\n",
+        )
+        .expect("source document");
+        let control = PackageIntakeControl::new(
+            "directory-operation",
+            PackageIntakeOperationKind::AddPackage,
+            TenderPackageSourceKind::Directory,
+            "package",
+        );
+        let prepared =
+            prepare_package_with_control(source_root.path(), content_root.path(), Some(&control))
+                .expect("directory preparation")
+                .expect("directory result");
+        assert_eq!(prepared.documents.len(), 1);
+        let progress = control.snapshot();
+        assert_eq!(progress.stage, PackageIntakeStage::ReadingPackage);
+        assert_eq!(
+            progress.current_relative_path.as_deref(),
+            Some("drawings/notes.pdf")
+        );
+        assert_eq!(progress.discovered_count, 2);
+        assert_eq!(progress.processed_count, 1);
+        assert_eq!(progress.exception_count, 0);
+        assert_eq!(
+            std::fs::read(nested.join("notes.pdf")).expect("read source"),
+            b"%PDF-1.7\n1 0 obj\n(source remains unchanged)\nendobj\n%%EOF\n"
+        );
+    }
+
+    #[test]
+    fn zip_progress_reports_determinate_total_and_cancel_before_read() {
+        let source_root = tempfile::tempdir().expect("source tempdir");
+        let content_root = tempfile::tempdir().expect("content tempdir");
+        let archive_path = source_root.path().join("package.zip");
+        let mut archive =
+            zip::ZipWriter::new(std::fs::File::create(&archive_path).expect("zip archive"));
+        archive
+            .start_file("spec.txt", zip::write::SimpleFileOptions::default())
+            .expect("zip entry");
+        archive
+            .write_all(b"archive remains unchanged")
+            .expect("zip bytes");
+        archive.finish().expect("finish zip");
+        let control = PackageIntakeControl::new(
+            "zip-operation",
+            PackageIntakeOperationKind::AddPackage,
+            TenderPackageSourceKind::ZipArchive,
+            "package.zip",
+        );
+        let prepared =
+            prepare_package_with_control(&archive_path, content_root.path(), Some(&control))
+                .expect("zip preparation")
+                .expect("zip result");
+        assert_eq!(prepared.documents.len(), 1);
+        let progress = control.snapshot();
+        assert_eq!(progress.total_count, Some(1));
+        assert_eq!(progress.current_relative_path.as_deref(), Some("spec.txt"));
+        let original = std::fs::read(&archive_path).expect("read archive");
+        control.request_cancel();
+        assert!(
+            prepare_package_with_control(&archive_path, content_root.path(), Some(&control))
+                .expect("cancelled preparation")
+                .is_none()
+        );
+        assert_eq!(
+            std::fs::read(&archive_path).expect("read archive"),
+            original
+        );
+    }
 }

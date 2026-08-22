@@ -294,6 +294,28 @@ pub struct PurgeTrashedTenderCommand {
     pub confirmation_tender_name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Validate, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct TrashRecoveryRequiredTenderCommand {
+    #[garde(length(bytes, min = 32, max = 32), ascii)]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 1, max = 4000))]
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Validate, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct PurgeRecoveryRequiredTenderCommand {
+    #[garde(length(bytes, min = 32, max = 32), ascii)]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 1, max = 4000))]
+    pub rationale: String,
+    #[garde(length(bytes, min = 1, max = 200))]
+    pub confirmation_tender_name: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -389,6 +411,25 @@ pub struct TrashedTenderRecord {
     pub diagnostic_code: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub deletion_source: TenderDeletionSourceState,
+    pub integrity_code: Option<String>,
+    pub provider_reference_discovery: ProviderReferenceDiscoveryState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TenderDeletionSourceState {
+    Verified,
+    RecoveryRequired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ProviderReferenceDiscoveryState {
+    Complete,
+    Incomplete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -412,6 +453,7 @@ pub enum ProviderCleanupStatus {
     NotRequired,
     Pending,
     Completed,
+    Incomplete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -432,6 +474,9 @@ pub struct DeletionReceipt {
     pub acting_role: String,
     pub purged_at: String,
     pub manifest_sha256: String,
+    pub deletion_source: TenderDeletionSourceState,
+    pub integrity_code: Option<String>,
+    pub provider_reference_discovery: ProviderReferenceDiscoveryState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -450,6 +495,9 @@ struct DeletionReceiptRecord {
     acting_role: String,
     purged_at: String,
     manifest_sha256: String,
+    deletion_source: TenderDeletionSourceState,
+    integrity_code: Option<String>,
+    provider_reference_discovery: ProviderReferenceDiscoveryState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -464,6 +512,7 @@ struct PermanentDeletionPlan {
     portable_archive_paths: Vec<String>,
     recovery_ids: Vec<String>,
     provider_cleanup_targets: Vec<ProviderCleanupTarget>,
+    provider_reference_discovery: ProviderReferenceDiscoveryState,
 }
 
 struct PendingProviderCleanup {
@@ -490,6 +539,9 @@ struct TrashedTenderLifecycleDecision {
     recovery_ids: Vec<String>,
     provider_cleanup_targets: Vec<ProviderCleanupTarget>,
     manifest_sha256: String,
+    deletion_source: TenderDeletionSourceState,
+    integrity_code: Option<String>,
+    provider_reference_discovery: ProviderReferenceDiscoveryState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1797,6 +1849,7 @@ impl QuantixHost {
         &self,
         command: TenderRetentionDecisionCommand,
     ) -> Result<TenderRetentionDecisionRecord, TenderCommandError> {
+        self.diagnostics().stop_deep_for_tender(&command.tender_id);
         self.set_tender_retention(command, TenderRetentionState::Archived)
     }
 
@@ -1868,6 +1921,9 @@ impl QuantixHost {
             diagnostic_code: None,
             created_at: created_at.clone(),
             updated_at: created_at,
+            deletion_source: TenderDeletionSourceState::Verified,
+            integrity_code: None,
+            provider_reference_discovery: ProviderReferenceDiscoveryState::Complete,
         };
         record.approval_manifest_sha256 = manifest_sha256_record(&record)?;
         self.insert_trash_record(&record)?;
@@ -1900,6 +1956,7 @@ impl QuantixHost {
         }
         drop(store);
         self.close_tender(tender_id.as_str())?;
+        self.diagnostics().retire_tender(tender_id.as_str());
         let source = self
             .application_home()
             .join("tenders")
@@ -1918,6 +1975,99 @@ impl QuantixHost {
                 Ok(record)
             }
             Err(error) => {
+                self.diagnostics().resume_tender(tender_id.as_str());
+                record.state = TrashedTenderState::Failed;
+                record.diagnostic_code = Some("move_failed".into());
+                record.updated_at = self.installation_timestamp()?;
+                self.update_trash_record(&record, TrashedTenderState::Moving)?;
+                Err(store_unavailable(error))
+            }
+        }
+    }
+
+    /// Moves a latched recovery-required store without opening its database.
+    /// The catalogue is the only source used for the display name; the store
+    /// itself is treated as opaque bytes until it is in Trash.
+    pub fn trash_recovery_required_tender(
+        &self,
+        command: TrashRecoveryRequiredTenderCommand,
+    ) -> Result<TrashedTenderRecord, TenderCommandError> {
+        require_setup(self)?;
+        let _deletion_work = self.begin_recovery_deletion_work()?;
+        self.trash_recovery_required_tender_locked(command)
+    }
+
+    fn trash_recovery_required_tender_locked(
+        &self,
+        command: TrashRecoveryRequiredTenderCommand,
+    ) -> Result<TrashedTenderRecord, TenderCommandError> {
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let rationale = command.rationale.trim();
+        if rationale.is_empty() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let integrity = self.inspect_tender_integrity_with_check(&tender_id, || Ok(()))?;
+        if integrity.state != TenderIntegrityState::RecoveryRequired {
+            return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
+        }
+        let source = managed_tender_path(self.application_home(), &tender_id)?;
+        validate_managed_directory_tree(&self.application_home().join("tenders"), &source)?;
+        validate_recovery_store_identity_if_readable(&source, &tender_id)?;
+        let tender_name = self.catalogue_tender_name(&tender_id)?;
+        self.close_tender(tender_id.as_str())?;
+        self.diagnostics().retire_tender(tender_id.as_str());
+        let deletion_id = self.installation_identifier()?;
+        let created_at = self.installation_timestamp()?;
+        let mut record = TrashedTenderRecord {
+            deletion_id: deletion_id.clone(),
+            tender_id: tender_id.as_str().into(),
+            tender_name,
+            state: TrashedTenderState::Moving,
+            relative_path: format!("{}-{deletion_id}", tender_id.as_str()),
+            rationale: rationale.into(),
+            decided_by: "engineer_user".into(),
+            acting_role: "tendering_engineer".into(),
+            approval_manifest_sha256: String::new(),
+            diagnostic_code: None,
+            created_at: created_at.clone(),
+            updated_at: created_at,
+            deletion_source: TenderDeletionSourceState::RecoveryRequired,
+            integrity_code: Some(
+                integrity
+                    .issues
+                    .first()
+                    .copied()
+                    .map(tender_integrity_issue_code)
+                    .unwrap_or("recovery_required")
+                    .into(),
+            ),
+            provider_reference_discovery: ProviderReferenceDiscoveryState::Incomplete,
+        };
+        record.approval_manifest_sha256 = manifest_sha256_record(&record)?;
+        self.insert_trash_record(&record)?;
+        let destination = self
+            .application_home()
+            .join("trash")
+            .join(&record.relative_path);
+        validate_managed_parent(&self.application_home().join("trash"))?;
+        storage_publication_failpoint("recovery_trash_after_decision");
+        match fs::rename(&source, &destination) {
+            Ok(()) => {
+                storage_publication_failpoint("recovery_trash_after_move");
+                self.recovery_required_tenders()
+                    .lock()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                    .remove(&tender_id);
+                record.state = TrashedTenderState::Trashed;
+                record.updated_at = self.installation_timestamp()?;
+                self.update_trash_record(&record, TrashedTenderState::Moving)?;
+                Ok(record)
+            }
+            Err(error) => {
+                self.diagnostics().resume_tender(tender_id.as_str());
                 record.state = TrashedTenderState::Failed;
                 record.diagnostic_code = Some("move_failed".into());
                 record.updated_at = self.installation_timestamp()?;
@@ -1930,6 +2080,10 @@ impl QuantixHost {
     pub fn inspect_trashed_tenders(&self) -> Result<Vec<TrashedTenderRecord>, TenderCommandError> {
         require_setup(self)?;
         self.reconcile_trash_records()?;
+        self.load_trashed_tenders()
+    }
+
+    fn load_trashed_tenders(&self) -> Result<Vec<TrashedTenderRecord>, TenderCommandError> {
         let _guard = self
             .catalogue_lock()
             .lock()
@@ -1956,6 +2110,7 @@ impl QuantixHost {
         for row in rows {
             let (json, state, diagnostic_code, updated_at) = row.map_err(sql_error)?;
             let mut record: TrashedTenderRecord = parse_canonical_record(&json)?;
+            validate_trash_approval_record(&record)?;
             record.state = TrashedTenderState::parse(&state)?;
             record.diagnostic_code = diagnostic_code;
             record.updated_at = updated_at;
@@ -1994,9 +2149,14 @@ impl QuantixHost {
             .application_home()
             .join("tenders")
             .join(tender_id.as_str());
-        let integrity = TenderStore::inspect_integrity_with_check(&source, &tender_id, || Ok(()))?;
-        if integrity.state != TenderIntegrityState::Ready {
-            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        if record.deletion_source == TenderDeletionSourceState::Verified {
+            let integrity =
+                TenderStore::inspect_integrity_with_check(&source, &tender_id, || Ok(()))?;
+            if integrity.state != TenderIntegrityState::Ready {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+        } else {
+            validate_managed_directory_tree(&self.application_home().join("trash"), &source)?;
         }
         record = self.begin_restore_from_trash(record, command.rationale.trim())?;
         if let Err(error) = fs::rename(&source, &destination) {
@@ -2007,7 +2167,77 @@ impl QuantixHost {
             record.updated_at = updated_at;
         }
         let _ = self.update_trash_record(&record, TrashedTenderState::Restoring);
+        if record.deletion_source == TenderDeletionSourceState::RecoveryRequired {
+            self.recovery_required_tenders()
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                .insert(tender_id);
+        }
+        self.diagnostics().resume_tender(&record.tender_id);
         Ok(record)
+    }
+
+    pub fn purge_recovery_required_tender(
+        &self,
+        command: PurgeRecoveryRequiredTenderCommand,
+    ) -> Result<DeletionReceipt, TenderCommandError> {
+        require_setup(self)?;
+        let _deletion_work = self.begin_recovery_deletion_work()?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let rationale = command.rationale.trim();
+        if rationale.is_empty() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        self.reconcile_trash_records()?;
+        let existing_record = self.load_trashed_tenders()?.into_iter().find(|record| {
+            record.tender_id == command.tender_id
+                && record.state == TrashedTenderState::Trashed
+                && record.deletion_source == TenderDeletionSourceState::RecoveryRequired
+        });
+        let expected_name = match existing_record.as_ref() {
+            Some(record) => record.tender_name.clone(),
+            None => self.catalogue_tender_name(&TenderId::parse(&command.tender_id)?)?,
+        };
+        if command.confirmation_tender_name != expected_name {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let mut record = match existing_record {
+            Some(record) => record,
+            None => {
+                self.trash_recovery_required_tender_locked(TrashRecoveryRequiredTenderCommand {
+                    tender_id: command.tender_id.clone(),
+                    rationale: rationale.into(),
+                })?
+            }
+        };
+        let tender_id = TenderId::parse(&record.tender_id)?;
+        let source = self
+            .application_home()
+            .join("trash")
+            .join(&record.relative_path);
+        validate_managed_directory_tree(&self.application_home().join("trash"), &source)?;
+        let summary = self.catalogue_summary_for_recovery(&tender_id)?;
+        let purge_root = self
+            .application_home()
+            .join("staging")
+            .join(format!("purge-{}", record.deletion_id));
+        if purge_root.exists() {
+            return Err(TenderCommandError::new(TenderErrorCode::StoreUnavailable));
+        }
+        let plan = self.recovery_permanent_deletion_plan(&tender_id, &source)?;
+        let (next_record, decision) =
+            self.begin_purge_from_trash(record, rationale, &summary, plan)?;
+        record = next_record;
+        storage_publication_failpoint("purge_after_decision");
+        fs::rename(&source, &purge_root).map_err(store_unavailable)?;
+        self.diagnostics()
+            .delete_tender(tender_id.as_str())
+            .map_err(store_unavailable)?;
+        remove_permanent_deletion_files(self.application_home(), &record, &decision)?;
+        storage_publication_failpoint("purge_after_local_delete");
+        self.complete_purge_from_trash(record)
     }
 
     pub fn purge_trashed_tender(
@@ -2056,6 +2286,9 @@ impl QuantixHost {
         record = next_record;
         storage_publication_failpoint("purge_after_decision");
         fs::rename(&source, &purge_root).map_err(store_unavailable)?;
+        self.diagnostics()
+            .delete_tender(tender_id.as_str())
+            .map_err(store_unavailable)?;
         remove_permanent_deletion_files(self.application_home(), &record, &decision)?;
         storage_publication_failpoint("purge_after_local_delete");
         self.complete_purge_from_trash(record)
@@ -2097,7 +2330,7 @@ impl QuantixHost {
         if pending.is_empty() {
             return Ok(());
         }
-        if self.runtime_is_verified()
+        if self.document_tools_are_verified()
             && pending
                 .iter()
                 .any(|job| job.provider == AiProviderKind::Codex)
@@ -2109,7 +2342,7 @@ impl QuantixHost {
         }
         for job in pending {
             let deleted = match job.provider {
-                AiProviderKind::Anthropic | AiProviderKind::Gemini => true,
+                AiProviderKind::Anthropic | AiProviderKind::Gemini => false,
                 AiProviderKind::Codex => {
                     let provider = self.agent_provider().lock().await.as_ref().cloned();
                     match provider {
@@ -2393,6 +2626,9 @@ impl QuantixHost {
             recovery_ids: Vec::new(),
             provider_cleanup_targets: Vec::new(),
             manifest_sha256: String::new(),
+            deletion_source: record.deletion_source,
+            integrity_code: record.integrity_code.clone(),
+            provider_reference_discovery: record.provider_reference_discovery,
         };
         decision.manifest_sha256 = manifest_sha256_record(&decision)?;
         insert_trash_lifecycle_decision(&transaction, &decision)?;
@@ -2495,6 +2731,111 @@ impl QuantixHost {
             portable_archive_paths,
             recovery_ids,
             provider_cleanup_targets,
+            provider_reference_discovery: ProviderReferenceDiscoveryState::Complete,
+        })
+    }
+
+    fn recovery_permanent_deletion_plan(
+        &self,
+        tender_id: &TenderId,
+        trashed_root: &Path,
+    ) -> Result<PermanentDeletionPlan, TenderCommandError> {
+        let (provider_cleanup_targets, provider_reference_discovery) =
+            discover_recovery_provider_cleanup_targets(trashed_root, tender_id)?;
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let installation = Connection::open_with_flags(
+            self.application_home().join("installation.sqlite"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(sql_error)?;
+        Ok(PermanentDeletionPlan {
+            erased_copy_classes: vec![
+                ErasedTenderCopyClass::TenderStore,
+                ErasedTenderCopyClass::TenderBackup,
+                ErasedTenderCopyClass::PortableTenderArchive,
+                ErasedTenderCopyClass::DeliveryExport,
+                ErasedTenderCopyClass::AgentRunWorkspace,
+                ErasedTenderCopyClass::StagingItem,
+                ErasedTenderCopyClass::QuarantineItem,
+                ErasedTenderCopyClass::TenderLog,
+            ],
+            backup_ids: load_string_column(
+                &installation,
+                "SELECT backup_id FROM tender_backups WHERE tender_id = ?1 ORDER BY backup_id",
+                tender_id.as_str(),
+            )?,
+            portable_archive_paths: load_string_column(
+                &installation,
+                "SELECT relative_path FROM portable_tender_archives WHERE tender_id = ?1 ORDER BY relative_path",
+                tender_id.as_str(),
+            )?,
+            recovery_ids: load_string_column(
+                &installation,
+                "SELECT recovery_id FROM tender_recoveries WHERE tender_id = ?1 ORDER BY recovery_id",
+                tender_id.as_str(),
+            )?,
+            provider_cleanup_targets,
+            provider_reference_discovery,
+        })
+    }
+
+    fn catalogue_tender_name(&self, tender_id: &TenderId) -> Result<String, TenderCommandError> {
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        Connection::open_with_flags(
+            self.application_home().join("installation.sqlite"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(sql_error)?
+        .query_row(
+            "SELECT name FROM tender_catalogue WHERE tender_id = ?1",
+            [tender_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => {
+                TenderCommandError::new(TenderErrorCode::NotFound)
+            }
+            _ => sql_error(error),
+        })
+    }
+
+    fn catalogue_summary_for_recovery(
+        &self,
+        tender_id: &TenderId,
+    ) -> Result<TenderSummary, TenderCommandError> {
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let connection = Connection::open_with_flags(
+            self.application_home().join("installation.sqlite"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(sql_error)?;
+        let (name, revision, audit_event_count, audit_chain_head): (String, i64, i64, String) =
+            connection
+                .query_row(
+                    "SELECT name, revision, audit_event_count, audit_chain_head
+                     FROM tender_catalogue WHERE tender_id = ?1",
+                    [tender_id.as_str()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .map_err(sql_error)?;
+        Ok(TenderSummary {
+            tender_id: tender_id.as_str().into(),
+            name,
+            revision: u32::try_from(revision)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            lifecycle_phase: TenderLifecyclePhase::Intake,
+            audit_event_count: u64::try_from(audit_event_count)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            audit_chain_head,
         })
     }
 
@@ -2536,9 +2877,18 @@ impl QuantixHost {
             recovery_ids: plan.recovery_ids,
             provider_cleanup_targets: plan.provider_cleanup_targets,
             manifest_sha256: String::new(),
+            deletion_source: record.deletion_source,
+            integrity_code: record.integrity_code.clone(),
+            provider_reference_discovery: plan.provider_reference_discovery,
         };
         decision.manifest_sha256 = manifest_sha256_record(&decision)?;
         insert_trash_lifecycle_decision(&transaction, &decision)?;
+        insert_provider_cleanup_jobs(
+            &transaction,
+            &record.deletion_id,
+            &decision.provider_cleanup_targets,
+            &created_at,
+        )?;
         let changed = transaction
             .execute(
                 "UPDATE tender_trash SET state = 'purging', updated_at = ?2
@@ -2656,6 +3006,9 @@ impl QuantixHost {
             acting_role: decision.acting_role.clone(),
             purged_at: purged_at.clone(),
             manifest_sha256: String::new(),
+            deletion_source: decision.deletion_source,
+            integrity_code: decision.integrity_code.clone(),
+            provider_reference_discovery: decision.provider_reference_discovery,
         };
         receipt.manifest_sha256 = manifest_sha256_record(&receipt)?;
         transaction
@@ -2673,34 +3026,6 @@ impl QuantixHost {
                 ],
             )
             .map_err(sql_error)?;
-        for (target_ordinal, target) in decision.provider_cleanup_targets.iter().enumerate() {
-            let (provider_kind, status, thread_ref) = match target.provider {
-                AiProviderKind::Codex => ("codex", "pending", Some(target.thread_ref.as_str())),
-                AiProviderKind::Anthropic => ("anthropic", "completed", None),
-                AiProviderKind::Gemini => ("gemini", "completed", None),
-            };
-            transaction
-                .execute(
-                    "INSERT INTO provider_cleanup_jobs (
-                       cleanup_id, deletion_id, target_ordinal, provider_kind, thread_ref,
-                       target_manifest_sha256, status,
-                       attempt_count, diagnostic_code, last_attempt_at, created_at, updated_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, NULL, NULL, ?8, ?8)",
-                    params![
-                        random_identifier(&transaction)?,
-                        record.deletion_id,
-                        i64::try_from(target_ordinal).map_err(|_| TenderCommandError::new(
-                            TenderErrorCode::IntegrityFailed
-                        ))?,
-                        provider_kind,
-                        thread_ref,
-                        provider_target_manifests[target_ordinal],
-                        status,
-                        purged_at,
-                    ],
-                )
-                .map_err(sql_error)?;
-        }
         transaction
             .execute(
                 "DELETE FROM tender_recovery_decisions
@@ -2866,7 +3191,7 @@ impl QuantixHost {
         }
     }
 
-    fn reconcile_trash_records(&self) -> Result<(), TenderCommandError> {
+    pub(crate) fn reconcile_trash_records(&self) -> Result<(), TenderCommandError> {
         let records = {
             let _guard = self
                 .catalogue_lock()
@@ -2892,6 +3217,7 @@ impl QuantixHost {
             for row in rows {
                 let (json, state) = row.map_err(sql_error)?;
                 let mut record = parse_canonical_record::<TrashedTenderRecord>(&json)?;
+                validate_trash_approval_record(&record)?;
                 record.state = TrashedTenderState::parse(&state)?;
                 records.push(record);
             }
@@ -2910,18 +3236,24 @@ impl QuantixHost {
                 .application_home()
                 .join("staging")
                 .join(format!("purge-{}", record.deletion_id));
+            let live_exists =
+                managed_directory_tree_exists(&self.application_home().join("tenders"), &live)?;
+            let trashed_exists =
+                managed_directory_tree_exists(&self.application_home().join("trash"), &trashed)?;
+            let purging_exists =
+                managed_directory_tree_exists(&self.application_home().join("staging"), &purging)?;
             record.updated_at = self.installation_timestamp()?;
             let expected = record.state;
             match expected {
-                TrashedTenderState::Moving => match (live.exists(), trashed.exists()) {
+                TrashedTenderState::Moving => match (live_exists, trashed_exists) {
                     (false, true) => record.state = TrashedTenderState::Trashed,
                     (true, false) => {
-                        record.state = TrashedTenderState::Failed;
-                        record.diagnostic_code = Some("move_not_published".into());
+                        fs::rename(&live, &trashed).map_err(store_unavailable)?;
+                        record.state = TrashedTenderState::Trashed;
                     }
                     _ => return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired)),
                 },
-                TrashedTenderState::Restoring => match (live.exists(), trashed.exists()) {
+                TrashedTenderState::Restoring => match (live_exists, trashed_exists) {
                     (false, true) => {
                         fs::rename(&trashed, &live).map_err(store_unavailable)?;
                         record.state = TrashedTenderState::Restored;
@@ -2930,18 +3262,39 @@ impl QuantixHost {
                     _ => return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired)),
                 },
                 TrashedTenderState::Purging => {
-                    if live.exists() || (trashed.exists() && purging.exists()) {
+                    if live_exists || (trashed_exists && purging_exists) {
                         return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
                     }
-                    if trashed.exists() {
+                    if trashed_exists {
                         fs::rename(&trashed, &purging).map_err(store_unavailable)?;
                     }
                     let decision = self.load_purge_decision(&record.deletion_id)?;
+                    self.diagnostics()
+                        .delete_tender(&record.tender_id)
+                        .map_err(store_unavailable)?;
                     remove_permanent_deletion_files(self.application_home(), &record, &decision)?;
                     self.complete_purge_from_trash(record)?;
                     continue;
                 }
                 _ => return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+            }
+            match record.state {
+                TrashedTenderState::Trashed => {
+                    self.diagnostics().retire_tender(&record.tender_id);
+                }
+                TrashedTenderState::Restored => {
+                    self.diagnostics().resume_tender(&record.tender_id);
+                }
+                _ => {}
+            }
+            if expected == TrashedTenderState::Restoring
+                && record.state == TrashedTenderState::Restored
+                && record.deletion_source == TenderDeletionSourceState::RecoveryRequired
+            {
+                self.recovery_required_tenders()
+                    .lock()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                    .insert(TenderId::parse(&record.tender_id)?);
             }
             self.update_trash_record(&record, expected)?;
         }
@@ -3241,6 +3594,42 @@ fn insert_trash_lifecycle_decision(
         .map_err(sql_error)
 }
 
+fn insert_provider_cleanup_jobs(
+    transaction: &Transaction<'_>,
+    deletion_id: &str,
+    targets: &[ProviderCleanupTarget],
+    created_at: &str,
+) -> Result<(), TenderCommandError> {
+    for (target_ordinal, target) in targets.iter().enumerate() {
+        let provider_kind = match target.provider {
+            AiProviderKind::Codex => "codex",
+            AiProviderKind::Anthropic => "anthropic",
+            AiProviderKind::Gemini => "gemini",
+        };
+        transaction
+            .execute(
+                "INSERT INTO provider_cleanup_jobs (
+                   cleanup_id, deletion_id, target_ordinal, provider_kind, thread_ref,
+                   target_manifest_sha256, status,
+                   attempt_count, diagnostic_code, last_attempt_at, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, NULL, NULL, ?8, ?8)",
+                params![
+                    random_identifier(transaction)?,
+                    deletion_id,
+                    i64::try_from(target_ordinal)
+                        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+                    provider_kind,
+                    target.thread_ref.as_str(),
+                    manifest_sha256_record(target)?,
+                    "pending",
+                    created_at,
+                ],
+            )
+            .map_err(sql_error)?;
+    }
+    Ok(())
+}
+
 fn parse_canonical_record<T: for<'de> Deserialize<'de> + Serialize>(
     value: &str,
 ) -> Result<T, TenderCommandError> {
@@ -3250,6 +3639,33 @@ fn parse_canonical_record<T: for<'de> Deserialize<'de> + Serialize>(
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
     Ok(record)
+}
+
+fn validate_trash_approval_record(record: &TrashedTenderRecord) -> Result<(), TenderCommandError> {
+    let tender_id = TenderId::parse(&record.tender_id)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    if !valid_identifier(&record.deletion_id)
+        || record.state != TrashedTenderState::Moving
+        || record.relative_path != format!("{}-{}", tender_id.as_str(), record.deletion_id)
+        || record.tender_name.trim().is_empty()
+        || record.tender_name.len() > MAX_TENDER_NAME_BYTES
+        || record.created_at != record.updated_at
+        || record.diagnostic_code.is_some()
+        || manifest_sha256_record(record)? != record.approval_manifest_sha256
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    match record.deletion_source {
+        TenderDeletionSourceState::Verified
+            if record.integrity_code.is_none()
+                && record.provider_reference_discovery
+                    == ProviderReferenceDiscoveryState::Complete =>
+        {
+            Ok(())
+        }
+        TenderDeletionSourceState::RecoveryRequired if record.integrity_code.is_some() => Ok(()),
+        _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+    }
 }
 
 fn manifest_sha256_record<T: Serialize>(value: &T) -> Result<String, TenderCommandError> {
@@ -3354,6 +3770,174 @@ fn remove_operation_staging(parent: &Path, target: &Path) -> Result<(), TenderCo
     }
 }
 
+fn managed_tender_path(
+    application_home: &Path,
+    tender_id: &TenderId,
+) -> Result<PathBuf, TenderCommandError> {
+    let parent = application_home.join("tenders");
+    validate_managed_parent(&parent)?;
+    Ok(parent.join(tender_id.as_str()))
+}
+
+fn tender_integrity_issue_code(issue: TenderIntegrityIssue) -> &'static str {
+    match issue {
+        TenderIntegrityIssue::AuditChainInvalid => "audit_chain_invalid",
+        TenderIntegrityIssue::DatabaseIntegrityInvalid => "database_integrity_invalid",
+        TenderIntegrityIssue::InspectionUnavailable => "inspection_unavailable",
+        TenderIntegrityIssue::ReferencedContentMissing => "referenced_content_missing",
+        TenderIntegrityIssue::ReferencedContentMismatch => "referenced_content_mismatch",
+        TenderIntegrityIssue::ManifestInvalid => "manifest_invalid",
+        TenderIntegrityIssue::SchemaMismatch => "schema_mismatch",
+        TenderIntegrityIssue::StorageLayoutInvalid => "storage_layout_invalid",
+        TenderIntegrityIssue::TenderIdentityMismatch => "tender_identity_mismatch",
+    }
+}
+
+fn validate_managed_parent(parent: &Path) -> Result<(), TenderCommandError> {
+    let metadata = fs::symlink_metadata(parent).map_err(store_unavailable)?;
+    if metadata_is_unsafe_storage_link(&metadata) || !metadata.is_dir() {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(())
+}
+
+fn validate_managed_directory(parent: &Path, target: &Path) -> Result<(), TenderCommandError> {
+    validate_managed_parent(parent)?;
+    let metadata = fs::symlink_metadata(target).map_err(store_unavailable)?;
+    if metadata_is_unsafe_storage_link(&metadata) || !metadata.is_dir() {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let canonical_parent = fs::canonicalize(parent).map_err(store_unavailable)?;
+    let canonical_target = fs::canonicalize(target).map_err(store_unavailable)?;
+    if canonical_target.parent() != Some(canonical_parent.as_path()) {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    Ok(())
+}
+
+fn validate_managed_directory_tree(parent: &Path, target: &Path) -> Result<(), TenderCommandError> {
+    validate_managed_directory(parent, target)?;
+    for entry in walkdir::WalkDir::new(target).follow_links(false) {
+        let entry = entry.map_err(walkdir_error)?;
+        let metadata = fs::symlink_metadata(entry.path()).map_err(store_unavailable)?;
+        if metadata_is_unsafe_storage_link(&metadata) {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+    }
+    Ok(())
+}
+
+fn managed_directory_tree_exists(parent: &Path, target: &Path) -> Result<bool, TenderCommandError> {
+    validate_managed_parent(parent)?;
+    match fs::symlink_metadata(target) {
+        Ok(_) => {
+            validate_managed_directory_tree(parent, target)?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(store_unavailable(error)),
+    }
+}
+
+fn discover_recovery_provider_cleanup_targets(
+    trashed_root: &Path,
+    expected_tender_id: &TenderId,
+) -> Result<(Vec<ProviderCleanupTarget>, ProviderReferenceDiscoveryState), TenderCommandError> {
+    let connection = match Connection::open_with_flags(
+        trashed_root.join("tender.sqlite"),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) {
+        Ok(connection) => connection,
+        Err(_) => {
+            return Ok((Vec::new(), ProviderReferenceDiscoveryState::Incomplete));
+        }
+    };
+    if let Ok(Some(actual_tender_id)) = readable_recovery_store_identity(&connection) {
+        if actual_tender_id != expected_tender_id.as_str() {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+    }
+    let mut statement = match connection.prepare(
+        "SELECT DISTINCT json_extract(bindings.binding_json, '$.provider'),
+                runs.provider_thread_ref
+         FROM agent_runs AS runs
+         JOIN agent_run_provider_bindings AS bindings ON bindings.run_id = runs.run_id
+         WHERE runs.provider_thread_ref IS NOT NULL
+         ORDER BY 1, 2",
+    ) {
+        Ok(statement) => statement,
+        Err(_) => {
+            return Ok((Vec::new(), ProviderReferenceDiscoveryState::Incomplete));
+        }
+    };
+    let rows = match statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) {
+        Ok(rows) => rows,
+        Err(_) => {
+            return Ok((Vec::new(), ProviderReferenceDiscoveryState::Incomplete));
+        }
+    };
+    let mut targets = Vec::new();
+    let mut discovery = ProviderReferenceDiscoveryState::Complete;
+    for row in rows {
+        let (provider, thread_ref) = match row {
+            Ok(row) => row,
+            Err(_) => {
+                discovery = ProviderReferenceDiscoveryState::Incomplete;
+                continue;
+            }
+        };
+        let provider = match provider.as_str() {
+            "codex" => AiProviderKind::Codex,
+            "anthropic" => AiProviderKind::Anthropic,
+            "gemini" => AiProviderKind::Gemini,
+            _ => {
+                discovery = ProviderReferenceDiscoveryState::Incomplete;
+                continue;
+            }
+        };
+        if thread_ref.is_empty() || thread_ref.len() > 1000 {
+            discovery = ProviderReferenceDiscoveryState::Incomplete;
+            continue;
+        }
+        targets.push(ProviderCleanupTarget {
+            provider,
+            thread_ref,
+        });
+    }
+    Ok((targets, discovery))
+}
+
+fn validate_recovery_store_identity_if_readable(
+    root: &Path,
+    expected_tender_id: &TenderId,
+) -> Result<(), TenderCommandError> {
+    let connection = match Connection::open_with_flags(
+        root.join("tender.sqlite"),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) {
+        Ok(connection) => connection,
+        Err(_) => return Ok(()),
+    };
+    if let Ok(Some(actual_tender_id)) = readable_recovery_store_identity(&connection) {
+        if actual_tender_id != expected_tender_id.as_str() {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+    }
+    Ok(())
+}
+
+fn readable_recovery_store_identity(connection: &Connection) -> rusqlite::Result<Option<String>> {
+    connection
+        .query_row(
+            "SELECT tender_id FROM tender WHERE singleton = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+}
+
 fn remove_permanent_deletion_files(
     application_home: &Path,
     record: &TrashedTenderRecord,
@@ -3390,12 +3974,19 @@ fn remove_permanent_deletion_files(
         &application_home.join("exports").join(&record.tender_id),
     )?;
 
+    // Operational diagnostics are strictly partitioned by Tender. Permanent
+    // deletion must erase exactly this validated Tender subtree; substring
+    // matching at the logs root is both too broad and unable to reach the
+    // nested journal layout.
+    let tender_logs = application_home.join("logs").join("tenders");
+    remove_operation_staging(&tender_logs, &tender_logs.join(&record.tender_id))?;
+
     let mut identifiers = vec![record.tender_id.clone(), record.deletion_id.clone()];
     identifiers.extend(decision.backup_ids.iter().cloned());
     identifiers.extend(decision.recovery_ids.iter().cloned());
     identifiers.extend(decision.portable_archive_paths.iter().cloned());
+    remove_matching_managed_children(&application_home.join("trash"), &identifiers)?;
     remove_matching_managed_children(&application_home.join("staging"), &identifiers)?;
-    remove_matching_managed_children(&application_home.join("logs"), &identifiers)?;
     Ok(())
 }
 
@@ -3469,13 +4060,16 @@ fn deletion_receipt_view(
     if provider_threads != record.provider_thread_count || confirmed > provider_threads {
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
-    let provider_cleanup_status = if provider_threads == 0 {
-        ProviderCleanupStatus::NotRequired
-    } else if confirmed == provider_threads {
-        ProviderCleanupStatus::Completed
-    } else {
-        ProviderCleanupStatus::Pending
-    };
+    let provider_cleanup_status =
+        if record.provider_reference_discovery == ProviderReferenceDiscoveryState::Incomplete {
+            ProviderCleanupStatus::Incomplete
+        } else if provider_threads == 0 {
+            ProviderCleanupStatus::NotRequired
+        } else if confirmed == provider_threads {
+            ProviderCleanupStatus::Completed
+        } else {
+            ProviderCleanupStatus::Pending
+        };
     Ok(DeletionReceipt {
         receipt_id: record.receipt_id.clone(),
         deletion_id: record.deletion_id.clone(),
@@ -3492,6 +4086,9 @@ fn deletion_receipt_view(
         acting_role: record.acting_role.clone(),
         purged_at: record.purged_at.clone(),
         manifest_sha256: record.manifest_sha256.clone(),
+        deletion_source: record.deletion_source,
+        integrity_code: record.integrity_code.clone(),
+        provider_reference_discovery: record.provider_reference_discovery,
     })
 }
 
@@ -3581,7 +4178,8 @@ fn tender_error_code(code: TenderErrorCode) -> &'static str {
         TenderErrorCode::NotFound => "not_found",
         TenderErrorCode::OperationTimedOut => "operation_timed_out",
         TenderErrorCode::RecoveryRequired => "recovery_required",
-        TenderErrorCode::RuntimeRequired => "runtime_required",
+        TenderErrorCode::LocalDocumentToolsRequired => "local_document_tools_required",
+        TenderErrorCode::AiProviderRequired => "ai_provider_required",
         TenderErrorCode::SetupRequired => "setup_required",
         TenderErrorCode::StoreUnavailable => "store_unavailable",
     }
@@ -4380,6 +4978,9 @@ mod tests {
             acting_role: "tendering_engineer".into(),
             purged_at: "2026-08-15T00:00:00.000Z".into(),
             manifest_sha256: String::new(),
+            deletion_source: TenderDeletionSourceState::Verified,
+            integrity_code: None,
+            provider_reference_discovery: ProviderReferenceDiscoveryState::Complete,
         };
         receipt.manifest_sha256 = manifest_sha256_record(&receipt).expect("hash receipt");
         let serialized = canonical_json_record(&receipt).expect("serialize receipt");
@@ -4410,5 +5011,112 @@ mod tests {
                 .expect("repeat completed cleanup inspection"),
             completed
         );
+    }
+
+    #[test]
+    fn trash_reconciliation_rejects_a_rehashed_traversal_approval() {
+        let tender_id = "1".repeat(32);
+        let deletion_id = "2".repeat(32);
+        let mut record = TrashedTenderRecord {
+            deletion_id: deletion_id.clone(),
+            tender_id: tender_id.clone(),
+            tender_name: "Recovery Tender".into(),
+            state: TrashedTenderState::Moving,
+            relative_path: format!("{tender_id}-{deletion_id}"),
+            rationale: "Move the damaged Store to Trash".into(),
+            decided_by: "engineer_user".into(),
+            acting_role: "tendering_engineer".into(),
+            approval_manifest_sha256: String::new(),
+            diagnostic_code: None,
+            created_at: "2026-08-15T00:00:00.000Z".into(),
+            updated_at: "2026-08-15T00:00:00.000Z".into(),
+            deletion_source: TenderDeletionSourceState::RecoveryRequired,
+            integrity_code: Some("recovery_required".into()),
+            provider_reference_discovery: ProviderReferenceDiscoveryState::Incomplete,
+        };
+        record.approval_manifest_sha256 =
+            manifest_sha256_record(&record).expect("hash valid Trash approval");
+        validate_trash_approval_record(&record).expect("accept exact managed relative path");
+
+        record.relative_path = "../outside-application-home".into();
+        record.approval_manifest_sha256 =
+            manifest_sha256_record(&record).expect("rehash malicious Trash approval");
+        let error = validate_trash_approval_record(&record)
+            .expect_err("rehashed path traversal must still fail reconciliation");
+        assert_eq!(error.code, TenderErrorCode::IntegrityFailed);
+    }
+
+    #[test]
+    fn permanent_deletion_erases_only_the_exact_tender_log_subtree() {
+        let home = tempfile::tempdir().expect("application home");
+        for directory in ["backups", "archives", "exports", "trash", "staging"] {
+            fs::create_dir_all(home.path().join(directory)).unwrap();
+        }
+        let tender_id = "1".repeat(32);
+        let other_tender_id = "2".repeat(32);
+        let application_log = home.path().join("logs/application/2026-08-21");
+        let target_log = home
+            .path()
+            .join("logs/tenders")
+            .join(&tender_id)
+            .join("2026-08-21");
+        let other_log = home
+            .path()
+            .join("logs/tenders")
+            .join(&other_tender_id)
+            .join("2026-08-21");
+        for directory in [&application_log, &target_log, &other_log] {
+            fs::create_dir_all(directory).unwrap();
+            File::create(directory.join("000001.jsonl")).unwrap();
+        }
+        let record = TrashedTenderRecord {
+            deletion_id: "3".repeat(32),
+            tender_id: tender_id.clone(),
+            tender_name: "Deleted Tender".into(),
+            state: TrashedTenderState::Purging,
+            relative_path: "managed-trash-entry".into(),
+            rationale: "Permanent deletion approved".into(),
+            decided_by: "engineer_user".into(),
+            acting_role: "tendering_engineer".into(),
+            approval_manifest_sha256: "4".repeat(64),
+            diagnostic_code: None,
+            created_at: "2026-08-21T00:00:00Z".into(),
+            updated_at: "2026-08-21T00:00:00Z".into(),
+            deletion_source: TenderDeletionSourceState::Verified,
+            integrity_code: None,
+            provider_reference_discovery: ProviderReferenceDiscoveryState::Complete,
+        };
+        let mut decision = TrashedTenderLifecycleDecision {
+            decision_id: "5".repeat(32),
+            deletion_id: record.deletion_id.clone(),
+            tender_id: tender_id.clone(),
+            action: "purge".into(),
+            rationale: record.rationale.clone(),
+            decided_by: record.decided_by.clone(),
+            acting_role: record.acting_role.clone(),
+            created_at: record.updated_at.clone(),
+            audit_event_count: Some(1),
+            audit_chain_head: Some("6".repeat(64)),
+            erased_copy_classes: vec![ErasedTenderCopyClass::TenderLog],
+            backup_ids: Vec::new(),
+            portable_archive_paths: Vec::new(),
+            recovery_ids: Vec::new(),
+            provider_cleanup_targets: Vec::new(),
+            manifest_sha256: String::new(),
+            deletion_source: TenderDeletionSourceState::Verified,
+            integrity_code: None,
+            provider_reference_discovery: ProviderReferenceDiscoveryState::Complete,
+        };
+        decision.manifest_sha256 = manifest_sha256_record(&decision).unwrap();
+
+        remove_permanent_deletion_files(home.path(), &record, &decision).unwrap();
+
+        assert!(!home.path().join("logs/tenders").join(tender_id).exists());
+        assert!(home
+            .path()
+            .join("logs/tenders")
+            .join(other_tender_id)
+            .exists());
+        assert!(application_log.exists());
     }
 }

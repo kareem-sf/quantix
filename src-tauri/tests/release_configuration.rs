@@ -27,6 +27,44 @@ fn native_candidate_build_does_not_require_public_release_authorization() {
 }
 
 #[test]
+fn custom_titlebar_is_windows_only_and_has_explicit_window_permissions() {
+    let root = repository_root();
+    let capability: Value = serde_json::from_slice(
+        &fs::read(root.join("src-tauri/capabilities/windows-titlebar.json"))
+            .expect("read Windows titlebar capability"),
+    )
+    .expect("parse Windows titlebar capability");
+    let permissions = capability["permissions"]
+        .as_array()
+        .expect("titlebar permissions");
+
+    assert_eq!(capability["platforms"], serde_json::json!(["windows"]));
+    assert_eq!(capability["windows"], serde_json::json!(["main"]));
+    for required in [
+        "core:window:default",
+        "core:window:allow-close",
+        "core:window:allow-minimize",
+        "core:window:allow-toggle-maximize",
+        "core:window:allow-start-dragging",
+        "core:event:allow-listen",
+        "core:event:allow-unlisten",
+    ] {
+        assert!(
+            permissions.iter().any(|permission| permission == required),
+            "Windows titlebar capability is missing `{required}`",
+        );
+    }
+
+    let host =
+        fs::read_to_string(root.join("src-tauri/src/lib.rs")).expect("read Tauri host entrypoint");
+    assert!(
+        host.contains("#[cfg(target_os = \"windows\")]")
+            && host.contains("window.set_decorations(false)?;"),
+        "the main window must become frameless only on Windows",
+    );
+}
+
+#[test]
 fn windows_candidate_workflow_creates_only_private_windows_installers() {
     let workflow =
         fs::read_to_string(repository_root().join(".github/workflows/candidate-windows.yml"))

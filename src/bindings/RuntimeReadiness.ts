@@ -2,4 +2,4 @@
 import type { RuntimeReadinessIssue } from "./RuntimeReadinessIssue";
 import type { RuntimeReadinessState } from "./RuntimeReadinessState";
 
-export type RuntimeReadiness = { state: RuntimeReadinessState, issues: Array<RuntimeReadinessIssue>, codex_version: string | null, uv_version: string | null, ocr_version: string | null, repair_available: boolean, };
+export type RuntimeReadiness = { state: RuntimeReadinessState, issues: Array<RuntimeReadinessIssue>, uv_version: string | null, ocr_version: string | null, repair_available: boolean, };

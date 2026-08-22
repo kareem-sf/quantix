@@ -6,17 +6,16 @@ use ts_rs::TS;
 
 use std::{fs, path::Path, time::Duration};
 
-use crate::{
-    application_settings::load_preferred_ai_execution_selection, QuantixHost,
-    TenderPackageSourceKind,
-};
+use crate::tender_intake::PackageIntakeControl;
+use crate::{QuantixHost, TenderPackageSourceKind};
 
 use super::{
-    append_audit_event, random_identifier, require_setup, sha256_hex, sql_error, sqlite_timestamp,
-    storage_publication_failpoint, store_unavailable, tender_records::insert_engineer_entry,
-    ManagerIntakeStage, ManagerIntakeStatus, TenderCommandError, TenderErrorCode, TenderId,
-    TenderLifecyclePhase, TenderStore, WorkspaceMessageReference, WorkspaceTenderDocument,
-    MAX_TENDER_NAME_BYTES,
+    append_audit_event, metadata_is_unsafe_storage_link, random_identifier, require_setup,
+    sha256_hex, sql_error, sqlite_timestamp, storage_publication_failpoint, store_unavailable,
+    tender_records::insert_engineer_entry, ManagerIntakeStage, ManagerIntakeStatus,
+    TenderAiExecutionBinding, TenderAiSelectionReadiness, TenderCommandError, TenderErrorCode,
+    TenderId, TenderLifecyclePhase, TenderStore, WorkPlanCapabilityGap, WorkspaceMessageReference,
+    WorkspaceTenderDocument, MAX_TENDER_NAME_BYTES,
 };
 
 const MAX_CONVERSATION_MESSAGES: i64 = 100;
@@ -42,6 +41,7 @@ pub struct SelectManagerWorkspaceTenderCommand {
 #[ts(export)]
 pub struct StartManagerTenderCommand {
     pub source_kind: TenderPackageSourceKind,
+    pub local_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
@@ -52,6 +52,20 @@ pub struct RecordEngineerWorkspaceMessageCommand {
     pub tender_id: String,
     #[garde(length(bytes, min = 1, max = 4000))]
     pub body: String,
+    #[garde(skip)]
+    pub attachment_refs: Vec<WorkspaceMessageReference>,
+    #[garde(skip)]
+    pub context_refs: Vec<WorkspaceMessageReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct SearchManagerWorkspaceCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 1, max = 200))]
+    pub query: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
@@ -193,6 +207,40 @@ pub struct WorkspaceCurrentAction {
     pub requires_engineer: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum WorkspaceCapabilityReadinessState {
+    NotPlanned,
+    Ready,
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceCapabilityReadiness {
+    pub state: WorkspaceCapabilityReadinessState,
+    pub gaps: Vec<WorkPlanCapabilityGap>,
+    pub blocker_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum WorkspaceDoctorBlockerArea {
+    AiExecution,
+    Capability,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceDoctorBlockerSummary {
+    pub code: String,
+    pub area: WorkspaceDoctorBlockerArea,
+    pub title: String,
+    pub detail: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct WorkspaceWorkSummary {
@@ -202,6 +250,7 @@ pub struct WorkspaceWorkSummary {
     pub done: u32,
     pub cancelled: u32,
     pub failed: u32,
+    pub tasks: Vec<WorkspaceTaskRow>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -210,6 +259,7 @@ pub struct WorkspaceFilesSummary {
     pub tender_document_count: u32,
     pub quantix_output_count: u32,
     pub tender_documents: Vec<WorkspaceTenderDocument>,
+    pub quantix_outputs: Vec<WorkspaceOutputReference>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -218,6 +268,101 @@ pub struct WorkspaceTeamSummary {
     pub active_agent_runs: u32,
     pub waiting_tasks: u32,
     pub needs_engineer: u32,
+    pub events: Vec<TenderOfficeMessage>,
+    pub agent_runs: Vec<WorkspaceAgentRunReference>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum WorkspaceTaskState {
+    Waiting,
+    Working,
+    NeedsEngineer,
+    Paused,
+    Done,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceAgentReference {
+    pub profile_id: String,
+    pub profile_version: u32,
+    pub identity: String,
+    pub profession: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceTaskRow {
+    pub production_task_id: String,
+    pub task_id: Option<String>,
+    pub task_key: String,
+    pub objective: Option<String>,
+    pub state: WorkspaceTaskState,
+    pub status_detail: String,
+    pub dependencies: Vec<String>,
+    pub agent: Option<WorkspaceAgentReference>,
+    pub current_run_id: Option<String>,
+    pub output_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceAgentRunReference {
+    pub run_id: String,
+    pub task_id: String,
+    pub state: String,
+    pub agent: WorkspaceAgentReference,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceOutputReference {
+    pub artifact_id: String,
+    pub version: u32,
+    pub production_task_id: String,
+    pub author_run_id: String,
+    pub payload_sha256: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum WorkspaceSearchResultKind {
+    Conversation,
+    Work,
+    Files,
+    Evidence,
+    Agents,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceSearchHit {
+    pub kind: WorkspaceSearchResultKind,
+    pub reference: String,
+    pub version: Option<u32>,
+    pub title: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceSearchGroup {
+    pub kind: WorkspaceSearchResultKind,
+    pub hits: Vec<WorkspaceSearchHit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceSearchProjection {
+    pub query: String,
+    pub groups: Vec<WorkspaceSearchGroup>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -231,6 +376,9 @@ pub struct ManagerWorkspaceProjection {
     pub files: WorkspaceFilesSummary,
     pub team: WorkspaceTeamSummary,
     pub intake: Option<ManagerIntakeStatus>,
+    pub ai_execution: Option<TenderAiExecutionBinding>,
+    pub capability_readiness: Option<WorkspaceCapabilityReadiness>,
+    pub doctor_blockers: Vec<WorkspaceDoctorBlockerSummary>,
 }
 
 pub(super) fn initialize_manager_workspace(
@@ -352,6 +500,9 @@ struct WorkspaceSnapshot {
     files: WorkspaceFilesSummary,
     team: WorkspaceTeamSummary,
     intake: Option<ManagerIntakeStatus>,
+    ai_execution: TenderAiExecutionBinding,
+    capability_readiness: WorkspaceCapabilityReadiness,
+    doctor_blockers: Vec<WorkspaceDoctorBlockerSummary>,
 }
 
 impl TenderStore {
@@ -365,10 +516,14 @@ impl TenderStore {
                 |row| row.get::<_, String>(0),
             )
             .map_err(sql_error)?;
+        let conversation = self.manager_conversation()?;
         let work = self.workspace_work_summary()?;
         let files = self.workspace_files_summary()?;
-        let team = self.workspace_team_summary(&work)?;
+        let team = self.workspace_team_summary(&work, &conversation)?;
         let intake = self.current_manager_intake_status()?;
+        let ai_execution = self.inspect_tender_ai_execution_binding()?;
+        let capability_readiness = self.workspace_capability_readiness()?;
+        let doctor_blockers = workspace_doctor_blockers(&ai_execution, &capability_readiness);
         let current_action =
             self.workspace_current_action(summary.lifecycle_phase, &work, intake.as_ref())?;
         let safe_terminal_boundary = self.retention_boundary_is_safe()?;
@@ -389,12 +544,15 @@ impl TenderStore {
         };
         Ok(WorkspaceSnapshot {
             tender,
-            conversation: self.manager_conversation()?,
+            conversation,
             current_action,
             work,
             files,
             team,
             intake,
+            ai_execution,
+            capability_readiness,
+            doctor_blockers,
         })
     }
 
@@ -406,6 +564,9 @@ impl TenderStore {
         self.require_storage_writable()?;
         let body = command.body.trim();
         if body.is_empty() || body.len() > MAX_MESSAGE_BYTES {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        if command.attachment_refs.len() + command.context_refs.len() > 24 {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
         let transaction = self
@@ -437,6 +598,36 @@ impl TenderStore {
                 params![message_id, conversation_id, body, created_at],
             )
             .map_err(sql_error)?;
+        for (index, reference) in command
+            .attachment_refs
+            .iter()
+            .chain(command.context_refs.iter())
+            .enumerate()
+        {
+            if !workspace_reference_exists(&transaction, reference)? {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            transaction
+                .execute(
+                    "INSERT INTO tender_office_message_references (
+                       message_id, ordinal, kind, reference, version,
+                       evidence_ordinal, label, detail
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        message_id,
+                        i64::try_from(index + 1).map_err(|_| TenderCommandError::new(
+                            TenderErrorCode::InvalidCommand
+                        ))?,
+                        reference.kind.as_str(),
+                        reference.reference,
+                        reference.version,
+                        reference.evidence_ordinal,
+                        reference.label,
+                        reference.detail,
+                    ],
+                )
+                .map_err(sql_error)?;
+        }
         let pending_question: Option<(String, String)> = transaction
             .query_row(
                 "SELECT outcomes.outcome_id, outcomes.question
@@ -483,9 +674,13 @@ impl TenderStore {
                     "INSERT INTO tender_office_message_references (
                        message_id, ordinal, kind, reference, version,
                        evidence_ordinal, label, detail
-                     ) VALUES (?1, 1, 'manager_intake_outcome', ?2, 1, NULL, ?3, ?4)",
+                     ) VALUES (?1, ?2, 'manager_intake_outcome', ?3, 1, NULL, ?4, ?5)",
                     params![
                         message_id,
+                        i64::try_from(
+                            command.attachment_refs.len() + command.context_refs.len() + 1
+                        )
+                        .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?,
                         outcome_id,
                         "Answered Manager question",
                         question,
@@ -537,6 +732,8 @@ impl TenderStore {
                 "message_id": &message_id,
                 "author": "engineer",
                 "body_sha256": sha256_hex(body.as_bytes()),
+                "attachment_reference_count": command.attachment_refs.len(),
+                "context_reference_count": command.context_refs.len(),
             }),
             &created_at,
         )?;
@@ -663,6 +860,7 @@ impl TenderStore {
                 },
             )
             .map_err(sql_error)?;
+        let tasks = self.workspace_task_rows()?;
         Ok(WorkspaceWorkSummary {
             needs_engineer: to_u32(counts.0)?,
             working: to_u32(counts.1)?,
@@ -670,6 +868,7 @@ impl TenderStore {
             done: to_u32(counts.3)?,
             cancelled: to_u32(counts.4)?,
             failed: to_u32(counts.5)?,
+            tasks,
         })
     }
 
@@ -688,12 +887,14 @@ impl TenderStore {
             tender_document_count: to_u32(counts.0)?,
             quantix_output_count: to_u32(counts.1)?,
             tender_documents: self.workspace_tender_documents()?,
+            quantix_outputs: self.workspace_output_references()?,
         })
     }
 
     fn workspace_team_summary(
         &self,
         work: &WorkspaceWorkSummary,
+        conversation: &ManagerConversation,
     ) -> Result<WorkspaceTeamSummary, TenderCommandError> {
         let active_agent_runs: i64 = self
             .connection
@@ -707,6 +908,420 @@ impl TenderStore {
             active_agent_runs: to_u32(active_agent_runs)?,
             waiting_tasks: work.waiting,
             needs_engineer: work.needs_engineer.saturating_add(work.failed),
+            events: conversation.messages.clone(),
+            agent_runs: self.workspace_agent_run_references()?,
+        })
+    }
+
+    fn workspace_capability_readiness(
+        &self,
+    ) -> Result<WorkspaceCapabilityReadiness, TenderCommandError> {
+        let plan: Option<(String, String)> = self
+            .connection
+            .query_row(
+                "SELECT versions.capability_gaps_json, versions.blocker_codes_json
+                 FROM work_plan_heads AS heads
+                 JOIN work_plan_versions AS versions
+                   ON versions.plan_id = heads.plan_id
+                  AND versions.version = heads.current_version
+                 ORDER BY heads.plan_id
+                 LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let Some((gaps_json, blocker_codes_json)) = plan else {
+            return Ok(WorkspaceCapabilityReadiness {
+                state: WorkspaceCapabilityReadinessState::NotPlanned,
+                gaps: Vec::new(),
+                blocker_codes: Vec::new(),
+            });
+        };
+        let mut gaps: Vec<WorkPlanCapabilityGap> = serde_json::from_str(&gaps_json)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let mut blocker_codes: Vec<String> = serde_json::from_str(&blocker_codes_json)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        for gap in &mut gaps {
+            gap.affected_work.sort();
+        }
+        gaps.sort_by(|left, right| {
+            left.capability
+                .cmp(&right.capability)
+                .then_with(|| left.reason.cmp(&right.reason))
+                .then_with(|| left.affected_work.cmp(&right.affected_work))
+        });
+        blocker_codes.sort();
+        blocker_codes.dedup();
+        let state = if gaps.is_empty() && blocker_codes.is_empty() {
+            WorkspaceCapabilityReadinessState::Ready
+        } else {
+            WorkspaceCapabilityReadinessState::Blocked
+        };
+        Ok(WorkspaceCapabilityReadiness {
+            state,
+            gaps,
+            blocker_codes,
+        })
+    }
+
+    fn workspace_task_rows(&self) -> Result<Vec<WorkspaceTaskRow>, TenderCommandError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT tasks.production_task_id, tasks.task_id, tasks.task_key,
+                        tasks.task_definition_json, tasks.status,
+                        tender_tasks.objective, tender_tasks.profile_id,
+                        tender_tasks.profile_version, profiles.identity,
+                        profiles.profession,
+                        (SELECT runs.run_id FROM agent_runs AS runs
+                         WHERE runs.task_id = tasks.task_id
+                         ORDER BY runs.run_sequence DESC LIMIT 1),
+                        (SELECT COUNT(*) FROM production_artifact_versions AS outputs
+                         WHERE outputs.production_task_id = tasks.production_task_id)
+                 FROM production_tasks AS tasks
+                 LEFT JOIN tender_tasks
+                   ON tender_tasks.task_id = tasks.task_id
+                 LEFT JOIN agent_profile_versions AS profiles
+                   ON profiles.profile_id = tender_tasks.profile_id
+                  AND profiles.version = tender_tasks.profile_version
+                 ORDER BY tasks.updated_at DESC, tasks.task_key",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<u32>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, i64>(11)?,
+                ))
+            })
+            .map_err(sql_error)?;
+        rows.map(|row| {
+            let (
+                production_task_id,
+                task_id,
+                task_key,
+                definition_json,
+                status,
+                objective,
+                profile_id,
+                profile_version,
+                identity,
+                profession,
+                current_run_id,
+                output_count,
+            ) = row.map_err(sql_error)?;
+            let definition: serde_json::Value = serde_json::from_str(&definition_json)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            let dependencies = definition
+                .get("dependencies")
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let agent = profile_id
+                .zip(profile_version)
+                .zip(identity)
+                .zip(profession)
+                .map(|(((profile_id, profile_version), identity), profession)| {
+                    WorkspaceAgentReference {
+                        profile_id,
+                        profile_version,
+                        identity,
+                        profession,
+                    }
+                });
+            Ok(WorkspaceTaskRow {
+                production_task_id,
+                task_id,
+                task_key,
+                objective,
+                state: workspace_task_state(&status),
+                status_detail: status,
+                dependencies,
+                agent,
+                current_run_id,
+                output_count: to_u32(output_count)?,
+            })
+        })
+        .collect()
+    }
+
+    fn workspace_agent_run_references(
+        &self,
+    ) -> Result<Vec<WorkspaceAgentRunReference>, TenderCommandError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT runs.run_id, runs.task_id, runs.status,
+                        profiles.profile_id, profiles.version,
+                        profiles.identity, profiles.profession,
+                        runs.started_at, runs.completed_at
+                 FROM agent_runs AS runs
+                 JOIN agent_profile_versions AS profiles
+                   ON profiles.profile_id = runs.profile_id
+                  AND profiles.version = runs.profile_version
+                 ORDER BY runs.run_sequence DESC",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(WorkspaceAgentRunReference {
+                    run_id: row.get(0)?,
+                    task_id: row.get(1)?,
+                    state: row.get(2)?,
+                    agent: WorkspaceAgentReference {
+                        profile_id: row.get(3)?,
+                        profile_version: row.get(4)?,
+                        identity: row.get(5)?,
+                        profession: row.get(6)?,
+                    },
+                    started_at: row.get(7)?,
+                    completed_at: row.get(8)?,
+                })
+            })
+            .map_err(sql_error)?;
+        rows.map(|row| row.map_err(sql_error)).collect()
+    }
+
+    fn workspace_output_references(
+        &self,
+    ) -> Result<Vec<WorkspaceOutputReference>, TenderCommandError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT artifact_id, version, production_task_id,
+                        author_run_id, payload_sha256, created_at
+                 FROM production_artifact_versions
+                 ORDER BY created_at DESC, artifact_id, version",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(WorkspaceOutputReference {
+                    artifact_id: row.get(0)?,
+                    version: row.get(1)?,
+                    production_task_id: row.get(2)?,
+                    author_run_id: row.get(3)?,
+                    payload_sha256: row.get(4)?,
+                    created_at: row.get(5)?,
+                })
+            })
+            .map_err(sql_error)?;
+        rows.map(|row| row.map_err(sql_error)).collect()
+    }
+
+    pub(crate) fn search_workspace(
+        &self,
+        query: &str,
+    ) -> Result<WorkspaceSearchProjection, TenderCommandError> {
+        let query = query.trim();
+        if query.is_empty() || query.len() > 200 {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let escaped = query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("%{escaped}%");
+
+        let conversation = {
+            let mut statement = self
+                .connection
+                .prepare(
+                    "SELECT message_id, body, author
+                     FROM tender_office_messages
+                     WHERE body LIKE ?1 ESCAPE '\\'
+                     ORDER BY message_sequence DESC LIMIT 32",
+                )
+                .map_err(sql_error)?;
+            let hits = statement
+                .query_map([pattern.as_str()], |row| {
+                    Ok(WorkspaceSearchHit {
+                        kind: WorkspaceSearchResultKind::Conversation,
+                        reference: row.get(0)?,
+                        version: None,
+                        title: format!("{} message", row.get::<_, String>(2)?),
+                        detail: row.get(1)?,
+                    })
+                })
+                .map_err(sql_error)?
+                .map(|row| row.map_err(sql_error))
+                .collect::<Result<Vec<_>, _>>()?;
+            hits
+        };
+
+        let work = {
+            let mut statement = self
+                .connection
+                .prepare(
+                    "SELECT production_task_id, task_key, status,
+                            COALESCE(tender_tasks.objective, '')
+                     FROM production_tasks
+                     LEFT JOIN tender_tasks ON tender_tasks.task_id = production_tasks.task_id
+                     WHERE task_key LIKE ?1 ESCAPE '\\'
+                        OR task_definition_json LIKE ?1 ESCAPE '\\'
+                        OR COALESCE(tender_tasks.objective, '') LIKE ?1 ESCAPE '\\'
+                     ORDER BY updated_at DESC LIMIT 32",
+                )
+                .map_err(sql_error)?;
+            let hits = statement
+                .query_map([pattern.as_str()], |row| {
+                    let task_key: String = row.get(1)?;
+                    let status: String = row.get(2)?;
+                    let objective: String = row.get(3)?;
+                    Ok(WorkspaceSearchHit {
+                        kind: WorkspaceSearchResultKind::Work,
+                        reference: row.get(0)?,
+                        version: None,
+                        title: task_key,
+                        detail: if objective.is_empty() {
+                            status
+                        } else {
+                            format!("{status}: {objective}")
+                        },
+                    })
+                })
+                .map_err(sql_error)?
+                .map(|row| row.map_err(sql_error))
+                .collect::<Result<Vec<_>, _>>()?;
+            hits
+        };
+
+        let files = {
+            let mut statement = self
+                .connection
+                .prepare(
+                    "SELECT artifacts.artifact_id, versions.version,
+                            artifacts.package_path, versions.document_type,
+                            COALESCE(versions.sha256, '')
+                     FROM source_artifacts AS artifacts
+                     JOIN source_artifact_versions AS versions
+                       ON versions.artifact_id = artifacts.artifact_id
+                     WHERE artifacts.package_path LIKE ?1 ESCAPE '\\'
+                        OR versions.document_type LIKE ?1 ESCAPE '\\'
+                        OR COALESCE(versions.sha256, '') LIKE ?1 ESCAPE '\\'
+                     ORDER BY versions.created_at DESC LIMIT 32",
+                )
+                .map_err(sql_error)?;
+            let hits = statement
+                .query_map([pattern.as_str()], |row| {
+                    Ok(WorkspaceSearchHit {
+                        kind: WorkspaceSearchResultKind::Files,
+                        reference: row.get(0)?,
+                        version: Some(row.get(1)?),
+                        title: row.get(2)?,
+                        detail: row.get(3)?,
+                    })
+                })
+                .map_err(sql_error)?
+                .map(|row| row.map_err(sql_error))
+                .collect::<Result<Vec<_>, _>>()?;
+            hits
+        };
+
+        let evidence = {
+            let mut statement = self
+                .connection
+                .prepare(
+                    "SELECT artifact_id, version, ordinal, original_text
+                     FROM evidence_locations
+                     WHERE original_text LIKE ?1 ESCAPE '\\'
+                        OR COALESCE(translated_text, '') LIKE ?1 ESCAPE '\\'
+                        OR COALESCE(section, '') LIKE ?1 ESCAPE '\\'
+                     ORDER BY artifact_id, version, ordinal LIMIT 32",
+                )
+                .map_err(sql_error)?;
+            let hits = statement
+                .query_map([pattern.as_str()], |row| {
+                    let artifact_id: String = row.get(0)?;
+                    let version: u32 = row.get(1)?;
+                    let ordinal: u32 = row.get(2)?;
+                    Ok(WorkspaceSearchHit {
+                        kind: WorkspaceSearchResultKind::Evidence,
+                        reference: format!("{artifact_id}:{ordinal}"),
+                        version: Some(version),
+                        title: format!("Evidence location {ordinal}"),
+                        detail: row.get(3)?,
+                    })
+                })
+                .map_err(sql_error)?
+                .map(|row| row.map_err(sql_error))
+                .collect::<Result<Vec<_>, _>>()?;
+            hits
+        };
+
+        let agents = {
+            let mut statement = self
+                .connection
+                .prepare(
+                    "SELECT profile_id, version, identity, profession
+                     FROM agent_profile_versions
+                     WHERE identity LIKE ?1 ESCAPE '\\'
+                        OR profession LIKE ?1 ESCAPE '\\'
+                        OR instructions LIKE ?1 ESCAPE '\\'
+                     ORDER BY identity, version DESC LIMIT 32",
+                )
+                .map_err(sql_error)?;
+            let hits = statement
+                .query_map([pattern.as_str()], |row| {
+                    let profile_id: String = row.get(0)?;
+                    let version: u32 = row.get(1)?;
+                    let identity: String = row.get(2)?;
+                    let profession: String = row.get(3)?;
+                    Ok(WorkspaceSearchHit {
+                        kind: WorkspaceSearchResultKind::Agents,
+                        reference: profile_id,
+                        version: Some(version),
+                        title: identity,
+                        detail: profession,
+                    })
+                })
+                .map_err(sql_error)?
+                .map(|row| row.map_err(sql_error))
+                .collect::<Result<Vec<_>, _>>()?;
+            hits
+        };
+
+        Ok(WorkspaceSearchProjection {
+            query: query.to_owned(),
+            groups: vec![
+                WorkspaceSearchGroup {
+                    kind: WorkspaceSearchResultKind::Conversation,
+                    hits: conversation,
+                },
+                WorkspaceSearchGroup {
+                    kind: WorkspaceSearchResultKind::Work,
+                    hits: work,
+                },
+                WorkspaceSearchGroup {
+                    kind: WorkspaceSearchResultKind::Files,
+                    hits: files,
+                },
+                WorkspaceSearchGroup {
+                    kind: WorkspaceSearchResultKind::Evidence,
+                    hits: evidence,
+                },
+                WorkspaceSearchGroup {
+                    kind: WorkspaceSearchResultKind::Agents,
+                    hits: agents,
+                },
+            ],
         })
     }
 
@@ -720,6 +1335,20 @@ impl TenderStore {
             TenderLifecyclePhase::Intake => {
                 if let Some(intake) = intake {
                     return Ok(match intake.stage {
+                        ManagerIntakeStage::WaitingForLocalTools => action(
+                            WorkspaceActionKind::ObserveIntake,
+                            "Prepare document tools",
+                            &intake.summary,
+                            "Prepare document tools",
+                            true,
+                        ),
+                        ManagerIntakeStage::WaitingForProviderApproval => action(
+                            WorkspaceActionKind::ConfigureAiProvider,
+                            "Choose an AI provider",
+                            &intake.summary,
+                            "Use selected AI",
+                            true,
+                        ),
                         ManagerIntakeStage::WaitingForProvider => action(
                             WorkspaceActionKind::ConfigureAiProvider,
                             "Waiting for AI Provider",
@@ -908,15 +1537,72 @@ impl TenderStore {
     }
 }
 
+fn workspace_reference_exists(
+    transaction: &Transaction<'_>,
+    reference: &WorkspaceMessageReference,
+) -> Result<bool, TenderCommandError> {
+    if reference.reference.trim().is_empty()
+        || reference.label.trim().is_empty()
+        || reference.reference.len() > 500
+        || reference.label.len() > 500
+        || reference
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.len() > 2_000)
+        || reference.version == 0
+    {
+        return Ok(false);
+    }
+    let exists = match reference.kind {
+        super::WorkspaceMessageReferenceKind::AgentRun => transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE run_id = ?1)",
+            [&reference.reference],
+            |row| row.get(0),
+        ),
+        super::WorkspaceMessageReferenceKind::ManagerIntakeOutcome => transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM manager_intake_outcomes WHERE outcome_id = ?1)",
+            [&reference.reference],
+            |row| row.get(0),
+        ),
+        super::WorkspaceMessageReferenceKind::TenderRecord => transaction.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM tender_record_versions WHERE record_id = ?1 AND version = ?2
+             )",
+            params![reference.reference, reference.version],
+            |row| row.get(0),
+        ),
+        super::WorkspaceMessageReferenceKind::SourceEvidence => {
+            let Some(ordinal) = reference.evidence_ordinal else {
+                return Ok(false);
+            };
+            transaction.query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM evidence_locations
+                   WHERE artifact_id = ?1 AND version = ?2 AND ordinal = ?3
+                 )",
+                params![reference.reference, reference.version, ordinal],
+                |row| row.get(0),
+            )
+        }
+    }
+    .map_err(sql_error)?;
+    Ok(exists)
+}
+
 impl QuantixHost {
-    pub(crate) fn start_manager_tender_from_package(
+    pub(crate) fn start_manager_tender_from_package_with_control(
         &self,
         source: &Path,
-    ) -> Result<ManagerWorkspaceProjection, TenderCommandError> {
+        control: Option<&PackageIntakeControl>,
+        local_only: bool,
+    ) -> Result<Option<ManagerWorkspaceProjection>, TenderCommandError> {
         let _ordinary_work = self.begin_ordinary_work()?;
         require_setup(self)?;
         if !source.is_absolute() || fs::symlink_metadata(source).is_err() {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        if control.is_some_and(PackageIntakeControl::is_cancelled) {
+            return Ok(None);
         }
         let _start_guard = self
             .manager_tender_start_lock()
@@ -933,7 +1619,6 @@ impl QuantixHost {
             .application_home()
             .join("tenders")
             .join(tender_id.as_str());
-        let preferred_selection = load_preferred_ai_execution_selection(self.application_home())?;
         let mut store = match TenderStore::create(&stage_root, &tender_id, &name) {
             Ok(store) => store,
             Err(error) => {
@@ -941,24 +1626,39 @@ impl QuantixHost {
                 return Err(error);
             }
         };
-        if let Err(error) = store.import_package(source) {
-            drop(store);
-            let _ = fs::remove_dir_all(&stage_root);
-            return Err(error);
-        }
-        if let Some(selection) = preferred_selection {
-            if let Err(error) = store.bind_manager_intake_provider_selection(&selection, false) {
+        if !local_only {
+            if let Err(error) =
+                store.seed_application_ai_execution_binding(self.application_home(), &tender_id)
+            {
                 drop(store);
                 let _ = fs::remove_dir_all(&stage_root);
                 return Err(error);
             }
         }
+        let _imported = match store.import_package_with_control(source, control) {
+            Ok(Some(imported)) => imported,
+            Ok(None) => {
+                drop(store);
+                let _ = fs::remove_dir_all(&stage_root);
+                return Ok(None);
+            }
+            Err(error) => {
+                drop(store);
+                let _ = fs::remove_dir_all(&stage_root);
+                return Err(error);
+            }
+        };
+        if let Some(control) = control {
+            control.opening_workspace();
+        }
         let projection = match (|| {
+            let summary = store.summary()?;
             let snapshot = store.workspace_snapshot()?;
             let mut catalogue = self.manager_workspace_catalogue()?;
             catalogue.push(snapshot.tender.clone());
             sort_workspace_catalogue(&mut catalogue, Some(&tender_id));
             let projection = projection_from_snapshot(catalogue, snapshot);
+            self.upsert_catalogue_summary(&summary)?;
             self.begin_manager_tender_selection_publication(&tender_id)?;
             Ok::<_, TenderCommandError>(projection)
         })() {
@@ -966,6 +1666,8 @@ impl QuantixHost {
             Err(error) => {
                 drop(store);
                 let _ = fs::remove_dir_all(&stage_root);
+                let _ = self.cancel_manager_tender_selection_publication(&tender_id);
+                let _ = self.remove_catalogue_entry(&tender_id);
                 return Err(error);
             }
         };
@@ -974,11 +1676,12 @@ impl QuantixHost {
         if let Err(error) = fs::rename(&stage_root, &final_root) {
             let _ = fs::remove_dir_all(&stage_root);
             let _ = self.cancel_manager_tender_selection_publication(&tender_id);
+            let _ = self.remove_catalogue_entry(&tender_id);
             return Err(store_unavailable(error));
         }
         let _ = self.finish_manager_tender_selection_publication(&tender_id);
         storage_publication_failpoint("tender_after_publish");
-        Ok(projection)
+        Ok(Some(projection))
     }
 
     pub fn inspect_manager_workspace(
@@ -1074,6 +1777,23 @@ impl QuantixHost {
         Ok(projection)
     }
 
+    pub fn search_manager_workspace(
+        &self,
+        command: SearchManagerWorkspaceCommand,
+    ) -> Result<WorkspaceSearchProjection, TenderCommandError> {
+        require_setup(self)?;
+        if command.validate().is_err() || command.query.trim().is_empty() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let result = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .search_workspace(&command.query);
+        result
+    }
+
     pub fn record_engineer_workspace_message(
         &self,
         command: RecordEngineerWorkspaceMessageCommand,
@@ -1121,27 +1841,46 @@ impl QuantixHost {
         &self,
     ) -> Result<Vec<ManagerWorkspaceTender>, TenderCommandError> {
         let mut catalogue = Vec::new();
-        for entry in self.list_tenders()? {
-            if entry.summary.is_some() {
-                let tender_id = TenderId::parse(&entry.tender_id)?;
-                let store = self.tender_store(&tender_id)?;
-                let snapshot = store
-                    .lock()
-                    .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-                    .workspace_snapshot()?;
-                catalogue.push(snapshot.tender);
-            } else {
-                catalogue.push(ManagerWorkspaceTender {
-                    tender_id: entry.tender_id.clone(),
-                    name: format!("Tender {}", &entry.tender_id[..8]),
-                    revision: 0,
-                    phase: TenderLifecyclePhase::Intake,
-                    needs_engineer: true,
-                    state: ManagerWorkspaceTenderState::RecoveryRequired,
-                    can_archive: false,
-                    can_delete: false,
-                    last_activity_at: None,
-                });
+        let recovery_required = self
+            .recovery_required_tenders()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .clone();
+        let entries =
+            fs::read_dir(self.application_home().join("tenders")).map_err(store_unavailable)?;
+        for entry in entries {
+            let entry = entry.map_err(store_unavailable)?;
+            let tender_id = entry
+                .file_name()
+                .to_str()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+                .and_then(TenderId::parse)?;
+            if recovery_required.contains(&tender_id) {
+                catalogue.push(recovery_workspace_tender(
+                    self.application_home(),
+                    &tender_id,
+                ));
+                continue;
+            }
+            let metadata = fs::symlink_metadata(entry.path()).map_err(store_unavailable)?;
+            if metadata_is_unsafe_storage_link(&metadata) || !metadata.is_dir() {
+                self.mark_tender_recovery_required(&tender_id);
+                catalogue.push(recovery_workspace_tender(
+                    self.application_home(),
+                    &tender_id,
+                ));
+                continue;
+            }
+            match TenderStore::read_workspace_tender(&entry.path(), &tender_id) {
+                Ok(tender) => catalogue.push(tender),
+                Err(error) if error.code == TenderErrorCode::RecoveryRequired => {
+                    self.mark_tender_recovery_required(&tender_id);
+                    catalogue.push(recovery_workspace_tender(
+                        self.application_home(),
+                        &tender_id,
+                    ));
+                }
+                Err(error) => return Err(error),
             }
         }
         Ok(catalogue)
@@ -1331,6 +2070,42 @@ fn projection_from_snapshot(
         files: snapshot.files,
         team: snapshot.team,
         intake: snapshot.intake,
+        ai_execution: Some(snapshot.ai_execution),
+        capability_readiness: Some(snapshot.capability_readiness),
+        doctor_blockers: snapshot.doctor_blockers,
+    }
+}
+
+fn recovery_workspace_tender(
+    application_home: &Path,
+    tender_id: &TenderId,
+) -> ManagerWorkspaceTender {
+    let catalogue_name = Connection::open_with_flags(
+        application_home.join("installation.sqlite"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .and_then(|connection| {
+        connection
+            .query_row(
+                "SELECT name FROM tender_catalogue WHERE tender_id = ?1",
+                [tender_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+    })
+    .ok()
+    .flatten()
+    .filter(|name| !name.trim().is_empty() && name.len() <= MAX_TENDER_NAME_BYTES);
+    ManagerWorkspaceTender {
+        tender_id: tender_id.as_str().to_owned(),
+        name: catalogue_name.unwrap_or_else(|| format!("Tender {}", &tender_id.as_str()[..8])),
+        revision: 0,
+        phase: TenderLifecyclePhase::Intake,
+        needs_engineer: true,
+        state: ManagerWorkspaceTenderState::RecoveryRequired,
+        can_archive: false,
+        can_delete: true,
+        last_activity_at: None,
     }
 }
 
@@ -1395,6 +2170,84 @@ impl TenderStore {
     }
 }
 
+fn workspace_task_state(status: &str) -> WorkspaceTaskState {
+    match status {
+        "running" | "reviewing" => WorkspaceTaskState::Working,
+        "review_ready"
+        | "remediation_ready"
+        | "query_blocked"
+        | "attempt_limit_reached"
+        | "indeterminate" => WorkspaceTaskState::NeedsEngineer,
+        "ready_for_integration" => WorkspaceTaskState::Done,
+        "cancelled" | "suspended" => WorkspaceTaskState::Paused,
+        "failed" => WorkspaceTaskState::Failed,
+        "blocked" | "ready" => WorkspaceTaskState::Waiting,
+        _ => WorkspaceTaskState::Waiting,
+    }
+}
+
+fn workspace_doctor_blockers(
+    ai_execution: &TenderAiExecutionBinding,
+    capability: &WorkspaceCapabilityReadiness,
+) -> Vec<WorkspaceDoctorBlockerSummary> {
+    let mut blockers = Vec::new();
+    if !matches!(
+        ai_execution.readiness,
+        TenderAiSelectionReadiness::LocalOnly | TenderAiSelectionReadiness::Ready
+    ) {
+        let (code, title) = match ai_execution.readiness {
+            TenderAiSelectionReadiness::SelectionRequired => {
+                ("ai_selection_required", "AI execution selection required")
+            }
+            TenderAiSelectionReadiness::ProviderUnavailable => {
+                ("ai_provider_unavailable", "AI provider unavailable")
+            }
+            TenderAiSelectionReadiness::CatalogueStale => {
+                ("ai_catalogue_stale", "AI capability catalogue is stale")
+            }
+            TenderAiSelectionReadiness::ModelUnavailable => (
+                "ai_model_unavailable",
+                "AI model or reasoning is unavailable",
+            ),
+            TenderAiSelectionReadiness::ApprovalRequired => {
+                ("ai_approval_required", "AI execution approval required")
+            }
+            TenderAiSelectionReadiness::LocalOnly | TenderAiSelectionReadiness::Ready => {
+                unreachable!("handled by the readiness guard")
+            }
+        };
+        blockers.push(WorkspaceDoctorBlockerSummary {
+            code: code.to_owned(),
+            area: WorkspaceDoctorBlockerArea::AiExecution,
+            title: title.to_owned(),
+            detail: ai_execution.status_summary.clone(),
+        });
+    }
+    for gap in &capability.gaps {
+        blockers.push(WorkspaceDoctorBlockerSummary {
+            code: format!("capability_gap:{}", gap.capability),
+            area: WorkspaceDoctorBlockerArea::Capability,
+            title: format!("Capability gap: {}", gap.capability),
+            detail: gap.reason.clone(),
+        });
+    }
+    for code in &capability.blocker_codes {
+        blockers.push(WorkspaceDoctorBlockerSummary {
+            code: code.clone(),
+            area: WorkspaceDoctorBlockerArea::Capability,
+            title: "Work Plan blocker".to_owned(),
+            detail: format!("The current Work Plan reports blocker code `{code}`."),
+        });
+    }
+    blockers.sort_by(|left, right| {
+        left.code
+            .cmp(&right.code)
+            .then_with(|| left.title.cmp(&right.title))
+            .then_with(|| left.detail.cmp(&right.detail))
+    });
+    blockers
+}
+
 fn empty_projection(catalogue: Vec<ManagerWorkspaceTender>) -> ManagerWorkspaceProjection {
     ManagerWorkspaceProjection {
         catalogue,
@@ -1411,6 +2264,9 @@ fn empty_projection(catalogue: Vec<ManagerWorkspaceTender>) -> ManagerWorkspaceP
         files: WorkspaceFilesSummary::default(),
         team: WorkspaceTeamSummary::default(),
         intake: None,
+        ai_execution: None,
+        capability_readiness: None,
+        doctor_blockers: Vec::new(),
     }
 }
 
@@ -1469,5 +2325,190 @@ fn tender_name_from_source(source: &Path) -> Result<String, TenderCommandError> 
         Err(TenderCommandError::new(TenderErrorCode::InvalidCommand))
     } else {
         Ok(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, io, path::Path, sync::Arc};
+
+    use super::{
+        workspace_doctor_blockers, workspace_task_state, TenderAiExecutionBinding,
+        TenderAiSelectionReadiness, WorkPlanCapabilityGap, WorkspaceCapabilityReadiness,
+        WorkspaceCapabilityReadinessState, WorkspaceDoctorBlockerArea, WorkspaceTaskState,
+    };
+    use crate::{
+        setup::{SetupPlatform, StoragePermissions, MINIMUM_SETUP_FREE_SPACE_BYTES},
+        InspectManagerWorkspaceCommand, ManagerWorkspaceTenderState, PackageIntakeOperationKind,
+        QuantixHost, SetupState, TenderIntegrityState, TenderPackageSourceKind,
+    };
+
+    struct ReadySetupPlatform;
+
+    impl SetupPlatform for ReadySetupPlatform {
+        fn available_space(&self, _path: &Path) -> io::Result<u64> {
+            Ok(MINIMUM_SETUP_FREE_SPACE_BYTES)
+        }
+
+        fn is_writable(&self, _path: &Path) -> io::Result<bool> {
+            Ok(true)
+        }
+
+        fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
+            Ok(StoragePermissions::Restrictive)
+        }
+    }
+
+    #[test]
+    fn manager_tender_start_reaches_package_intake_after_host_sqlite_initialization() {
+        let user_home = tempfile::tempdir().expect("temporary user home");
+        let application_home = user_home.path().join(".quantix");
+        let package = user_home.path().join("Juhayna");
+        fs::create_dir(&package).expect("create Tender Package");
+        fs::write(package.join("scope.txt"), b"unsupported fixture document")
+            .expect("write Tender Package entry");
+
+        let host =
+            QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+        assert_eq!(host.ensure_setup().state, SetupState::Ready);
+        let control = host
+            .begin_package_intake(
+                PackageIntakeOperationKind::StartTender,
+                TenderPackageSourceKind::Directory,
+                "Juhayna",
+            )
+            .expect("claim package intake");
+        let operation_id = control.snapshot().operation_id.clone();
+
+        let projection = host
+            .start_manager_tender_from_package_with_control(&package, Some(&control), true)
+            .expect("start Manager Tender")
+            .expect("package intake should complete");
+        host.finish_package_intake(&operation_id);
+
+        let selected = projection.selected_tender.expect("selected Tender");
+        assert_eq!(selected.name, "Juhayna");
+        let selected_id = selected.tender_id.clone();
+        let progress = control.snapshot();
+        assert_eq!(
+            progress.stage,
+            crate::tender_intake::PackageIntakeStage::OpeningWorkspace
+        );
+        assert_eq!(progress.discovered_count, 1);
+        assert_eq!(progress.processed_count, 1);
+        assert!(!progress.cancellable);
+        assert!(application_home.join("tenders").join(&selected_id).is_dir());
+        assert!(!application_home
+            .join("staging")
+            .join(format!("tender-{selected_id}"))
+            .exists());
+    }
+
+    #[test]
+    fn manager_created_recovery_tender_keeps_its_name_after_catalogue_refresh_and_restart() {
+        let user_home = tempfile::tempdir().expect("temporary user home");
+        let application_home = user_home.path().join(".quantix");
+        let package = user_home.path().join("Manager Recovery Fixture");
+        fs::create_dir(&package).expect("create disposable Tender Package");
+        fs::write(package.join("Tender Package.txt"), b"recovery fixture")
+            .expect("write disposable Tender Package");
+        let host =
+            QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+        let setup = host.ensure_setup();
+        assert_eq!(setup.state, SetupState::Ready, "setup outcome: {setup:#?}");
+        let created = host
+            .start_manager_tender_from_package_with_control(&package, None, true)
+            .expect("start Manager Tender")
+            .expect("completed Manager Tender intake");
+        let tender = created.selected_tender.expect("selected Manager Tender");
+        assert_eq!(tender.name, "Manager Recovery Fixture");
+        host.close_tender(&tender.tender_id)
+            .expect("close Manager-created Tender");
+        rusqlite::Connection::open(
+            application_home
+                .join("tenders")
+                .join(&tender.tender_id)
+                .join("tender.sqlite"),
+        )
+        .expect("Manager Tender Store")
+        .execute_batch("DROP TRIGGER audit_events_no_update")
+        .expect("alter exact Tender Store schema");
+        drop(host);
+
+        let restarted =
+            QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+        let setup = restarted.ensure_setup();
+        assert_eq!(setup.state, SetupState::Ready, "setup outcome: {setup:#?}");
+        let listed = restarted
+            .list_tenders()
+            .expect("refresh catalogue without erasing recovery metadata");
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].summary.is_none());
+        assert_eq!(
+            listed[0].integrity.state,
+            TenderIntegrityState::RecoveryRequired
+        );
+        let projection = restarted
+            .inspect_manager_workspace(InspectManagerWorkspaceCommand { tender_id: None })
+            .expect("inspect cold Manager workspace");
+        let recovery = projection
+            .catalogue
+            .iter()
+            .find(|candidate| candidate.tender_id == tender.tender_id)
+            .expect("Manager-created recovery Tender remains visible");
+        assert_eq!(recovery.name, "Manager Recovery Fixture");
+        assert_eq!(
+            recovery.state,
+            ManagerWorkspaceTenderState::RecoveryRequired
+        );
+        assert!(recovery.can_delete);
+        assert!(projection.selected_tender.is_none());
+    }
+
+    #[test]
+    fn workspace_task_state_preserves_authoritative_status_semantics() {
+        assert_eq!(workspace_task_state("blocked"), WorkspaceTaskState::Waiting);
+        assert_eq!(workspace_task_state("ready"), WorkspaceTaskState::Waiting);
+        assert_eq!(workspace_task_state("running"), WorkspaceTaskState::Working);
+        assert_eq!(
+            workspace_task_state("review_ready"),
+            WorkspaceTaskState::NeedsEngineer
+        );
+        assert_eq!(
+            workspace_task_state("ready_for_integration"),
+            WorkspaceTaskState::Done
+        );
+        assert_eq!(
+            workspace_task_state("cancelled"),
+            WorkspaceTaskState::Paused
+        );
+        assert_eq!(workspace_task_state("failed"), WorkspaceTaskState::Failed);
+    }
+
+    #[test]
+    fn workspace_doctor_blockers_are_redacted_and_deterministically_ordered() {
+        let ai_execution = TenderAiExecutionBinding {
+            revision: 2,
+            selection: None,
+            readiness: TenderAiSelectionReadiness::ProviderUnavailable,
+            status_summary: "Provider connection is unavailable.".to_owned(),
+        };
+        let capability = WorkspaceCapabilityReadiness {
+            state: WorkspaceCapabilityReadinessState::Blocked,
+            gaps: vec![WorkPlanCapabilityGap {
+                capability: "quantity-survey".to_owned(),
+                reason: "No approved profile covers this capability.".to_owned(),
+                affected_work: vec!["boq".to_owned()],
+            }],
+            blocker_codes: vec!["zeta".to_owned(), "alpha".to_owned()],
+        };
+        let blockers = workspace_doctor_blockers(&ai_execution, &capability);
+        assert_eq!(blockers.len(), 4);
+        assert_eq!(blockers[0].code, "ai_provider_unavailable");
+        assert_eq!(blockers[0].area, WorkspaceDoctorBlockerArea::AiExecution);
+        assert_eq!(blockers[1].code, "alpha");
+        assert_eq!(blockers[2].code, "capability_gap:quantity-survey");
+        assert_eq!(blockers[3].code, "zeta");
+        assert!(!blockers[0].detail.contains("token"));
     }
 }

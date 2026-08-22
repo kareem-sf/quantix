@@ -5,9 +5,9 @@ use std::{
 };
 
 use quantix_lib::{
-    ensure_quantix_setup, CreateTenderCommand, DeviceProtection, QuantixHost,
-    RegisterTenderContentCommand, ReviseTenderCommand, SetupPlatform, SetupState,
-    StoragePermissions, TenderErrorCode, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    ensure_quantix_setup, CreateTenderCommand, QuantixHost, RegisterTenderContentCommand,
+    ReviseTenderCommand, SetupPlatform, SetupState, StoragePermissions, TenderErrorCode,
+    MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 struct ReadySetupPlatform;
@@ -23,10 +23,6 @@ impl SetupPlatform for ReadySetupPlatform {
 
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(StoragePermissions::Restrictive)
-    }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
     }
 }
 
@@ -44,7 +40,8 @@ fn engineer_can_create_close_and_reopen_a_tender_through_host_commands() {
         .expect("create Tender");
     assert_eq!(created.name, "New Cairo Medical Centre");
     assert_eq!(created.revision, 1);
-    assert_eq!(created.audit_event_count, 1);
+    // Creation records both `tender_created` and the durable Tender AI seed.
+    assert_eq!(created.audit_event_count, 2);
     assert_eq!(created.tender_id.len(), 32);
     assert!(created
         .tender_id
@@ -122,7 +119,7 @@ fn tender_mutation_commits_an_immutable_revision_and_audit_event_together() {
     assert_eq!(revised.tender_id, created.tender_id);
     assert_eq!(revised.name, "Cairo Rail Extension — Package A");
     assert_eq!(revised.revision, 2);
-    assert_eq!(revised.audit_event_count, 2);
+    assert_eq!(revised.audit_event_count, created.audit_event_count + 1);
     assert_ne!(revised.audit_chain_head, created.audit_chain_head);
     host.close_tender(&revised.tender_id).expect("close Tender");
     assert_eq!(
@@ -171,7 +168,10 @@ fn immutable_content_versions_share_one_verified_sha256_object() {
         .expect("inspect canonical Tender state");
     assert_eq!(inspection.content_object_count, 1);
     assert_eq!(inspection.content_version_count, 2);
-    assert_eq!(inspection.summary.audit_event_count, 3);
+    assert_eq!(
+        inspection.summary.audit_event_count,
+        tender.audit_event_count + 2
+    );
 }
 
 #[test]
@@ -208,7 +208,10 @@ fn failed_content_publication_is_audited_without_advancing_a_logical_pointer() {
         .expect("inspect unchanged canonical Tender state");
     assert_eq!(inspection.content_object_count, 0);
     assert_eq!(inspection.content_version_count, 0);
-    assert_eq!(inspection.summary.audit_event_count, 2);
+    assert_eq!(
+        inspection.summary.audit_event_count,
+        tender.audit_event_count + 1
+    );
     assert_ne!(inspection.summary.audit_chain_head, tender.audit_chain_head);
 }
 
@@ -329,6 +332,7 @@ fn host_serializes_concurrent_tender_mutations_through_one_writer() {
             })
         })
         .collect::<Vec<_>>();
+    let mutation_count = mutations.len() as u64;
     for mutation in mutations {
         mutation
             .join()
@@ -340,7 +344,10 @@ fn host_serializes_concurrent_tender_mutations_through_one_writer() {
         .inspect_tender(&tender.tender_id)
         .expect("inspect serialized Tender mutations");
     assert_eq!(inspection.summary.revision, 9);
-    assert_eq!(inspection.summary.audit_event_count, 9);
+    assert_eq!(
+        inspection.summary.audit_event_count,
+        tender.audit_event_count + mutation_count
+    );
 }
 
 #[test]
@@ -507,6 +514,9 @@ fn invalid_targeted_commands_are_audited_without_changing_canonical_records() {
     assert_eq!(inspection.summary.name, tender.name);
     assert_eq!(inspection.content_object_count, 0);
     assert_eq!(inspection.content_version_count, 0);
-    assert_eq!(inspection.summary.audit_event_count, 3);
+    assert_eq!(
+        inspection.summary.audit_event_count,
+        tender.audit_event_count + 2
+    );
     assert_ne!(inspection.summary.audit_chain_head, tender.audit_chain_head);
 }

@@ -1040,7 +1040,7 @@ async fn send_thread(
                 "cwd": run.prepared.workspace
                     .join(&run.prepared.permission_grant.workspace.working_area),
                 "approvalPolicy": "never",
-                "sandbox": "workspaceWrite",
+                "sandbox": "workspace-write",
                 "serviceName": "quantix",
                 "model": run.prepared.provider_selection.model_id,
                 "dynamicTools": tools,

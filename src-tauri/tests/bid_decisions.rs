@@ -28,7 +28,7 @@ use quantix_lib::{
     DecideChangeAssessmentCommand, DecideCoordinatedBidBaselineCommand,
     DecideTenderQueryTreatmentCommand, DecideTenderRecordCommand, DecideWorkPlanProposalCommand,
     DecisionAction, DecisionFactKind, DecisionKind, DecisionStatus, DecisionTargetKind,
-    DesignateBoqTableCommand, DeviceProtection, ExchangeRateType, ExportApprovedExternalRfiCommand,
+    DesignateBoqTableCommand, ExchangeRateType, ExportApprovedExternalRfiCommand,
     ExternalRfiQueryReference, ExternalRfiRecipient, FinalReviewInspection,
     GenerateSubmissionSectionsCommand, GenerationAuthoringMode, GenerationRequirementAvailability,
     GenerationRequirementKind, ImportTenderPackageCommand,
@@ -2141,10 +2141,6 @@ impl SetupPlatform for ReadySetupPlatform {
 
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(StoragePermissions::Restrictive)
-    }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
     }
 }
 

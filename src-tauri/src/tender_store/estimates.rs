@@ -2570,8 +2570,16 @@ pub(crate) fn insert_planned_run(
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-    let provider_selection =
-        crate::application_settings::load_current_ai_execution_selection(application_home)?;
+    let provider_selection_json: String = transaction
+        .query_row(
+            "SELECT selection_json FROM tender_ai_execution_binding WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    let provider_selection: crate::application_settings::AiExecutionSelection =
+        serde_json::from_str(&provider_selection_json)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
     let workspace = application_home.join("staging").join(format!(
         "agent-{}-{}",
         request.tender_id.as_str(),

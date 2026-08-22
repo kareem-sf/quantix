@@ -1,0 +1,407 @@
+.qx-ui-select,
+.qx-ui-switch {
+  position: relative;
+  display: grid;
+  gap: 7px;
+}
+
+.application-settings__field-group {
+  display: grid;
+  gap: 7px;
+}
+
+.application-settings__doctor,
+.application-settings__doctor-status {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--qx-border);
+  border-radius: var(--qx-radius-panel);
+  background: var(--qx-surface-subtle);
+}
+
+.application-settings__doctor {
+  display: grid;
+  gap: 14px;
+}
+
+.application-settings__doctor-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.application-settings__doctor-heading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.application-settings__doctor-heading small {
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+}
+
+.application-settings__doctor-heading > span {
+  color: var(--qx-warning);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.application-settings__doctor ul {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.application-settings__doctor li {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--qx-border);
+  border-radius: var(--qx-radius-control);
+  background: var(--qx-surface-subtle);
+}
+
+.application-settings__doctor li > div:first-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.application-settings__doctor li code {
+  color: var(--qx-text-muted);
+  font-size: 0.7rem;
+}
+
+.application-settings__doctor li dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.application-settings__doctor li dl > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.35fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.application-settings__doctor li dt {
+  color: var(--qx-text-muted);
+  font-size: 0.72rem;
+}
+
+.application-settings__doctor li dd {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.application-settings__doctor-dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+.application-settings__doctor li span,
+.application-settings__doctor p {
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+}
+
+.application-settings__doctor p {
+  margin: 0;
+}
+
+.application-settings__doctor-versions {
+  display: flex;
+  gap: 22px;
+  margin: 0;
+}
+
+.application-settings__doctor-versions div {
+  display: grid;
+  gap: 2px;
+}
+
+.application-settings__doctor-versions dt {
+  color: var(--qx-text-muted);
+  font-size: 0.7rem;
+}
+
+.application-settings__doctor-versions dd {
+  margin: 0;
+  font-family: var(--qx-font-mono);
+  font-size: 0.75rem;
+}
+
+.application-settings__doctor button {
+  justify-self: start;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: var(--qx-radius-control);
+  color: var(--qx-text-inverse);
+  background: var(--qx-action);
+}
+
+.qx-ui-select > [data-label],
+.qx-ui-select > label {
+  color: var(--qx-text);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.qx-ui-select__trigger {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  border: 1px solid var(--qx-border-strong);
+  border-radius: var(--qx-radius-control);
+  color: var(--qx-text);
+  background: var(--qx-surface-raised);
+  cursor: pointer;
+}
+
+.qx-ui-select__trigger[data-hovered],
+.qx-ui-select__trigger[data-open] {
+  border-color: var(--qx-focus);
+  background: var(--qx-hover);
+}
+
+.qx-ui-select__trigger[data-focus-visible],
+.qx-ui-switch[data-focus-visible] {
+  outline: 3px solid rgb(var(--qx-focus-rgb) / 35%);
+  outline-offset: 2px;
+}
+
+.qx-ui-select__description,
+.qx-ui-select small,
+.qx-ui-switch small {
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.qx-ui-popover {
+  min-width: var(--trigger-width);
+  padding: 6px;
+  border: 1px solid var(--qx-border-strong);
+  border-radius: var(--qx-radius-panel);
+  color: var(--qx-text);
+  background: var(--qx-surface-popover);
+  box-shadow: var(--qx-shadow-popover);
+}
+
+.qx-ui-listbox,
+.qx-ui-menu {
+  display: grid;
+  gap: 2px;
+  min-width: 220px;
+  margin: 0;
+  padding: 0;
+  outline: 0;
+  list-style: none;
+}
+
+.qx-ui-listbox__item,
+.qx-ui-menu__item {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border-radius: var(--qx-radius-sm);
+  color: var(--qx-text);
+  cursor: pointer;
+}
+
+.qx-ui-listbox__item small {
+  display: block;
+}
+
+.qx-ui-menu__item-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.qx-ui-menu__item-copy small {
+  color: var(--qx-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.25;
+}
+
+.qx-ui-menu__item[data-disabled] .qx-ui-menu__item-copy small {
+  color: inherit;
+}
+
+.qx-ui-listbox__item[data-hovered],
+.qx-ui-listbox__item[data-focused],
+.qx-ui-listbox__item[data-selected],
+.qx-ui-menu__item[data-hovered],
+.qx-ui-menu__item[data-focused] {
+  background: var(--qx-selected);
+}
+
+.qx-ui-listbox__item[data-disabled],
+.qx-ui-menu__item[data-disabled] {
+  color: var(--qx-text-disabled);
+  cursor: not-allowed;
+}
+
+.qx-ui-switch {
+  display: flex;
+  min-height: 66px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--qx-border);
+  cursor: pointer;
+}
+
+.qx-ui-switch__copy {
+  display: grid;
+  gap: 3px;
+}
+
+.qx-ui-switch__control {
+  position: relative;
+  display: inline-flex;
+  width: 44px;
+  min-width: 44px;
+  height: 26px;
+  align-items: center;
+  padding: 3px;
+  border: 1px solid var(--qx-border-strong);
+  border-radius: 999px;
+  background: var(--qx-surface-subtle);
+  transition:
+    background var(--qx-motion-fast) var(--qx-motion-ease),
+    border-color var(--qx-motion-fast) var(--qx-motion-ease);
+}
+
+.qx-ui-switch__control > span {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--qx-text-muted);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 25%);
+  transition:
+    transform var(--qx-motion-fast) var(--qx-motion-ease),
+    background var(--qx-motion-fast) var(--qx-motion-ease);
+}
+
+.qx-ui-switch[data-selected] .qx-ui-switch__control {
+  border-color: var(--qx-focus);
+  background: var(--qx-focus);
+}
+
+.qx-ui-switch[data-selected] .qx-ui-switch__control > span {
+  background: var(--qx-text-inverse);
+  transform: translateX(18px);
+}
+
+.qx-ui-switch[data-disabled] {
+  color: var(--qx-text-disabled);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.qx-ui-menu__trigger,
+.qx-ui-tooltip__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: var(--qx-radius-control);
+  color: var(--qx-text);
+  background: var(--qx-surface-subtle);
+}
+
+.qx-ui-menu__trigger[data-focus-visible],
+.qx-ui-tooltip__trigger[data-focus-visible] {
+  outline: 3px solid rgb(var(--qx-focus-rgb) / 35%);
+  outline-offset: 2px;
+}
+
+.qx-ui-dialog__overlay {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 42%);
+}
+
+.qx-ui-dialog__modal {
+  width: min(560px, 100%);
+  max-height: min(720px, 100%);
+  overflow: auto;
+  border: 1px solid var(--qx-border-strong);
+  border-radius: var(--qx-radius-lg);
+  background: var(--qx-surface-raised);
+  box-shadow: var(--qx-shadow-popover);
+}
+
+.qx-ui-dialog {
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+  outline: 0;
+}
+
+.qx-ui-dialog h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.qx-ui-tooltip {
+  max-width: 240px;
+  padding: 7px 9px;
+  border: 1px solid var(--qx-border-strong);
+  border-radius: var(--qx-radius-sm);
+  color: var(--qx-text-inverse);
+  background: var(--qx-action);
+  font-size: 0.75rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qx-ui-switch__control,
+  .qx-ui-switch__control > span {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .qx-ui-select__trigger,
+  .qx-ui-popover,
+  .qx-ui-dialog__modal,
+  .qx-ui-switch__control,
+  .qx-ui-menu__trigger,
+  .qx-ui-tooltip__trigger {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: none;
+  }
+
+  .qx-ui-listbox__item[data-hovered],
+  .qx-ui-listbox__item[data-focused],
+  .qx-ui-listbox__item[data-selected],
+  .qx-ui-menu__item[data-hovered],
+  .qx-ui-menu__item[data-focused],
+  .qx-ui-switch[data-selected] .qx-ui-switch__control {
+    background: Highlight;
+    color: HighlightText;
+  }
+}

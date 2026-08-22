@@ -180,7 +180,7 @@ pub use permissions::{
 #[cfg(not(feature = "runtime-fixture"))]
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg(feature = "runtime-fixture")]
-const PROVIDER_TIMEOUT: Duration = Duration::from_secs(2);
+const PROVIDER_TIMEOUT: Duration = Duration::from_secs(5);
 const PROVIDER_OUTPUT_LIMIT: usize = 1024 * 1024;
 const PROVIDER_READINESS_TIMEOUT: Duration = Duration::from_secs(20);
 pub(crate) const CODEX_VERSION: &str = "0.147.0";
@@ -883,6 +883,18 @@ impl QuantixHost {
         if !self.begin_manager_intake(&tender_id)? {
             return Ok(());
         }
+        let operation_id = format!("manager-intake-{tender_id}");
+        self.record_tender_diagnostic(
+            &tender_id,
+            crate::DiagnosticSeverity::Info,
+            crate::DiagnosticComponent::Manager,
+            "manager_intake_scheduled",
+            "Manager intake work was scheduled",
+            Some(operation_id.clone()),
+            None,
+            Some("started"),
+            None,
+        );
         let host = self.clone();
         tauri::async_runtime::spawn(async move {
             {
@@ -890,11 +902,38 @@ impl QuantixHost {
                     host: host.clone(),
                     tender_id: tender_id.clone(),
                 };
-                if let Err(error) = host.run_manager_intake_pipeline(&tender_id).await {
+                let started = Instant::now();
+                let result = host.run_manager_intake_pipeline(&tender_id).await;
+                let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                match &result {
+                    Ok(()) => host.record_tender_diagnostic(
+                        &tender_id,
+                        crate::DiagnosticSeverity::Info,
+                        crate::DiagnosticComponent::Manager,
+                        "manager_intake_cycle_completed",
+                        "A Manager intake processing cycle completed",
+                        Some(operation_id.clone()),
+                        Some(elapsed_ms),
+                        Some("completed"),
+                        None,
+                    ),
+                    Err(error) => host.record_tender_diagnostic(
+                        &tender_id,
+                        crate::DiagnosticSeverity::Error,
+                        crate::DiagnosticComponent::Manager,
+                        "manager_intake_cycle_failed",
+                        "A Manager intake processing cycle failed",
+                        Some(operation_id.clone()),
+                        Some(elapsed_ms),
+                        Some("failed"),
+                        Some(format!("{:?}", error.code)),
+                    ),
+                }
+                if let Err(error) = result {
                     if let Ok(parsed) = TenderId::parse(&tender_id) {
                         if let Ok(store) = host.tender_store(&parsed) {
                             if let Ok(mut store) = store.lock() {
-                                if error.code == TenderErrorCode::RuntimeRequired {
+                                if error.code == TenderErrorCode::AiProviderRequired {
                                     let _ = store.wait_manager_intake_for_provider();
                                 } else {
                                     let _ = store.fail_manager_intake(
@@ -972,7 +1011,7 @@ impl QuantixHost {
         let selection = self
             .refresh_exact_ai_execution_selection(None)
             .await?
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
         let store = self.tender_store(&tender_id)?;
         store
             .lock()
@@ -983,27 +1022,16 @@ impl QuantixHost {
 
     async fn run_manager_intake_pipeline(&self, tender_id: &str) -> Result<(), TenderCommandError> {
         require_setup(self)?;
-        let _execution = self.manager_intake_execution_guard().await;
+        let _execution = self.manager_intake_execution_guard(tender_id).await?;
         let tender_id = TenderId::parse(tender_id)?;
         let store = self.tender_store(&tender_id)?;
-        let preferred = store
-            .lock()
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-            .manager_intake_provider_selection()?;
-        let Some(selection) = self
-            .refresh_exact_ai_execution_selection(preferred.as_ref())
-            .await?
-        else {
+        if !self.document_tools_are_verified() {
             store
                 .lock()
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-                .wait_manager_intake_for_provider()?;
+                .wait_manager_intake_for_local_tools()?;
             return Ok(());
-        };
-        store
-            .lock()
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-            .bind_manager_intake_provider_selection(&selection, false)?;
+        }
         let stage = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
@@ -1055,6 +1083,28 @@ impl QuantixHost {
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
                 .refresh_manager_intake_parse_counts()?;
         }
+        let preferred = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .manager_intake_provider_selection()?;
+        let Some(selection) = self
+            .refresh_exact_ai_execution_selection(preferred.as_ref())
+            .await?
+        else {
+            let mut store = store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            if preferred.is_some() {
+                store.wait_manager_intake_for_provider()?;
+            } else {
+                store.wait_manager_intake_for_provider_approval()?;
+            }
+            return Ok(());
+        };
+        store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .bind_manager_intake_provider_selection(&selection, false)?;
         let (batches, authorities) = {
             let mut store = store
                 .lock()
@@ -1145,7 +1195,7 @@ impl QuantixHost {
         &self,
         tender_id: &TenderId,
     ) -> Result<AgentRunInspection, TenderCommandError> {
-        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
         let _active = ActiveAgentRunGuard {
             host: self.clone(),
             lease_id: lease_id.clone(),
@@ -1156,7 +1206,9 @@ impl QuantixHost {
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .prepare_manager_intake_run(tender_id)?;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
-        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let execution =
+            execute_tender_provider_turn(self, tender_id.as_str(), &store, &prepared, cancellation)
+                .await;
         let mut store = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
@@ -1198,9 +1250,22 @@ impl QuantixHost {
         command: RunBootstrapAgentCommand,
         deterministic_outcome: Option<DeterministicProviderOutcome>,
     ) -> Result<AgentRunInspection, TenderCommandError> {
-        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        if store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .has_unresolved_indeterminate_agent_run()?
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let run_started = Instant::now();
+        let provider_selection = if deterministic_outcome.is_some() {
+            deterministic_provider_selection()
+        } else {
+            self.require_current_tender_ai_selection(&tender_id).await?
+        };
         if command
             .retry_of_run_id
             .as_deref()
@@ -1209,26 +1274,45 @@ impl QuantixHost {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
 
-        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
         let _active = ActiveAgentRunGuard {
             host: self.clone(),
             lease_id: lease_id.clone(),
         };
-        let store = self.tender_store(&tender_id)?;
         let prepared = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .prepare_bootstrap_agent_run(
                 &tender_id,
+                &provider_selection,
                 command.retry_of_run_id.as_deref(),
                 self.provider_subscription_capacity_is_exhausted(),
             )?;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
 
+        record_provider_turn_started(self, tender_id.as_str(), &prepared);
+        let deterministic = deterministic_outcome.is_some();
         let execution = match deterministic_outcome {
             Some(outcome) => deterministic_provider_execution(&prepared, outcome),
-            None => execute_provider_turn(self, &store, &prepared, cancellation).await,
+            None => {
+                execute_provider_turn_from(self, &store, &prepared, cancellation, run_started).await
+            }
         };
+        record_provider_turn_diagnostic(
+            self,
+            tender_id.as_str(),
+            &prepared,
+            &execution,
+            run_started,
+        );
+        if deterministic {
+            if let Some(thread_ref) = execution.provider_thread_ref.as_deref() {
+                store
+                    .lock()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                    .checkpoint_agent_thread(&prepared, thread_ref, false)?;
+            }
+        }
         store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
@@ -1273,7 +1357,6 @@ impl QuantixHost {
         &self,
         command: RunProductionTaskCommand,
     ) -> Result<ProductionTaskRunResult, TenderCommandError> {
-        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         command
             .validate()
@@ -1288,7 +1371,8 @@ impl QuantixHost {
         tender_id: &TenderId,
         production_task_id: &str,
     ) -> Result<ProductionTaskRunResult, TenderCommandError> {
-        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), true)?;
+        let provider_selection = self.require_current_tender_ai_selection(tender_id).await?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
         let _active = ActiveAgentRunGuard {
             host: self.clone(),
             lease_id: lease_id.clone(),
@@ -1299,12 +1383,15 @@ impl QuantixHost {
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .prepare_production_task_run(
                 tender_id,
+                &provider_selection,
                 production_task_id,
                 None,
                 self.provider_subscription_capacity_is_exhausted(),
             )?;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
-        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let execution =
+            execute_tender_provider_turn(self, tender_id.as_str(), &store, &prepared, cancellation)
+                .await;
         let mut store = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
@@ -1333,14 +1420,16 @@ impl QuantixHost {
         &self,
         tender_id: &str,
     ) -> Result<(), TenderCommandError> {
-        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
-        TenderId::parse(tender_id)?;
-        if !self.claim_production_scheduler(tender_id) {
+        let tender_id = TenderId::parse(tender_id)?;
+        self.require_current_tender_ai_selection(&tender_id).await?;
+        if !self.claim_production_scheduler(tender_id.as_str()) {
             return Ok(());
         }
-        let result = self.schedule_ready_production_tasks(tender_id).await;
-        self.release_production_scheduler(tender_id);
+        let result = self
+            .schedule_ready_production_tasks(tender_id.as_str())
+            .await;
+        self.release_production_scheduler(tender_id.as_str());
         result
     }
 
@@ -1452,17 +1541,13 @@ impl QuantixHost {
         command: RunTenderRecordExtractionCommand,
         manager_intake_run_id: Option<&str>,
     ) -> Result<TenderRecordExtractionResult, TenderCommandError> {
-        if manager_intake_run_id.is_none() {
-            self.require_current_live_ai_selection().await?;
-        } else {
-            self.require_runtime_verified()?;
-        }
         require_setup(self)?;
         command
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         let tender_id = TenderId::parse(&command.tender_id)?;
-        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        self.require_current_tender_ai_selection(&tender_id).await?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
         let _active = ActiveAgentRunGuard {
             host: self.clone(),
             lease_id: lease_id.clone(),
@@ -1479,7 +1564,9 @@ impl QuantixHost {
             )?;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
 
-        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let execution =
+            execute_tender_provider_turn(self, tender_id.as_str(), &store, &prepared, cancellation)
+                .await;
         let mut store = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
@@ -1502,20 +1589,16 @@ impl QuantixHost {
         command: RunTenderRecordReviewCommand,
         manager_intake_run_id: Option<&str>,
     ) -> Result<TenderRecordReviewResult, TenderCommandError> {
-        if manager_intake_run_id.is_none() {
-            self.require_current_live_ai_selection().await?;
-        } else {
-            self.require_runtime_verified()?;
-        }
         require_setup(self)?;
         command
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         let tender_id = TenderId::parse(&command.tender_id)?;
+        self.require_current_tender_ai_selection(&tender_id).await?;
         if !valid_identifier(&command.record_id) {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
         let _active = ActiveAgentRunGuard {
             host: self.clone(),
             lease_id: lease_id.clone(),
@@ -1531,7 +1614,9 @@ impl QuantixHost {
                 manager_intake_run_id,
             )?;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
-        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let execution =
+            execute_tender_provider_turn(self, tender_id.as_str(), &store, &prepared, cancellation)
+                .await;
         let mut store = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
@@ -1546,16 +1631,16 @@ impl QuantixHost {
         &self,
         command: RunExternalRfiReviewCommand,
     ) -> Result<ExternalRfiReviewResult, TenderCommandError> {
-        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         command
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         let tender_id = TenderId::parse(&command.tender_id)?;
+        self.require_current_tender_ai_selection(&tender_id).await?;
         if !valid_identifier(&command.rfi_id) {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
         let _active = ActiveAgentRunGuard {
             host: self.clone(),
             lease_id: lease_id.clone(),
@@ -1566,7 +1651,9 @@ impl QuantixHost {
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .prepare_external_rfi_review_run(&tender_id, &command.rfi_id, command.version)?;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
-        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let execution =
+            execute_tender_provider_turn(self, tender_id.as_str(), &store, &prepared, cancellation)
+                .await;
         let mut store = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
@@ -1585,10 +1672,10 @@ impl QuantixHost {
         &self,
         command: RunCalculationRuleReviewCommand,
     ) -> Result<CalculationRuleReviewResult, TenderCommandError> {
-        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
-        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        self.require_current_tender_ai_selection(&tender_id).await?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
         let _active = ActiveAgentRunGuard {
             host: self.clone(),
             lease_id: lease_id.clone(),
@@ -1632,7 +1719,9 @@ impl QuantixHost {
         .await
         .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))??;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
-        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let execution =
+            execute_tender_provider_turn(self, tender_id.as_str(), &store, &prepared, cancellation)
+                .await;
         let complete_tender_id = tender_id.clone();
         let complete_prepared = prepared.clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -1653,10 +1742,10 @@ impl QuantixHost {
         &self,
         command: RunCostEstimatorCalculationCommand,
     ) -> Result<CostEstimatorCalculationResult, TenderCommandError> {
-        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
-        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        self.require_current_tender_ai_selection(&tender_id).await?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
         let _active = ActiveAgentRunGuard {
             host: self.clone(),
             lease_id: lease_id.clone(),
@@ -1700,7 +1789,9 @@ impl QuantixHost {
         .await
         .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))??;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
-        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let execution =
+            execute_tender_provider_turn(self, tender_id.as_str(), &store, &prepared, cancellation)
+                .await;
         let complete_tender_id = tender_id.clone();
         let complete_prepared = prepared.clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -1727,10 +1818,10 @@ impl QuantixHost {
         &self,
         command: RunCostEstimatorBasisCommand,
     ) -> Result<CostEstimatorBasisResult, TenderCommandError> {
-        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
-        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        self.require_current_tender_ai_selection(&tender_id).await?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
         let _active = ActiveAgentRunGuard {
             host: self.clone(),
             lease_id: lease_id.clone(),
@@ -1774,7 +1865,9 @@ impl QuantixHost {
         .await
         .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))??;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
-        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let execution =
+            execute_tender_provider_turn(self, tender_id.as_str(), &store, &prepared, cancellation)
+                .await;
         let complete_tender_id = tender_id.clone();
         let complete_prepared = prepared.clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -1800,10 +1893,10 @@ impl QuantixHost {
         &self,
         command: RunBasisOfEstimateReviewCommand,
     ) -> Result<BasisOfEstimateReviewResult, TenderCommandError> {
-        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
-        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        self.require_current_tender_ai_selection(&tender_id).await?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
         let _active = ActiveAgentRunGuard {
             host: self.clone(),
             lease_id: lease_id.clone(),
@@ -1848,7 +1941,9 @@ impl QuantixHost {
         .await
         .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))??;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
-        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let execution =
+            execute_tender_provider_turn(self, tender_id.as_str(), &store, &prepared, cancellation)
+                .await;
         let complete_tender_id = tender_id.clone();
         let complete_prepared = prepared.clone();
         let result_basis_id = command.basis_id.clone();
@@ -1871,10 +1966,10 @@ impl QuantixHost {
         &self,
         command: RunPricedCostBaselineReviewCommand,
     ) -> Result<PricedCostBaselineReviewResult, TenderCommandError> {
-        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
-        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        self.require_current_tender_ai_selection(&tender_id).await?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
         let _active = ActiveAgentRunGuard {
             host: self.clone(),
             lease_id: lease_id.clone(),
@@ -1919,7 +2014,9 @@ impl QuantixHost {
         .await
         .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))??;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
-        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let execution =
+            execute_tender_provider_turn(self, tender_id.as_str(), &store, &prepared, cancellation)
+                .await;
         let complete_tender_id = tender_id.clone();
         let complete_prepared = prepared.clone();
         let result_baseline_id = command.baseline_id.clone();
@@ -1942,10 +2039,10 @@ impl QuantixHost {
         &self,
         command: RunPricingAdjustmentReviewCommand,
     ) -> Result<PricingAdjustmentReviewResult, TenderCommandError> {
-        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
-        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        self.require_current_tender_ai_selection(&tender_id).await?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
         let _active = ActiveAgentRunGuard {
             host: self.clone(),
             lease_id: lease_id.clone(),
@@ -1990,7 +2087,9 @@ impl QuantixHost {
         .await
         .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))??;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
-        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let execution =
+            execute_tender_provider_turn(self, tender_id.as_str(), &store, &prepared, cancellation)
+                .await;
         let complete_tender_id = tender_id.clone();
         let complete_prepared = prepared.clone();
         let result_adjustment_id = command.adjustment_id.clone();
@@ -2215,16 +2314,16 @@ impl QuantixHost {
         &self,
         command: RunBidDecisionPackageReviewCommand,
     ) -> Result<BidDecisionPackageReviewResult, TenderCommandError> {
-        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         command
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         let tender_id = TenderId::parse(&command.tender_id)?;
+        self.require_current_tender_ai_selection(&tender_id).await?;
         if !valid_identifier(&command.package_id) {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
         let _active = ActiveAgentRunGuard {
             host: self.clone(),
             lease_id: lease_id.clone(),
@@ -2239,7 +2338,9 @@ impl QuantixHost {
                 command.version,
             )?;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
-        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let execution =
+            execute_tender_provider_turn(self, tender_id.as_str(), &store, &prepared, cancellation)
+                .await;
         let mut store = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
@@ -2254,13 +2355,13 @@ impl QuantixHost {
         &self,
         command: RunSubmissionSectionReviewCommand,
     ) -> Result<SubmissionSectionReviewRunResult, TenderCommandError> {
-        self.require_current_live_ai_selection().await?;
         require_setup(self)?;
         command
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         let tender_id = TenderId::parse(&command.tender_id)?;
-        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str(), false)?;
+        self.require_current_tender_ai_selection(&tender_id).await?;
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
         let _active = ActiveAgentRunGuard {
             host: self.clone(),
             lease_id: lease_id.clone(),
@@ -2271,7 +2372,9 @@ impl QuantixHost {
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .prepare_submission_section_review_run(&tender_id, &command)?;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
-        let execution = execute_provider_turn(self, &store, &prepared, cancellation).await;
+        let execution =
+            execute_tender_provider_turn(self, tender_id.as_str(), &store, &prepared, cancellation)
+                .await;
         let mut store = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
@@ -2370,7 +2473,7 @@ impl QuantixHost {
         &self,
         command: RequestAgentAccessCommand,
     ) -> Result<AgentAccessRequestView, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_document_tools()?;
         require_setup(self)?;
         command
             .validate()
@@ -2393,7 +2496,7 @@ impl QuantixHost {
         &self,
         command: ApproveAgentAccessCommand,
     ) -> Result<AgentAccessRequestView, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_document_tools()?;
         require_setup(self)?;
         command
             .validate()
@@ -2415,7 +2518,7 @@ impl QuantixHost {
         &self,
         command: ResolveAgentAccessCommand,
     ) -> Result<AgentAccessRequestView, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_document_tools()?;
         require_setup(self)?;
         command
             .validate()
@@ -2563,13 +2666,36 @@ fn provider_connection_readiness(
     }
 }
 
+async fn execute_tender_provider_turn(
+    host: &QuantixHost,
+    tender_id: &str,
+    store: &Arc<Mutex<TenderStore>>,
+    prepared: &PreparedAgentRun,
+    cancellation: CancellationToken,
+) -> ProviderExecution {
+    let started = Instant::now();
+    record_provider_turn_started(host, tender_id, prepared);
+    let execution = execute_provider_turn(host, store, prepared, cancellation).await;
+    record_provider_turn_diagnostic(host, tender_id, prepared, &execution, started);
+    execution
+}
+
 async fn execute_provider_turn(
     host: &QuantixHost,
     store: &Arc<Mutex<TenderStore>>,
     prepared: &PreparedAgentRun,
     cancellation: CancellationToken,
 ) -> ProviderExecution {
-    let started = Instant::now();
+    execute_provider_turn_from(host, store, prepared, cancellation, Instant::now()).await
+}
+
+async fn execute_provider_turn_from(
+    host: &QuantixHost,
+    store: &Arc<Mutex<TenderStore>>,
+    prepared: &PreparedAgentRun,
+    cancellation: CancellationToken,
+    started: Instant,
+) -> ProviderExecution {
     if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
         return execution;
     }
@@ -2579,29 +2705,88 @@ async fn execute_provider_turn(
     };
     let provider = if prepared.provider_selection.provider == AiProviderKind::Codex {
         let mut provider_slot = host.agent_provider().lock().await;
-        if provider_slot.is_none() {
-            let provider = match AgentProvider::codex_readiness(
-                host.process_supervisor(),
-                host.runtime_layout().codex_executable(),
-                host.application_home(),
-                cancellation.clone(),
-            )
-            .await
-            {
-                Ok(provider) => provider,
-                Err(failure) => return failed_execution(failure, started),
-            };
-            *provider_slot = Some(provider);
-        }
-        Some(
-            provider_slot
-                .as_ref()
-                .expect("provider initialized above")
-                .clone(),
-        )
+        let provider = match provider_slot.take() {
+            Some(provider) => match provider.refresh_readiness().await {
+                Ok(_) => provider,
+                Err(failure)
+                    if failure.category == ProviderFailureCategory::ProcessFailed
+                        && failure.retry_safe =>
+                {
+                    host.record_application_diagnostic(
+                        crate::DiagnosticSeverity::Info,
+                        crate::DiagnosticComponent::Provider,
+                        "provider_readiness_retry_started",
+                        "Provider readiness retry started after a retry-safe process failure",
+                        Some(format!("provider-turn-{}", prepared.run_id)),
+                        None,
+                        Some("started"),
+                        Some(format!("{:?}", failure.category)),
+                    );
+                    match AgentProvider::codex_readiness(
+                        host.process_supervisor(),
+                        host.runtime_layout().codex_executable(),
+                        host.application_home(),
+                        cancellation.clone(),
+                    )
+                    .await
+                    {
+                        Ok(provider) => {
+                            host.record_application_diagnostic(
+                                crate::DiagnosticSeverity::Info,
+                                crate::DiagnosticComponent::Provider,
+                                "provider_readiness_retry_completed",
+                                "Provider readiness retry completed",
+                                Some(format!("provider-turn-{}", prepared.run_id)),
+                                None,
+                                Some("completed"),
+                                None,
+                            );
+                            provider
+                        }
+                        Err(failure) => {
+                            host.record_application_diagnostic(
+                                crate::DiagnosticSeverity::Error,
+                                crate::DiagnosticComponent::Provider,
+                                "provider_readiness_retry_failed",
+                                "Provider readiness retry failed",
+                                Some(format!("provider-turn-{}", prepared.run_id)),
+                                None,
+                                Some("failed"),
+                                Some(format!("{:?}", failure.category)),
+                            );
+                            return failed_execution(failure, started);
+                        }
+                    }
+                }
+                Err(failure) => {
+                    return failed_execution(failure, started);
+                }
+            },
+            None => {
+                match AgentProvider::codex_readiness(
+                    host.process_supervisor(),
+                    host.runtime_layout().codex_executable(),
+                    host.application_home(),
+                    cancellation.clone(),
+                )
+                .await
+                {
+                    Ok(provider) => provider,
+                    Err(failure) => return failed_execution(failure, started),
+                }
+            }
+        };
+        let provider = provider.clone();
+        *provider_slot = Some(provider.clone());
+        Some(provider)
     } else {
         None
     };
+    if let Some(provider) = provider.as_ref() {
+        if let Err(failure) = provider_connection_readiness(&provider.connection_snapshot()) {
+            return failed_execution(failure, started);
+        }
+    }
     if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
         return execution;
     }
@@ -2764,12 +2949,96 @@ async fn execute_provider_turn(
         }
         drop(provider_slot);
         if removed {
+            host.record_application_diagnostic(
+                crate::DiagnosticSeverity::Info,
+                crate::DiagnosticComponent::Process,
+                "provider_process_cleanup_completed",
+                "Closed provider process was removed from the active supervisor slot",
+                Some(format!("provider-turn-{}", prepared.run_id)),
+                None,
+                Some("completed"),
+                None,
+            );
             let (status, summary) =
                 codex_failure_connection_status(ProviderFailureCategory::ProcessFailed);
             let _ = save_codex_connection_status(host.application_home(), status, summary);
         }
     }
     execution
+}
+
+fn record_provider_turn_diagnostic(
+    host: &QuantixHost,
+    tender_id: &str,
+    prepared: &PreparedAgentRun,
+    execution: &ProviderExecution,
+    started: Instant,
+) {
+    let (event_name, severity) = match execution.state {
+        AgentRunState::Completed => ("provider_turn_completed", crate::DiagnosticSeverity::Info),
+        AgentRunState::Failed => ("provider_turn_failed", crate::DiagnosticSeverity::Error),
+        AgentRunState::Interrupted => {
+            ("provider_turn_interrupted", crate::DiagnosticSeverity::Info)
+        }
+        AgentRunState::Indeterminate => (
+            "provider_turn_indeterminate",
+            crate::DiagnosticSeverity::Warning,
+        ),
+        AgentRunState::Running => ("provider_turn_running", crate::DiagnosticSeverity::Info),
+    };
+    let error_code = execution
+        .failure
+        .as_ref()
+        .map(|failure| format!("{:?}", failure.category));
+    let mut fact = crate::RecordDiagnosticFact::new(
+        severity,
+        crate::DiagnosticComponent::Provider,
+        event_name,
+        "Provider turn reached an execution boundary",
+    );
+    fact.correlation.operation_id = Some(format!("provider-turn-{}", prepared.run_id));
+    fact.correlation.run_id = Some(prepared.run_id.clone());
+    fact.correlation.task_id = Some(prepared.task.task_id.clone());
+    fact.duration_ms = Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
+    fact.outcome = Some(execution.state.as_str().into());
+    fact.error_code = error_code.clone();
+    fact.success = Some(execution.state == AgentRunState::Completed);
+    host.diagnostics().record_tender(tender_id, fact);
+
+    let mut deep = crate::RecordDiagnosticFact::new(
+        severity,
+        crate::DiagnosticComponent::Provider,
+        "provider_turn_protocol_boundary",
+        "Redacted provider protocol boundary captured",
+    );
+    deep.correlation.operation_id = Some(format!("provider-turn-{}", prepared.run_id));
+    deep.correlation.run_id = Some(prepared.run_id.clone());
+    deep.correlation.task_id = Some(prepared.task.task_id.clone());
+    deep.duration_ms = Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
+    deep.outcome = Some(execution.state.as_str().into());
+    deep.error_code = error_code;
+    deep.deep = true;
+    deep.request_id = Some(format!("run-{}", prepared.run_id));
+    deep.size_bytes = execution
+        .candidate_payload_json
+        .as_ref()
+        .map(|payload| u64::try_from(payload.len()).unwrap_or(u64::MAX));
+    deep.success = Some(execution.state == AgentRunState::Completed);
+    host.diagnostics().record_tender(tender_id, deep);
+}
+
+fn record_provider_turn_started(host: &QuantixHost, tender_id: &str, prepared: &PreparedAgentRun) {
+    let mut fact = crate::RecordDiagnosticFact::new(
+        crate::DiagnosticSeverity::Info,
+        crate::DiagnosticComponent::Provider,
+        "provider_turn_started",
+        "Provider turn execution started",
+    );
+    fact.correlation.operation_id = Some(format!("provider-turn-{}", prepared.run_id));
+    fact.correlation.run_id = Some(prepared.run_id.clone());
+    fact.correlation.task_id = Some(prepared.task.task_id.clone());
+    fact.outcome = Some("started".into());
+    host.diagnostics().record_tender(tender_id, fact);
 }
 
 fn failed_execution(failure: ProviderFailure, started: Instant) -> ProviderExecution {
@@ -2837,6 +3106,17 @@ fn deterministic_provider_execution(
             Instant::now(),
         ),
         DeterministicProviderOutcome::Interrupted => interrupted_execution(Instant::now()),
+    }
+}
+
+fn deterministic_provider_selection() -> AiExecutionSelection {
+    AiExecutionSelection {
+        connection_id: "quantix-deterministic-provider-v1".into(),
+        provider: AiProviderKind::Codex,
+        model_id: "quantix-deterministic-model-v1".into(),
+        reasoning: ProviderReasoningSelection::ProviderDefault,
+        catalogue_fetched_at: "1970-01-01T00:00:00Z".into(),
+        adapter_version: "quantix-deterministic-provider-v1".into(),
     }
 }
 
@@ -2964,7 +3244,9 @@ fn turn_acceptance_unknown() -> ProviderFailure {
         ProviderFailureCategory::OutcomeUnknown,
         false,
         "Resolve the quarantined Agent Run before retrying.",
-        Some("The Provider Turn may have started, but its identity and outcome could not be established."),
+        Some(
+            "The Provider Turn may have started, but its identity and outcome could not be established.",
+        ),
     )
 }
 
@@ -3450,6 +3732,85 @@ fn valid_identifier(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tender_store::CreateTenderCommand;
+
+    #[tokio::test]
+    async fn deterministic_provider_accepts_a_new_default_local_only_tender() {
+        let root = tempfile::tempdir().expect("temporary deterministic acceptance home");
+        let application_home = root.path().join(".quantix");
+        let resources = root.path().join("resources");
+        let host = QuantixHost::new(&application_home, &resources);
+        assert!(matches!(
+            crate::ensure_quantix_setup(&host).state,
+            crate::SetupState::Ready | crate::SetupState::Warning
+        ));
+        let tender = host
+            .create_tender(CreateTenderCommand {
+                name: "Deterministic local-only Tender".into(),
+            })
+            .expect("create default local-only Tender");
+        let public_result = host
+            .run_bootstrap_agent(RunBootstrapAgentCommand {
+                tender_id: tender.tender_id.clone(),
+                retry_of_run_id: None,
+            })
+            .await;
+        assert_eq!(
+            public_result
+                .expect_err("public bootstrap must require the Tender AI binding")
+                .code,
+            TenderErrorCode::AiProviderRequired
+        );
+
+        let expected_selection = deterministic_provider_selection();
+        let completed = host
+            .run_bootstrap_agent_with_deterministic_provider(
+                RunBootstrapAgentCommand {
+                    tender_id: tender.tender_id.clone(),
+                    retry_of_run_id: None,
+                },
+                DeterministicProviderOutcome::Completed,
+            )
+            .await
+            .expect("deterministic helper must not require provider binding");
+        assert_eq!(completed.state, AgentRunState::Completed, "{completed:#?}");
+        assert_eq!(completed.provider_selection, expected_selection);
+
+        let failed = host
+            .run_bootstrap_agent_with_deterministic_provider(
+                RunBootstrapAgentCommand {
+                    tender_id: tender.tender_id.clone(),
+                    retry_of_run_id: None,
+                },
+                DeterministicProviderOutcome::Failed,
+            )
+            .await
+            .expect("persist deterministic failed outcome");
+        assert_eq!(failed.state, AgentRunState::Failed, "{failed:#?}");
+        assert_eq!(failed.provider_selection, expected_selection);
+        assert_eq!(
+            failed.failure.as_ref().map(|failure| failure.category),
+            Some(ProviderFailureCategory::OutputInvalid)
+        );
+
+        let interrupted = host
+            .run_bootstrap_agent_with_deterministic_provider(
+                RunBootstrapAgentCommand {
+                    tender_id: tender.tender_id,
+                    retry_of_run_id: None,
+                },
+                DeterministicProviderOutcome::Interrupted,
+            )
+            .await
+            .expect("persist deterministic interrupted outcome");
+        assert_eq!(
+            interrupted.state,
+            AgentRunState::Interrupted,
+            "{interrupted:#?}"
+        );
+        assert_eq!(interrupted.provider_selection, expected_selection);
+        assert!(interrupted.failure.is_some());
+    }
 
     #[tokio::test]
     #[ignore = "explicitly contacts the Engineer User's local Codex app-server"]

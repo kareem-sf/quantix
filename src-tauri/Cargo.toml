@@ -68,9 +68,10 @@ rust_decimal = { version = "1.42.1", default-features = false, features = ["std"
 semver = "1.0.27"
 serde_json_canonicalizer = "0.3.2"
 sha2 = "0.11.0"
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2.4.3"
 tauri-plugin-updater = "=2.10.1"
 serde = { version = "1", features = ["derive"] }
@@ -80,6 +81,8 @@ tempfile = "3.27.0"
 thiserror = "2.0.16"
 tokio = { version = "1.47.1", features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 tokio-util = { version = "0.7.16", features = ["rt"] }
+tracing = "0.1.44"
+tracing-subscriber = "0.3.20"
 ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
 unicase = "2.9.0"
 unicode-bidi = "0.3.18"
@@ -92,11 +95,8 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2
 [target.'cfg(windows)'.dependencies]
 junction = { version = "2.0.0", default-features = false }
 windows-permissions = "0.2.4"
-# wmi ranges `windows` and `windows-core` independently, so pin its pair to
-# one minor line. Tauri retains its own compatible 0.61 dependency line.
 windows = { version = "=0.62.2", features = ["Win32_Storage_FileSystem", "Win32_System_Threading"] }
 windows-core = "=0.62.2"
-wmi = { version = "0.18.4", default-features = false }
 
 [dev-dependencies]
 minisign = "0.9.1"

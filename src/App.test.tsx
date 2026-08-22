@@ -1,182 +1,230 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const host = vi.hoisted(() => ({
   ensureQuantixSetup: vi.fn(),
-  inspectRuntimePreparationProgress: vi.fn(),
-  inspectRuntimeReadiness: vi.fn(),
-  refreshApplicationSettings: vi.fn(),
-  repairRuntimeReadiness: vi.fn(),
-  resumeManagerIntakes: vi.fn(),
+  inspectApplicationSettings: vi.fn(),
+  inspectManagerWorkspace: vi.fn(),
   validateQuantixUpdateRestart: vi.fn(),
 }));
+const tauri = vi.hoisted(() => ({ invoke: vi.fn() }));
 
 vi.mock("./quantixHost", () => host);
+vi.mock("@tauri-apps/api/core", () => tauri);
 vi.mock("./ManagerWorkspace", () => ({
-  ManagerWorkspace: ({ aiAvailable }: { aiAvailable: boolean }) => (
-    <p>{aiAvailable ? "AI office ready" : "AI office unavailable"}</p>
+  ManagerWorkspace: ({
+    initialPreferences,
+    setupWarnings,
+  }: {
+    initialPreferences: { reduced_motion: boolean };
+    setupWarnings: string[];
+  }) => (
+    <main data-testid="manager-workspace">
+      <h1>Tender workspace</h1>
+      <span data-testid="motion-preference">
+        {initialPreferences.reduced_motion ? "reduced" : "full"}
+      </span>
+      {setupWarnings.length ? <p>{setupWarnings.join(", ")}</p> : null}
+    </main>
   ),
 }));
 
 import App from "./App";
 
-describe("App runtime startup", () => {
+const projection = {
+  catalogue: [],
+  selected_tender: null,
+  conversation: null,
+  current_action: {
+    kind: "start_tender" as const,
+    title: "Start a Tender",
+    summary: "Choose a Tender Package.",
+    action_label: "Choose Tender Package",
+    requires_engineer: true,
+  },
+  work: {
+    needs_engineer: 0,
+    working: 0,
+    waiting: 0,
+    done: 0,
+    cancelled: 0,
+    failed: 0,
+  },
+  files: {
+    tender_document_count: 0,
+    quantix_output_count: 0,
+    tender_documents: [],
+  },
+  team: { active_agent_runs: 0, waiting_tasks: 0, needs_engineer: 0 },
+  intake: null,
+};
+
+describe("App bootstrap", () => {
   beforeEach(() => {
-    host.ensureQuantixSetup.mockResolvedValue({ state: "ready", issues: [] });
-    host.validateQuantixUpdateRestart.mockResolvedValue({ state: "idle" });
-    host.inspectRuntimePreparationProgress.mockResolvedValue({
-      status: "preparing",
-      started_at_epoch_ms: 1,
-      updated_at_epoch_ms: 1,
-      model_files_written: 3,
-      model_bytes_written: 31769509,
-      activities: [
-        {
-          step: "prepare_document_models",
-          title: "Prepare document models",
-          detail:
-            "Downloading and validating the local models used to read Tender documents.",
-          status: "active",
-          started_at_epoch_ms: 1,
-          finished_at_epoch_ms: null,
-        },
-      ],
+    host.ensureQuantixSetup.mockResolvedValue({
+      state: "ready",
+      issues: [],
     });
-    host.resumeManagerIntakes.mockResolvedValue(undefined);
-    host.refreshApplicationSettings.mockResolvedValue({
+    host.validateQuantixUpdateRestart.mockResolvedValue({ state: "idle" });
+    host.inspectManagerWorkspace.mockResolvedValue(projection);
+    host.inspectApplicationSettings.mockResolvedValue({
       general_preferences: {
         appearance: "system",
         reduced_motion: false,
-        high_contrast: false,
         larger_text: false,
         notify_when_attention_needed: false,
       },
-      ai_execution_selection: null,
-      provider_connections: [{ status: "ready" }],
-      active_provider_login: null,
-      storage: {
-        application_home: "A:\\Quantix-test",
-        tender_backups_are_preserved: true,
-        trash_requires_explicit_purge: true,
-      },
-      diagnostics: {
-        quantix_version: "0.1.0",
-        installation_schema_version: 21,
-        tender_schema_version: 32,
-      },
     });
+    tauri.invoke.mockImplementation(async (command: string) =>
+      command === "inspect_application_settings"
+        ? {
+            general_preferences: {
+              reduced_motion: false,
+            },
+          }
+        : undefined,
+    );
   });
 
   afterEach(() => {
+    Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    document.documentElement.className = "";
+    delete document.documentElement.dataset.quantixAppearance;
+    vi.useRealTimers();
     cleanup();
     vi.clearAllMocks();
   });
 
-  it("prepares a missing managed runtime before opening the workspace", async () => {
-    host.inspectRuntimeReadiness.mockResolvedValue({
-      state: "missing_executable",
-      issues: ["ocr_executable_missing"],
-      codex_version: "0.147.0",
-      uv_version: "0.12.2",
-      ocr_version: null,
-      repair_available: true,
+  it("opens a healthy workspace without an infrastructure checklist", async () => {
+    render(<App />);
+
+    expect(await screen.findByTestId("manager-workspace")).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(host.ensureQuantixSetup).toHaveBeenCalledTimes(1);
+    expect(host.inspectManagerWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  it("announces one truthful activity only after the quiet threshold", async () => {
+    vi.useFakeTimers();
+    let resolveSetup!: (value: { state: "ready"; issues: never[] }) => void;
+    host.ensureQuantixSetup.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSetup = resolve;
+      }),
+    );
+    render(<App />);
+
+    expect(screen.queryByRole("status")).toBeNull();
+    await act(async () => {
+      vi.advanceTimersByTime(700);
     });
-    host.repairRuntimeReadiness.mockResolvedValue({
-      state: "ready",
-      issues: [],
-      codex_version: "0.147.0",
-      uv_version: "0.12.2",
-      ocr_version: "3.9.2",
-      repair_available: false,
+    expect(screen.getByRole("status").textContent).toContain(
+      "Opening the local workspace",
+    );
+
+    await act(async () => {
+      resolveSetup({ state: "ready", issues: [] });
+      await Promise.resolve();
+    });
+    vi.useRealTimers();
+    expect(await screen.findByTestId("manager-workspace")).toBeTruthy();
+  });
+
+  it("keeps nonblocking setup warnings visible in the workspace", async () => {
+    host.ensureQuantixSetup.mockResolvedValue({
+      state: "warning",
+      issues: ["storage_permissions_unverified"],
     });
 
     render(<App />);
 
-    expect(await screen.findByText("AI office ready")).toBeTruthy();
-    expect(host.repairRuntimeReadiness).toHaveBeenCalledTimes(1);
-    await waitFor(() => {
-      expect(host.resumeManagerIntakes).toHaveBeenCalledTimes(1);
-    });
+    expect(await screen.findByTestId("manager-workspace")).toBeTruthy();
+    expect(screen.getByText("storage_permissions_unverified")).toBeTruthy();
   });
 
-  it("shows truthful first-run runtime feedback while preparation is active", async () => {
-    host.inspectRuntimeReadiness.mockResolvedValue({
-      state: "missing_executable",
-      issues: ["ocr_executable_missing"],
-      codex_version: "0.147.0",
-      uv_version: "0.12.2",
-      ocr_version: null,
-      repair_available: true,
+  it("applies saved motion preferences before publishing the ready workspace", async () => {
+    host.inspectApplicationSettings.mockResolvedValue({
+      general_preferences: {
+        appearance: "light",
+        reduced_motion: true,
+        larger_text: false,
+        notify_when_attention_needed: false,
+      },
     });
-    let finishPreparation: ((value: unknown) => void) | undefined;
-    host.repairRuntimeReadiness.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          finishPreparation = resolve;
-        }),
+
+    render(<App />);
+
+    expect((await screen.findByTestId("motion-preference")).textContent).toBe(
+      "reduced",
+    );
+    expect(document.documentElement.classList).toContain(
+      "quantix-reduced-motion",
+    );
+  });
+
+  it("publishes native display readiness after the opening shell commits", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    let resolveSetup!: (value: { state: "ready"; issues: never[] }) => void;
+    host.ensureQuantixSetup.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSetup = resolve;
+      }),
+    );
+
+    render(<App />);
+    await act(async () => Promise.resolve());
+
+    expect(tauri.invoke).toHaveBeenCalledWith("notify_startup_display_ready");
+
+    await act(async () => {
+      resolveSetup({ state: "ready", issues: [] });
+    });
+
+    expect(await screen.findByTestId("manager-workspace")).toBeTruthy();
+    expect(tauri.invoke).toHaveBeenCalledWith("notify_startup_display_ready");
+    expect(
+      tauri.invoke.mock.calls.filter(
+        ([command]) => command === "notify_startup_display_ready",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("publishes display readiness while the workspace projection is still restoring", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    let resolveProjection!: (value: typeof projection) => void;
+    host.inspectManagerWorkspace.mockReturnValue(
+      new Promise((resolve) => {
+        resolveProjection = resolve;
+      }),
     );
 
     render(<App />);
 
-    const runtimeStatus = await screen.findByRole("status");
-    await waitFor(() => {
-      expect(runtimeStatus.textContent).toContain("Prepare document models");
-      expect(runtimeStatus.textContent).toContain(
-        "Downloading and validating the local models used to read Tender documents.",
-      );
-    });
-    expect(
-      screen.getByRole("list", { name: "Workspace opening progress" }),
-    ).toBeTruthy();
-    expect(await screen.findByText("Setup details")).toBeTruthy();
-    expect(
-      (await screen.findAllByText("Prepare document models")).length,
-    ).toBeGreaterThan(0);
-    expect(await screen.findByText(/3 model files/)).toBeTruthy();
+    expect(tauri.invoke).toHaveBeenCalledWith("notify_startup_display_ready");
+    expect(screen.queryByTestId("manager-workspace")).toBeNull();
 
     await act(async () => {
-      finishPreparation?.({
-        state: "ready",
-        issues: [],
-        codex_version: "0.147.0",
-        uv_version: "0.12.2",
-        ocr_version: "3.9.2",
-        repair_available: false,
-      });
+      await new Promise((resolve) => window.setTimeout(resolve, 710));
     });
-    expect(await screen.findByText("AI office ready")).toBeTruthy();
-  });
+    expect(screen.getByRole("status").textContent).toContain(
+      "Restoring your Tender workspace",
+    );
 
-  it("keeps checking until an active runtime preparation finishes", async () => {
-    host.inspectRuntimeReadiness
-      .mockResolvedValueOnce({
-        state: "preparing",
-        issues: ["runtime_preparation_active"],
-        codex_version: null,
-        uv_version: null,
-        ocr_version: null,
-        repair_available: false,
-      })
-      .mockResolvedValueOnce({
-        state: "preparing",
-        issues: ["runtime_preparation_active"],
-        codex_version: null,
-        uv_version: null,
-        ocr_version: null,
-        repair_available: false,
-      })
-      .mockResolvedValueOnce({
-        state: "ready",
-        issues: [],
-        codex_version: "0.147.0",
-        uv_version: "0.12.2",
-        ocr_version: "3.9.2",
-        repair_available: false,
-      });
-
-    render(<App />);
-
-    expect(await screen.findByText("AI office ready")).toBeTruthy();
-    expect(host.repairRuntimeReadiness).not.toHaveBeenCalled();
+    await act(async () => {
+      resolveProjection(projection);
+      await Promise.resolve();
+    });
+    expect(await screen.findByTestId("manager-workspace")).toBeTruthy();
+    expect(
+      tauri.invoke.mock.calls.filter(
+        ([command]) => command === "notify_startup_display_ready",
+      ),
+    ).toHaveLength(1);
   });
 });

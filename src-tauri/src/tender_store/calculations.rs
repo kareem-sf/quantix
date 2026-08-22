@@ -1867,8 +1867,7 @@ impl TenderStore {
             .parent()
             .and_then(Path::parent)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let provider_selection =
-            crate::application_settings::load_current_ai_execution_selection(application_home)?;
+        let provider_selection = self.required_tender_ai_execution_selection()?;
         let workspace = application_home
             .join("staging")
             .join(format!("agent-{}-{run_id}", tender_id.as_str()));
@@ -2189,8 +2188,7 @@ impl TenderStore {
             .parent()
             .and_then(Path::parent)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let provider_selection =
-            crate::application_settings::load_current_ai_execution_selection(application_home)?;
+        let provider_selection = self.required_tender_ai_execution_selection()?;
         let workspace = application_home
             .join("staging")
             .join(format!("agent-{}-{run_id}", tender_id.as_str()));

@@ -3,6 +3,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeAssessment } from "./bindings/ChangeAssessment";
 import type { ChangeAssessmentClassification } from "./bindings/ChangeAssessmentClassification";
 import type { ChangeAssessmentPage } from "./bindings/ChangeAssessmentPage";
+import { evidenceLanguageTag } from "./evidenceTypography";
 import {
   decideChangeAssessment,
   inspectChangeAssessments,
@@ -63,11 +64,18 @@ function SourceVersion({
                 <p className="evidence-authority">
                   Authoritative original-language text
                 </p>
-                <blockquote>{evidence.original_text}</blockquote>
+                <blockquote
+                  dir="auto"
+                  lang={evidenceLanguageTag(evidence.language)}
+                >
+                  {evidence.original_text}
+                </blockquote>
                 {evidence.translated_text ? (
                   <div className="evidence-translation">
                     <p>Derived translation / non-authoritative</p>
-                    <blockquote>{evidence.translated_text}</blockquote>
+                    <blockquote dir="auto">
+                      {evidence.translated_text}
+                    </blockquote>
                   </div>
                 ) : null}
                 <p>

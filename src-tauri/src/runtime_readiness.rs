@@ -14,19 +14,20 @@ use ts_rs::TS;
 use walkdir::WalkDir;
 
 use crate::{
-    agent_runtime::{CodexReadiness, CODEX_PROTOCOL_SCHEMA, CODEX_VERSION},
+    agent_runtime::{CODEX_PROTOCOL_SCHEMA, CODEX_VERSION},
     process_supervisor::{ProcessOutput, ProcessSpec, ProcessSupervisor, ProcessTermination},
-    setup::SetupState,
+    setup::{SetupState, MINIMUM_SETUP_FREE_SPACE_BYTES},
     QuantixHost,
 };
 
 const UV_VERSION: &str = "0.12.2";
 pub(crate) const OCR_VERSION: &str = "3.9.2";
 const PYTHON_VERSION: &str = "3.12.13";
-pub(crate) const RUNTIME_PROVENANCE_SCHEMA: u32 = 2;
+pub(crate) const RUNTIME_PROVENANCE_SCHEMA: u32 = 3;
 const OCR_MANIFEST_SCHEMA: u32 = 3;
 const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 const ENVIRONMENT_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
+const RUNTIME_INSPECTION_TIMEOUT: Duration = Duration::from_secs(30);
 const PREPARATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const MODEL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const SMOKE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -87,7 +88,6 @@ pub enum RuntimeReadinessState {
     MissingExecutable,
     IncompatibleVersion,
     MissingModel,
-    AuthenticationRequired,
     InterruptedPreparation,
     RepairRequired,
 }
@@ -97,19 +97,16 @@ pub enum RuntimeReadinessState {
 #[ts(export)]
 pub enum RuntimeReadinessIssue {
     SetupIncomplete,
-    CodexExecutableMissing,
     UvExecutableMissing,
     OcrExecutableMissing,
-    CodexVersionIncompatible,
     UvVersionIncompatible,
     OcrVersionIncompatible,
     RuntimeResourceIntegrityFailed,
     OcrEnvironmentInvalid,
     OcrModelsMissing,
-    CodexAuthenticationRequired,
-    CodexSubscriptionRequired,
     RuntimePreparationActive,
     RuntimePreparationInterrupted,
+    RuntimePreparationCancelled,
     RuntimePreparationFailed,
     RuntimeProbeFailed,
 }
@@ -119,7 +116,6 @@ pub enum RuntimeReadinessIssue {
 pub struct RuntimeReadiness {
     pub state: RuntimeReadinessState,
     pub issues: Vec<RuntimeReadinessIssue>,
-    pub codex_version: Option<String>,
     pub uv_version: Option<String>,
     pub ocr_version: Option<String>,
     pub repair_available: bool,
@@ -142,6 +138,8 @@ pub enum RuntimePreparationStatus {
     Idle,
     Preparing,
     Ready,
+    Cancelled,
+    Interrupted,
     Failed,
 }
 
@@ -242,6 +240,18 @@ impl RuntimePreparationProgress {
         self.updated_at_epoch_ms = Some(now);
     }
 
+    pub(crate) fn finish_cancelled(&mut self) {
+        let now = epoch_milliseconds();
+        for activity in &mut self.activities {
+            if activity.status == RuntimePreparationActivityStatus::Active {
+                activity.status = RuntimePreparationActivityStatus::Failed;
+                activity.finished_at_epoch_ms = Some(now);
+            }
+        }
+        self.status = RuntimePreparationStatus::Cancelled;
+        self.updated_at_epoch_ms = Some(now);
+    }
+
     pub(crate) fn observe_model_files(mut self, application_home: &Path) -> Self {
         if !self.activities.iter().any(|activity| {
             activity.step == RuntimePreparationStep::PrepareDocumentModels
@@ -280,8 +290,8 @@ fn runtime_preparation_activities() -> Vec<RuntimePreparationActivity> {
         ),
         (
             RuntimePreparationStep::VerifyBundledTools,
-            "Verify bundled AI tools",
-            "Checking the exact Codex and uv executable versions.",
+            "Verify bundled document tools",
+            "Checking the exact uv and OCR resource versions.",
         ),
         (
             RuntimePreparationStep::ResetEnvironment,
@@ -341,11 +351,10 @@ fn epoch_milliseconds() -> u64 {
 }
 
 impl RuntimeReadiness {
-    fn state(state: RuntimeReadinessState, issue: RuntimeReadinessIssue) -> Self {
+    pub(crate) fn state(state: RuntimeReadinessState, issue: RuntimeReadinessIssue) -> Self {
         Self {
             state,
             issues: vec![issue],
-            codex_version: None,
             uv_version: None,
             ocr_version: None,
             repair_available: false,
@@ -361,7 +370,6 @@ impl RuntimeReadiness {
         Self {
             state,
             issues,
-            codex_version: versions.codex.clone(),
             uv_version: versions.uv.clone(),
             ocr_version: versions.ocr.clone(),
             repair_available,
@@ -381,6 +389,8 @@ enum PersistedPreparationState {
     NotStarted,
     Preparing,
     Ready,
+    Cancelled,
+    Interrupted,
     Failed,
 }
 
@@ -447,6 +457,8 @@ enum OcrValidationError {
 enum RuntimeError {
     #[error("runtime resources are unavailable")]
     MissingResource,
+    #[error("application home has insufficient free space")]
+    InsufficientDisk,
     #[error("runtime process failed")]
     ProcessFailed,
     #[error("runtime process was cancelled")]
@@ -460,6 +472,85 @@ enum RuntimeError {
 struct RuntimePreparationGuard {
     host: QuantixHost,
     cancellation: CancellationToken,
+}
+
+struct RuntimeCandidate {
+    application_home: PathBuf,
+    root: PathBuf,
+    previous: PathBuf,
+    moved: Vec<(PathBuf, PathBuf)>,
+    committed: bool,
+}
+
+impl RuntimeCandidate {
+    fn new(application_home: &Path) -> Result<Self, RuntimeError> {
+        let candidate_id = format!("candidate-{}", epoch_milliseconds());
+        let root = application_home
+            .join("staging")
+            .join("document-tools")
+            .join(candidate_id);
+        let previous = root.join("previous");
+        fs::create_dir_all(&previous).map_err(|_| RuntimeError::PersistenceFailed)?;
+        Ok(Self {
+            application_home: application_home.to_path_buf(),
+            root,
+            previous,
+            moved: Vec::new(),
+            committed: false,
+        })
+    }
+
+    fn take(&mut self, path: &Path, name: &str) -> Result<(), RuntimeError> {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(_) => return Err(RuntimeError::PersistenceFailed),
+        };
+        if has_unsafe_link(&metadata) || !path_is_within(path, &self.application_home) {
+            return Err(RuntimeError::PersistenceFailed);
+        }
+        let backup = self.previous.join(name);
+        fs::rename(path, &backup).map_err(|_| RuntimeError::PersistenceFailed)?;
+        self.moved.push((path.to_path_buf(), backup));
+        Ok(())
+    }
+
+    fn commit(mut self) -> Result<(), RuntimeError> {
+        remove_managed_tree(&self.root)?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for RuntimeCandidate {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        // The active runtime is disposable only while this candidate is
+        // uncommitted. Remove newly-created active paths, then restore each
+        // prior path in reverse order so a failed repair cannot destroy the
+        // last verified document-tool environment.
+        for (path, _) in self.moved.iter().rev() {
+            let _ = remove_managed_tree(path);
+        }
+        for (path, backup) in self.moved.iter().rev() {
+            if backup.exists() {
+                let _ = fs::rename(backup, path);
+            }
+        }
+        let _ = remove_managed_tree(&self.root);
+    }
+}
+
+fn path_is_within(path: &Path, allowed_root: &Path) -> bool {
+    let Ok(canonical_root) = allowed_root.canonicalize() else {
+        return false;
+    };
+    let Ok(canonical_path) = path.canonicalize() else {
+        return false;
+    };
+    canonical_path.starts_with(canonical_root)
 }
 
 impl RuntimePreparationGuard {
@@ -481,7 +572,7 @@ impl Drop for RuntimePreparationGuard {
 impl QuantixHost {
     #[doc(hidden)]
     pub async fn verify_offline_runtime_for_acceptance(&self) -> bool {
-        self.set_runtime_verified(false);
+        self.set_document_tools_verified(false);
         if !matches!(
             self.ensure_setup().state,
             SetupState::Ready | SetupState::Warning
@@ -489,23 +580,14 @@ impl QuantixHost {
             return false;
         }
         let layout = self.runtime_layout();
-        let codex = layout.codex_executable();
         let uv = layout.uv_executable();
-        if !is_real_file(&codex)
-            || !is_real_file(&uv)
+        if !is_real_file(&uv)
             || validate_runtime_provenance(layout).is_err()
             || validate_ocr_runtime(self.application_home(), layout).is_err()
         {
             return false;
         }
         let cancellation = CancellationToken::new();
-        let codex_version = probe_version(
-            self.process_supervisor(),
-            self.application_home(),
-            &codex,
-            cancellation.clone(),
-        )
-        .await;
         let uv_version = probe_version(
             self.process_supervisor(),
             self.application_home(),
@@ -513,14 +595,11 @@ impl QuantixHost {
             cancellation,
         )
         .await;
-        let verified = codex_version
+        let verified = uv_version
             .as_deref()
-            .is_ok_and(|version| version == CODEX_VERSION)
-            && uv_version
-                .as_deref()
-                .is_ok_and(|version| version == UV_VERSION)
+            .is_ok_and(|version| version == UV_VERSION)
             && is_real_file(&python_executable(self.application_home()));
-        self.set_runtime_verified(verified);
+        self.set_document_tools_verified(verified);
         verified
     }
 
@@ -531,6 +610,30 @@ impl QuantixHost {
                 RuntimeReadinessIssue::RuntimePreparationActive,
             );
         }
+        let (flight, leader) = self.begin_runtime_readiness_inspection();
+        if leader {
+            let worker = self.clone();
+            let owner = flight.clone();
+            tokio::spawn(async move {
+                let readiness = worker.inspect_runtime_readiness_uncached().await;
+                worker.finish_runtime_readiness_inspection(&owner, readiness);
+            });
+        }
+        match tokio::time::timeout(
+            RUNTIME_INSPECTION_TIMEOUT,
+            self.await_runtime_readiness_inspection(&flight),
+        )
+        .await
+        {
+            Ok(readiness) => readiness,
+            Err(_) => RuntimeReadiness::state(
+                RuntimeReadinessState::RepairRequired,
+                RuntimeReadinessIssue::RuntimeProbeFailed,
+            ),
+        }
+    }
+
+    async fn inspect_runtime_readiness_uncached(&self) -> RuntimeReadiness {
         let Ok(_ordinary_work) = self.begin_ordinary_work() else {
             return RuntimeReadiness::state(
                 RuntimeReadinessState::Preparing,
@@ -541,7 +644,7 @@ impl QuantixHost {
         // filesystem drift and hostile links cannot be hidden by a prior Ready
         // result. The fixture-only verified shortcut belongs solely to the
         // post-update validation seam below.
-        self.set_runtime_verified(false);
+        self.set_document_tools_verified(false);
         if !matches!(
             self.ensure_setup().state,
             SetupState::Ready | SetupState::Warning
@@ -556,17 +659,16 @@ impl QuantixHost {
 
     pub(crate) async fn inspect_runtime_readiness_for_update(&self) -> RuntimeReadiness {
         #[cfg(feature = "runtime-fixture")]
-        if self.runtime_is_verified() {
+        if self.document_tools_are_verified() {
             return RuntimeReadiness {
                 state: RuntimeReadinessState::Ready,
                 issues: Vec::new(),
-                codex_version: Some(CODEX_VERSION.to_owned()),
                 uv_version: Some(UV_VERSION.to_owned()),
                 ocr_version: Some(OCR_VERSION.to_owned()),
                 repair_available: false,
             };
         }
-        self.set_runtime_verified(false);
+        self.set_document_tools_verified(false);
         if !self
             .application_home()
             .join("installation.sqlite")
@@ -593,6 +695,11 @@ impl QuantixHost {
             }
         };
         if persisted.state == PersistedPreparationState::Preparing {
+            let _ = write_preparation(
+                self.application_home(),
+                PersistedPreparationState::Interrupted,
+                &RuntimeVersions::default(),
+            );
             let mut readiness = RuntimeReadiness::state(
                 RuntimeReadinessState::InterruptedPreparation,
                 RuntimeReadinessIssue::RuntimePreparationInterrupted,
@@ -610,12 +717,12 @@ impl QuantixHost {
         }
 
         let readiness = self.probe_runtime(CancellationToken::new()).await;
-        self.set_runtime_verified(readiness.state == RuntimeReadinessState::Ready);
+        self.set_document_tools_verified(readiness.state == RuntimeReadinessState::Ready);
         readiness
     }
 
     pub async fn repair_runtime_readiness(&self) -> RuntimeReadiness {
-        self.set_runtime_verified(false);
+        self.set_document_tools_verified(false);
         if !matches!(
             self.ensure_setup().state,
             SetupState::Ready | SetupState::Warning
@@ -655,17 +762,14 @@ impl QuantixHost {
         match prepared {
             Ok(versions) => {
                 if cancellation.is_cancelled() {
-                    return self.fail_runtime_preparation();
+                    return self.cancelled_runtime_preparation();
                 }
                 self.activate_runtime_preparation_step(RuntimePreparationStep::FinalRuntimeCheck);
                 let readiness = self.probe_runtime(cancellation.clone()).await;
                 if cancellation.is_cancelled() {
-                    return self.fail_runtime_preparation();
+                    return self.cancelled_runtime_preparation();
                 }
-                let preparation_state = if matches!(
-                    readiness.state,
-                    RuntimeReadinessState::Ready | RuntimeReadinessState::AuthenticationRequired
-                ) {
+                let preparation_state = if readiness.state == RuntimeReadinessState::Ready {
                     PersistedPreparationState::Ready
                 } else {
                     PersistedPreparationState::Failed
@@ -675,13 +779,13 @@ impl QuantixHost {
                 {
                     return self.fail_runtime_preparation();
                 }
-                self.set_runtime_verified(readiness.state == RuntimeReadinessState::Ready);
-                self.finish_runtime_preparation_progress(matches!(
-                    readiness.state,
-                    RuntimeReadinessState::Ready | RuntimeReadinessState::AuthenticationRequired
-                ));
+                self.set_document_tools_verified(readiness.state == RuntimeReadinessState::Ready);
+                self.finish_runtime_preparation_progress(
+                    readiness.state == RuntimeReadinessState::Ready,
+                );
                 readiness
             }
+            Err(RuntimeError::Cancelled) => self.cancelled_runtime_preparation(),
             Err(_) => self.fail_runtime_preparation(),
         }
     }
@@ -691,7 +795,7 @@ impl QuantixHost {
     }
 
     fn fail_runtime_preparation(&self) -> RuntimeReadiness {
-        self.set_runtime_verified(false);
+        self.set_document_tools_verified(false);
         self.finish_runtime_preparation_progress(false);
         let _ = write_preparation(
             self.application_home(),
@@ -706,14 +810,26 @@ impl QuantixHost {
         readiness
     }
 
+    fn cancelled_runtime_preparation(&self) -> RuntimeReadiness {
+        self.set_document_tools_verified(false);
+        self.finish_runtime_preparation_cancelled();
+        let _ = write_preparation(
+            self.application_home(),
+            PersistedPreparationState::Cancelled,
+            &RuntimeVersions::default(),
+        );
+        let mut readiness = RuntimeReadiness::state(
+            RuntimeReadinessState::RepairRequired,
+            RuntimeReadinessIssue::RuntimePreparationCancelled,
+        );
+        readiness.repair_available = true;
+        readiness
+    }
+
     async fn probe_runtime(&self, cancellation: CancellationToken) -> RuntimeReadiness {
         let layout = self.runtime_layout();
-        let codex = layout.codex_executable();
         let uv = layout.uv_executable();
         let mut missing = Vec::new();
-        if !is_real_file(&codex) {
-            missing.push(RuntimeReadinessIssue::CodexExecutableMissing);
-        }
         if !is_real_file(&uv) {
             missing.push(RuntimeReadinessIssue::UvExecutableMissing);
         }
@@ -725,7 +841,7 @@ impl QuantixHost {
                 false,
             );
         }
-        if validate_runtime_provenance(layout).is_err() {
+        if validate_runtime_provenance_async(layout).await.is_err() {
             return RuntimeReadiness::with_versions(
                 RuntimeReadinessState::RepairRequired,
                 vec![RuntimeReadinessIssue::RuntimeResourceIntegrityFailed],
@@ -735,14 +851,9 @@ impl QuantixHost {
         }
 
         let mut versions = RuntimeVersions {
-            codex: probe_version(
-                self.process_supervisor(),
-                self.application_home(),
-                &codex,
-                cancellation.clone(),
-            )
-            .await
-            .ok(),
+            // Codex is an AI provider, not a local document-processing tool. Its
+            // account/session readiness is inspected by the provider layer.
+            codex: Some(CODEX_VERSION.to_owned()),
             uv: probe_version(
                 self.process_supervisor(),
                 self.application_home(),
@@ -754,9 +865,6 @@ impl QuantixHost {
             ocr: None,
         };
         let mut incompatible = Vec::new();
-        if versions.codex.as_deref() != Some(CODEX_VERSION) {
-            incompatible.push(RuntimeReadinessIssue::CodexVersionIncompatible);
-        }
         if versions.uv.as_deref() != Some(UV_VERSION) {
             incompatible.push(RuntimeReadinessIssue::UvVersionIncompatible);
         }
@@ -827,38 +935,18 @@ impl QuantixHost {
                 true,
             );
         }
-        match self.inspect_codex_subscription(cancellation).await {
-            CodexReadiness::Ready => RuntimeReadiness::with_versions(
-                RuntimeReadinessState::Ready,
-                Vec::new(),
-                &versions,
-                false,
-            ),
-            CodexReadiness::AuthenticationRequired => RuntimeReadiness::with_versions(
-                RuntimeReadinessState::AuthenticationRequired,
-                vec![RuntimeReadinessIssue::CodexAuthenticationRequired],
-                &versions,
-                false,
-            ),
-            CodexReadiness::SubscriptionRequired => RuntimeReadiness::with_versions(
-                RuntimeReadinessState::AuthenticationRequired,
-                vec![RuntimeReadinessIssue::CodexSubscriptionRequired],
-                &versions,
-                false,
-            ),
-            CodexReadiness::Unavailable => RuntimeReadiness::with_versions(
-                RuntimeReadinessState::RepairRequired,
-                vec![RuntimeReadinessIssue::RuntimeProbeFailed],
-                &versions,
-                true,
-            ),
-        }
+        RuntimeReadiness::with_versions(RuntimeReadinessState::Ready, Vec::new(), &versions, false)
     }
 
     async fn prepare_ocr_runtime(
         &self,
         cancellation: CancellationToken,
     ) -> Result<RuntimeVersions, RuntimeError> {
+        if fs4::available_space(self.application_home())
+            .map_or(true, |available| available < MINIMUM_SETUP_FREE_SPACE_BYTES)
+        {
+            return Err(RuntimeError::InsufficientDisk);
+        }
         self.activate_runtime_preparation_step(RuntimePreparationStep::ValidateResources);
         let layout = self.runtime_layout();
         let codex = layout.codex_executable();
@@ -880,16 +968,9 @@ impl QuantixHost {
         }
         validate_runtime_provenance(layout)?;
         self.activate_runtime_preparation_step(RuntimePreparationStep::VerifyBundledTools);
-        let codex_version = probe_version(
-            self.process_supervisor(),
-            self.application_home(),
-            &codex,
-            cancellation.clone(),
-        )
-        .await?;
-        if codex_version != CODEX_VERSION {
-            return Err(RuntimeError::InvalidOutput);
-        }
+        // Do not execute or authenticate through Codex while preparing local
+        // document tools. Provider discovery and account checks are separate.
+        let codex_version = CODEX_VERSION.to_owned();
         let uv_version = probe_version(
             self.process_supervisor(),
             self.application_home(),
@@ -910,6 +991,14 @@ impl QuantixHost {
         for directory in [&runtime_root, &uv_cache, &models_root] {
             fs::create_dir_all(directory).map_err(|_| RuntimeError::PersistenceFailed)?;
         }
+        let mut candidate = RuntimeCandidate::new(self.application_home())?;
+        candidate.take(&environment, "ocr")?;
+        candidate.take(&python, "python")?;
+        candidate.take(&models, "models")?;
+        candidate.take(
+            &runtime_root.join("ocr-readiness.json"),
+            "ocr-readiness.json",
+        )?;
         self.activate_runtime_preparation_step(RuntimePreparationStep::ResetEnvironment);
         runtime_fixture_trace("resetting managed OCR environment");
         reset_managed_directory(&environment, self.application_home())?;
@@ -1027,6 +1116,7 @@ impl QuantixHost {
         remove_model_staging_marker(&models_root)?;
         publish_model_manifest(self.application_home(), &manifest)?;
         runtime_fixture_trace("runtime readiness published");
+        candidate.commit()?;
         Ok(RuntimeVersions {
             codex: Some(codex_version),
             uv: Some(uv_version),
@@ -1726,6 +1816,13 @@ fn validate_runtime_provenance(layout: &RuntimeLayout) -> Result<(), RuntimeErro
     Ok(())
 }
 
+async fn validate_runtime_provenance_async(layout: &RuntimeLayout) -> Result<(), RuntimeError> {
+    let layout = layout.clone();
+    tokio::task::spawn_blocking(move || validate_runtime_provenance(&layout))
+        .await
+        .map_err(|_| RuntimeError::InvalidOutput)?
+}
+
 fn validate_ocr_runtime(
     application_home: &Path,
     layout: &RuntimeLayout,
@@ -1847,6 +1944,8 @@ fn read_preparation(application_home: &Path) -> Result<PersistedPreparation, Run
         "not_started" => PersistedPreparationState::NotStarted,
         "preparing" => PersistedPreparationState::Preparing,
         "ready" => PersistedPreparationState::Ready,
+        "cancelled" => PersistedPreparationState::Cancelled,
+        "interrupted" => PersistedPreparationState::Interrupted,
         "failed" => PersistedPreparationState::Failed,
         _ => return Err(RuntimeError::PersistenceFailed),
     };
@@ -1870,6 +1969,8 @@ fn write_preparation(
         PersistedPreparationState::NotStarted => "not_started",
         PersistedPreparationState::Preparing => "preparing",
         PersistedPreparationState::Ready => "ready",
+        PersistedPreparationState::Cancelled => "cancelled",
+        PersistedPreparationState::Interrupted => "interrupted",
         PersistedPreparationState::Failed => "failed",
     };
     transaction

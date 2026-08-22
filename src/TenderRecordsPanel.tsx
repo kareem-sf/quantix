@@ -8,6 +8,7 @@ import type { TenderRecordEngineerDecisionKind } from "./bindings/TenderRecordEn
 import type { TenderRecordInspection } from "./bindings/TenderRecordInspection";
 import type { TenderRecordPage } from "./bindings/TenderRecordPage";
 import type { TenderRecordTrustClass } from "./bindings/TenderRecordTrustClass";
+import { evidenceTextAttributes } from "./evidenceTypography";
 import {
   decideTenderRecord,
   createTenderEngineerEntry,
@@ -578,7 +579,9 @@ export function TenderRecordsPanel({
                         {evidence.package_path} · v{evidence.reference.version}{" "}
                         · {evidence.location.kind} #{evidence.reference.ordinal}
                       </summary>
-                      <blockquote lang={evidence.location.language}>
+                      <blockquote
+                        {...evidenceTextAttributes(evidence.location)}
+                      >
                         {evidence.location.original_text}
                       </blockquote>
                       {evidence.location.translated_text ? (
@@ -586,7 +589,7 @@ export function TenderRecordsPanel({
                           <strong>
                             Derived translation — non-authoritative
                           </strong>
-                          <blockquote>
+                          <blockquote dir="auto">
                             {evidence.location.translated_text}
                           </blockquote>
                         </div>

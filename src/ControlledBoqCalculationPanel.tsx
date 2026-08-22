@@ -6,6 +6,7 @@ import type { CalculationRoundingMode } from "./bindings/CalculationRoundingMode
 import type { CalculationWorkspaceInspection } from "./bindings/CalculationWorkspaceInspection";
 import type { EvidenceSearchHit } from "./bindings/EvidenceSearchHit";
 import type { ExchangeRateType } from "./bindings/ExchangeRateType";
+import { evidenceTextAttributes } from "./evidenceTypography";
 import {
   approveCalculationRule,
   approveControlledBoqCalculationRun,
@@ -458,22 +459,44 @@ export function ControlledBoqCalculationPanel({
                 onClick={() => selectEvidence(hit)}
               >
                 Use for {statusCopy(evidenceTarget)} · {hit.package_path} ·{" "}
-                {hit.location.structural_path} · {hit.location.original_text}
+                {hit.location.structural_path} ·{" "}
+                <span {...evidenceTextAttributes(hit.location)}>
+                  {hit.location.original_text}
+                </span>
               </button>
             ))}
           </div>
           <p>
             Quantity Evidence:{" "}
-            {quantityEvidence?.location.original_text ?? "not selected"}
+            {quantityEvidence ? (
+              <span {...evidenceTextAttributes(quantityEvidence.location)}>
+                {quantityEvidence.location.original_text}
+              </span>
+            ) : (
+              "not selected"
+            )}
           </p>
           <p>
             Unit-rate Evidence:{" "}
-            {unitRateEvidence?.location.original_text ?? "not selected"}
+            {unitRateEvidence ? (
+              <span {...evidenceTextAttributes(unitRateEvidence.location)}>
+                {unitRateEvidence.location.original_text}
+              </span>
+            ) : (
+              "not selected"
+            )}
           </p>
           <p>
             Exchange-rate Evidence:{" "}
-            {exchangeRateEvidence?.location.original_text ??
-              (sameCurrency ? "not applicable" : "not selected")}
+            {exchangeRateEvidence ? (
+              <span {...evidenceTextAttributes(exchangeRateEvidence.location)}>
+                {exchangeRateEvidence.location.original_text}
+              </span>
+            ) : sameCurrency ? (
+              "not applicable"
+            ) : (
+              "not selected"
+            )}
           </p>
 
           <form className="stacked-form" onSubmit={handleCreateScenario}>

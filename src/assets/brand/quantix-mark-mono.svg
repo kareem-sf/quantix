@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-labelledby="title description" shape-rendering="geometricPrecision">
+  <title id="title">Quantix Evidence Register monochrome symbol</title>
+  <desc id="description">The Quantix evidence register and Engineer authority datum in one color.</desc>
+  <path id="evidence-register" fill="#3F464D" d="M6 6h6v6H6Zm9 0h6v6h-6Zm9 0h6v6h-6Zm9 0h6v6h-6ZM6 15h6v6H6Zm27 0h6v6h-6ZM6 24h6v6H6Zm27 0h6v6h-6ZM6 33h6v6H6Zm9 0h6v6h-6Z" />
+  <path id="engineer-authority-datum" fill="#3F464D" d="m20.1 27.3 2.9-3.6 21.2 16.4-2.9 3.6Z" />
+</svg>

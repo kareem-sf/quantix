@@ -9,11 +9,14 @@ use std::{
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 use quantix_lib::{
-    ensure_quantix_setup, CreateTenderBackupCommand, CreateTenderCommand, DeviceProtection,
-    PrepareTenderRecoveryCommand, QuantixHost, RegisterTenderContentCommand,
+    ensure_quantix_setup, CreateTenderBackupCommand, CreateTenderCommand, DeletionReceipt,
+    PrepareTenderRecoveryCommand, ProviderCleanupStatus, ProviderReferenceDiscoveryState,
+    PurgeRecoveryRequiredTenderCommand, QuantixHost, RegisterTenderContentCommand,
     ResolveTenderRecoveryCommand, ReviseTenderCommand, SetupPlatform, SetupState,
-    StoragePermissions, TenderBackupState, TenderErrorCode, TenderIntegrityState,
-    TenderRecoveryDecision, TenderRecoveryState, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    StoragePermissions, TenderBackupState, TenderDeletionSourceState, TenderErrorCode,
+    TenderIntegrityState, TenderRecoveryDecision, TenderRecoveryState,
+    TrashRecoveryRequiredTenderCommand, TrashedTenderDecisionCommand, TrashedTenderState,
+    MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 struct ReadySetupPlatform;
@@ -29,10 +32,6 @@ impl SetupPlatform for ReadySetupPlatform {
 
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(StoragePermissions::Restrictive)
-    }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
     }
 }
 
@@ -1114,7 +1113,7 @@ fn rejected_recovery_preserves_current_state_and_records_the_decision() {
 }
 
 #[test]
-fn approved_verified_backup_replaces_a_recovery_required_tender() {
+fn approved_verified_backup_replaces_a_recovery_required_tender_and_purge_removes_retained_store() {
     let user_home = tempfile::tempdir().expect("temporary user home");
     let application_home = user_home.path().join(".quantix");
     let host = QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
@@ -1171,6 +1170,35 @@ fn approved_verified_backup_replaces_a_recovery_required_tender() {
             .state,
         TenderIntegrityState::Ready
     );
+    let retained = application_home
+        .join("trash")
+        .join(format!("recovery-replaced-{}", applied.recovery_id));
+    assert!(retained.exists());
+
+    remove_registered_content(&application_home, &tender.tender_id);
+    assert_eq!(
+        host.inspect_tender_integrity(&tender.tender_id)
+            .expect("latch recovered Tender after a second corruption")
+            .state,
+        TenderIntegrityState::RecoveryRequired
+    );
+    let trashed = host
+        .trash_recovery_required_tender(TrashRecoveryRequiredTenderCommand {
+            tender_id: tender.tender_id.clone(),
+            rationale: "Remove the damaged recovered Store".into(),
+        })
+        .expect("trash damaged recovered Store");
+    host.purge_recovery_required_tender(PurgeRecoveryRequiredTenderCommand {
+        tender_id: tender.tender_id,
+        rationale: "Remove every retained Quantix recovery copy".into(),
+        confirmation_tender_name: "Recoverable Tender".into(),
+    })
+    .expect("purge damaged recovered Store and retained recovery copy");
+    assert!(!retained.exists());
+    assert!(!application_home
+        .join("trash")
+        .join(trashed.relative_path)
+        .exists());
 }
 
 #[test]
@@ -1491,5 +1519,460 @@ fn copy_directory(source: &Path, target: &Path) {
         } else {
             panic!("Tender fixture cannot copy linked storage");
         }
+    }
+}
+
+#[cfg(unix)]
+fn create_directory_link(target: &Path, link: &Path) {
+    std::os::unix::fs::symlink(target, link).expect("create directory symlink fixture");
+}
+
+#[cfg(unix)]
+fn remove_directory_link(link: &Path) {
+    std::fs::remove_file(link).expect("remove directory symlink fixture");
+}
+
+#[cfg(windows)]
+fn create_directory_link(target: &Path, link: &Path) {
+    junction::create(target, link).expect("create directory junction fixture");
+}
+
+#[cfg(windows)]
+fn remove_directory_link(link: &Path) {
+    junction::delete(link).expect("remove directory junction fixture");
+}
+
+#[test]
+fn recovery_required_tender_can_be_trashed_and_restored_without_opening_corrupt_store() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let host = QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    let tender = host
+        .create_tender(CreateTenderCommand {
+            name: "Recovery Bytes Retained".into(),
+        })
+        .expect("create Tender");
+    host.register_tender_content(RegisterTenderContentCommand {
+        tender_id: tender.tender_id.clone(),
+        logical_id: "required".into(),
+        media_type: "text/plain".into(),
+        bytes: b"bytes that remain opaque during recovery deletion".to_vec(),
+    })
+    .expect("register canonical content");
+    host.list_tenders()
+        .expect("seed catalogue before corruption");
+    let tender_root = application_home.join("tenders").join(&tender.tender_id);
+    let database = tender_root.join("tender.sqlite");
+    remove_registered_content(&application_home, &tender.tender_id);
+    let backup_error = host
+        .create_tender_backup(CreateTenderBackupCommand {
+            tender_id: tender.tender_id.clone(),
+        })
+        .expect_err("missing content must latch recovery_required");
+    assert_eq!(backup_error.code, TenderErrorCode::RecoveryRequired);
+    let database_bytes = std::fs::read(&database).expect("read latched corrupt-store bytes");
+
+    let trashed = host
+        .trash_recovery_required_tender(TrashRecoveryRequiredTenderCommand {
+            tender_id: tender.tender_id.clone(),
+            rationale: "Remove the damaged store while preserving its bytes".into(),
+        })
+        .expect("trash recovery-required store without opening it");
+    assert_eq!(trashed.tender_name, "Recovery Bytes Retained");
+    assert_eq!(
+        trashed.deletion_source,
+        TenderDeletionSourceState::RecoveryRequired
+    );
+    assert_eq!(
+        trashed.integrity_code.as_deref(),
+        Some("referenced_content_missing")
+    );
+    assert_eq!(trashed.state, TrashedTenderState::Trashed);
+    assert_eq!(
+        std::fs::read(
+            application_home
+                .join("trash")
+                .join(&trashed.relative_path)
+                .join("tender.sqlite")
+        )
+        .expect("read trashed opaque bytes"),
+        database_bytes
+    );
+    assert!(!tender_root.exists());
+    assert!(host
+        .list_tenders()
+        .expect("refresh active catalogue while recovery Tender is in Trash")
+        .is_empty());
+
+    let restored = host
+        .restore_trashed_tender(TrashedTenderDecisionCommand {
+            deletion_id: trashed.deletion_id,
+            rationale: "Restore for a later approved recovery decision".into(),
+        })
+        .expect("restore recovery-required store without claiming repair");
+    assert_eq!(restored.state, TrashedTenderState::Restored);
+    assert_eq!(
+        host.open_tender(&tender.tender_id)
+            .expect_err("restored corrupt store remains recovery-required")
+            .code,
+        TenderErrorCode::RecoveryRequired
+    );
+    assert_eq!(
+        std::fs::read(database).expect("read restored opaque bytes"),
+        database_bytes
+    );
+    let projection = host
+        .inspect_manager_workspace(quantix_lib::InspectManagerWorkspaceCommand { tender_id: None })
+        .expect("inspect restored recovery-required Tender");
+    assert_eq!(projection.catalogue.len(), 1);
+    assert_eq!(projection.catalogue[0].name, "Recovery Bytes Retained");
+    assert_eq!(
+        projection.catalogue[0].state,
+        quantix_lib::ManagerWorkspaceTenderState::RecoveryRequired
+    );
+}
+
+#[test]
+fn recovery_trash_rejects_mismatched_store_identity_and_path_traversal() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let host = QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    let tender = host
+        .create_tender(CreateTenderCommand {
+            name: "Identity Bound Recovery".into(),
+        })
+        .expect("create Tender");
+    host.close_tender(&tender.tender_id)
+        .expect("close Tender before identity substitution");
+    let mismatched_store = rusqlite::Connection::open(
+        application_home
+            .join("tenders")
+            .join(&tender.tender_id)
+            .join("tender.sqlite"),
+    )
+    .expect("open Tender database");
+    mismatched_store
+        .execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             DROP TRIGGER tender_identity_no_update;",
+        )
+        .expect("remove the Store's own identity guard for the hostile fixture");
+    mismatched_store
+        .execute(
+            "UPDATE tender SET tender_id = ?1 WHERE singleton = 1",
+            ["f".repeat(32)],
+        )
+        .expect("substitute mismatched Tender identity");
+    drop(mismatched_store);
+
+    let mismatch = host
+        .trash_recovery_required_tender(TrashRecoveryRequiredTenderCommand {
+            tender_id: tender.tender_id.clone(),
+            rationale: "This mismatched Store must not be moved".into(),
+        })
+        .expect_err("readable Store identity mismatch must fail closed");
+    assert_eq!(mismatch.code, TenderErrorCode::IntegrityFailed);
+    assert!(application_home
+        .join("tenders")
+        .join(&tender.tender_id)
+        .exists());
+
+    let traversal = host
+        .trash_recovery_required_tender(TrashRecoveryRequiredTenderCommand {
+            tender_id: "../outside-quantix-tender-store".into(),
+            rationale: "Traversal must never address managed storage".into(),
+        })
+        .expect_err("path traversal Tender identity must be rejected");
+    assert_eq!(traversal.code, TenderErrorCode::InvalidCommand);
+}
+
+#[test]
+fn recovery_trash_rejects_links_without_touching_their_external_target() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let external = user_home.path().join("external-controlled-copy");
+    std::fs::create_dir(&external).expect("create external directory fixture");
+    let external_file = external.join("outside.txt");
+    std::fs::write(&external_file, b"outside Quantix control").expect("write external fixture");
+    let host = QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    let tender = host
+        .create_tender(CreateTenderCommand {
+            name: "Linked Recovery Store".into(),
+        })
+        .expect("create Tender");
+    host.close_tender(&tender.tender_id)
+        .expect("close Tender before adding hostile link");
+    let link = application_home
+        .join("tenders")
+        .join(&tender.tender_id)
+        .join("external-link");
+    create_directory_link(&external, &link);
+
+    let error = host
+        .trash_recovery_required_tender(TrashRecoveryRequiredTenderCommand {
+            tender_id: tender.tender_id.clone(),
+            rationale: "Linked storage must fail closed".into(),
+        })
+        .expect_err("recovery Trash must reject links anywhere in the Store tree");
+    assert_eq!(error.code, TenderErrorCode::IntegrityFailed);
+    assert!(external_file.exists());
+    assert!(application_home
+        .join("tenders")
+        .join(&tender.tender_id)
+        .exists());
+    remove_directory_link(&link);
+}
+
+#[test]
+fn recovery_required_tender_can_be_purged_with_exact_name_and_complete_provider_discovery() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let host = QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    let tender = host
+        .create_tender(CreateTenderCommand {
+            name: "Purge Damaged Tender".into(),
+        })
+        .expect("create Tender");
+    host.register_tender_content(RegisterTenderContentCommand {
+        tender_id: tender.tender_id.clone(),
+        logical_id: "required".into(),
+        media_type: "text/plain".into(),
+        bytes: b"purge fixture".to_vec(),
+    })
+    .expect("register canonical content");
+    host.list_tenders()
+        .expect("seed catalogue before corruption");
+    remove_registered_content(&application_home, &tender.tender_id);
+    host.create_tender_backup(CreateTenderBackupCommand {
+        tender_id: tender.tender_id.clone(),
+    })
+    .expect_err("missing content must latch recovery_required");
+    let wrong_name = host
+        .purge_recovery_required_tender(PurgeRecoveryRequiredTenderCommand {
+            tender_id: tender.tender_id.clone(),
+            rationale: "Permanent removal requested".into(),
+            confirmation_tender_name: "Wrong Name".into(),
+        })
+        .expect_err("permanent deletion requires exact Tender name");
+    assert_eq!(wrong_name.code, TenderErrorCode::InvalidCommand);
+    assert!(application_home
+        .join("tenders")
+        .join(&tender.tender_id)
+        .exists());
+    assert!(host
+        .inspect_trashed_tenders()
+        .expect("wrong confirmation must not move the Tender")
+        .is_empty());
+
+    let trashed = host
+        .trash_recovery_required_tender(TrashRecoveryRequiredTenderCommand {
+            tender_id: tender.tender_id.clone(),
+            rationale: "Quarantine the damaged local store before permanent removal".into(),
+        })
+        .expect("trash recovery-required Tender before purge");
+    assert_eq!(trashed.state, TrashedTenderState::Trashed);
+    assert!(host
+        .list_tenders()
+        .expect("refresh active catalogue while damaged Tender is in Trash")
+        .is_empty());
+
+    let receipt: DeletionReceipt = host
+        .purge_recovery_required_tender(PurgeRecoveryRequiredTenderCommand {
+            tender_id: tender.tender_id.clone(),
+            rationale: "Permanently remove the damaged local store".into(),
+            confirmation_tender_name: "Purge Damaged Tender".into(),
+        })
+        .expect("purge recovery-required Tender without opening corrupt DB");
+    assert!(receipt.local_deletion_completed);
+    assert_eq!(
+        receipt.deletion_source,
+        TenderDeletionSourceState::RecoveryRequired
+    );
+    assert_eq!(
+        receipt.integrity_code.as_deref(),
+        Some("referenced_content_missing")
+    );
+    assert_eq!(
+        receipt.provider_reference_discovery,
+        ProviderReferenceDiscoveryState::Complete
+    );
+    assert_eq!(
+        receipt.provider_cleanup_status,
+        ProviderCleanupStatus::NotRequired
+    );
+    assert!(!application_home
+        .join("tenders")
+        .join(&tender.tender_id)
+        .exists());
+    assert!(host
+        .inspect_trashed_tenders()
+        .expect("direct purge leaves no Trash record")
+        .is_empty());
+    assert_eq!(
+        host.inspect_deletion_receipts().expect("inspect receipt"),
+        vec![receipt]
+    );
+}
+
+#[test]
+fn cold_recovery_purge_marks_provider_discovery_incomplete_when_database_is_unreadable() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let external_package = user_home.path().join("Original Tender Package.pdf");
+    std::fs::write(
+        &external_package,
+        b"external source remains outside Quantix",
+    )
+    .expect("write external Tender Package fixture");
+    let host = QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    let tender = host
+        .create_tender(CreateTenderCommand {
+            name: "Unreadable Recovery Store".into(),
+        })
+        .expect("create Tender");
+    host.close_tender(&tender.tender_id)
+        .expect("close Tender before corrupting its database");
+    drop(host);
+
+    std::fs::write(
+        application_home
+            .join("tenders")
+            .join(&tender.tender_id)
+            .join("tender.sqlite"),
+        b"not a sqlite database",
+    )
+    .expect("replace Tender database with unreadable bytes");
+
+    let restarted =
+        QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&restarted).state, SetupState::Ready);
+    let receipt = restarted
+        .purge_recovery_required_tender(PurgeRecoveryRequiredTenderCommand {
+            tender_id: tender.tender_id.clone(),
+            rationale: "Permanently remove the unreadable local Store".into(),
+            confirmation_tender_name: "Unreadable Recovery Store".into(),
+        })
+        .expect("cold Host diagnoses and purges the unreadable Store");
+    assert!(receipt.local_deletion_completed);
+    assert_eq!(
+        receipt.provider_reference_discovery,
+        ProviderReferenceDiscoveryState::Incomplete
+    );
+    assert_eq!(
+        receipt.provider_cleanup_status,
+        ProviderCleanupStatus::Incomplete
+    );
+    assert_eq!(receipt.provider_thread_count, 0);
+    assert!(external_package.exists());
+}
+
+#[test]
+fn recovery_trash_reconciles_decision_and_move_publication_boundaries_on_restart() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    for failpoint in ["recovery_trash_after_decision", "recovery_trash_after_move"] {
+        let application_home = user_home.path().join(failpoint);
+        let host =
+            QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+        assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+        let tender = host
+            .create_tender(CreateTenderCommand {
+                name: format!("Recovery Trash crash fixture {failpoint}"),
+            })
+            .expect("create recovery Trash crash fixture Tender");
+        host.register_tender_content(RegisterTenderContentCommand {
+            tender_id: tender.tender_id.clone(),
+            logical_id: "required".into(),
+            media_type: "text/plain".into(),
+            bytes: b"recovery Trash crash fixture".to_vec(),
+        })
+        .expect("register recovery Trash crash fixture content");
+        remove_registered_content(&application_home, &tender.tender_id);
+        drop(host);
+
+        assert!(!run_storage_fixture(
+            &application_home,
+            &["trash-recovery", &tender.tender_id],
+            failpoint,
+        ));
+
+        let restarted =
+            QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+        assert_eq!(ensure_quantix_setup(&restarted).state, SetupState::Ready);
+        let trash = restarted
+            .inspect_trashed_tenders()
+            .expect("startup reconciles interrupted recovery Trash move");
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].state, TrashedTenderState::Trashed);
+        assert_eq!(
+            trash[0].deletion_source,
+            TenderDeletionSourceState::RecoveryRequired
+        );
+        assert!(restarted
+            .list_tenders()
+            .expect("reconciled recovery Trash removes the active row")
+            .is_empty());
+    }
+}
+
+#[test]
+fn recovery_purge_reconciles_every_quarantine_publication_boundary_on_restart() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    for failpoint in ["purge_after_decision", "purge_after_local_delete"] {
+        let application_home = user_home.path().join(failpoint);
+        let tender_name = format!("Recovery crash fixture {failpoint}");
+        let host =
+            QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+        assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+        let tender = host
+            .create_tender(CreateTenderCommand {
+                name: tender_name.clone(),
+            })
+            .expect("create recovery crash fixture Tender");
+        host.register_tender_content(RegisterTenderContentCommand {
+            tender_id: tender.tender_id.clone(),
+            logical_id: "required".into(),
+            media_type: "text/plain".into(),
+            bytes: b"recovery crash fixture".to_vec(),
+        })
+        .expect("register recovery crash fixture content");
+        remove_registered_content(&application_home, &tender.tender_id);
+        host.create_tender_backup(CreateTenderBackupCommand {
+            tender_id: tender.tender_id.clone(),
+        })
+        .expect_err("missing content must latch recovery_required");
+        host.trash_recovery_required_tender(TrashRecoveryRequiredTenderCommand {
+            tender_id: tender.tender_id.clone(),
+            rationale: "Quarantine the damaged Store before the crash fixture".into(),
+        })
+        .expect("move recovery crash fixture to Trash");
+        drop(host);
+
+        assert!(!run_storage_fixture(
+            &application_home,
+            &["purge-recovery", &tender.tender_id, &tender_name],
+            failpoint,
+        ));
+
+        let restarted =
+            QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+        assert_eq!(ensure_quantix_setup(&restarted).state, SetupState::Ready);
+        let receipts = restarted
+            .inspect_deletion_receipts()
+            .expect("startup reconciles interrupted recovery purge");
+        assert_eq!(receipts.len(), 1);
+        assert!(receipts[0].local_deletion_completed);
+        assert_eq!(
+            receipts[0].deletion_source,
+            TenderDeletionSourceState::RecoveryRequired
+        );
+        assert!(restarted
+            .inspect_trashed_tenders()
+            .expect("reconciled recovery Trash is empty")
+            .is_empty());
     }
 }

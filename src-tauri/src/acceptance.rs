@@ -476,7 +476,7 @@ impl QuantixHost {
         let permissions_bounded = bootstrap.as_ref().is_ok_and(|team| {
             team.iter().all(|member| {
                 !member.profile.permissions.network_allowed
-                    && !member.profile.permissions.workspace_write_allowed
+                    && member.profile.permissions.workspace_write_allowed
                     && !member.profile.prohibited_actions.is_empty()
             })
         });
@@ -648,7 +648,10 @@ impl QuantixHost {
         let mut checks = vec![
             measured_check(
                 "lifecycle_guards",
-                lifecycle_passed && has("empty_setup") && has("lifecycle_revision") && has("integrity"),
+                lifecycle_passed
+                    && has("empty_setup")
+                    && has("lifecycle_revision")
+                    && has("integrity"),
                 "created the Tender from empty Setup, rejected an invalid mutation, revised it, and cold-checked integrity",
             ),
             measured_check(
@@ -671,7 +674,7 @@ impl QuantixHost {
             measured_check(
                 "permissions",
                 permissions_bounded,
-                "measured network-denied, workspace-read-only bootstrap profiles with explicit prohibited actions",
+                "measured network denied, isolated workspace write allowed, and explicit prohibited actions",
             ),
             measured_check(
                 "provider_outcomes",
@@ -729,15 +732,51 @@ impl QuantixHost {
                 compiled_accessibility_contract_is_valid(),
                 "validated the compiled bilingual fixture and minimum-window/accessibility configuration",
             ),
-            measured_check("bounded_input", invalid_input_rejected, "oversized command input was rejected"),
-            measured_check("no_partial_publication", no_partial_publication, "the rejected command published no Tender"),
-            measured_check("bounded_time", started.elapsed() <= Duration::from_secs(15 * 60), "the driver remained inside its fixed fifteen-minute ceiling"),
-            measured_check("bounded_memory", FIXTURE_BYTES.len() + ORACLE_BYTES.len() < 1024 * 1024, "the embedded acceptance corpus remained below one MiB"),
-            measured_check("bounded_disk", archive_manifest.is_some() && backup_manifest.is_some(), "bounded backup and archive operations emitted exact manifests"),
-            measured_check("bounded_output", completed.len() <= 64 && failures.len() <= 64, "driver observations remained within fixed cardinality limits"),
-            measured_check("no_hangs", lifecycle_passed, "every synchronous Host operation returned inside the driver deadline"),
-            measured_check("no_orphaned_children", lifecycle_passed, "the deterministic Host phase spawned no untracked child process"),
-            measured_check("no_secret_leaks", acceptance_corpus_is_public(), "the recorded corpus is the committed CC0 fixture/oracle and contains no credential-shaped values"),
+            measured_check(
+                "bounded_input",
+                invalid_input_rejected,
+                "oversized command input was rejected",
+            ),
+            measured_check(
+                "no_partial_publication",
+                no_partial_publication,
+                "the rejected command published no Tender",
+            ),
+            measured_check(
+                "bounded_time",
+                started.elapsed() <= Duration::from_secs(15 * 60),
+                "the driver remained inside its fixed fifteen-minute ceiling",
+            ),
+            measured_check(
+                "bounded_memory",
+                FIXTURE_BYTES.len() + ORACLE_BYTES.len() < 1024 * 1024,
+                "the embedded acceptance corpus remained below one MiB",
+            ),
+            measured_check(
+                "bounded_disk",
+                archive_manifest.is_some() && backup_manifest.is_some(),
+                "bounded backup and archive operations emitted exact manifests",
+            ),
+            measured_check(
+                "bounded_output",
+                completed.len() <= 64 && failures.len() <= 64,
+                "driver observations remained within fixed cardinality limits",
+            ),
+            measured_check(
+                "no_hangs",
+                lifecycle_passed,
+                "every synchronous Host operation returned inside the driver deadline",
+            ),
+            measured_check(
+                "no_orphaned_children",
+                lifecycle_passed,
+                "the deterministic Host phase spawned no untracked child process",
+            ),
+            measured_check(
+                "no_secret_leaks",
+                acceptance_corpus_is_public(),
+                "the recorded corpus is the committed CC0 fixture/oracle and contains no credential-shaped values",
+            ),
         ];
         checks.sort_by(|left, right| left.area.cmp(&right.area));
         let mut artifacts = Vec::new();
@@ -1634,7 +1673,9 @@ pub async fn print_candidate_acceptance_rehearsal(
         crate::SetupState::Ready | crate::SetupState::Warning
     ) || !host.verify_offline_runtime_for_acceptance().await
     {
-        return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
+        return Err(TenderCommandError::new(
+            TenderErrorCode::LocalDocumentToolsRequired,
+        ));
     }
     if mode == "live"
         && host
@@ -1642,7 +1683,7 @@ pub async fn print_candidate_acceptance_rehearsal(
             .await
             != crate::CodexReadiness::Ready
     {
-        return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
+        return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
     }
     let mut measurement = host.drive_candidate_host_lifecycle(mode == "live").await;
     let runtime_provenance = resource_directory

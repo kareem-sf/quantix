@@ -1,35 +1,55 @@
 use quantix_lib::{
     AcceptanceArtifactHash, AcceptanceCheckResult, AcceptanceStageTiming, AgentRunInspection,
-    AgentRunSummary, AiExecutionSelection, AiProviderKind, AppearancePreference,
-    ApplicationDiagnostics, ApplicationSettingsView, ApplicationStorageFacts,
-    ApproveSubmissionReleaseCommand, BootstrapRole, CancelProviderLoginCommand,
-    CodexProductionAssuranceEvidence, ConnectAnthropicCommand, ConnectGeminiCommand,
-    CreatePortableTenderArchiveCommand, DeletionReceipt, DisconnectAiProviderCommand,
-    ErasedTenderCopyClass, EvaluatePublicReleaseGateCommand, ExportReleaseCopyCommand,
-    GeneralApplicationPreferences, ImportPortableTenderArchiveCommand,
-    InspectManagerWorkspaceCommand, IntegrationTermsDecision, LicenseDistributionReview,
-    LiveQualificationMetrics, LiveQualificationRun, ManagerConversation, ManagerIntakeStage,
-    ManagerIntakeStatus, ManagerIntakeStatusKind, ManagerWorkspaceProjection,
-    ManagerWorkspaceTender, ManagerWorkspaceTenderState, NativePlatformQualificationEvidence,
-    NativePlatformQualificationRecord, OpenProviderLoginCommand, PortableTenderArchiveRecord,
-    PrivateQualificationRecord, ProductAcceptanceOutcome, ProductAcceptanceRecord,
-    ProductAcceptanceRun, ProviderCleanupStatus, ProviderConnectionStatus, ProviderConnectionView,
-    ProviderLoginMethod, ProviderLoginStatus, ProviderLoginView, ProviderModelOption,
-    ProviderReasoningOption, ProviderReasoningSelection, PublicReleaseGateOutcome,
-    PublicReleaseGateRecord, PurgeTrashedTenderCommand, RebindManagerIntakeProviderCommand,
-    RecordEngineerWorkspaceMessageCommand, RecordLiveQualificationRunCommand,
-    RecordNativePlatformQualificationCommand, ReleaseCopyExport, ReleaseCopyItem,
+    AgentRunSummary, AiExecutionApproval, AiExecutionSelection, AiProviderKind,
+    AppearancePreference, ApplicationDiagnostics, ApplicationSettingsView, ApplicationStorageFacts,
+    ApproveSubmissionReleaseCommand, BootstrapRole, CancelPackageIntakeCommand,
+    CancelProviderLoginCommand, CodexProductionAssuranceEvidence,
+    ConfirmAiExecutionSelectionCommand, ConnectAnthropicCommand, ConnectGeminiCommand,
+    CreatePortableTenderArchiveCommand, DeepDiagnosticsSession, DeletionReceipt,
+    DiagnosticComponent, DiagnosticCorrelation, DiagnosticEvent, DiagnosticHealth, DiagnosticScope,
+    DiagnosticSeverity, DiagnosticSupportBundleResult, DiagnosticTimelineEvent,
+    DiagnosticTimelineFilter, DiagnosticTimelinePage, DiagnosticsDeepState, DiagnosticsDeepStatus,
+    DiagnosticsStatus, DiagnosticsStatusState, DisconnectAiProviderCommand, ErasedTenderCopyClass,
+    EvaluatePublicReleaseGateCommand, ExportDiagnosticsSupportBundleCommand,
+    ExportReleaseCopyCommand, GeneralApplicationPreferences, ImportPortableTenderArchiveCommand,
+    InspectDiagnosticTimelineCommand, InspectDiagnosticsStatusCommand,
+    InspectManagerWorkspaceCommand, InspectQuantixDoctorCommand, InspectTenderAiExecutionCommand,
+    IntegrationTermsDecision, LicenseDistributionReview, LiveQualificationMetrics,
+    LiveQualificationRun, ManagerConversation, ManagerIntakeStage, ManagerIntakeStatus,
+    ManagerIntakeStatusKind, ManagerWorkspaceProjection, ManagerWorkspaceTender,
+    ManagerWorkspaceTenderState, NativePlatformQualificationEvidence,
+    NativePlatformQualificationRecord, OpenDiagnosticLogsCommand, OpenDiagnosticLogsResult,
+    OpenProviderLoginCommand, PackageIntakeOperationKind, PackageIntakeProgress,
+    PackageIntakeStage, PortableTenderArchiveRecord, PrivateQualificationRecord,
+    ProductAcceptanceOutcome, ProductAcceptanceRecord, ProductAcceptanceRun, ProviderCleanupStatus,
+    ProviderConnectionStatus, ProviderConnectionView, ProviderLoginMethod, ProviderLoginStatus,
+    ProviderLoginView, ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
+    ProviderReferenceDiscoveryState, PublicReleaseGateOutcome, PublicReleaseGateRecord,
+    PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand, QuantixDoctorArea,
+    QuantixDoctorFinding, QuantixDoctorRepairAction, QuantixDoctorRepairCommand,
+    QuantixDoctorRepairTarget, QuantixDoctorReport, QuantixDoctorSeverity,
+    RebindManagerIntakeProviderCommand, RecordEngineerWorkspaceMessageCommand,
+    RecordLiveQualificationRunCommand, RecordNativePlatformQualificationCommand,
+    RecordRendererDiagnosticCommand, ReleaseCopyExport, ReleaseCopyItem, RendererDiagnosticKind,
     RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand, RuntimePreparationActivity,
     RuntimePreparationActivityStatus, RuntimePreparationProgress, RuntimePreparationStatus,
-    RuntimePreparationStep, SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand,
-    StartProviderLoginCommand, SubmissionReleaseApproval, SubmissionReleaseInspection,
-    SubmissionReleaseState, TechnicalRiskAcceptance, TenderOfficeMessage,
+    RuntimePreparationStep, RuntimeReadiness, RuntimeReadinessIssue, RuntimeReadinessState,
+    SearchManagerWorkspaceCommand, SelectManagerWorkspaceTenderCommand, SetupIssue,
+    StartManagerTenderCommand, StartProviderLoginCommand, StartTenderDeepDiagnosticsCommand,
+    StopTenderDeepDiagnosticsCommand, SubmissionReleaseApproval, SubmissionReleaseInspection,
+    SubmissionReleaseState, TechnicalRiskAcceptance, TenderAiExecutionBinding,
+    TenderAiSelectionReadiness, TenderDeletionSourceState, TenderErrorCode, TenderOfficeMessage,
     TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderRetentionDecisionCommand,
-    TenderRetentionDecisionRecord, TenderRetentionState, TrashedTenderDecisionCommand,
-    TrashedTenderRecord, TrashedTenderState, UpdateAiExecutionSelectionCommand,
-    UpdateGeneralApplicationPreferencesCommand, WorkspaceActionKind, WorkspaceCurrentAction,
+    TenderRetentionDecisionRecord, TenderRetentionState, TrashRecoveryRequiredTenderCommand,
+    TrashedTenderDecisionCommand, TrashedTenderRecord, TrashedTenderState,
+    UpdateAiExecutionSelectionCommand, UpdateGeneralApplicationPreferencesCommand,
+    UpdateTenderAiExecutionSelectionCommand, WorkspaceActionKind, WorkspaceAgentReference,
+    WorkspaceAgentRunReference, WorkspaceCapabilityReadiness, WorkspaceCapabilityReadinessState,
+    WorkspaceCurrentAction, WorkspaceDoctorBlockerArea, WorkspaceDoctorBlockerSummary,
     WorkspaceFilesSummary, WorkspaceMessageReference, WorkspaceMessageReferenceKind,
-    WorkspaceTeamSummary, WorkspaceTenderDocument, WorkspaceWorkSummary,
+    WorkspaceOutputReference, WorkspaceSearchGroup, WorkspaceSearchHit, WorkspaceSearchProjection,
+    WorkspaceSearchResultKind, WorkspaceTaskRow, WorkspaceTaskState, WorkspaceTeamSummary,
+    WorkspaceTenderDocument, WorkspaceWorkSummary,
 };
 use ts_rs::{Config, TS};
 
@@ -47,15 +67,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     DeletionReceipt::export_all(&config)?;
     ErasedTenderCopyClass::export_all(&config)?;
     ProviderCleanupStatus::export_all(&config)?;
+    ProviderReferenceDiscoveryState::export_all(&config)?;
     ImportPortableTenderArchiveCommand::export_all(&config)?;
     PortableTenderArchiveRecord::export_all(&config)?;
     TenderRetentionDecisionCommand::export_all(&config)?;
     TenderRetentionDecisionRecord::export_all(&config)?;
     TenderRetentionState::export_all(&config)?;
     TrashedTenderDecisionCommand::export_all(&config)?;
+    TrashRecoveryRequiredTenderCommand::export_all(&config)?;
+    PurgeRecoveryRequiredTenderCommand::export_all(&config)?;
     PurgeTrashedTenderCommand::export_all(&config)?;
     TrashedTenderRecord::export_all(&config)?;
     TrashedTenderState::export_all(&config)?;
+    TenderDeletionSourceState::export_all(&config)?;
     AcceptanceArtifactHash::export_all(&config)?;
     AcceptanceCheckResult::export_all(&config)?;
     AcceptanceStageTiming::export_all(&config)?;
@@ -78,6 +102,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     PublicReleaseGateRecord::export_all(&config)?;
     TechnicalRiskAcceptance::export_all(&config)?;
     InspectManagerWorkspaceCommand::export_all(&config)?;
+    SearchManagerWorkspaceCommand::export_all(&config)?;
+    CancelPackageIntakeCommand::export_all(&config)?;
+    PackageIntakeOperationKind::export_all(&config)?;
+    PackageIntakeProgress::export_all(&config)?;
+    PackageIntakeStage::export_all(&config)?;
     StartManagerTenderCommand::export_all(&config)?;
     SelectManagerWorkspaceTenderCommand::export_all(&config)?;
     RecordEngineerWorkspaceMessageCommand::export_all(&config)?;
@@ -91,12 +120,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ManagerWorkspaceTenderState::export_all(&config)?;
     WorkspaceActionKind::export_all(&config)?;
     WorkspaceCurrentAction::export_all(&config)?;
+    WorkspaceCapabilityReadinessState::export_all(&config)?;
+    WorkspaceCapabilityReadiness::export_all(&config)?;
+    WorkspaceDoctorBlockerArea::export_all(&config)?;
+    WorkspaceDoctorBlockerSummary::export_all(&config)?;
     WorkspaceWorkSummary::export_all(&config)?;
+    WorkspaceTaskState::export_all(&config)?;
+    WorkspaceTaskRow::export_all(&config)?;
+    WorkspaceAgentReference::export_all(&config)?;
+    WorkspaceAgentRunReference::export_all(&config)?;
     WorkspaceFilesSummary::export_all(&config)?;
+    WorkspaceOutputReference::export_all(&config)?;
     WorkspaceTenderDocument::export_all(&config)?;
     WorkspaceMessageReferenceKind::export_all(&config)?;
     WorkspaceMessageReference::export_all(&config)?;
     WorkspaceTeamSummary::export_all(&config)?;
+    WorkspaceSearchResultKind::export_all(&config)?;
+    WorkspaceSearchHit::export_all(&config)?;
+    WorkspaceSearchGroup::export_all(&config)?;
+    WorkspaceSearchProjection::export_all(&config)?;
     ManagerIntakeStage::export_all(&config)?;
     ManagerIntakeStatusKind::export_all(&config)?;
     ManagerIntakeStatus::export_all(&config)?;
@@ -111,7 +153,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ProviderLoginMethod::export_all(&config)?;
     ProviderLoginStatus::export_all(&config)?;
     ProviderLoginView::export_all(&config)?;
+    AiExecutionApproval::export_all(&config)?;
     AiExecutionSelection::export_all(&config)?;
+    TenderAiSelectionReadiness::export_all(&config)?;
+    TenderAiExecutionBinding::export_all(&config)?;
     ApplicationSettingsView::export_all(&config)?;
     AppearancePreference::export_all(&config)?;
     GeneralApplicationPreferences::export_all(&config)?;
@@ -119,12 +164,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ApplicationDiagnostics::export_all(&config)?;
     UpdateGeneralApplicationPreferencesCommand::export_all(&config)?;
     UpdateAiExecutionSelectionCommand::export_all(&config)?;
+    InspectTenderAiExecutionCommand::export_all(&config)?;
+    UpdateTenderAiExecutionSelectionCommand::export_all(&config)?;
+    ConfirmAiExecutionSelectionCommand::export_all(&config)?;
     StartProviderLoginCommand::export_all(&config)?;
     CancelProviderLoginCommand::export_all(&config)?;
     OpenProviderLoginCommand::export_all(&config)?;
     ConnectAnthropicCommand::export_all(&config)?;
     ConnectGeminiCommand::export_all(&config)?;
     DisconnectAiProviderCommand::export_all(&config)?;
+    InspectQuantixDoctorCommand::export_all(&config)?;
+    QuantixDoctorSeverity::export_all(&config)?;
+    QuantixDoctorArea::export_all(&config)?;
+    QuantixDoctorRepairAction::export_all(&config)?;
+    QuantixDoctorRepairTarget::export_all(&config)?;
+    QuantixDoctorFinding::export_all(&config)?;
+    QuantixDoctorReport::export_all(&config)?;
+    QuantixDoctorRepairCommand::export_all(&config)?;
+    DiagnosticSeverity::export_all(&config)?;
+    DiagnosticScope::export_all(&config)?;
+    DiagnosticComponent::export_all(&config)?;
+    DiagnosticCorrelation::export_all(&config)?;
+    DiagnosticEvent::export_all(&config)?;
+    DiagnosticHealth::export_all(&config)?;
+    DiagnosticTimelineFilter::export_all(&config)?;
+    DiagnosticTimelineEvent::export_all(&config)?;
+    DiagnosticTimelinePage::export_all(&config)?;
+    DiagnosticsStatusState::export_all(&config)?;
+    DiagnosticsDeepState::export_all(&config)?;
+    DiagnosticsDeepStatus::export_all(&config)?;
+    DiagnosticsStatus::export_all(&config)?;
+    DeepDiagnosticsSession::export_all(&config)?;
+    DiagnosticSupportBundleResult::export_all(&config)?;
+    OpenDiagnosticLogsResult::export_all(&config)?;
+    InspectDiagnosticsStatusCommand::export_all(&config)?;
+    InspectDiagnosticTimelineCommand::export_all(&config)?;
+    StartTenderDeepDiagnosticsCommand::export_all(&config)?;
+    StopTenderDeepDiagnosticsCommand::export_all(&config)?;
+    OpenDiagnosticLogsCommand::export_all(&config)?;
+    ExportDiagnosticsSupportBundleCommand::export_all(&config)?;
+    RendererDiagnosticKind::export_all(&config)?;
+    RecordRendererDiagnosticCommand::export_all(&config)?;
     AgentRunInspection::export_all(&config)?;
     AgentRunSummary::export_all(&config)?;
     RuntimePreparationActivity::export_all(&config)?;
@@ -132,5 +212,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     RuntimePreparationProgress::export_all(&config)?;
     RuntimePreparationStatus::export_all(&config)?;
     RuntimePreparationStep::export_all(&config)?;
+    RuntimeReadiness::export_all(&config)?;
+    RuntimeReadinessIssue::export_all(&config)?;
+    RuntimeReadinessState::export_all(&config)?;
+    SetupIssue::export_all(&config)?;
+    TenderErrorCode::export_all(&config)?;
     Ok(())
 }

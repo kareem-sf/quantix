@@ -3,6 +3,8 @@
 mod acceptance;
 mod agent_runtime;
 mod application_settings;
+mod diagnostics;
+mod doctor;
 mod document_parsing;
 mod embedding;
 mod host;
@@ -40,14 +42,33 @@ pub use agent_runtime::{
     VerificationStatus,
 };
 pub use application_settings::{
-    AiExecutionSelection, AiProviderKind, AppearancePreference, ApplicationDiagnostics,
-    ApplicationSettingsView, ApplicationStorageFacts, CancelProviderLoginCommand,
-    ConnectAnthropicCommand, ConnectGeminiCommand, DisconnectAiProviderCommand,
-    GeneralApplicationPreferences, OpenProviderLoginCommand, ProviderConnectionStatus,
+    AiExecutionApproval, AiExecutionSelection, AiProviderKind, AppearancePreference,
+    ApplicationDiagnostics, ApplicationSettingsView, ApplicationStorageFacts,
+    CancelProviderLoginCommand, ConfirmAiExecutionSelectionCommand, ConnectAnthropicCommand,
+    ConnectGeminiCommand, DisconnectAiProviderCommand, GeneralApplicationPreferences,
+    InspectTenderAiExecutionCommand, OpenProviderLoginCommand, ProviderConnectionStatus,
     ProviderConnectionView, ProviderLoginMethod, ProviderLoginStatus, ProviderLoginView,
     ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
-    StartProviderLoginCommand, UpdateAiExecutionSelectionCommand,
-    UpdateGeneralApplicationPreferencesCommand,
+    StartProviderLoginCommand, TenderAiExecutionBinding, TenderAiSelectionReadiness,
+    UpdateAiExecutionSelectionCommand, UpdateGeneralApplicationPreferencesCommand,
+    UpdateTenderAiExecutionSelectionCommand,
+};
+pub(crate) use diagnostics::RecordDiagnosticFact;
+pub use diagnostics::{
+    DeepDiagnosticsSession, DiagnosticComponent, DiagnosticCorrelation, DiagnosticEvent,
+    DiagnosticHealth, DiagnosticScope, DiagnosticSeverity, DiagnosticSupportBundleResult,
+    DiagnosticTimelineEvent, DiagnosticTimelineFilter, DiagnosticTimelinePage,
+    DiagnosticsDeepState, DiagnosticsDeepStatus, DiagnosticsStatus, DiagnosticsStatusState,
+    ExportDiagnosticsSupportBundleCommand, InspectDiagnosticTimelineCommand,
+    InspectDiagnosticsStatusCommand, OpenDiagnosticLogsCommand, OpenDiagnosticLogsResult,
+    RecordRendererDiagnosticCommand, RendererDiagnosticKind, StartTenderDeepDiagnosticsCommand,
+    StopTenderDeepDiagnosticsCommand, DIAGNOSTIC_REDACTION_POLICY_VERSION,
+};
+pub use doctor::{
+    compose_quantix_doctor_report, validate_quantix_doctor_repair, DoctorTenderInput,
+    InspectQuantixDoctorCommand, QuantixDoctorArea, QuantixDoctorFinding,
+    QuantixDoctorRepairAction, QuantixDoctorRepairCommand, QuantixDoctorRepairTarget,
+    QuantixDoctorReport, QuantixDoctorSeverity,
 };
 pub use document_parsing::{
     DocumentParseResult, EvidenceBoundingBox, EvidenceDocument, EvidenceLanguage, EvidenceLocation,
@@ -70,12 +91,13 @@ pub use runtime_readiness::{
     RuntimeReadinessIssue, RuntimeReadinessState,
 };
 pub use setup::{
-    ensure_quantix_setup, DeviceProtection, SetupIssue, SetupOutcome, SetupPlatform, SetupState,
-    StoragePermissions, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    ensure_quantix_setup, SetupIssue, SetupOutcome, SetupPlatform, SetupState, StoragePermissions,
+    MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 pub use tender_intake::{
-    ChooseTenderPackageCommand, ConfirmSourceRelationshipCommand, DocumentRegister,
-    DocumentRegisterEntry, ImportTenderPackageCommand, IntakeExceptionCode, RegistrationState,
+    CancelPackageIntakeCommand, ChooseTenderPackageCommand, ConfirmSourceRelationshipCommand,
+    DocumentRegister, DocumentRegisterEntry, ImportTenderPackageCommand, IntakeExceptionCode,
+    PackageIntakeOperationKind, PackageIntakeProgress, PackageIntakeStage, RegistrationState,
     SourceRelationshipKind, SupersessionState, TenderPackageImportResult, TenderPackageSourceKind,
 };
 pub use tender_store::{
@@ -171,7 +193,8 @@ pub use tender_store::{
     ProductionQueryTreatmentApplication, ProductionRemediation, ProductionReview,
     ProductionReviewFinding, ProductionReviewResult, ProductionTaskInspection,
     ProductionTaskReviewInspection, ProductionTaskRunResult, ProductionTaskState,
-    ProposeBoqCalculationRuleCommand, ProviderCleanupStatus, PurgeTrashedTenderCommand,
+    ProposeBoqCalculationRuleCommand, ProviderCleanupStatus, ProviderReferenceDiscoveryState,
+    PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand,
     RebindManagerIntakeProviderCommand, RecordEngineerWorkspaceMessageCommand,
     RecordPackageManualVerificationCommand, RegisterExternalRfiResponseCommand,
     RegisterTenderContentCommand, ReleaseCopyExport, ReleaseCopyItem, ReleaseReadinessBlocker,
@@ -184,40 +207,45 @@ pub use tender_store::{
     RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand, RunPackageValidationCommand,
     RunPricedCostBaselineReviewCommand, RunPricingAdjustmentReviewCommand,
     RunProductionTaskCommand, RunSubmissionSectionReviewCommand, RunTenderRecordExtractionCommand,
-    RunTenderRecordReviewCommand, SelectManagerWorkspaceTenderCommand,
-    SelectPricingScenarioCommand, StartManagerTenderCommand, StartupReconciliationReport,
-    SubmissionArtifactContent, SubmissionArtifactVersion, SubmissionAuthorshipProvenance,
-    SubmissionContributionKind, SubmissionCoverageBlocker, SubmissionCoverageBlockerCode,
-    SubmissionCoverageDisposition, SubmissionCoverageRow, SubmissionGeneratedArtifactReference,
-    SubmissionItemContent, SubmissionItemSource, SubmissionPackageAssessment,
-    SubmissionPackageCurrentnessCode, SubmissionPackageCurrentnessFact,
-    SubmissionPackageDependency, SubmissionPackageDependencyKind, SubmissionPackageItem,
-    SubmissionPackageSection, SubmissionPackageStatus, SubmissionPackageVersion,
-    SubmissionProfileVersionReference, SubmissionReleaseApproval, SubmissionReleaseInspection,
-    SubmissionReleaseState, SubmissionSectionIndependenceContext, SubmissionSectionReview,
-    SubmissionSectionReviewRunResult, SubmissionSectionRiskContext,
+    RunTenderRecordReviewCommand, SearchManagerWorkspaceCommand,
+    SelectManagerWorkspaceTenderCommand, SelectPricingScenarioCommand, StartManagerTenderCommand,
+    StartupReconciliationReport, SubmissionArtifactContent, SubmissionArtifactVersion,
+    SubmissionAuthorshipProvenance, SubmissionContributionKind, SubmissionCoverageBlocker,
+    SubmissionCoverageBlockerCode, SubmissionCoverageDisposition, SubmissionCoverageRow,
+    SubmissionGeneratedArtifactReference, SubmissionItemContent, SubmissionItemSource,
+    SubmissionPackageAssessment, SubmissionPackageCurrentnessCode,
+    SubmissionPackageCurrentnessFact, SubmissionPackageDependency, SubmissionPackageDependencyKind,
+    SubmissionPackageItem, SubmissionPackageSection, SubmissionPackageStatus,
+    SubmissionPackageVersion, SubmissionProfileVersionReference, SubmissionReleaseApproval,
+    SubmissionReleaseInspection, SubmissionReleaseState, SubmissionSectionIndependenceContext,
+    SubmissionSectionReview, SubmissionSectionReviewRunResult, SubmissionSectionRiskContext,
     SubmissionSourceArtifactReference, SubmissionValidationContextInput, SubmissionWorkPlanContext,
     TenderBackupRecord, TenderBackupState, TenderCatalogueEntry, TenderCommandError,
-    TenderErrorCode, TenderEvidenceReference, TenderInspection, TenderIntegrityIssue,
-    TenderIntegrityReport, TenderIntegrityState, TenderLifecyclePhase, TenderOfficeMessage,
-    TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderProductionInspection, TenderQuery,
-    TenderQueryInvalidation, TenderQueryPage, TenderQueryResponse, TenderQueryStatus,
-    TenderQueryTreatment, TenderQueryTreatmentProposal, TenderQueryTreatmentProposalInput,
-    TenderQueryType, TenderRecordAuthority, TenderRecordAuthorityKind,
-    TenderRecordAuthorityReference, TenderRecordBasisKind, TenderRecordContradiction,
-    TenderRecordDecisionResult, TenderRecordEngineerDecisionKind, TenderRecordEvidence,
-    TenderRecordExtractionResult, TenderRecordField, TenderRecordGenerationInstruction,
-    TenderRecordInspection, TenderRecordKind, TenderRecordPage, TenderRecordReview,
-    TenderRecordReviewOutcome, TenderRecordReviewResult, TenderRecordSourceRelationship,
-    TenderRecordTrustClass, TenderRecordVersionReference, TenderRecoveryChoice,
-    TenderRecoveryDecision, TenderRecoveryDecisionRecord, TenderRecoveryRecord,
-    TenderRecoveryState, TenderRetentionDecisionCommand, TenderRetentionDecisionRecord,
-    TenderRetentionState, TenderSummary, TrashedTenderDecisionCommand, TrashedTenderRecord,
+    TenderDeletionSourceState, TenderErrorCode, TenderEvidenceReference, TenderInspection,
+    TenderIntegrityIssue, TenderIntegrityReport, TenderIntegrityState, TenderLifecyclePhase,
+    TenderOfficeMessage, TenderOfficeMessageAuthor, TenderOfficeMessageKind,
+    TenderProductionInspection, TenderQuery, TenderQueryInvalidation, TenderQueryPage,
+    TenderQueryResponse, TenderQueryStatus, TenderQueryTreatment, TenderQueryTreatmentProposal,
+    TenderQueryTreatmentProposalInput, TenderQueryType, TenderRecordAuthority,
+    TenderRecordAuthorityKind, TenderRecordAuthorityReference, TenderRecordBasisKind,
+    TenderRecordContradiction, TenderRecordDecisionResult, TenderRecordEngineerDecisionKind,
+    TenderRecordEvidence, TenderRecordExtractionResult, TenderRecordField,
+    TenderRecordGenerationInstruction, TenderRecordInspection, TenderRecordKind, TenderRecordPage,
+    TenderRecordReview, TenderRecordReviewOutcome, TenderRecordReviewResult,
+    TenderRecordSourceRelationship, TenderRecordTrustClass, TenderRecordVersionReference,
+    TenderRecoveryChoice, TenderRecoveryDecision, TenderRecoveryDecisionRecord,
+    TenderRecoveryRecord, TenderRecoveryState, TenderRetentionDecisionCommand,
+    TenderRetentionDecisionRecord, TenderRetentionState, TenderSummary,
+    TrashRecoveryRequiredTenderCommand, TrashedTenderDecisionCommand, TrashedTenderRecord,
     TrashedTenderState, WorkPlanApprovalRecord, WorkPlanCapabilityGap, WorkPlanDecision,
     WorkPlanProfileBinding, WorkPlanProposalInspection, WorkPlanRevisionAction, WorkPlanTask,
-    WorkPlanWorkstream, WorkspaceActionKind, WorkspaceCurrentAction, WorkspaceFilesSummary,
-    WorkspaceMessageReference, WorkspaceMessageReferenceKind, WorkspaceTeamSummary,
-    WorkspaceTenderDocument, WorkspaceWorkSummary,
+    WorkPlanWorkstream, WorkspaceActionKind, WorkspaceAgentReference, WorkspaceAgentRunReference,
+    WorkspaceCapabilityReadiness, WorkspaceCapabilityReadinessState, WorkspaceCurrentAction,
+    WorkspaceDoctorBlockerArea, WorkspaceDoctorBlockerSummary, WorkspaceFilesSummary,
+    WorkspaceMessageReference, WorkspaceMessageReferenceKind, WorkspaceOutputReference,
+    WorkspaceSearchGroup, WorkspaceSearchHit, WorkspaceSearchProjection, WorkspaceSearchResultKind,
+    WorkspaceTaskRow, WorkspaceTaskState, WorkspaceTeamSummary, WorkspaceTenderDocument,
+    WorkspaceWorkSummary,
 };
 pub use update::{
     current_application_artifact_is_restorable, current_update_platform,
@@ -231,16 +259,163 @@ pub use update::{
     UpdateState, UpdateStatus,
 };
 
-use tauri::Manager;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager, Runtime, WindowEvent};
+
+#[derive(Clone, Default)]
+pub struct StartupSplashState {
+    ready: Arc<AtomicBool>,
+    finished: Arc<AtomicBool>,
+    watchdog_registered_at: Arc<Mutex<Option<Instant>>>,
+}
+
+const SPLASH_WATCHDOG_HARD_DEADLINE: Duration = Duration::from_millis(7_750);
+
+impl StartupSplashState {
+    fn register_watchdog_once(&self) -> bool {
+        let mut registered_at = self
+            .watchdog_registered_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if registered_at.is_some() {
+            return false;
+        }
+        *registered_at = Some(Instant::now());
+        true
+    }
+
+    fn watchdog_deadline(&self) -> Option<Instant> {
+        self.watchdog_registered_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .map(|registered_at| registered_at + SPLASH_WATCHDOG_HARD_DEADLINE)
+    }
+}
+
+fn remaining_until(deadline: Instant, now: Instant) -> Duration {
+    deadline.saturating_duration_since(now)
+}
+
+fn claim_startup_splash_completion(state: &StartupSplashState) -> Result<bool, String> {
+    if !state.ready.load(Ordering::Acquire) {
+        return Err("startup is not ready".to_string());
+    }
+    Ok(!state.finished.swap(true, Ordering::AcqRel))
+}
+
+fn claim_startup_splash_watchdog_completion(state: &StartupSplashState) -> bool {
+    !state.finished.swap(true, Ordering::AcqRel)
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartupSplashPreferences {
+    pub reduced_motion: bool,
+}
+
+fn finish_splash_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(splash) = app.get_webview_window("splashscreen") {
+        let _ = splash.close();
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.unminimize();
+        let _ = main.set_focus();
+    }
+}
+
+fn start_splash_watchdog<R: Runtime>(app: AppHandle<R>, state: StartupSplashState) {
+    if !state.register_watchdog_once() {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        let deadline = state
+            .watchdog_deadline()
+            .unwrap_or_else(|| Instant::now() + SPLASH_WATCHDOG_HARD_DEADLINE);
+        let delay = remaining_until(deadline, Instant::now());
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        if claim_startup_splash_watchdog_completion(&state) {
+            finish_splash_window(&app);
+        }
+    });
+}
+
+#[cfg(test)]
+mod startup_splash_tests {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    use super::{
+        claim_startup_splash_completion, claim_startup_splash_watchdog_completion, remaining_until,
+        StartupSplashState, SPLASH_WATCHDOG_HARD_DEADLINE,
+    };
+
+    #[test]
+    fn registered_watchdog_has_the_full_window_and_a_hard_cap() {
+        let registered_at = Instant::now();
+        let deadline = registered_at + SPLASH_WATCHDOG_HARD_DEADLINE;
+
+        assert_eq!(
+            remaining_until(deadline, registered_at),
+            SPLASH_WATCHDOG_HARD_DEADLINE
+        );
+        assert_eq!(
+            remaining_until(deadline, deadline + Duration::from_millis(1)),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn watchdog_registration_is_idempotent_and_has_an_absolute_deadline() {
+        let state = StartupSplashState::default();
+        assert!(state.register_watchdog_once());
+        let deadline = state.watchdog_deadline().expect("watchdog deadline");
+        assert!(!state.register_watchdog_once());
+        assert_eq!(remaining_until(deadline, deadline), Duration::ZERO);
+    }
+
+    #[test]
+    fn startup_splash_cannot_finish_before_readiness_and_finishes_once_afterward() {
+        let state = StartupSplashState::default();
+
+        assert_eq!(
+            claim_startup_splash_completion(&state),
+            Err("startup is not ready".to_string())
+        );
+        state.ready.store(true, Ordering::Release);
+        assert_eq!(claim_startup_splash_completion(&state), Ok(true));
+        assert_eq!(claim_startup_splash_completion(&state), Ok(false));
+    }
+
+    #[test]
+    fn absolute_watchdog_can_recover_before_renderer_readiness_and_only_once() {
+        let state = StartupSplashState::default();
+
+        assert!(claim_startup_splash_watchdog_completion(&state));
+        assert!(!claim_startup_splash_watchdog_completion(&state));
+    }
+}
 
 mod tauri_commands {
-    use std::sync::Mutex;
+    use std::sync::{atomic::Ordering, Mutex};
+    use std::time::Instant;
 
     use garde::Validate;
+    use tauri::Emitter;
+    use tauri_plugin_opener::OpenerExt;
     use tauri_plugin_updater::UpdaterExt;
 
     use super::{
-        ensure_quantix_setup as ensure_setup, ActivateTenderProductionCommand,
+        claim_startup_splash_completion, ensure_quantix_setup as ensure_setup,
+        finish_splash_window, start_splash_watchdog, ActivateTenderProductionCommand,
         AgentAccessRequestView, AgentRunActivity, AgentRunHistoryPage, AgentRunInspection,
         AgentRunRecoveryDecision, ApplicationSettingsView, ApproveAgentAccessCommand,
         ApproveBasisOfEstimateCommand, ApproveCalculationRuleCommand,
@@ -254,45 +429,49 @@ mod tauri_commands {
         BidDecisionApprovalResult, BidDecisionPackageInspection, BidDecisionPackageRecordPage,
         BidDecisionPackageReviewResult, BidDecisionReturnReworkResult, BoqTableDesignation,
         CalculationRuleReviewResult, CalculationRuleVersion, CalculationScenarioVersion,
-        CalculationWorkspaceInspection, CancelProviderLoginCommand, ChangeAssessment,
-        ChangeAssessmentPage, ChooseTenderPackageCommand, CommercialStrategy, ComplianceMatrixPage,
-        ComposeTenderOfficeCommand, ConfirmSourceRelationshipCommand, ConnectAnthropicCommand,
-        ConnectGeminiCommand, ControlledBoqCalculationRun, CoordinatedBidBaseline,
-        CoordinatedBidBaselinePage, CostEstimatorBasisResult, CostEstimatorCalculationResult,
-        CreateBidDecisionPackageCommand, CreateCalculationScenarioCommand,
-        CreateCommercialStrategyCommand, CreateExternalRfiDraftCommand,
-        CreatePortableTenderArchiveCommand, CreatePricedCostBaselineCommand,
-        CreatePricingAdjustmentCommand, CreatePricingScenarioCommand, CreateTenderBackupCommand,
-        CreateTenderCommand, CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
+        CalculationWorkspaceInspection, CancelPackageIntakeCommand, CancelProviderLoginCommand,
+        ChangeAssessment, ChangeAssessmentPage, ChooseTenderPackageCommand, CommercialStrategy,
+        ComplianceMatrixPage, ComposeTenderOfficeCommand, ConfirmAiExecutionSelectionCommand,
+        ConfirmSourceRelationshipCommand, ConnectAnthropicCommand, ConnectGeminiCommand,
+        ControlledBoqCalculationRun, CoordinatedBidBaseline, CoordinatedBidBaselinePage,
+        CostEstimatorBasisResult, CostEstimatorCalculationResult, CreateBidDecisionPackageCommand,
+        CreateCalculationScenarioCommand, CreateCommercialStrategyCommand,
+        CreateExternalRfiDraftCommand, CreatePortableTenderArchiveCommand,
+        CreatePricedCostBaselineCommand, CreatePricingAdjustmentCommand,
+        CreatePricingScenarioCommand, CreateTenderBackupCommand, CreateTenderCommand,
+        CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
         DecideBidDecisionPackageCommand, DecideChangeAssessmentCommand,
         DecideCoordinatedBidBaselineCommand, DecideTenderQueryTreatmentCommand,
         DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DecisionCockpit, DeletionReceipt,
-        DesignateBoqTableCommand, DisconnectAiProviderCommand, DocumentParseResult,
-        DocumentRegister, EstimateWorkspaceInspection, EvidenceDocument, EvidenceSearchResult,
-        EvidenceSemanticSearchResult, ExportApprovedExternalRfiCommand, ExportReleaseCopyCommand,
-        ExternalRfiDraft, ExternalRfiEligibleQueryPage, ExternalRfiExportRecord, ExternalRfiPage,
-        ExternalRfiResponseCandidatePage, ExternalRfiReviewResult, FinalReviewInspection,
-        GenerateSubmissionSectionsCommand, ImportPortableTenderArchiveCommand,
-        ImportTenderPackageCommand, InspectAgentRunCommand, InspectAgentRunHistoryCommand,
-        InspectBidDecisionApprovalHistoryCommand, InspectBidDecisionPackageRecordsCommand,
-        InspectCalculationWorkspaceCommand, InspectChangeAssessmentsCommand,
-        InspectComplianceMatrixCommand, InspectCoordinatedBidBaselinesCommand,
-        InspectDecisionCockpitCommand, InspectEstimateWorkspaceCommand,
-        InspectExternalRfiEligibleQueriesCommand, InspectExternalRfiResponseCandidatesCommand,
-        InspectExternalRfisCommand, InspectManagerWorkspaceCommand,
-        InspectPackageProductionCommand, InspectPricingWorkspaceCommand,
-        InspectProductionTaskReviewCommand, InspectSubmissionArtifactContentCommand,
+        DesignateBoqTableCommand, DisconnectAiProviderCommand, DoctorTenderInput,
+        DocumentParseResult, DocumentRegister, EstimateWorkspaceInspection, EvidenceDocument,
+        EvidenceSearchResult, EvidenceSemanticSearchResult, ExportApprovedExternalRfiCommand,
+        ExportReleaseCopyCommand, ExternalRfiDraft, ExternalRfiEligibleQueryPage,
+        ExternalRfiExportRecord, ExternalRfiPage, ExternalRfiResponseCandidatePage,
+        ExternalRfiReviewResult, FinalReviewInspection, GenerateSubmissionSectionsCommand,
+        ImportPortableTenderArchiveCommand, ImportTenderPackageCommand, InspectAgentRunCommand,
+        InspectAgentRunHistoryCommand, InspectBidDecisionApprovalHistoryCommand,
+        InspectBidDecisionPackageRecordsCommand, InspectCalculationWorkspaceCommand,
+        InspectChangeAssessmentsCommand, InspectComplianceMatrixCommand,
+        InspectCoordinatedBidBaselinesCommand, InspectDecisionCockpitCommand,
+        InspectEstimateWorkspaceCommand, InspectExternalRfiEligibleQueriesCommand,
+        InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
+        InspectManagerWorkspaceCommand, InspectPackageProductionCommand,
+        InspectPricingWorkspaceCommand, InspectProductionTaskReviewCommand,
+        InspectQuantixDoctorCommand, InspectSubmissionArtifactContentCommand,
         InspectSubmissionPackageCommand, InspectSubmissionPackageItemContentCommand,
-        InspectTenderQueriesCommand, InspectTenderRecordsCommand,
+        InspectTenderAiExecutionCommand, InspectTenderQueriesCommand, InspectTenderRecordsCommand,
         InterpretExternalRfiResponseCommand, InterruptAgentRunCommand,
         InvalidateBidDecisionApprovalCommand, LiveQualificationRun, ManagerWorkspaceProjection,
-        OpenProviderLoginCommand, OpenTenderCommand, PackageProductionGeneration,
-        ParseSourceArtifactCommand, PortableTenderArchiveRecord, PrepareTenderRecoveryCommand,
-        PricedCostBaselineReviewResult, PricedCostBaselineVersion, PricingAdjustmentReviewResult,
-        PricingAdjustmentVersion, PricingScenarioVersion, PricingWorkspaceInspection,
-        PrivateQualificationRecord, ProductAcceptanceRecord, ProductAcceptanceRun,
-        ProductionTaskReviewInspection, ProductionTaskRunResult, ProposeBoqCalculationRuleCommand,
-        PublicReleaseGateRecord, PurgeTrashedTenderCommand, QuantixHost,
+        OpenProviderLoginCommand, OpenTenderCommand, PackageIntakeOperationKind,
+        PackageIntakeProgress, PackageProductionGeneration, ParseSourceArtifactCommand,
+        PortableTenderArchiveRecord, PrepareTenderRecoveryCommand, PricedCostBaselineReviewResult,
+        PricedCostBaselineVersion, PricingAdjustmentReviewResult, PricingAdjustmentVersion,
+        PricingScenarioVersion, PricingWorkspaceInspection, PrivateQualificationRecord,
+        ProductAcceptanceRecord, ProductAcceptanceRun, ProductionTaskReviewInspection,
+        ProductionTaskRunResult, ProposeBoqCalculationRuleCommand, PublicReleaseGateRecord,
+        PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand, QuantixDoctorRepairAction,
+        QuantixDoctorRepairCommand, QuantixDoctorReport, QuantixHost,
         RebindManagerIntakeProviderCommand, RecordEngineerWorkspaceMessageCommand,
         RecordPackageManualVerificationCommand, RegisterExternalRfiResponseCommand,
         RequestAgentAccessCommand, ResolveAgentAccessCommand,
@@ -306,18 +485,20 @@ mod tauri_commands {
         RunPricingAdjustmentReviewCommand, RunProductionTaskCommand,
         RunSubmissionSectionReviewCommand, RunTenderRecordExtractionCommand,
         RunTenderRecordReviewCommand, RuntimePreparationProgress, RuntimeReadiness,
-        SearchEvidenceCommand, SearchEvidenceSemanticCommand, SelectManagerWorkspaceTenderCommand,
-        SelectPricingScenarioCommand, SetupOutcome, SetupState, StartManagerTenderCommand,
-        StartProviderLoginCommand, SubmissionArtifactContent, SubmissionItemContent,
+        SearchEvidenceCommand, SearchEvidenceSemanticCommand, SearchManagerWorkspaceCommand,
+        SelectManagerWorkspaceTenderCommand, SelectPricingScenarioCommand, SetupOutcome,
+        SetupState, StartManagerTenderCommand, StartProviderLoginCommand, StartupSplashPreferences,
+        StartupSplashState, SubmissionArtifactContent, SubmissionItemContent,
         SubmissionPackageVersion, SubmissionReleaseInspection, SubmissionSectionReviewRunResult,
         TenderBackupRecord, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
         TenderIntegrityReport, TenderPackageImportResult, TenderPackageSourceKind,
         TenderProductionInspection, TenderQuery, TenderQueryPage, TenderRecordAuthority,
         TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordPage,
         TenderRecordReviewResult, TenderRecoveryRecord, TenderRetentionDecisionCommand,
-        TenderRetentionDecisionRecord, TenderSummary, TrashedTenderDecisionCommand,
-        TrashedTenderRecord, UpdateAiExecutionSelectionCommand,
-        UpdateGeneralApplicationPreferencesCommand, WorkPlanProposalInspection,
+        TenderRetentionDecisionRecord, TenderSummary, TrashRecoveryRequiredTenderCommand,
+        TrashedTenderDecisionCommand, TrashedTenderRecord, UpdateAiExecutionSelectionCommand,
+        UpdateGeneralApplicationPreferencesCommand, UpdateTenderAiExecutionSelectionCommand,
+        WorkPlanProposalInspection, WorkspaceSearchProjection,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -339,6 +520,48 @@ mod tauri_commands {
         pub(super) fn new() -> Self {
             Self(Mutex::new(None))
         }
+    }
+
+    #[tauri::command]
+    pub(super) fn report_startup_splash_preferences<R: tauri::Runtime>(
+        app: tauri::AppHandle<R>,
+        preferences: StartupSplashPreferences,
+    ) -> Result<(), String> {
+        app.emit_to("splashscreen", "quantix-startup-preferences", preferences)
+            .map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub(super) fn notify_startup_display_ready<R: tauri::Runtime>(
+        app: tauri::AppHandle<R>,
+        state: tauri::State<'_, StartupSplashState>,
+    ) -> Result<(), String> {
+        let state = state.inner().clone();
+        if state.ready.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        let _ = app.emit_to("splashscreen", "quantix-startup-ready", ());
+        start_splash_watchdog(app, state);
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub(super) fn inspect_startup_display_ready(
+        state: tauri::State<'_, StartupSplashState>,
+    ) -> bool {
+        state.ready.load(Ordering::Acquire)
+    }
+
+    #[tauri::command]
+    pub(super) fn finish_startup_splash<R: tauri::Runtime>(
+        app: tauri::AppHandle<R>,
+        state: tauri::State<'_, StartupSplashState>,
+    ) -> Result<(), String> {
+        if !claim_startup_splash_completion(state.inner())? {
+            return Ok(());
+        }
+        finish_splash_window(&app);
+        Ok(())
     }
 
     #[tauri::command]
@@ -623,10 +846,17 @@ mod tauri_commands {
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
         let host = host.inner().clone();
         let view = host.refresh_application_settings().await?;
-        if host.runtime_is_verified() {
+        if host.document_tools_are_verified() {
             retry_provider_cleanup_in_background(host);
         }
         Ok(view)
+    }
+
+    #[tauri::command]
+    pub(super) fn inspect_application_settings(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        host.inner().inspect_application_settings()
     }
 
     #[tauri::command]
@@ -635,6 +865,324 @@ mod tauri_commands {
         command: UpdateAiExecutionSelectionCommand,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
         host.inner().update_ai_execution_selection(command).await
+    }
+
+    #[tauri::command]
+    pub(super) fn inspect_tender_ai_execution(
+        host: tauri::State<'_, QuantixHost>,
+        command: InspectTenderAiExecutionCommand,
+    ) -> Result<crate::TenderAiExecutionBinding, TenderCommandError> {
+        host.inner().inspect_tender_ai_execution(command)
+    }
+
+    #[tauri::command]
+    pub(super) fn update_tender_ai_execution(
+        host: tauri::State<'_, QuantixHost>,
+        command: UpdateTenderAiExecutionSelectionCommand,
+    ) -> Result<crate::TenderAiExecutionBinding, TenderCommandError> {
+        host.inner().update_tender_ai_execution(command)
+    }
+
+    async fn compose_doctor_report(
+        host: &QuantixHost,
+        command: &InspectQuantixDoctorCommand,
+    ) -> Result<QuantixDoctorReport, TenderCommandError> {
+        let setup = host.ensure_setup();
+        let runtime = host.inspect_runtime_readiness().await;
+        let settings = host.inspect_application_settings()?;
+        let update = host.inspect_update_status();
+        let diagnostics = host.diagnostics().inspect_health();
+        let tender = command
+            .tender_id
+            .as_ref()
+            .map(|tender_id| {
+                let integrity = host.inspect_tender_integrity(tender_id)?;
+                let ai_execution =
+                    host.inspect_tender_ai_execution(InspectTenderAiExecutionCommand {
+                        tender_id: tender_id.clone(),
+                    })?;
+                Ok::<_, TenderCommandError>(DoctorTenderInput {
+                    tender_id: tender_id.clone(),
+                    integrity,
+                    ai_execution,
+                })
+            })
+            .transpose()?;
+        Ok(crate::compose_quantix_doctor_report(
+            &setup,
+            &runtime,
+            &settings,
+            update.as_ref().map_err(|error| error.diagnostic),
+            &diagnostics,
+            tender.as_ref(),
+        ))
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_quantix_doctor(
+        host: tauri::State<'_, QuantixHost>,
+        command: InspectQuantixDoctorCommand,
+    ) -> Result<QuantixDoctorReport, TenderCommandError> {
+        compose_doctor_report(host.inner(), &command).await
+    }
+
+    #[tauri::command]
+    pub(super) async fn repair_quantix_doctor(
+        host: tauri::State<'_, QuantixHost>,
+        command: QuantixDoctorRepairCommand,
+    ) -> Result<QuantixDoctorReport, TenderCommandError> {
+        let inspect = InspectQuantixDoctorCommand {
+            tender_id: command.tender_id.clone(),
+        };
+        let current = compose_doctor_report(host.inner(), &inspect).await?;
+        if !crate::validate_quantix_doctor_repair(&current, &command) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        match command.action {
+            QuantixDoctorRepairAction::PrepareDocumentTools
+            | QuantixDoctorRepairAction::RetryDocumentTools => {
+                host.inner().repair_runtime_readiness().await;
+            }
+            QuantixDoctorRepairAction::RefreshAiProvider => {
+                host.inner().refresh_application_settings().await?;
+            }
+            QuantixDoctorRepairAction::RetryDiagnostics => {
+                host.inner()
+                    .diagnostics()
+                    .retry()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            }
+            QuantixDoctorRepairAction::InspectTenderIntegrity
+            | QuantixDoctorRepairAction::RebindTenderAiSelection
+            | QuantixDoctorRepairAction::RetryUpdateInspection => {}
+        }
+        compose_doctor_report(host.inner(), &inspect).await
+    }
+
+    fn diagnostic_target(
+        scope: crate::DiagnosticScope,
+        tender_id: Option<String>,
+    ) -> Result<Option<String>, TenderCommandError> {
+        match (scope, tender_id) {
+            (crate::DiagnosticScope::Application, None) => Ok(None),
+            (crate::DiagnosticScope::Tender, Some(tender_id)) => {
+                crate::tender_store::TenderId::parse(&tender_id)?;
+                Ok(Some(tender_id))
+            }
+            _ => Err(TenderCommandError::new(TenderErrorCode::InvalidCommand)),
+        }
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_diagnostics_status(
+        host: tauri::State<'_, QuantixHost>,
+        command: crate::InspectDiagnosticsStatusCommand,
+    ) -> Result<crate::DiagnosticsStatus, TenderCommandError> {
+        let tender_id = diagnostic_target(command.scope, command.tender_id)?;
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.diagnostics()
+                .inspect_status(command.scope, tender_id.as_deref())
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))
+        })
+        .await
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_diagnostic_timeline(
+        host: tauri::State<'_, QuantixHost>,
+        command: crate::InspectDiagnosticTimelineCommand,
+    ) -> Result<crate::DiagnosticTimelinePage, TenderCommandError> {
+        let tender_id = diagnostic_target(command.scope, command.tender_id)?;
+        let component = match command.component.as_deref() {
+            Some(component) => Some(
+                crate::DiagnosticComponent::parse(component)
+                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?,
+            ),
+            None => None,
+        };
+        let limit = command.limit.unwrap_or(50).clamp(1, 200);
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            Ok(host.diagnostics().inspect_timeline(
+                crate::DiagnosticTimelineFilter {
+                    scope: Some(command.scope),
+                    severity: command.severity,
+                    component,
+                    tender_id,
+                },
+                command.cursor.as_deref(),
+                limit,
+            ))
+        })
+        .await
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+    }
+
+    #[tauri::command]
+    pub(super) fn start_tender_deep_diagnostics(
+        host: tauri::State<'_, QuantixHost>,
+        command: crate::StartTenderDeepDiagnosticsCommand,
+    ) -> Result<crate::DeepDiagnosticsSession, TenderCommandError> {
+        if command.policy_revision != crate::DIAGNOSTIC_REDACTION_POLICY_VERSION {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        host.inner().inspect_tender_integrity(&command.tender_id)?;
+        let session = host
+            .inner()
+            .diagnostics()
+            .start_deep(&command.tender_id)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let mut fact = crate::RecordDiagnosticFact::new(
+            crate::DiagnosticSeverity::Info,
+            crate::DiagnosticComponent::Diagnostics,
+            "deep_diagnostics_started",
+            "Redacted deep diagnostics started",
+        );
+        fact.outcome = Some("started".into());
+        fact.initiated_by = Some("engineer_user".into());
+        fact.success = Some(true);
+        host.inner()
+            .diagnostics()
+            .record_tender(&command.tender_id, fact);
+        Ok(session)
+    }
+
+    #[tauri::command]
+    pub(super) fn stop_tender_deep_diagnostics(
+        host: tauri::State<'_, QuantixHost>,
+        command: crate::StopTenderDeepDiagnosticsCommand,
+    ) -> Result<bool, TenderCommandError> {
+        if !host
+            .inner()
+            .diagnostics()
+            .stop_deep(&command.tender_id, &command.session_id)
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let mut fact = crate::RecordDiagnosticFact::new(
+            crate::DiagnosticSeverity::Info,
+            crate::DiagnosticComponent::Diagnostics,
+            "deep_diagnostics_stopped",
+            "Redacted deep diagnostics stopped",
+        );
+        fact.outcome = Some("stopped".into());
+        fact.initiated_by = Some("engineer_user".into());
+        fact.success = Some(true);
+        host.inner()
+            .diagnostics()
+            .record_tender(&command.tender_id, fact);
+        Ok(true)
+    }
+
+    #[tauri::command]
+    pub(super) fn open_diagnostic_logs<R: tauri::Runtime>(
+        app: tauri::AppHandle<R>,
+        host: tauri::State<'_, QuantixHost>,
+        command: crate::OpenDiagnosticLogsCommand,
+    ) -> Result<crate::OpenDiagnosticLogsResult, TenderCommandError> {
+        let tender_id = diagnostic_target(command.scope, command.tender_id)?;
+        let directory = match tender_id.as_deref() {
+            Some(tender_id) => host
+                .inner()
+                .diagnostics()
+                .tender_directory(tender_id)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?,
+            None => host.inner().diagnostics().application_directory(),
+        };
+        std::fs::create_dir_all(&directory)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        app.opener()
+            .open_path(directory.to_string_lossy(), None::<&str>)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        Ok(crate::OpenDiagnosticLogsResult {
+            directory: directory.to_string_lossy().into_owned(),
+        })
+    }
+
+    #[tauri::command]
+    pub(super) async fn export_diagnostics_support_bundle(
+        host: tauri::State<'_, QuantixHost>,
+        command: crate::ExportDiagnosticsSupportBundleCommand,
+    ) -> Result<crate::DiagnosticSupportBundleResult, TenderCommandError> {
+        if command.policy_revision != crate::DIAGNOSTIC_REDACTION_POLICY_VERSION {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let tender_id = diagnostic_target(command.scope, command.tender_id)?;
+        let doctor_report = compose_doctor_report(
+            host.inner(),
+            &InspectQuantixDoctorCommand {
+                tender_id: tender_id.clone(),
+            },
+        )
+        .await?;
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.diagnostics()
+                .export_support_bundle(
+                    tender_id.as_deref(),
+                    7,
+                    command.include_deep,
+                    Some(&doctor_report),
+                )
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))
+        })
+        .await
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+    }
+
+    #[tauri::command]
+    pub(super) fn record_renderer_diagnostic(
+        host: tauri::State<'_, QuantixHost>,
+        command: crate::RecordRendererDiagnosticCommand,
+    ) -> bool {
+        if !host.inner().allow_renderer_diagnostic() {
+            return false;
+        }
+        let (severity, event_name, summary, outcome) = match command.kind {
+            crate::RendererDiagnosticKind::SurfaceUnavailable => (
+                crate::DiagnosticSeverity::Error,
+                "renderer_surface_unavailable",
+                "A renderer surface became unavailable",
+                "failed",
+            ),
+            crate::RendererDiagnosticKind::InteractionFailed => (
+                crate::DiagnosticSeverity::Warning,
+                "renderer_interaction_failed",
+                "A renderer interaction failed",
+                "failed",
+            ),
+            crate::RendererDiagnosticKind::StateRecovered => (
+                crate::DiagnosticSeverity::Info,
+                "renderer_state_recovered",
+                "The renderer recovered its application state",
+                "recovered",
+            ),
+        };
+        let mut fact = crate::RecordDiagnosticFact::new(
+            severity,
+            crate::DiagnosticComponent::Renderer,
+            event_name,
+            summary,
+        );
+        fact.outcome = Some(outcome.into());
+        host.inner().diagnostics().record_application(fact)
+    }
+
+    #[tauri::command]
+    pub(super) async fn confirm_ai_execution_selection(
+        host: tauri::State<'_, QuantixHost>,
+        command: ConfirmAiExecutionSelectionCommand,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        host.inner().confirm_ai_execution_selection(command).await
+    }
+
+    #[tauri::command]
+    pub(super) fn clear_ai_execution_selection(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        host.inner().clear_ai_execution_selection()
     }
 
     #[tauri::command]
@@ -716,14 +1264,44 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn search_manager_workspace(
+        host: tauri::State<'_, QuantixHost>,
+        command: SearchManagerWorkspaceCommand,
+    ) -> Result<WorkspaceSearchProjection, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.search_manager_workspace(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) fn inspect_package_intake_progress(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Option<PackageIntakeProgress> {
+        host.inner().inspect_package_intake_progress()
+    }
+
+    #[tauri::command]
+    pub(super) fn cancel_package_intake(
+        host: tauri::State<'_, QuantixHost>,
+        command: CancelPackageIntakeCommand,
+    ) -> bool {
+        host.inner().cancel_package_intake(command)
+    }
+
+    #[tauri::command]
     pub(super) async fn start_manager_tender<R: tauri::Runtime>(
         app: tauri::AppHandle<R>,
         host: tauri::State<'_, QuantixHost>,
         command: StartManagerTenderCommand,
     ) -> Result<Option<ManagerWorkspaceProjection>, TenderCommandError> {
+        let source_kind = command.source_kind;
+        let local_only = command.local_only;
         let selected = tauri::async_runtime::spawn_blocking(move || {
             let picker = app.dialog().file();
-            match command.source_kind {
+            match source_kind {
                 TenderPackageSourceKind::Directory => picker.blocking_pick_folder(),
                 TenderPackageSourceKind::ZipArchive => picker
                     .add_filter("ZIP archive", &["zip"])
@@ -741,19 +1319,78 @@ mod tauri_commands {
             code: TenderErrorCode::InvalidCommand,
         })?;
         let host = host.inner().clone();
+        let source_name = source_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Tender Package")
+            .to_owned();
+        let control = host.begin_package_intake(
+            PackageIntakeOperationKind::StartTender,
+            source_kind,
+            source_name,
+        )?;
+        let operation_id = control.snapshot().operation_id.clone();
+        let intake_started = Instant::now();
         let start_host = host.clone();
         let projection = tauri::async_runtime::spawn_blocking(move || {
-            start_host
-                .start_manager_tender_from_package(&source_path)
-                .map(Some)
+            start_host.start_manager_tender_from_package_with_control(
+                &source_path,
+                Some(&control),
+                local_only,
+            )
         })
-        .await
-        .map_err(|_| TenderCommandError {
+        .await;
+        let elapsed_ms = u64::try_from(intake_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match &projection {
+            Ok(Ok(Some(projection))) => {
+                if let Some(tender) = &projection.selected_tender {
+                    host.record_tender_diagnostic(
+                        &tender.tender_id,
+                        crate::DiagnosticSeverity::Info,
+                        crate::DiagnosticComponent::Package,
+                        "package_intake_completed",
+                        "The Tender package was published",
+                        Some(operation_id.clone()),
+                        Some(elapsed_ms),
+                        Some("completed"),
+                        None,
+                    );
+                }
+            }
+            Ok(Err(error)) => host.record_application_diagnostic(
+                crate::DiagnosticSeverity::Error,
+                crate::DiagnosticComponent::Package,
+                "package_intake_failed",
+                "The governed package intake operation failed",
+                Some(operation_id.clone()),
+                Some(elapsed_ms),
+                Some("failed"),
+                Some(format!("{:?}", error.code)),
+            ),
+            Err(_) => host.record_application_diagnostic(
+                crate::DiagnosticSeverity::Error,
+                crate::DiagnosticComponent::Package,
+                "package_intake_stopped",
+                "The package intake worker stopped unexpectedly",
+                Some(operation_id.clone()),
+                Some(elapsed_ms),
+                Some("failed"),
+                Some("WORKER_STOPPED".into()),
+            ),
+            Ok(Ok(None)) => {}
+        }
+        host.finish_package_intake(&operation_id);
+        let projection = projection.map_err(|_| TenderCommandError {
             code: TenderErrorCode::StoreUnavailable,
         })??;
         if let Some(projection) = &projection {
             if let Some(tender) = &projection.selected_tender {
-                host.start_manager_intake_background(tender.tender_id.clone())?;
+                // The Tender is already atomically published. A transient
+                // scheduling failure must not turn that successful import
+                // into a misleading package failure in the renderer; active
+                // intake records are resumed by the normal startup/refresh
+                // path.
+                let _ = host.start_manager_intake_background(tender.tender_id.clone());
             }
         }
         Ok(projection)
@@ -821,7 +1458,7 @@ mod tauri_commands {
             .intake
             .as_ref()
             .is_some_and(|intake| intake.stage.is_active())
-            && host.runtime_is_verified()
+            && host.document_tools_are_verified()
         {
             if let Some(tender) = &projection.selected_tender {
                 host.start_manager_intake_background(tender.tender_id.clone())?;
@@ -1081,6 +1718,19 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn trash_recovery_required_tender(
+        host: tauri::State<'_, QuantixHost>,
+        command: TrashRecoveryRequiredTenderCommand,
+    ) -> Result<TrashedTenderRecord, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.trash_recovery_required_tender(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
     pub(super) async fn inspect_trashed_tenders(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<Vec<TrashedTenderRecord>, TenderCommandError> {
@@ -1114,6 +1764,24 @@ mod tauri_commands {
         let deletion_host = host.clone();
         let receipt = tauri::async_runtime::spawn_blocking(move || {
             deletion_host.purge_trashed_tender(command)
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })??;
+        retry_provider_cleanup_in_background(host);
+        Ok(receipt)
+    }
+
+    #[tauri::command]
+    pub(super) async fn purge_recovery_required_tender(
+        host: tauri::State<'_, QuantixHost>,
+        command: PurgeRecoveryRequiredTenderCommand,
+    ) -> Result<DeletionReceipt, TenderCommandError> {
+        let host = host.inner().clone();
+        let deletion_host = host.clone();
+        let receipt = tauri::async_runtime::spawn_blocking(move || {
+            deletion_host.purge_recovery_required_tender(command)
         })
         .await
         .map_err(|_| TenderCommandError {
@@ -1220,24 +1888,78 @@ mod tauri_commands {
         let source_path = selected.into_path().map_err(|_| TenderCommandError {
             code: TenderErrorCode::InvalidCommand,
         })?;
-        let host = host.inner().clone();
-        let import_host = host.clone();
         let tender_id = command.tender_id;
         let intake_tender_id = tender_id.clone();
+        let host = host.inner().clone();
+        let source_name = source_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Tender Package")
+            .to_owned();
+        let control = host.begin_package_intake(
+            PackageIntakeOperationKind::AddPackage,
+            source_kind,
+            source_name,
+        )?;
+        let operation_id = control.snapshot().operation_id.clone();
+        let intake_started = Instant::now();
+        let import_host = host.clone();
         let result = tauri::async_runtime::spawn_blocking(move || {
-            import_host
-                .import_tender_package(ImportTenderPackageCommand {
+            import_host.import_tender_package_with_control(
+                ImportTenderPackageCommand {
                     tender_id,
                     source_path: source_path.to_string_lossy().into_owned(),
-                })
-                .map(Some)
+                },
+                &control,
+            )
         })
-        .await
-        .map_err(|_| TenderCommandError {
+        .await;
+        let elapsed_ms = u64::try_from(intake_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match &result {
+            Ok(Ok(Some(_))) => host.record_tender_diagnostic(
+                &intake_tender_id,
+                crate::DiagnosticSeverity::Info,
+                crate::DiagnosticComponent::Package,
+                "package_add_completed",
+                "An additional Tender package was published",
+                Some(operation_id.clone()),
+                Some(elapsed_ms),
+                Some("completed"),
+                None,
+            ),
+            Ok(Err(error)) => host.record_tender_diagnostic(
+                &intake_tender_id,
+                crate::DiagnosticSeverity::Error,
+                crate::DiagnosticComponent::Package,
+                "package_add_failed",
+                "The additional package intake operation failed",
+                Some(operation_id.clone()),
+                Some(elapsed_ms),
+                Some("failed"),
+                Some(format!("{:?}", error.code)),
+            ),
+            Err(_) => host.record_tender_diagnostic(
+                &intake_tender_id,
+                crate::DiagnosticSeverity::Error,
+                crate::DiagnosticComponent::Package,
+                "package_add_stopped",
+                "The additional package worker stopped unexpectedly",
+                Some(operation_id.clone()),
+                Some(elapsed_ms),
+                Some("failed"),
+                Some("WORKER_STOPPED".into()),
+            ),
+            Ok(Ok(None)) => {}
+        }
+        host.finish_package_intake(&operation_id);
+        let result = result.map_err(|_| TenderCommandError {
             code: TenderErrorCode::StoreUnavailable,
         })??;
         if result.is_some() {
-            host.start_manager_intake_background(intake_tender_id)?;
+            // Package publication is already committed at this boundary.
+            // Keep scheduling failures separate from the import result so the
+            // UI never asks the Engineer to repeat a successful package add.
+            let _ = host.start_manager_intake_background(intake_tender_id);
         }
         Ok(result)
     }
@@ -1321,38 +2043,38 @@ mod tauri_commands {
     }
 
     #[tauri::command]
-    pub(super) async fn inspect_runtime_readiness(
+    pub(super) async fn inspect_document_tool_readiness(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<RuntimeReadiness, &'static str> {
         let host = host.inner().clone();
-        let readiness = host.inspect_runtime_readiness().await;
-        if host.runtime_is_verified() {
-            retry_provider_cleanup_in_background(host);
-        }
-        Ok(readiness)
+        Ok(host.inspect_runtime_readiness().await)
     }
 
     #[tauri::command]
-    pub(super) async fn repair_runtime_readiness(
+    pub(super) async fn prepare_document_tools(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<RuntimeReadiness, &'static str> {
         let host = host.inner().clone();
-        let readiness = host.repair_runtime_readiness().await;
-        if host.runtime_is_verified() {
-            retry_provider_cleanup_in_background(host);
-        }
-        Ok(readiness)
+        Ok(host.repair_runtime_readiness().await)
     }
 
     #[tauri::command]
-    pub(super) fn inspect_runtime_preparation_progress(
+    pub(super) async fn repair_document_tools(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<RuntimeReadiness, &'static str> {
+        let host = host.inner().clone();
+        Ok(host.repair_runtime_readiness().await)
+    }
+
+    #[tauri::command]
+    pub(super) fn inspect_document_tool_preparation_progress(
         host: tauri::State<'_, QuantixHost>,
     ) -> RuntimePreparationProgress {
         host.inner().inspect_runtime_preparation_progress()
     }
 
     #[tauri::command]
-    pub(super) fn cancel_runtime_preparation(host: tauri::State<'_, QuantixHost>) -> bool {
+    pub(super) fn cancel_document_tool_preparation(host: tauri::State<'_, QuantixHost>) -> bool {
         host.inner().cancel_runtime_preparation()
     }
 
@@ -2572,7 +3294,12 @@ pub fn perform_authorized_update_restart(
 pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder
         .manage(tauri_commands::PendingSignedUpdate::new())
+        .manage(StartupSplashState::default())
         .invoke_handler(tauri::generate_handler![
+            tauri_commands::report_startup_splash_preferences,
+            tauri_commands::notify_startup_display_ready,
+            tauri_commands::inspect_startup_display_ready,
+            tauri_commands::finish_startup_splash,
             tauri_commands::ensure_quantix_setup,
             tauri_commands::inspect_product_acceptance_runs,
             tauri_commands::aggregate_product_acceptance,
@@ -2588,8 +3315,13 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::create_tender,
             tauri_commands::list_tenders,
             tauri_commands::refresh_application_settings,
+            tauri_commands::inspect_application_settings,
             tauri_commands::update_general_application_preferences,
             tauri_commands::update_ai_execution_selection,
+            tauri_commands::inspect_tender_ai_execution,
+            tauri_commands::update_tender_ai_execution,
+            tauri_commands::confirm_ai_execution_selection,
+            tauri_commands::clear_ai_execution_selection,
             tauri_commands::start_provider_login,
             tauri_commands::cancel_provider_login,
             tauri_commands::open_provider_login,
@@ -2597,7 +3329,19 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::connect_anthropic,
             tauri_commands::disconnect_ai_provider,
             tauri_commands::connect_gemini,
+            tauri_commands::inspect_quantix_doctor,
+            tauri_commands::repair_quantix_doctor,
+            tauri_commands::inspect_diagnostics_status,
+            tauri_commands::inspect_diagnostic_timeline,
+            tauri_commands::start_tender_deep_diagnostics,
+            tauri_commands::stop_tender_deep_diagnostics,
+            tauri_commands::open_diagnostic_logs,
+            tauri_commands::export_diagnostics_support_bundle,
+            tauri_commands::record_renderer_diagnostic,
             tauri_commands::inspect_manager_workspace,
+            tauri_commands::search_manager_workspace,
+            tauri_commands::inspect_package_intake_progress,
+            tauri_commands::cancel_package_intake,
             tauri_commands::start_manager_tender,
             tauri_commands::resume_manager_intakes,
             tauri_commands::retry_manager_intake,
@@ -2616,9 +3360,11 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::restore_archived_tender,
             tauri_commands::inspect_tender_retention,
             tauri_commands::trash_tender,
+            tauri_commands::trash_recovery_required_tender,
             tauri_commands::inspect_trashed_tenders,
             tauri_commands::restore_trashed_tender,
             tauri_commands::purge_trashed_tender,
+            tauri_commands::purge_recovery_required_tender,
             tauri_commands::inspect_deletion_receipts,
             tauri_commands::prepare_tender_recovery,
             tauri_commands::inspect_tender_recoveries,
@@ -2632,10 +3378,11 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::inspect_evidence,
             tauri_commands::search_evidence,
             tauri_commands::search_evidence_semantic,
-            tauri_commands::inspect_runtime_readiness,
-            tauri_commands::repair_runtime_readiness,
-            tauri_commands::inspect_runtime_preparation_progress,
-            tauri_commands::cancel_runtime_preparation,
+            tauri_commands::inspect_document_tool_readiness,
+            tauri_commands::prepare_document_tools,
+            tauri_commands::repair_document_tools,
+            tauri_commands::inspect_document_tool_preparation_progress,
+            tauri_commands::cancel_document_tool_preparation,
             tauri_commands::run_bootstrap_agent,
             tauri_commands::run_tender_record_extraction,
             tauri_commands::run_tender_record_review,
@@ -2735,17 +3482,47 @@ pub fn run() {
     configure_tauri_builder(tauri::Builder::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(splash) = app.get_webview_window("splashscreen") {
+                if splash.is_visible().unwrap_or(false) {
+                    let _ = splash.set_focus();
+                    return;
+                }
+            }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.unminimize();
                 let _ = window.set_focus();
             }
         }))
+        .on_window_event(|window, event| {
+            if window.label() == "splashscreen"
+                && matches!(event, WindowEvent::CloseRequested { .. })
+            {
+                let state = window.app_handle().state::<StartupSplashState>();
+                if !state.finished.load(Ordering::Acquire) {
+                    window.app_handle().exit(0);
+                }
+            }
+        })
         .setup(|app| {
-            let application_home = app.path().home_dir()?.join(".quantix");
+            let splash_state = app.state::<StartupSplashState>().inner().clone();
+            start_splash_watchdog(app.handle().clone(), splash_state);
+            let default_application_home = app.path().home_dir()?.join(".quantix");
+            #[cfg(debug_assertions)]
+            let application_home = std::env::var_os("QUANTIX_APPLICATION_HOME")
+                .map(std::path::PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .unwrap_or(default_application_home);
+            #[cfg(not(debug_assertions))]
+            let application_home = default_application_home;
             let resource_directory = app.path().resource_dir()?;
+            #[cfg(target_os = "windows")]
+            if let Some(window) = app.get_webview_window("main") {
+                window.set_decorations(false)?;
+            }
             app.manage(QuantixHost::new(application_home, resource_directory));
             Ok(())
         })

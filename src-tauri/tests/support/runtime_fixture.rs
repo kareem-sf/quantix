@@ -345,7 +345,13 @@ fn run_agent_codex(
         "supportsPersonality": true,
         "isDefault": false
     });
-    if !respond_agent_model_catalogue(&mut requests, scenario, &usable_model, &alternate_model)? {
+    let catalogue_ready =
+        respond_agent_model_catalogue(&mut requests, scenario, &usable_model, &alternate_model)?;
+    if scenario == "close-after-readiness" {
+        fs::write(executable.with_extension("provider-closed"), b"closed")?;
+        return Ok(());
+    }
+    if !catalogue_ready {
         for request in requests {
             request?;
         }
@@ -667,7 +673,7 @@ fn run_agent_turn(
     };
     if thread_method == "thread/start"
         && (thread_request.pointer("/params/sandbox")
-            != Some(&serde_json::Value::String("workspaceWrite".into()))
+            != Some(&serde_json::Value::String("workspace-write".into()))
             || thread_request.pointer("/params/approvalPolicy")
                 != Some(&serde_json::Value::String("never".into()))
             || thread_request.pointer("/params/model")
@@ -1123,6 +1129,7 @@ fn run_agent_turn(
             | "usage-stream"
             | "output-invalid"
             | "record-extraction"
+            | "record-extraction-insignificant-space"
             | "record-extraction-submission-generation"
             | "record-extraction-submission-generation-empty-material"
             | "record-extraction-submission-generation-missing"
@@ -1822,7 +1829,10 @@ fn run_agent_turn(
         coordinated_record_extraction_candidate(provider_data_view, changed_branch)?
     } else if scenario.starts_with("record-extraction-submission-generation") {
         submission_generation_fixture::candidate(provider_data_view, scenario)?
-    } else if scenario == "record-extraction" {
+    } else if matches!(
+        scenario,
+        "record-extraction" | "record-extraction-insignificant-space"
+    ) {
         record_extraction_candidate(provider_data_view)?
     } else if scenario == "record-extraction-invalid" {
         let mut candidate = record_extraction_candidate(provider_data_view)?;
@@ -2828,10 +2838,20 @@ fn run_agent_turn(
             }
         }
     }
+    let candidate_text = if scenario == "record-extraction-insignificant-space" {
+        let mut text = serde_json::to_string(&candidate)?;
+        text.insert(1, ' ');
+        text
+    } else {
+        serde_json::to_string(&candidate)?
+    };
+    if scenario == "record-extraction-insignificant-space" {
+        fs::write(executable.with_extension("candidate-json"), &candidate_text)?;
+    }
     let final_item = serde_json::json!({
         "id": "message_fixture_1",
         "type": "agentMessage",
-        "text": serde_json::to_string(&candidate)?,
+        "text": candidate_text,
         "phase": if scenario == "phase-null-final" {
             serde_json::Value::Null
         } else {
@@ -3018,7 +3038,7 @@ fn run_multiplexed_production_turns(
                 if threads.len() >= 2
                     || (method == "thread/start"
                         && (request.pointer("/params/sandbox")
-                            != Some(&serde_json::Value::String("workspaceWrite".into()))
+                            != Some(&serde_json::Value::String("workspace-write".into()))
                             || request.pointer("/params/approvalPolicy")
                                 != Some(&serde_json::Value::String("never".into()))
                             || !request
@@ -3876,7 +3896,7 @@ fn run_ocr_document(arguments: &[std::ffi::OsString]) -> Result<(), Box<dyn std:
         fs::write(output.join(format!("{name}.md")), b"fixture markdown")?;
         fs::write(
             output.join(format!("{name}.locations.json")),
-            br#"{"schema_version":2}"#,
+            br#"{"schema_version":3}"#,
         )?;
         return Ok(());
     }

@@ -14,7 +14,7 @@ use crate::QuantixHost;
 
 pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
-pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 21;
+pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 23;
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
@@ -30,7 +30,7 @@ const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
 ];
 const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 21)
+           schema_version INTEGER NOT NULL CHECK (schema_version = 23)
          )";
 pub(crate) const APPLICATION_SETTINGS_TABLE_SQL: &str = "CREATE TABLE application_settings (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -198,7 +198,6 @@ const PROVIDER_CLEANUP_JOBS_TABLE_SQL: &str = "CREATE TABLE provider_cleanup_job
            last_attempt_at TEXT,
            created_at TEXT NOT NULL,
            updated_at TEXT NOT NULL,
-           FOREIGN KEY (deletion_id) REFERENCES deletion_receipts(deletion_id),
            UNIQUE (deletion_id, target_ordinal),
            CHECK (
              (status = 'pending' AND thread_ref IS NOT NULL)
@@ -428,18 +427,10 @@ pub enum StoragePermissions {
     Unverified,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeviceProtection {
-    Protected,
-    Unprotected,
-    Unverified,
-}
-
 pub trait SetupPlatform: Send + Sync {
     fn available_space(&self, path: &Path) -> io::Result<u64>;
     fn is_writable(&self, path: &Path) -> io::Result<bool>;
     fn storage_permissions(&self, path: &Path) -> io::Result<StoragePermissions>;
-    fn device_protection(&self, path: &Path) -> DeviceProtection;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -448,7 +439,6 @@ pub trait SetupPlatform: Send + Sync {
 pub enum SetupState {
     Ready,
     Warning,
-    AuthenticationRequired,
     MissingCapability,
     UnsupportedVersion,
     RepairRequired,
@@ -459,10 +449,7 @@ pub enum SetupState {
 #[ts(export)]
 pub enum SetupIssue {
     ApplicationHomeUnavailable,
-    DeviceProtectionDisabled,
-    DeviceProtectionUnverified,
     InstallationCatalogueCorrupt,
-    InsufficientFreeSpace,
     StorageNotWritable,
     StoragePermissionsUnverified,
     UnrecognizedApplicationHome,
@@ -522,10 +509,6 @@ impl SetupPlatform for SystemSetupPlatform {
 
     fn storage_permissions(&self, path: &Path) -> io::Result<StoragePermissions> {
         system_storage_permissions(path)
-    }
-
-    fn device_protection(&self, path: &Path) -> DeviceProtection {
-        system_device_protection(path)
     }
 }
 
@@ -606,22 +589,6 @@ pub(crate) fn ensure_application_home(
         None
     };
 
-    match platform.available_space(&probe_path) {
-        Ok(bytes) if bytes < MINIMUM_SETUP_FREE_SPACE_BYTES => {
-            return SetupOutcome::blocked(
-                SetupState::MissingCapability,
-                SetupIssue::InsufficientFreeSpace,
-            )
-        }
-        Ok(_) => {}
-        Err(_) => {
-            return SetupOutcome::blocked(
-                SetupState::RepairRequired,
-                SetupIssue::ApplicationHomeUnavailable,
-            )
-        }
-    }
-
     match platform.is_writable(&probe_path) {
         Ok(true) => {}
         Ok(false) | Err(_) => {
@@ -643,9 +610,7 @@ pub(crate) fn ensure_application_home(
         }
 
         return finish_with_storage_diagnostics(
-            &probe_path,
             storage_permissions.expect("existing homes have permission diagnostics"),
-            platform,
             false,
         );
     }
@@ -700,9 +665,7 @@ pub(crate) fn ensure_application_home(
     }
 
     finish_with_storage_diagnostics(
-        &application_storage,
         storage_permissions.expect("application homes have permission diagnostics"),
-        platform,
         true,
     )
 }
@@ -938,7 +901,7 @@ fn publish_installation_catalogue(application_home: &Path) -> rusqlite::Result<(
     )?;
     transaction.execute(
         "INSERT INTO application_settings (singleton, settings_json, updated_at)
-         VALUES (1, '{\"general_preferences\":{\"appearance\":\"system\",\"reduced_motion\":false,\"high_contrast\":false,\"larger_text\":false,\"notify_when_attention_needed\":false},\"ai_execution_selection\":null}', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+         VALUES (1, '{\"general_preferences\":{\"appearance\":\"system\",\"reduced_motion\":false,\"larger_text\":false,\"notify_when_attention_needed\":false},\"ai_execution_selection\":null,\"ai_execution_approval\":null}', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
         [],
     )?;
     transaction.execute(
@@ -1331,21 +1294,13 @@ fn catalogue_status(path: &Path) -> rusqlite::Result<CatalogueStatus> {
 }
 
 fn finish_with_storage_diagnostics(
-    application_home: &Path,
     storage_permissions: StoragePermissions,
-    platform: &dyn SetupPlatform,
     setup_performed: bool,
 ) -> SetupOutcome {
     let mut issues = Vec::new();
 
     if matches!(storage_permissions, StoragePermissions::Unverified) {
         issues.push(SetupIssue::StoragePermissionsUnverified);
-    }
-
-    match platform.device_protection(application_home) {
-        DeviceProtection::Protected => {}
-        DeviceProtection::Unprotected => issues.push(SetupIssue::DeviceProtectionDisabled),
-        DeviceProtection::Unverified => issues.push(SetupIssue::DeviceProtectionUnverified),
     }
 
     SetupOutcome::ready(setup_performed, issues)
@@ -1457,57 +1412,4 @@ fn system_storage_permissions(path: &Path) -> io::Result<StoragePermissions> {
 #[cfg(not(any(unix, windows)))]
 fn system_storage_permissions(_path: &Path) -> io::Result<StoragePermissions> {
     Ok(StoragePermissions::Unverified)
-}
-
-#[cfg(windows)]
-fn system_device_protection(path: &Path) -> DeviceProtection {
-    use serde::Deserialize;
-    use std::path::{Component, Prefix};
-    use wmi::{AuthLevel, WMIConnection};
-
-    #[derive(Deserialize)]
-    #[serde(rename = "Win32_EncryptableVolume", rename_all = "PascalCase")]
-    struct EncryptableVolume {
-        drive_letter: Option<String>,
-        protection_status: Option<u32>,
-    }
-
-    let drive = match path.components().next() {
-        Some(Component::Prefix(prefix)) => match prefix.kind() {
-            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
-                format!("{}:", char::from(letter).to_ascii_uppercase())
-            }
-            _ => return DeviceProtection::Unverified,
-        },
-        _ => return DeviceProtection::Unverified,
-    };
-
-    let connection = match WMIConnection::with_namespace_path(
-        "ROOT\\CIMV2\\Security\\MicrosoftVolumeEncryption",
-    ) {
-        Ok(connection) => connection,
-        Err(_) => return DeviceProtection::Unverified,
-    };
-    if connection.set_proxy_blanket(AuthLevel::PktPrivacy).is_err() {
-        return DeviceProtection::Unverified;
-    }
-    let volumes: Vec<EncryptableVolume> = match connection.query() {
-        Ok(volumes) => volumes,
-        Err(_) => return DeviceProtection::Unverified,
-    };
-
-    match volumes
-        .into_iter()
-        .find(|volume| volume.drive_letter.as_deref() == Some(drive.as_str()))
-        .and_then(|volume| volume.protection_status)
-    {
-        Some(1) => DeviceProtection::Protected,
-        Some(0) => DeviceProtection::Unprotected,
-        _ => DeviceProtection::Unverified,
-    }
-}
-
-#[cfg(not(windows))]
-fn system_device_protection(_path: &Path) -> DeviceProtection {
-    DeviceProtection::Unverified
 }

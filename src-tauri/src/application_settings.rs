@@ -1,8 +1,10 @@
-use std::{path::Path, time::Duration};
+use std::{fs, path::Path, time::Duration};
 
 use garde::Validate;
+use jiff::Timestamp;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
 use crate::{
@@ -11,7 +13,7 @@ use crate::{
         ProviderFailure, ProviderFailureCategory, CODEX_VERSION,
     },
     setup::INSTALLATION_SCHEMA_VERSION,
-    tender_store::{TenderCommandError, TenderErrorCode, TENDER_SCHEMA_VERSION},
+    tender_store::{TenderCommandError, TenderErrorCode, TenderId, TENDER_SCHEMA_VERSION},
     QuantixHost,
 };
 
@@ -116,6 +118,42 @@ pub struct AiExecutionSelection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
+pub enum TenderAiSelectionReadiness {
+    LocalOnly,
+    Ready,
+    SelectionRequired,
+    ProviderUnavailable,
+    CatalogueStale,
+    ModelUnavailable,
+    ApprovalRequired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct TenderAiExecutionBinding {
+    pub revision: u64,
+    pub selection: Option<AiExecutionSelection>,
+    pub readiness: TenderAiSelectionReadiness,
+    pub status_summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct AiExecutionApproval {
+    pub connection_id: String,
+    pub provider: AiProviderKind,
+    pub account_fingerprint: String,
+    pub model_id: String,
+    pub reasoning: ProviderReasoningSelection,
+    pub data_destination: String,
+    pub approved_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum AppearancePreference {
     System,
     Light,
@@ -128,7 +166,6 @@ pub enum AppearancePreference {
 pub struct GeneralApplicationPreferences {
     pub appearance: AppearancePreference,
     pub reduced_motion: bool,
-    pub high_contrast: bool,
     pub larger_text: bool,
     pub notify_when_attention_needed: bool,
 }
@@ -138,7 +175,6 @@ impl Default for GeneralApplicationPreferences {
         Self {
             appearance: AppearancePreference::System,
             reduced_motion: false,
-            high_contrast: false,
             larger_text: false,
             notify_when_attention_needed: false,
         }
@@ -169,6 +205,7 @@ pub struct ApplicationDiagnostics {
 pub struct ApplicationSettingsView {
     pub general_preferences: GeneralApplicationPreferences,
     pub ai_execution_selection: Option<AiExecutionSelection>,
+    pub ai_execution_approval: Option<AiExecutionApproval>,
     pub provider_connections: Vec<ProviderConnectionView>,
     pub active_provider_login: Option<ProviderLoginView>,
     pub storage: ApplicationStorageFacts,
@@ -277,14 +314,64 @@ pub struct UpdateAiExecutionSelectionCommand {
     pub reasoning: ProviderReasoningSelection,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ConfirmAiExecutionSelectionCommand {
+    #[garde(length(bytes, min = 1, max = 100))]
+    pub connection_id: String,
+    #[garde(length(bytes, min = 1, max = 200))]
+    pub model_id: String,
+    #[garde(skip)]
+    pub reasoning: ProviderReasoningSelection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct InspectTenderAiExecutionCommand {
+    #[garde(length(bytes, min = 1, max = 64))]
+    pub tender_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct UpdateTenderAiExecutionSelectionCommand {
+    #[garde(length(bytes, min = 1, max = 64))]
+    pub tender_id: String,
+    #[garde(range(min = 1))]
+    pub expected_revision: u64,
+    #[garde(skip)]
+    pub selection: Option<AiExecutionSelection>,
+}
+
+impl From<ConfirmAiExecutionSelectionCommand> for UpdateAiExecutionSelectionCommand {
+    fn from(command: ConfirmAiExecutionSelectionCommand) -> Self {
+        Self {
+            connection_id: command.connection_id,
+            model_id: command.model_id,
+            reasoning: command.reasoning,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredApplicationSettings {
     general_preferences: GeneralApplicationPreferences,
     ai_execution_selection: Option<AiExecutionSelection>,
+    #[serde(default)]
+    ai_execution_approval: Option<AiExecutionApproval>,
 }
 
 impl QuantixHost {
+    pub fn inspect_application_settings(
+        &self,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        load_application_settings(self.application_home())
+    }
+
     pub async fn update_general_application_preferences(
         &self,
         command: UpdateGeneralApplicationPreferencesCommand,
@@ -335,6 +422,16 @@ impl QuantixHost {
                 )?,
             }
         }
+        let provider_missing = self.agent_provider().lock().await.is_none();
+        // Provider discovery is independent from local document-tool
+        // readiness. The workspace must be able to discover (or explain the
+        // loss of) an AI connection while a Tender remains readable and the
+        // local tools are still waiting for an explicit preparation action.
+        if provider_missing {
+            let _ = self
+                .inspect_codex_subscription(tokio_util::sync::CancellationToken::new())
+                .await;
+        }
         let mut current_provider = self.agent_provider().lock().await.as_ref().cloned();
         if current_provider
             .as_ref()
@@ -351,9 +448,6 @@ impl QuantixHost {
             }
         }
         let Some(provider) = current_provider else {
-            if self.runtime_is_verified() {
-                self.invalidate_missing_provider()?;
-            }
             let mut view = load_application_settings(self.application_home())?;
             for connection in &mut view.provider_connections {
                 if connection.connection_id == CODEX_CONNECTION_ID
@@ -365,11 +459,6 @@ impl QuantixHost {
                             .to_owned();
                 }
             }
-            self.set_runtime_verified(
-                view.provider_connections
-                    .iter()
-                    .any(|connection| connection.status == ProviderConnectionStatus::Ready),
-            );
             return Ok(view);
         };
         let login_snapshot = provider.login_snapshot();
@@ -412,15 +501,6 @@ impl QuantixHost {
         }
         let connection = provider.connection_snapshot();
         save_live_connection(self.application_home(), &connection)?;
-        let ready = connection.status == ProviderConnectionStatus::Ready
-            || load_application_settings(self.application_home())?
-                .provider_connections
-                .iter()
-                .any(|candidate| {
-                    candidate.connection_id != CODEX_CONNECTION_ID
-                        && candidate.status == ProviderConnectionStatus::Ready
-                });
-        self.set_runtime_verified(ready);
         let mut view = load_application_settings(self.application_home())?;
         view.active_provider_login = provider.login_snapshot();
         Ok(view)
@@ -430,19 +510,14 @@ impl QuantixHost {
         &self,
         preferred: Option<&AiExecutionSelection>,
     ) -> Result<Option<AiExecutionSelection>, TenderCommandError> {
-        #[cfg(any(test, feature = "runtime-fixture"))]
-        if self.runtime_is_verified() {
-            if let Some(preferred) = preferred {
-                return Ok(Some(preferred.clone()));
-            }
-            return load_current_ai_execution_selection(self.application_home()).map(Some);
-        }
-
         let view = self.refresh_application_settings().await?;
         let preferred = preferred
             .cloned()
             .or_else(|| view.ai_execution_selection.clone());
         let Some(preferred) = preferred else {
+            return Ok(None);
+        };
+        let Some(approval) = view.ai_execution_approval.as_ref() else {
             return Ok(None);
         };
         let Some(connection) = view
@@ -455,17 +530,76 @@ impl QuantixHost {
         if !selection_is_supported(connection, &preferred) {
             return Ok(None);
         }
-        Ok(Some(selection_with_current_provenance(
-            connection, &preferred,
-        )?))
+        let selection = selection_with_current_provenance(connection, &preferred)?;
+        if !approval_matches(connection, &selection, approval) {
+            return Ok(None);
+        }
+        Ok(Some(selection))
     }
 
-    pub(crate) async fn require_current_live_ai_selection(
+    pub(crate) async fn require_current_tender_ai_selection(
         &self,
+        tender_id: &TenderId,
     ) -> Result<AiExecutionSelection, TenderCommandError> {
-        self.refresh_exact_ai_execution_selection(None)
-            .await?
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))
+        let store = self.tender_store(tender_id)?;
+        let binding = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .inspect_tender_ai_execution_binding()?;
+        let selection = binding
+            .selection
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
+        if binding.readiness != TenderAiSelectionReadiness::Ready {
+            return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
+        }
+        Ok(selection)
+    }
+
+    pub fn inspect_tender_ai_execution(
+        &self,
+        command: InspectTenderAiExecutionCommand,
+    ) -> Result<TenderAiExecutionBinding, TenderCommandError> {
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let binding = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .inspect_tender_ai_execution_binding()?;
+        Ok(binding)
+    }
+
+    pub fn update_tender_ai_execution(
+        &self,
+        command: UpdateTenderAiExecutionSelectionCommand,
+    ) -> Result<TenderAiExecutionBinding, TenderCommandError> {
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let next_revision = command
+            .expected_revision
+            .checked_add(1)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let binding = assess_tender_ai_execution_binding(
+            self.application_home(),
+            command.selection.clone(),
+            next_revision,
+        )?;
+        let store = self.tender_store(&tender_id)?;
+        let updated = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .update_tender_ai_execution_binding(
+                &tender_id,
+                command.expected_revision,
+                binding.selection,
+                binding.readiness,
+                &binding.status_summary,
+            )?;
+        Ok(updated)
     }
 
     pub async fn update_ai_execution_selection(
@@ -477,41 +611,133 @@ impl QuantixHost {
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         if command.connection_id == ANTHROPIC_CONNECTION_ID {
             let api_key = load_anthropic_api_key()
-                .map_err(|_| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
             let connection = inspect_anthropic_connection(&api_key)
                 .await
-                .map_err(|_| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
             let selection = selection_from_command(&connection, &command)?;
             save_connection_and_selection(self.application_home(), &connection, &selection)?;
-            self.set_runtime_verified(true);
             return load_application_settings(self.application_home());
         }
         if command.connection_id == GEMINI_CONNECTION_ID {
             let api_key = load_gemini_api_key()
-                .map_err(|_| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
             let connection = inspect_gemini_connection(&api_key)
                 .await
-                .map_err(|_| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
             let selection = selection_from_command(&connection, &command)?;
             save_connection_and_selection(self.application_home(), &connection, &selection)?;
-            self.set_runtime_verified(true);
             return load_application_settings(self.application_home());
         }
         if command.connection_id != CODEX_CONNECTION_ID {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        self.require_runtime_verified()?;
         let provider = self.agent_provider().lock().await.as_ref().cloned();
         let Some(provider) = provider else {
             self.invalidate_missing_provider()?;
-            return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
+            return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
         };
         let connection = provider.connection_snapshot();
         if connection.status != ProviderConnectionStatus::Ready {
-            return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
+            return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
         }
         let selection = selection_from_command(&connection, &command)?;
         save_connection_and_selection(self.application_home(), &connection, &selection)?;
+        load_application_settings(self.application_home())
+    }
+
+    pub async fn confirm_ai_execution_selection(
+        &self,
+        command: ConfirmAiExecutionSelectionCommand,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        let view = self.update_ai_execution_selection(command.into()).await?;
+        let selection = view
+            .ai_execution_selection
+            .as_ref()
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
+        let connection = view
+            .provider_connections
+            .iter()
+            .find(|connection| connection.connection_id == selection.connection_id)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
+        let approval = AiExecutionApproval {
+            connection_id: selection.connection_id.clone(),
+            provider: selection.provider,
+            account_fingerprint: account_fingerprint(connection),
+            model_id: selection.model_id.clone(),
+            reasoning: selection.reasoning.clone(),
+            data_destination: data_destination(connection.provider).to_owned(),
+            approved_at: Timestamp::now().to_string(),
+        };
+        let mut database = settings_connection(self.application_home())?;
+        let transaction = database
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(settings_store_error)?;
+        let mut stored = load_stored_settings(&transaction)?;
+        stored.ai_execution_approval = Some(approval);
+        store_application_settings(&transaction, &stored)?;
+        transaction.commit().map_err(settings_store_error)?;
+        let view = load_application_settings(self.application_home())?;
+        if let Some(selection) = view.ai_execution_selection.as_ref() {
+            self.refresh_matching_tender_ai_bindings(&view, selection)?;
+        }
+        load_application_settings(self.application_home())
+    }
+
+    fn refresh_matching_tender_ai_bindings(
+        &self,
+        view: &ApplicationSettingsView,
+        selection: &AiExecutionSelection,
+    ) -> Result<(), TenderCommandError> {
+        let tenders_root = self.application_home().join("tenders");
+        let Ok(entries) = fs::read_dir(tenders_root) else {
+            return Ok(());
+        };
+        for entry in entries {
+            let entry =
+                entry.map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            let Some(tender_id) = entry
+                .file_name()
+                .to_str()
+                .and_then(|value| TenderId::parse(value).ok())
+            else {
+                continue;
+            };
+            let store = match self.tender_store(&tender_id) {
+                Ok(store) => store,
+                Err(_) => continue,
+            };
+            let mut store = store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            let current = store.inspect_tender_ai_execution_binding()?;
+            if current.selection.as_ref() != Some(selection) {
+                continue;
+            }
+            let refreshed = tender_ai_execution_binding_from_view(view, Some(selection.clone()));
+            store.update_tender_ai_execution_binding(
+                &tender_id,
+                current.revision,
+                refreshed.selection,
+                refreshed.readiness,
+                &refreshed.status_summary,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn clear_ai_execution_selection(
+        &self,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        let mut database = settings_connection(self.application_home())?;
+        let transaction = database
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(settings_store_error)?;
+        let mut stored = load_stored_settings(&transaction)?;
+        stored.ai_execution_selection = None;
+        stored.ai_execution_approval = None;
+        store_application_settings(&transaction, &stored)?;
+        transaction.commit().map_err(settings_store_error)?;
         load_application_settings(self.application_home())
     }
 
@@ -535,7 +761,7 @@ impl QuantixHost {
                 ProviderFailureCategory::AuthenticationRequired => {
                     TenderCommandError::new(TenderErrorCode::InvalidCommand)
                 }
-                _ => TenderCommandError::new(TenderErrorCode::RuntimeRequired),
+                _ => TenderCommandError::new(TenderErrorCode::AiProviderRequired),
             })?;
         let previous = read_anthropic_api_key().ok();
         write_anthropic_api_key(&api_key)
@@ -551,7 +777,6 @@ impl QuantixHost {
             }
             return Err(error);
         }
-        self.set_runtime_verified(true);
         load_application_settings(self.application_home())
     }
 
@@ -587,13 +812,7 @@ impl QuantixHost {
             _ => return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand)),
         }
         clear_selection_for_connection(self.application_home(), &command.connection_id)?;
-        let view = load_application_settings(self.application_home())?;
-        self.set_runtime_verified(
-            view.provider_connections
-                .iter()
-                .any(|connection| connection.status == ProviderConnectionStatus::Ready),
-        );
-        Ok(view)
+        load_application_settings(self.application_home())
     }
 
     pub async fn connect_gemini(
@@ -617,7 +836,7 @@ impl QuantixHost {
                     ProviderFailureCategory::AuthenticationRequired => {
                         TenderCommandError::new(TenderErrorCode::InvalidCommand)
                     }
-                    _ => TenderCommandError::new(TenderErrorCode::RuntimeRequired),
+                    _ => TenderCommandError::new(TenderErrorCode::AiProviderRequired),
                 })?;
         let previous = read_gemini_api_key().ok();
         write_gemini_api_key(&api_key)
@@ -633,7 +852,6 @@ impl QuantixHost {
             }
             return Err(error);
         }
-        self.set_runtime_verified(true);
         load_application_settings(self.application_home())
     }
 
@@ -654,7 +872,7 @@ impl QuantixHost {
             .as_ref()
             .filter(|provider| !provider.is_closed())
             .cloned()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
         let login = match provider.start_login(command.method).await {
             Ok(login) => login,
             Err(failure) if failure.category == ProviderFailureCategory::PermissionDenied => {
@@ -662,10 +880,9 @@ impl QuantixHost {
             }
             Err(failure) => {
                 self.retire_failed_provider(&provider, &failure).await?;
-                return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
+                return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
             }
         };
-        self.set_runtime_verified(false);
         let mut view = load_application_settings(self.application_home())?;
         view.active_provider_login = Some(login);
         Ok(view)
@@ -685,7 +902,7 @@ impl QuantixHost {
             .as_ref()
             .filter(|provider| !provider.is_closed())
             .cloned()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
         let login = provider
             .login_snapshot()
             .filter(|login| {
@@ -714,7 +931,7 @@ impl QuantixHost {
             .as_ref()
             .filter(|provider| !provider.is_closed())
             .cloned()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
         match provider.cancel_login(command.login_id).await {
             Ok(()) => {}
             Err(failure) if failure.category == ProviderFailureCategory::PermissionDenied => {
@@ -722,7 +939,7 @@ impl QuantixHost {
             }
             Err(failure) => {
                 self.retire_failed_provider(&provider, &failure).await?;
-                return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
+                return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
             }
         }
         let mut view = load_application_settings(self.application_home())?;
@@ -741,7 +958,7 @@ impl QuantixHost {
             .as_ref()
             .filter(|provider| !provider.is_closed())
             .cloned()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?;
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
         let connection = match provider.logout().await {
             Ok(connection) => connection,
             Err(failure) if failure.category == ProviderFailureCategory::PermissionDenied => {
@@ -749,17 +966,11 @@ impl QuantixHost {
             }
             Err(failure) => {
                 self.retire_failed_provider(&provider, &failure).await?;
-                return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
+                return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
             }
         };
         save_live_connection(self.application_home(), &connection)?;
-        let view = load_application_settings(self.application_home())?;
-        self.set_runtime_verified(
-            view.provider_connections
-                .iter()
-                .any(|candidate| candidate.status == ProviderConnectionStatus::Ready),
-        );
-        Ok(view)
+        load_application_settings(self.application_home())
     }
 
     async fn retire_failed_provider(
@@ -792,12 +1003,6 @@ impl QuantixHost {
                 let (status, summary) = codex_failure_connection_status(failure.category);
                 save_codex_connection_status(self.application_home(), status, summary)?;
             }
-            let view = load_application_settings(self.application_home())?;
-            self.set_runtime_verified(
-                view.provider_connections
-                    .iter()
-                    .any(|connection| connection.status == ProviderConnectionStatus::Ready),
-            );
         }
         Ok(())
     }
@@ -805,14 +1010,7 @@ impl QuantixHost {
     fn invalidate_missing_provider(&self) -> Result<(), TenderCommandError> {
         let (status, summary) =
             codex_failure_connection_status(ProviderFailureCategory::ProcessFailed);
-        save_codex_connection_status(self.application_home(), status, summary)?;
-        let view = load_application_settings(self.application_home())?;
-        self.set_runtime_verified(
-            view.provider_connections
-                .iter()
-                .any(|connection| connection.status == ProviderConnectionStatus::Ready),
-        );
-        Ok(())
+        save_codex_connection_status(self.application_home(), status, summary)
     }
 }
 
@@ -839,45 +1037,111 @@ pub(crate) fn codex_failure_connection_status(
     }
 }
 
-pub(crate) fn load_current_ai_execution_selection(
+/// Returns the application-wide selection that should seed a new Tender.
+/// A missing selection is intentional and represents a local-only Tender
+/// until the Engineer chooses and approves an AI destination.
+pub(crate) fn default_tender_ai_execution_binding(
     application_home: &Path,
-) -> Result<AiExecutionSelection, TenderCommandError> {
+) -> Result<TenderAiExecutionBinding, TenderCommandError> {
     let view = load_application_settings(application_home)?;
-    if let Some(selection) = view.ai_execution_selection {
-        let current = view.provider_connections.iter().any(|connection| {
-            selection_is_supported(connection, &selection)
-                && connection.catalogue_fetched_at.as_deref()
-                    == Some(selection.catalogue_fetched_at.as_str())
-                && connection.adapter_version == selection.adapter_version
-        });
-        if current {
-            return Ok(selection);
-        }
-    }
-    #[cfg(any(test, feature = "runtime-fixture"))]
-    {
-        Ok(AiExecutionSelection {
-            connection_id: CODEX_CONNECTION_ID.to_owned(),
-            provider: AiProviderKind::Codex,
-            model_id: "gpt-5.6-terra".to_owned(),
-            reasoning: ProviderReasoningSelection::CodexEffort("medium".to_owned()),
-            catalogue_fetched_at: "2026-01-01T00:00:00Z".to_owned(),
-            adapter_version: format!("{}-fixture", CODEX_VERSION),
-        })
-    }
-    #[cfg(not(any(test, feature = "runtime-fixture")))]
-    Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired))
+    let selection = view.ai_execution_selection.clone();
+    Ok(tender_ai_execution_binding_from_view(&view, selection))
 }
 
-pub(crate) fn load_preferred_ai_execution_selection(
+/// Re-evaluates an exact Tender selection against the currently persisted
+/// provider catalogue and Engineer approval. This is deliberately a local
+/// fact check; live provider refresh remains the Host's explicit action.
+pub(crate) fn assess_tender_ai_execution_binding(
     application_home: &Path,
-) -> Result<Option<AiExecutionSelection>, TenderCommandError> {
-    let selection = load_application_settings(application_home)?.ai_execution_selection;
-    #[cfg(any(test, feature = "runtime-fixture"))]
-    if selection.is_none() {
-        return load_current_ai_execution_selection(application_home).map(Some);
+    selection: Option<AiExecutionSelection>,
+    revision: u64,
+) -> Result<TenderAiExecutionBinding, TenderCommandError> {
+    let view = load_application_settings(application_home)?;
+    Ok(tender_ai_execution_binding_from_view(&view, selection).with_revision(revision))
+}
+
+impl TenderAiExecutionBinding {
+    pub(crate) fn with_revision(mut self, revision: u64) -> Self {
+        self.revision = revision;
+        self
     }
-    Ok(selection)
+}
+
+pub(crate) fn tender_ai_execution_binding_from_view(
+    view: &ApplicationSettingsView,
+    selection: Option<AiExecutionSelection>,
+) -> TenderAiExecutionBinding {
+    let Some(selection) = selection else {
+        return TenderAiExecutionBinding {
+            revision: 1,
+            selection: None,
+            readiness: TenderAiSelectionReadiness::LocalOnly,
+            status_summary: "No AI provider is selected; local-only Tender work remains available."
+                .to_owned(),
+        };
+    };
+
+    let Some(connection) = view
+        .provider_connections
+        .iter()
+        .find(|connection| connection.connection_id == selection.connection_id)
+    else {
+        return TenderAiExecutionBinding {
+            revision: 1,
+            selection: Some(selection),
+            readiness: TenderAiSelectionReadiness::ProviderUnavailable,
+            status_summary: "The selected AI provider connection is unavailable.".to_owned(),
+        };
+    };
+    if connection.status != ProviderConnectionStatus::Ready {
+        return TenderAiExecutionBinding {
+            revision: 1,
+            selection: Some(selection),
+            readiness: TenderAiSelectionReadiness::ProviderUnavailable,
+            status_summary: connection.status_summary.clone(),
+        };
+    }
+    if connection.catalogue_fetched_at.as_deref() != Some(selection.catalogue_fetched_at.as_str())
+        || connection.adapter_version != selection.adapter_version
+    {
+        return TenderAiExecutionBinding {
+            revision: 1,
+            selection: Some(selection),
+            readiness: TenderAiSelectionReadiness::CatalogueStale,
+            status_summary: "The selected AI capability catalogue is stale; refresh it before running Tender work."
+                .to_owned(),
+        };
+    }
+    if !selection_is_supported(connection, &selection) {
+        return TenderAiExecutionBinding {
+            revision: 1,
+            selection: Some(selection),
+            readiness: TenderAiSelectionReadiness::ModelUnavailable,
+            status_summary: "The selected model or reasoning capability is no longer available."
+                .to_owned(),
+        };
+    }
+    let approved = view
+        .ai_execution_approval
+        .as_ref()
+        .is_some_and(|approval| approval_matches(connection, &selection, approval));
+    if !approved {
+        return TenderAiExecutionBinding {
+            revision: 1,
+            selection: Some(selection),
+            readiness: TenderAiSelectionReadiness::ApprovalRequired,
+            status_summary:
+                "Confirm the selected provider, model, and reasoning before AI work starts."
+                    .to_owned(),
+        };
+    }
+    TenderAiExecutionBinding {
+        revision: 1,
+        selection: Some(selection),
+        readiness: TenderAiSelectionReadiness::Ready,
+        status_summary: "The selected AI provider, model, and reasoning capability are ready."
+            .to_owned(),
+    }
 }
 
 fn selection_from_command(
@@ -887,7 +1151,7 @@ fn selection_from_command(
     if connection.status != ProviderConnectionStatus::Ready
         || connection.connection_id != command.connection_id
     {
-        return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
+        return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
     }
     let model = connection
         .models
@@ -909,7 +1173,7 @@ fn selection_from_command(
         catalogue_fetched_at: connection
             .catalogue_fetched_at
             .clone()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?,
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?,
         adapter_version: connection.adapter_version.clone(),
     })
 }
@@ -919,7 +1183,7 @@ fn selection_with_current_provenance(
     preferred: &AiExecutionSelection,
 ) -> Result<AiExecutionSelection, TenderCommandError> {
     if !selection_is_supported(connection, preferred) {
-        return Err(TenderCommandError::new(TenderErrorCode::RuntimeRequired));
+        return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
     }
     Ok(AiExecutionSelection {
         connection_id: connection.connection_id.clone(),
@@ -929,25 +1193,7 @@ fn selection_with_current_provenance(
         catalogue_fetched_at: connection
             .catalogue_fetched_at
             .clone()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?,
-        adapter_version: connection.adapter_version.clone(),
-    })
-}
-
-fn default_selection(connection: &ProviderConnectionView) -> Option<AiExecutionSelection> {
-    let model = connection.models.iter().find(|model| model.is_default)?;
-    let reasoning = model
-        .reasoning_options
-        .iter()
-        .find(|option| option.is_default)?
-        .selection
-        .clone();
-    Some(AiExecutionSelection {
-        connection_id: connection.connection_id.clone(),
-        provider: connection.provider,
-        model_id: model.model_id.clone(),
-        reasoning,
-        catalogue_fetched_at: connection.catalogue_fetched_at.clone()?,
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?,
         adapter_version: connection.adapter_version.clone(),
     })
 }
@@ -960,27 +1206,45 @@ pub(crate) fn save_live_connection(
     let transaction = database
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(settings_store_error)?;
-    upsert_connection(&transaction, connection)?;
+    let previous = transaction
+        .query_row(
+            "SELECT connection_json FROM provider_connections WHERE connection_id = ?1",
+            [connection.connection_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(settings_store_error)?
+        .map(|raw| serde_json::from_str::<ProviderConnectionView>(&raw))
+        .transpose()
+        .map_err(settings_json_error)?;
+    let mut persisted = connection.clone();
+    // A provider outage often returns only a status and no live catalogue.
+    // Retain the last verified catalogue and account identity so an explicit
+    // approval can survive reconnection without silently rebinding elsewhere.
+    if persisted.status != ProviderConnectionStatus::Ready && persisted.models.is_empty() {
+        if let Some(previous) = previous {
+            persisted.models = previous.models;
+            persisted.catalogue_fetched_at = previous.catalogue_fetched_at;
+            persisted.adapter_version = previous.adapter_version;
+            persisted.account_label = previous.account_label;
+            persisted.account_plan = previous.account_plan;
+        }
+    }
+    upsert_connection(&transaction, &persisted)?;
     let settings = load_stored_settings(&transaction)?;
     match settings.ai_execution_selection {
-        Some(selection) if selection_is_supported(connection, &selection) => {
+        Some(selection) if selection_is_supported(&persisted, &selection) => {
             let rebound = AiExecutionSelection {
-                catalogue_fetched_at: connection
+                catalogue_fetched_at: persisted
                     .catalogue_fetched_at
                     .clone()
-                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::RuntimeRequired))?,
-                adapter_version: connection.adapter_version.clone(),
+                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?,
+                adapter_version: persisted.adapter_version.clone(),
                 ..selection
             };
             store_selection(&transaction, &rebound)?;
         }
-        Some(_) => {}
-        None if connection.status == ProviderConnectionStatus::Ready => {
-            if let Some(selection) = default_selection(connection) {
-                store_selection(&transaction, &selection)?;
-            }
-        }
-        None => {}
+        Some(_) | None => {}
     }
     transaction.commit().map_err(settings_store_error)
 }
@@ -1033,7 +1297,10 @@ fn save_connection_and_selection(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(settings_store_error)?;
     upsert_connection(&transaction, connection)?;
-    store_selection(&transaction, selection)?;
+    let mut stored = load_stored_settings(&transaction)?;
+    stored.ai_execution_selection = Some(selection.clone());
+    stored.ai_execution_approval = None;
+    store_application_settings(&transaction, &stored)?;
     transaction.commit().map_err(settings_store_error)
 }
 
@@ -1051,6 +1318,47 @@ fn selection_is_supported(
                     .iter()
                     .any(|option| option.selection == selection.reasoning)
         })
+}
+
+fn data_destination(provider: AiProviderKind) -> &'static str {
+    match provider {
+        AiProviderKind::Codex => "OpenAI Codex account",
+        AiProviderKind::Anthropic => "Anthropic API account",
+        AiProviderKind::Gemini => "Google Gemini API account",
+    }
+}
+
+fn account_fingerprint(connection: &ProviderConnectionView) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(connection.connection_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(connection.provider.as_str().as_bytes());
+    hasher.update([0]);
+    hasher.update(
+        connection
+            .account_label
+            .as_deref()
+            .unwrap_or("unknown")
+            .as_bytes(),
+    );
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn approval_matches(
+    connection: &ProviderConnectionView,
+    selection: &AiExecutionSelection,
+    approval: &AiExecutionApproval,
+) -> bool {
+    approval.connection_id == selection.connection_id
+        && approval.provider == selection.provider
+        && approval.model_id == selection.model_id
+        && approval.reasoning == selection.reasoning
+        && approval.data_destination == data_destination(connection.provider)
+        && approval.account_fingerprint == account_fingerprint(connection)
 }
 
 fn upsert_connection(
@@ -1102,6 +1410,68 @@ fn store_application_settings(
     Ok(())
 }
 
+#[cfg(any(test, feature = "runtime-fixture"))]
+pub(crate) fn seed_runtime_fixture_ai_selection(
+    application_home: &Path,
+) -> Result<(), TenderCommandError> {
+    let connection = ProviderConnectionView {
+        connection_id: CODEX_CONNECTION_ID.to_owned(),
+        provider: AiProviderKind::Codex,
+        display_name: "OpenAI account via Codex".to_owned(),
+        status: ProviderConnectionStatus::Ready,
+        account_label: None,
+        account_plan: Some("plus".to_owned()),
+        models: vec![ProviderModelOption {
+            model_id: "gpt-5.6-terra".to_owned(),
+            display_name: "GPT-5.6 Terra".to_owned(),
+            description: "Fixture Codex model".to_owned(),
+            is_default: true,
+            input_modalities: vec!["text".to_owned()],
+            reasoning_options: vec![ProviderReasoningOption {
+                selection: ProviderReasoningSelection::CodexEffort("medium".to_owned()),
+                label: "medium".to_owned(),
+                description: "Fixture reasoning effort".to_owned(),
+                is_default: true,
+            }],
+        }],
+        catalogue_fetched_at: Some("fixture-catalogue".to_owned()),
+        adapter_version: codex_connection_version(),
+        status_summary: "Fixture provider ready.".to_owned(),
+    };
+    let selection = AiExecutionSelection {
+        connection_id: connection.connection_id.clone(),
+        provider: connection.provider,
+        model_id: "gpt-5.6-terra".to_owned(),
+        reasoning: ProviderReasoningSelection::CodexEffort("medium".to_owned()),
+        catalogue_fetched_at: "fixture-catalogue".to_owned(),
+        adapter_version: connection.adapter_version.clone(),
+    };
+    let approval = AiExecutionApproval {
+        connection_id: selection.connection_id.clone(),
+        provider: selection.provider,
+        account_fingerprint: account_fingerprint(&connection),
+        model_id: selection.model_id.clone(),
+        reasoning: selection.reasoning.clone(),
+        data_destination: data_destination(connection.provider).to_owned(),
+        approved_at: "2026-01-01T00:00:00Z".to_owned(),
+    };
+    let mut database = settings_connection(application_home)?;
+    let transaction = database
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(settings_store_error)?;
+    let stored = load_stored_settings(&transaction)?;
+    if stored.ai_execution_selection.is_some() && stored.ai_execution_approval.is_some() {
+        drop(transaction);
+        return Ok(());
+    }
+    upsert_connection(&transaction, &connection)?;
+    let mut stored = stored;
+    stored.ai_execution_selection = Some(selection);
+    stored.ai_execution_approval = Some(approval);
+    store_application_settings(&transaction, &stored)?;
+    transaction.commit().map_err(settings_store_error)
+}
+
 fn load_application_settings(
     application_home: &Path,
 ) -> Result<ApplicationSettingsView, TenderCommandError> {
@@ -1142,6 +1512,7 @@ fn load_application_settings(
     Ok(ApplicationSettingsView {
         general_preferences: settings.general_preferences,
         ai_execution_selection: settings.ai_execution_selection,
+        ai_execution_approval: settings.ai_execution_approval,
         provider_connections,
         active_provider_login: None,
         storage: ApplicationStorageFacts {

@@ -1,10 +1,11 @@
 use std::{io, path::Path, sync::Arc};
 
 use quantix_lib::{
-    ensure_quantix_setup, CreateTenderBackupCommand, CreateTenderCommand, DeviceProtection,
-    PrepareTenderRecoveryCommand, PurgeTrashedTenderCommand, QuantixHost,
+    ensure_quantix_setup, CreateTenderBackupCommand, CreateTenderCommand,
+    InspectManagerWorkspaceCommand, PrepareTenderRecoveryCommand,
+    PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand, QuantixHost,
     RegisterTenderContentCommand, ResolveTenderRecoveryCommand, SetupPlatform, StoragePermissions,
-    TenderRecoveryDecision, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    TenderRecoveryDecision, TrashRecoveryRequiredTenderCommand, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 struct ReadySetupPlatform;
@@ -20,10 +21,6 @@ impl SetupPlatform for ReadySetupPlatform {
 
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(StoragePermissions::Restrictive)
-    }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
     }
 }
 
@@ -54,6 +51,23 @@ fn main() {
         "list" => {
             host.list_tenders().expect("list Tender fixture action");
         }
+        "workspace" => {
+            let tender_id = arguments.next().expect("Tender identity argument");
+            let projection = host
+                .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+                    tender_id: Some(tender_id.clone()),
+                })
+                .expect("inspect Manager workspace fixture action");
+            let selected = projection
+                .selected_tender
+                .expect("fresh workspace selected Tender");
+            assert_eq!(selected.tender_id, tender_id);
+            assert!(projection
+                .catalogue
+                .iter()
+                .any(|tender| tender.tender_id == tender_id
+                    && tender.state == quantix_lib::ManagerWorkspaceTenderState::Active));
+        }
         "backup" => {
             host.create_tender_backup(CreateTenderBackupCommand {
                 tender_id: arguments.next().expect("Tender identity argument"),
@@ -83,6 +97,23 @@ fn main() {
                 confirmation_tender_name: arguments.next().expect("Tender name argument"),
             })
             .expect("purge trashed Tender fixture action");
+        }
+        "purge-recovery" => {
+            host.purge_recovery_required_tender(PurgeRecoveryRequiredTenderCommand {
+                tender_id: arguments.next().expect("Tender identity argument"),
+                rationale: "Fixture Engineer confirmed recovery Store deletion".into(),
+                confirmation_tender_name: arguments.next().expect("Tender name argument"),
+            })
+            .expect("purge recovery-required Tender fixture action");
+        }
+        "trash-recovery" => {
+            host.list_tenders()
+                .expect("inspect damaged Tender before recovery Trash fixture action");
+            host.trash_recovery_required_tender(TrashRecoveryRequiredTenderCommand {
+                tender_id: arguments.next().expect("Tender identity argument"),
+                rationale: "Fixture Engineer moved the recovery Store to Trash".into(),
+            })
+            .expect("trash recovery-required Tender fixture action");
         }
         _ => panic!("unknown storage fixture action"),
     }

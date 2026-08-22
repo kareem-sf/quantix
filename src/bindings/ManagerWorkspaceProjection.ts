@@ -2,9 +2,12 @@
 import type { ManagerConversation } from "./ManagerConversation";
 import type { ManagerIntakeStatus } from "./ManagerIntakeStatus";
 import type { ManagerWorkspaceTender } from "./ManagerWorkspaceTender";
+import type { TenderAiExecutionBinding } from "./TenderAiExecutionBinding";
+import type { WorkspaceCapabilityReadiness } from "./WorkspaceCapabilityReadiness";
 import type { WorkspaceCurrentAction } from "./WorkspaceCurrentAction";
+import type { WorkspaceDoctorBlockerSummary } from "./WorkspaceDoctorBlockerSummary";
 import type { WorkspaceFilesSummary } from "./WorkspaceFilesSummary";
 import type { WorkspaceTeamSummary } from "./WorkspaceTeamSummary";
 import type { WorkspaceWorkSummary } from "./WorkspaceWorkSummary";
 
-export type ManagerWorkspaceProjection = { catalogue: Array<ManagerWorkspaceTender>, selected_tender: ManagerWorkspaceTender | null, conversation: ManagerConversation | null, current_action: WorkspaceCurrentAction, work: WorkspaceWorkSummary, files: WorkspaceFilesSummary, team: WorkspaceTeamSummary, intake: ManagerIntakeStatus | null, };
+export type ManagerWorkspaceProjection = { catalogue: Array<ManagerWorkspaceTender>, selected_tender: ManagerWorkspaceTender | null, conversation: ManagerConversation | null, current_action: WorkspaceCurrentAction, work: WorkspaceWorkSummary, files: WorkspaceFilesSummary, team: WorkspaceTeamSummary, intake: ManagerIntakeStatus | null, ai_execution: TenderAiExecutionBinding | null, capability_readiness: WorkspaceCapabilityReadiness | null, doctor_blockers: Array<WorkspaceDoctorBlockerSummary>, };

@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useState } from "react";
 import type { EvidenceDocument } from "./bindings/EvidenceDocument";
 import type { EvidenceLocation } from "./bindings/EvidenceLocation";
 import type { EvidenceSearchResult } from "./bindings/EvidenceSearchResult";
+import { evidenceTextAttributes } from "./evidenceTypography";
 import { searchEvidence } from "./quantixHost";
 
 interface EvidenceReviewProps {
@@ -18,12 +19,6 @@ interface EvidenceReviewProps {
 }
 
 const readableState = (value: string) => value.replace(/_/g, " ");
-
-export const evidenceTextDirection = (location: EvidenceLocation) => {
-  if (location.direction === "right_to_left") return "rtl";
-  if (location.direction === "left_to_right") return "ltr";
-  return "auto";
-};
 
 export const evidenceLocationLabel = (location: EvidenceLocation) => {
   const pages = Array.from(
@@ -68,7 +63,7 @@ export function EvidenceLocationDetails({
         Authoritative source text · {location.language} ·{" "}
         {readableState(location.direction)}
       </p>
-      <blockquote dir={evidenceTextDirection(location)}>
+      <blockquote {...evidenceTextAttributes(location)}>
         {location.original_text}
       </blockquote>
       {location.translated_text ? (
@@ -212,7 +207,7 @@ export function EvidenceReview({
                       {evidenceLocationLabel(match.location) ||
                         match.location.structural_path}
                     </span>
-                    <q dir={evidenceTextDirection(match.location)}>
+                    <q {...evidenceTextAttributes(match.location)}>
                       {match.location.original_text}
                     </q>
                   </button>

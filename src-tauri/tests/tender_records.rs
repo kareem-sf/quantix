@@ -4,9 +4,9 @@ use quantix_lib::{
     ensure_quantix_setup, AgentRunRecoveryDisposition, AgentRunState, BootstrapAuthority,
     BootstrapRole, ChangeAssessmentClassification, ChangeAssessmentStatus,
     ConfirmSourceRelationshipCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
-    DecideChangeAssessmentCommand, DecideTenderRecordCommand, DeviceProtection,
-    ImportTenderPackageCommand, InspectChangeAssessmentsCommand, ParseSourceArtifactCommand,
-    ProviderFailureCategory, QuantixHost, ResolveIndeterminateAgentRunCommand, ReviseTenderCommand,
+    DecideChangeAssessmentCommand, DecideTenderRecordCommand, ImportTenderPackageCommand,
+    InspectChangeAssessmentsCommand, ParseSourceArtifactCommand, ProviderFailureCategory,
+    QuantixHost, ResolveIndeterminateAgentRunCommand, ReviseTenderCommand,
     RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, RuntimeLayout, SetupPlatform,
     SetupState, SourceRelationshipKind, StoragePermissions, TenderEvidenceReference,
     TenderIntegrityState, TenderLifecyclePhase, TenderRecordAuthorityReference,
@@ -28,10 +28,6 @@ impl SetupPlatform for ReadySetupPlatform {
 
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(StoragePermissions::Restrictive)
-    }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
     }
 }
 
@@ -291,6 +287,39 @@ async fn agent_record_proposals_preserve_exact_original_evidence_and_explicit_ga
         .contradictions
         .iter()
         .any(|contradiction| contradiction.evidence.len() >= 2));
+}
+
+#[tokio::test]
+async fn record_extraction_accepts_insignificant_json_whitespace() {
+    let harness = RuntimeHarness::new("record-extraction-insignificant-space");
+    let evidence = harness
+        .parsed_pdf_evidence("insignificant-space", b"TENDER_RECORD_GOLDEN")
+        .await;
+
+    let extraction = harness
+        .host
+        .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id: harness.tender_id.clone(),
+            evidence: evidence.references,
+            authorities: Vec::new(),
+        })
+        .await
+        .expect("emit whitespace-variant record candidate");
+    let candidate = fs::read_to_string(harness.codex.with_extension("candidate-json"))
+        .expect("fixture whitespace-variant candidate");
+    assert!(candidate.starts_with("{ "), "{candidate}");
+    let value: serde_json::Value =
+        serde_json::from_str(&candidate).expect("valid whitespace-variant candidate");
+    let canonical = serde_json_canonicalizer::to_string(&value).expect("canonical candidate");
+    assert_ne!(candidate, canonical);
+
+    assert_eq!(
+        extraction.run.state,
+        AgentRunState::Completed,
+        "{:#?}; expected canonicalization before domain validation",
+        extraction.run
+    );
+    assert!(extraction.published_record_count > 0);
 }
 
 #[tokio::test]

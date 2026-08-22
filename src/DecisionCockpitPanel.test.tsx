@@ -269,6 +269,9 @@ describe("DecisionCockpitPanel", () => {
       screen.getByRole("heading", { name: /Instructions.*Table 3/i }),
     ).toBeTruthy();
     expect(screen.getByText(/Authoritative source text.*arabic/i)).toBeTruthy();
+    const arabicSource = screen.getByText("النص الملزم").closest("blockquote");
+    expect(arabicSource?.lang).toBe("ar");
+    expect(arabicSource?.dir).toBe("rtl");
     expect(
       screen.getByText("Derived translation — non-authoritative"),
     ).toBeTruthy();
@@ -281,7 +284,9 @@ describe("DecisionCockpitPanel", () => {
     expect(
       screen.getByRole("heading", { name: /Commercials.*D14/i }),
     ).toBeTruthy();
-    expect(screen.getByText("12.5%")).toBeTruthy();
+    const englishSource = screen.getByText("12.5%").closest("blockquote");
+    expect(englishSource?.lang).toBe("en");
+    expect(englishSource?.dir).toBe("ltr");
     fireEvent.click(
       screen.getByRole("button", { name: "Previous evidence location" }),
     );

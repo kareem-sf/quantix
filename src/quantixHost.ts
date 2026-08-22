@@ -69,6 +69,8 @@ import type { BidDecisionPackageRecordCategory } from "./bindings/BidDecisionPac
 import type { BidDecisionPackageRecordPage } from "./bindings/BidDecisionPackageRecordPage";
 import type { BidDecisionPackageReviewResult } from "./bindings/BidDecisionPackageReviewResult";
 import type { ChooseTenderPackageCommand } from "./bindings/ChooseTenderPackageCommand";
+import type { CancelPackageIntakeCommand } from "./bindings/CancelPackageIntakeCommand";
+import type { PackageIntakeProgress } from "./bindings/PackageIntakeProgress";
 import type { ConfirmSourceRelationshipCommand } from "./bindings/ConfirmSourceRelationshipCommand";
 import type { ComplianceDispositionUpdate } from "./bindings/ComplianceDispositionUpdate";
 import type { ComplianceMatrixPage } from "./bindings/ComplianceMatrixPage";
@@ -107,6 +109,8 @@ import type { InvalidateBidDecisionApprovalCommand } from "./bindings/Invalidate
 import type { InspectComplianceMatrixCommand } from "./bindings/InspectComplianceMatrixCommand";
 import type { InspectProductionTaskReviewCommand } from "./bindings/InspectProductionTaskReviewCommand";
 import type { InspectManagerWorkspaceCommand } from "./bindings/InspectManagerWorkspaceCommand";
+import type { SearchManagerWorkspaceCommand } from "./bindings/SearchManagerWorkspaceCommand";
+import type { WorkspaceSearchProjection } from "./bindings/WorkspaceSearchProjection";
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
 import type { UpdateGeneralApplicationPreferencesCommand } from "./bindings/UpdateGeneralApplicationPreferencesCommand";
 import type { CancelProviderLoginCommand } from "./bindings/CancelProviderLoginCommand";
@@ -122,6 +126,25 @@ import type { OpenTenderCommand } from "./bindings/OpenTenderCommand";
 import type { ParseSourceArtifactCommand } from "./bindings/ParseSourceArtifactCommand";
 import type { PrepareTenderRecoveryCommand } from "./bindings/PrepareTenderRecoveryCommand";
 import type { RecordEngineerWorkspaceMessageCommand } from "./bindings/RecordEngineerWorkspaceMessageCommand";
+import type { WorkspaceMessageReference } from "./bindings/WorkspaceMessageReference";
+import type { InspectTenderAiExecutionCommand } from "./bindings/InspectTenderAiExecutionCommand";
+import type { TenderAiExecutionBinding } from "./bindings/TenderAiExecutionBinding";
+import type { UpdateTenderAiExecutionSelectionCommand } from "./bindings/UpdateTenderAiExecutionSelectionCommand";
+import type { InspectQuantixDoctorCommand } from "./bindings/InspectQuantixDoctorCommand";
+import type { QuantixDoctorRepairCommand } from "./bindings/QuantixDoctorRepairCommand";
+import type { QuantixDoctorReport } from "./bindings/QuantixDoctorReport";
+import type { DeepDiagnosticsSession } from "./bindings/DeepDiagnosticsSession";
+import type { DiagnosticSupportBundleResult } from "./bindings/DiagnosticSupportBundleResult";
+import type { DiagnosticTimelinePage } from "./bindings/DiagnosticTimelinePage";
+import type { DiagnosticsStatus } from "./bindings/DiagnosticsStatus";
+import type { ExportDiagnosticsSupportBundleCommand } from "./bindings/ExportDiagnosticsSupportBundleCommand";
+import type { InspectDiagnosticTimelineCommand } from "./bindings/InspectDiagnosticTimelineCommand";
+import type { InspectDiagnosticsStatusCommand } from "./bindings/InspectDiagnosticsStatusCommand";
+import type { OpenDiagnosticLogsCommand } from "./bindings/OpenDiagnosticLogsCommand";
+import type { OpenDiagnosticLogsResult } from "./bindings/OpenDiagnosticLogsResult";
+import type { RecordRendererDiagnosticCommand } from "./bindings/RecordRendererDiagnosticCommand";
+import type { StartTenderDeepDiagnosticsCommand } from "./bindings/StartTenderDeepDiagnosticsCommand";
+import type { StopTenderDeepDiagnosticsCommand } from "./bindings/StopTenderDeepDiagnosticsCommand";
 import type { RebindManagerIntakeProviderCommand } from "./bindings/RebindManagerIntakeProviderCommand";
 import type { RetryManagerIntakeCommand } from "./bindings/RetryManagerIntakeCommand";
 import type { ReviseTenderCommand } from "./bindings/ReviseTenderCommand";
@@ -255,21 +278,21 @@ export function installQuantixUpdate(updateId: string): Promise<UpdateStatus> {
 }
 
 export function inspectRuntimeReadiness(): Promise<RuntimeReadiness> {
-  return invoke<RuntimeReadiness>("inspect_runtime_readiness");
+  return invoke<RuntimeReadiness>("inspect_document_tool_readiness");
 }
 
 export function repairRuntimeReadiness(): Promise<RuntimeReadiness> {
-  return invoke<RuntimeReadiness>("repair_runtime_readiness");
+  return invoke<RuntimeReadiness>("prepare_document_tools");
 }
 
 export function inspectRuntimePreparationProgress(): Promise<RuntimePreparationProgress> {
   return invoke<RuntimePreparationProgress>(
-    "inspect_runtime_preparation_progress",
+    "inspect_document_tool_preparation_progress",
   );
 }
 
 export function cancelRuntimePreparation(): Promise<boolean> {
-  return invoke<boolean>("cancel_runtime_preparation");
+  return invoke<boolean>("cancel_document_tool_preparation");
 }
 
 export function createTender(name: string): Promise<TenderSummary> {
@@ -283,6 +306,10 @@ export function listTenders(): Promise<TenderCatalogueEntry[]> {
 
 export function refreshApplicationSettings(): Promise<ApplicationSettingsView> {
   return invoke<ApplicationSettingsView>("refresh_application_settings");
+}
+
+export function inspectApplicationSettings(): Promise<ApplicationSettingsView> {
+  return invoke<ApplicationSettingsView>("inspect_application_settings");
 }
 
 export function updateGeneralApplicationPreferences(
@@ -300,6 +327,18 @@ export function updateAiExecutionSelection(
   return invoke<ApplicationSettingsView>("update_ai_execution_selection", {
     command,
   });
+}
+
+export function confirmAiExecutionSelection(
+  command: UpdateAiExecutionSelectionCommand,
+): Promise<ApplicationSettingsView> {
+  return invoke<ApplicationSettingsView>("confirm_ai_execution_selection", {
+    command,
+  });
+}
+
+export function clearAiExecutionSelection(): Promise<ApplicationSettingsView> {
+  return invoke<ApplicationSettingsView>("clear_ai_execution_selection");
 }
 
 export function startProviderLogin(
@@ -351,13 +390,120 @@ export function inspectManagerWorkspace(
   });
 }
 
+export function searchManagerWorkspace(
+  tenderId: string,
+  query: string,
+): Promise<WorkspaceSearchProjection> {
+  const command: SearchManagerWorkspaceCommand = {
+    tender_id: tenderId,
+    query,
+  };
+  return invoke<WorkspaceSearchProjection>("search_manager_workspace", {
+    command,
+  });
+}
+
+export function inspectTenderAiExecution(
+  tenderId: string,
+): Promise<TenderAiExecutionBinding> {
+  const command: InspectTenderAiExecutionCommand = { tender_id: tenderId };
+  return invoke<TenderAiExecutionBinding>("inspect_tender_ai_execution", {
+    command,
+  });
+}
+
+export function updateTenderAiExecution(
+  command: UpdateTenderAiExecutionSelectionCommand,
+): Promise<TenderAiExecutionBinding> {
+  return invoke<TenderAiExecutionBinding>("update_tender_ai_execution", {
+    command,
+  });
+}
+
+export function inspectQuantixDoctor(
+  tenderId: string | null,
+): Promise<QuantixDoctorReport> {
+  const command: InspectQuantixDoctorCommand = { tender_id: tenderId };
+  return invoke<QuantixDoctorReport>("inspect_quantix_doctor", { command });
+}
+
+export function repairQuantixDoctor(
+  command: QuantixDoctorRepairCommand,
+): Promise<QuantixDoctorReport> {
+  return invoke<QuantixDoctorReport>("repair_quantix_doctor", { command });
+}
+
+export function inspectDiagnosticsStatus(
+  command: InspectDiagnosticsStatusCommand,
+): Promise<DiagnosticsStatus> {
+  return invoke<DiagnosticsStatus>("inspect_diagnostics_status", { command });
+}
+
+export function inspectDiagnosticTimeline(
+  command: InspectDiagnosticTimelineCommand,
+): Promise<DiagnosticTimelinePage> {
+  return invoke<DiagnosticTimelinePage>("inspect_diagnostic_timeline", {
+    command,
+  });
+}
+
+export function startTenderDeepDiagnostics(
+  command: StartTenderDeepDiagnosticsCommand,
+): Promise<DeepDiagnosticsSession> {
+  return invoke<DeepDiagnosticsSession>("start_tender_deep_diagnostics", {
+    command,
+  });
+}
+
+export function stopTenderDeepDiagnostics(
+  command: StopTenderDeepDiagnosticsCommand,
+): Promise<boolean> {
+  return invoke<boolean>("stop_tender_deep_diagnostics", { command });
+}
+
+export function openDiagnosticLogs(
+  command: OpenDiagnosticLogsCommand,
+): Promise<OpenDiagnosticLogsResult> {
+  return invoke<OpenDiagnosticLogsResult>("open_diagnostic_logs", { command });
+}
+
+export function exportDiagnosticsSupportBundle(
+  command: ExportDiagnosticsSupportBundleCommand,
+): Promise<DiagnosticSupportBundleResult> {
+  return invoke<DiagnosticSupportBundleResult>(
+    "export_diagnostics_support_bundle",
+    { command },
+  );
+}
+
+export function recordRendererDiagnostic(
+  command: RecordRendererDiagnosticCommand,
+): Promise<boolean> {
+  return invoke<boolean>("record_renderer_diagnostic", { command });
+}
+
 export function startManagerTender(
   sourceKind: TenderPackageSourceKind,
+  localOnly = false,
 ): Promise<ManagerWorkspaceProjection | null> {
-  const command: StartManagerTenderCommand = { source_kind: sourceKind };
+  const command: StartManagerTenderCommand = {
+    source_kind: sourceKind,
+    local_only: localOnly,
+  };
   return invoke<ManagerWorkspaceProjection | null>("start_manager_tender", {
     command,
   });
+}
+
+export function inspectPackageIntakeProgress(): Promise<PackageIntakeProgress | null> {
+  return invoke<PackageIntakeProgress | null>(
+    "inspect_package_intake_progress",
+  );
+}
+
+export function cancelPackageIntake(operationId: string): Promise<boolean> {
+  const command: CancelPackageIntakeCommand = { operation_id: operationId };
+  return invoke<boolean>("cancel_package_intake", { command });
 }
 
 export function selectManagerWorkspaceTender(
@@ -372,10 +518,14 @@ export function selectManagerWorkspaceTender(
 export function recordEngineerWorkspaceMessage(
   tenderId: string,
   body: string,
+  attachmentRefs: WorkspaceMessageReference[] = [],
+  contextRefs: WorkspaceMessageReference[] = [],
 ): Promise<ManagerWorkspaceProjection> {
   const command: RecordEngineerWorkspaceMessageCommand = {
     tender_id: tenderId,
     body,
+    attachment_refs: attachmentRefs,
+    context_refs: contextRefs,
   };
   return invoke<ManagerWorkspaceProjection>(
     "record_engineer_workspace_message",
@@ -1329,6 +1479,15 @@ export function trashTender(
   });
 }
 
+export function trashRecoveryRequiredTender(
+  tenderId: string,
+  rationale: string,
+): Promise<TrashedTenderRecord> {
+  return invoke<TrashedTenderRecord>("trash_recovery_required_tender", {
+    command: { tender_id: tenderId, rationale },
+  });
+}
+
 export function inspectTrashedTenders(): Promise<TrashedTenderRecord[]> {
   return invoke<TrashedTenderRecord[]>("inspect_trashed_tenders");
 }
@@ -1350,6 +1509,20 @@ export function purgeTrashedTender(
   return invoke<DeletionReceipt>("purge_trashed_tender", {
     command: {
       deletion_id: deletionId,
+      rationale,
+      confirmation_tender_name: confirmationTenderName,
+    },
+  });
+}
+
+export function purgeRecoveryRequiredTender(
+  tenderId: string,
+  rationale: string,
+  confirmationTenderName: string,
+): Promise<DeletionReceipt> {
+  return invoke<DeletionReceipt>("purge_recovery_required_tender", {
+    command: {
+      tender_id: tenderId,
       rationale,
       confirmation_tender_name: confirmationTenderName,
     },

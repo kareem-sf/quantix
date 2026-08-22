@@ -18,7 +18,7 @@ use quantix_lib::{
     ensure_quantix_setup, perform_authorized_update_restart,
     run_update_rollback_helper_with_launcher, update_platform_from_target,
     verify_signed_update_artifact, verify_signed_update_candidate, CreateTenderBackupCommand,
-    CreateTenderCommand, DecideUpdateCommand, DeviceProtection, ImportTenderPackageCommand,
+    CreateTenderCommand, DecideUpdateCommand, ImportTenderPackageCommand,
     InstalledApplicationArtifactKind, InstalledApplicationArtifactSet, ParseSourceArtifactCommand,
     QuantixHost, RegisterTenderContentCommand, RunBootstrapAgentCommand, RuntimeLayout,
     RuntimeReadinessState, SetupIssue, SetupPlatform, SetupState, SignedArtifactIdentity,
@@ -69,10 +69,6 @@ impl SetupPlatform for ReadySetupPlatform {
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(StoragePermissions::Restrictive)
     }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
-    }
 }
 
 impl SetupPlatform for BlockingBackupSetupPlatform {
@@ -93,10 +89,6 @@ impl SetupPlatform for BlockingBackupSetupPlatform {
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(StoragePermissions::Restrictive)
     }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
-    }
 }
 
 impl SetupPlatform for TamperableStorageSetupPlatform {
@@ -114,10 +106,6 @@ impl SetupPlatform for TamperableStorageSetupPlatform {
         } else {
             StoragePermissions::Restrictive
         })
-    }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
     }
 }
 
@@ -141,11 +129,11 @@ fn valid_offer(data_may_change: bool) -> UpdateCandidate {
             signature_sha256: "b".repeat(64),
         },
         compatibility: UpdateCompatibilityManifest {
-            installation_schema_version: 21,
-            tender_schema_version: 33,
+            installation_schema_version: 23,
+            tender_schema_version: 35,
             codex_version: "0.147.0".into(),
             ocr_version: "3.9.2".into(),
-            runtime_manifest_schema_version: 2,
+            runtime_manifest_schema_version: 3,
         },
         release: UpdateReleaseInformation {
             published_at: "2026-08-12T10:00:00Z".into(),
@@ -623,7 +611,7 @@ fn valid_signed_update_is_presented_and_requires_exact_backup_before_installatio
     assert_eq!(presented.version, "0.2.0");
     assert_eq!(presented.artifact.sha256, "a".repeat(64));
     assert_eq!(presented.artifact.signature_sha256, "b".repeat(64));
-    assert_eq!(presented.compatibility.tender_schema_version, 33);
+    assert_eq!(presented.compatibility.tender_schema_version, 35);
     assert!(presented.impact.stored_data_may_change);
 
     let approved = host
@@ -1086,7 +1074,7 @@ fn unsafe_or_incompatible_offers_are_rejected_before_approval() {
         (
             {
                 let mut offer = valid_offer(false);
-                offer.compatibility.runtime_manifest_schema_version = 3;
+                offer.compatibility.runtime_manifest_schema_version = 2;
                 offer
             },
             UpdateDiagnostic::RuntimeIncompatible,

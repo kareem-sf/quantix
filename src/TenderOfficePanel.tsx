@@ -208,6 +208,7 @@ export function TenderOfficePanel({
     setBusy(true);
     try {
       const next = await command();
+      onTenderStateChange();
       if (request === requestSequence.current) setPlan(next);
       return true;
     } catch {

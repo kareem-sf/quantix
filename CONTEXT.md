@@ -65,8 +65,8 @@ The credential-free model and capability facts reported by one ready Provider Co
 _Avoid_: Hard-coded model list, compatibility table, stale authorization
 
 **AI Execution Selection**:
-The application-wide choice of one ready Provider Connection, one provider-qualified model, and one provider-native reasoning setting for future Agent Runs. Every new Agent Run captures the effective selection and its Provider Capability Catalogue provenance; changing the default never rewrites active, queued, interrupted, or indeterminate work, and Quantix never silently substitutes another provider, model, or reasoning setting.
-_Avoid_: Bare model name, automatic fallback, per-Agent provider routing
+The Tender-scoped choice of one ready Provider Connection, one provider-qualified model, and one provider-native reasoning setting for future Agent Runs in that Tender. Application Settings holds only the default copied into a newly created Tender. Every new Agent Run captures the effective selection and its Provider Capability Catalogue provenance; changing either default or Tender selection never rewrites active, queued, interrupted, or indeterminate work, and Quantix never silently substitutes another provider, model, or reasoning setting.
+_Avoid_: Bare model name, automatic fallback, per-Agent provider routing, application-wide runtime selection
 
 **AI Provider Contract**:
 The versioned Quantix definition of the mandatory lifecycle, execution, tool, sandbox, event, usage, interruption, and failure capabilities an AI Provider must satisfy. Provider-specific protocols remain behind the contract, and incompatibility blocks provider work rather than weakening a requirement.

@@ -7,11 +7,11 @@ use std::{
 
 use quantix_lib::{
     ensure_quantix_setup, ChangeAssessmentClassification, ConfirmSourceRelationshipCommand,
-    CreateTenderCommand, DecideChangeAssessmentCommand, DeviceProtection,
-    ImportTenderPackageCommand, InspectChangeAssessmentsCommand, IntakeExceptionCode,
-    ParseSourceArtifactCommand, ParseState, QuantixHost, RegistrationState, RuntimeLayout,
-    SetupPlatform, SetupState, SourceRelationshipKind, StoragePermissions, SupersessionState,
-    TenderErrorCode, TenderPackageSourceKind, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    CreateTenderCommand, DecideChangeAssessmentCommand, ImportTenderPackageCommand,
+    InspectChangeAssessmentsCommand, IntakeExceptionCode, ParseSourceArtifactCommand, ParseState,
+    QuantixHost, RegistrationState, RuntimeLayout, SetupPlatform, SetupState,
+    SourceRelationshipKind, StoragePermissions, SupersessionState, TenderErrorCode,
+    TenderPackageSourceKind, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
@@ -28,10 +28,6 @@ impl SetupPlatform for ReadySetupPlatform {
 
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(StoragePermissions::Restrictive)
-    }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
     }
 }
 

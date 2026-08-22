@@ -288,7 +288,11 @@ describe("PackageProductionPanel", () => {
     expect(screen.getByText(/Record manifest/)).toBeTruthy();
     expect(screen.getByText(/Requirement manifest/)).toBeTruthy();
     expect(screen.getByText(/Generated Artifact .* v1/)).toBeTruthy();
-    expect(screen.getByText("السعر المعتمد فقط")).toBeTruthy();
+    const arabicSource = screen
+      .getByText("السعر المعتمد فقط")
+      .closest("blockquote");
+    expect(arabicSource?.lang).toBe("ar");
+    expect(arabicSource?.dir).toBe("rtl");
     expect(screen.getAllByText(/calc-run-1/).length).toBeGreaterThan(0);
     expect(screen.getByText(/review-1/)).toBeTruthy();
     expect(screen.getByText(/approved_tender_price:price-1/)).toBeTruthy();

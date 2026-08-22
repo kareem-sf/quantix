@@ -104,14 +104,14 @@ The visual system is calm, readable, minimalist, and beginner-oriented. Secondar
 76. As a Tendering Engineer, I want the Manager to state how many later decisions remain without displaying them all, so that I can anticipate work without losing focus.
 77. As a Tendering Engineer, I want Manager messages to lead with the outcome or action in concise prose, so that explanations are easy to scan.
 78. As a Tendering Engineer, I want structured action cards only for decisions, approvals, blockers, plans, and deliverables, so that ordinary conversation stays calm.
-79. As a Tendering Engineer, I want a plain composer with text, attachment, and Send, so that I do not need to learn command syntax.
-80. As a Tendering Engineer, I want advanced mentions and actions behind one additional control, so that expert capability does not burden the beginner surface.
+79. As a Tendering Engineer, I want a plain composer with text, Tools & Context, my Tender's provider and model selection, and Send, so that I can control future AI work without leaving the Manager.
+80. As a Tendering Engineer, I want attachments, search, and governed actions behind Tools & Context, so that expert capability does not burden the beginner surface or imply unrestricted access.
 81. As a Tendering Engineer, I want a sent message corrected through a visible successor after work has begun, so that history cannot be rewritten silently.
-82. As a Tendering Engineer, I want Search this Tender and an optional keyboard shortcut, so that search is available without occupying the global header.
+82. As a Tendering Engineer, I want Search this Tender in the Tender workspace header and through Tools & Context, with an optional keyboard shortcut, so that all search remains scoped and easy to reach.
 83. As a Tendering Engineer, I want search results grouped by conversation, Work, Files, Evidence, and Agents, so that different record types remain understandable.
 84. As a Tendering Engineer, I want an attachment registered and classified before Agent exposure, so that attaching a file does not silently grant access.
 85. As a Tendering Engineer, I want Quantix to explain which task or Agent will receive an attachment, so that disclosure remains intentional.
-86. As a Tendering Engineer, I want a minimal Tender header containing name, deadline, Team working, and one Tender menu, so that orientation does not become a dashboard.
+86. As a Tendering Engineer, I want a minimal Tender header containing name, deadline, Team working, and Search this Tender, while lifecycle actions live on the Tender row, so that orientation does not become a dashboard.
 87. As a Tendering Engineer, I want a responsive workspace that collapses navigation and opens focused views instead of squeezing panes, so that text remains readable in smaller windows.
 88. As a Tendering Engineer, I want calm neutral surfaces, restrained blue emphasis, subtle boundaries, and generous whitespace, so that Quantix feels professional rather than like a control room.
 89. As a Tendering Engineer, I want body text sized for comfortable reading and primary controls large enough to use confidently, so that beginner usability is not sacrificed for density.
@@ -133,28 +133,34 @@ The visual system is calm, readable, minimalist, and beginner-oriented. Secondar
 105. As a low-vision user, I want the workspace to remain usable at 200% zoom and high contrast, so that content does not overlap or disappear.
 106. As a motion-sensitive user, I want reduced-motion preferences honored, so that functional updates do not cause discomfort.
 107. As a first-time Tendering Engineer, I want the interface validated with people unfamiliar with it, so that familiarity from the design team does not hide usability failures.
-108. As a Tendering Engineer, I want Archive and Delete in the selected Tender's one menu, so that retention controls do not become another permanent workspace panel.
+108. As a Tendering Engineer, I want Rename, Archive, and Move to Trash in each Tender row's one menu, so that management is discoverable without becoming another permanent workspace panel.
 109. As a Tendering Engineer, I want Archive to become available only at a proven safe terminal boundary, so that protected work cannot be made read-only mid-operation.
 110. As a Tendering Engineer, I want Archived Tenders separated from my active list but openable through the same Manager, Work, and Files surfaces with a clear read-only banner and Restore action, so that healthy history is not presented as recovery failure.
 111. As a Tendering Engineer, I want Delete to move a safe Tender into recoverable Tender Trash, so that an ordinary delete action is not immediately irreversible.
 112. As a Tendering Engineer, I want `Archived & Trash` to show Archived Tenders, trashed Tenders, restore actions, and deletion receipts without occupying a fourth Tender tab, so that lifecycle management remains findable but quiet.
 113. As a Tendering Engineer, I want Permanent Tender Deletion available only from Tender Trash with an exact consequence review and explicit confirmation, so that every Quantix-controlled Tender copy is removed deliberately.
 114. As a Tendering Engineer, I want local deletion to complete even when provider-thread cleanup is temporarily unavailable, with a minimal receipt and visible cleanup status, so that an external provider cannot hold local confidential data hostage.
+114a. As a Tendering Engineer, I want a damaged Tender to have a recovery-specific Move to Trash action, so that I can contain it without Quantix opening an incompatible Store.
+114b. As a Tendering Engineer, I want to permanently delete a recovery-required Tender with a rationale and exact-name confirmation, so that the destructive decision is explicit while the original Tender Package remains untouched.
+114c. As a Tendering Engineer, I want restoring a damaged Tender to preserve its `Needs recovery` state, so that restoration never falsely suggests that the Store was repaired.
+114d. As a Tendering Engineer, I want incomplete provider-reference discovery reported honestly in the Deletion Receipt, so that local deletion can finish without hiding the need for any external provider review.
 115. As a Tendering Engineer, I want one application Settings control fixed at the bottom of the sidebar, so that global configuration is distinct from Tender work.
 116. As a Tendering Engineer, I want Settings organized as General, AI & Models, Data & Storage, Updates, and About & Diagnostics with technical detail collapsed, so that beginner choices remain clear.
-117. As a Tendering Engineer, I want Settings to save immediately and provider, model, and reasoning to change as one valid selection, so that the interface cannot leave a half-applied AI configuration.
+117. As a Tendering Engineer, I want Settings to save the default for new Tenders immediately and each Manager composer to change its Tender's provider, model, and reasoning as one valid selection, so that the interface cannot leave a half-applied AI configuration or rewrite another Tender.
 118. As a Tendering Engineer, I want to connect an OpenAI account through managed Codex login and add Anthropic or Gemini API keys, so that Quantix is AI-powered without being a Codex-only product.
 119. As a Tendering Engineer, I want Quantix to use Codex-managed browser or device login without reading or copying raw ChatGPT tokens, so that account authentication remains with its documented owner.
 120. As a Tendering Engineer, I want Anthropic and Gemini API keys kept in the operating-system credential vault and excluded from every Tender record, log, diagnostic, archive, and export, so that BYOK does not expose credentials.
 121. As a Tendering Engineer, I want each connected provider's models loaded from its live catalogue, so that I never choose from a stale hard-coded model list.
 122. As a Tendering Engineer, I want Reasoning choices limited to exact live provider capabilities, with Gemini showing Automatic when exact options cannot be discovered, so that Quantix never invents support.
-123. As a Tendering Engineer, I want every Agent Run to retain the provider, model, reasoning setting, and catalogue provenance it started with, so that later Settings changes do not rewrite ongoing or historical work.
+123. As a Tendering Engineer, I want every Agent Run to retain the provider, model, reasoning setting, and catalogue provenance it started with, so that later default or Tender-selection changes do not rewrite ongoing or historical work.
 124. As a Tendering Engineer, I want a removed model or reasoning choice kept visible as unavailable with a compatible live recommendation, so that capability drift is explicit and requires my confirmation.
 125. As a Tendering Engineer, I want Quantix never to switch providers, models, or reasoning depth silently, so that data destination, cost account, and AI behavior remain intentional.
 126. As a Tendering Engineer, I want a failure in one Provider Connection not to disable another ready connection or non-AI Tender work, so that failures remain isolated.
 127. As a Tendering Engineer, I want a Tender Package registered safely and AI work shown as Waiting for AI Provider when no selected connection is ready, so that expected offline operation is not recorded as failed work.
 128. As a Tendering Engineer, I want a concise data-destination and cost-account disclosure when connecting a provider, so that I understand where Tender information may be processed.
 129. As a Tendering Engineer, I want Disconnect to remove local authentication safely, pause bound work, and explain any external key-revocation step, so that disconnection never implies unperformed provider-side revocation.
+130. As a Tendering Engineer, I want Quantix to warn me before the Tender Package picker when the AI default is incomplete, while allowing me to continue with local work, so that missing AI setup is intentional rather than a surprise.
+131. As a Tendering Engineer, I want About & Diagnostics to explain each health finding and offer only safe typed repairs after I approve their impact, so that Repair Required is actionable without granting Quantix autonomous repair authority.
 
 ## Implementation Decisions
 
@@ -172,23 +178,25 @@ The visual system is calm, readable, minimalist, and beginner-oriented. Secondar
 - Use controlled calculation records for estimates and scenarios; conversational explanation never becomes the calculation source of truth.
 - Formal Work Plan and output approval actions bind exact immutable versions and are available only in focused review views.
 - Starting, pausing, stopping, recovering, amending, approving, and returning work must surface the exact domain consequence before dispatching the existing Host command.
-- Place Archive and Delete in the existing selected-Tender menu. Place separate Archived and Trash collections behind one `Archived & Trash` sidebar destination; do not add retention to Manager, Work, or Files.
+- Place Rename, Archive, and Move to Trash in each Tender sidebar row's Quantix menu. Make the same menu available through the row ellipsis, keyboard menu key, and secondary click. Place separate Archived and Trash collections behind one `Archived & Trash` sidebar destination; do not add retention to Manager, Work, Team, or Files.
 - Open a healthy Archived Tender read-only through the ordinary Tender workspace with an Archived banner and Restore action. Do not project Archive as Recovery Required or label it as corruption.
 - Reuse the Host's existing archive, restore, trash, restore-from-trash, purge, and Deletion Receipt authorities. Extend Permanent Tender Deletion to remove every identifiable Tender-associated Quantix-controlled copy and track asynchronous provider cleanup; do not create a parallel renderer lifecycle.
+- Recovery-required Tenders use typed Host trash and purge commands that validate identity and Application Home ownership without opening the damaged Store. The renderer shows the catalogue name when available, requires a rationale for recovery deletion, and requires exact-name confirmation for permanent deletion. The original Tender Package is never treated as a Quantix-controlled copy.
+- Restore of a recovery-required Tender restores its files and identity but projects `Needs recovery` until an explicit repair succeeds. Provider-reference discovery may be `Pending` or `Incomplete`; either state is visible in the receipt and never blocks local deletion.
 - Disable Archive and Delete unless the Host proves the Tender is at the exact safe terminal boundary. The renderer never infers safety from visible activity alone.
 - Place one application Settings control at the bottom of the sidebar. Settings replaces the Tender content area with a focused application-wide view and is not a fourth Tender destination.
 - Persist non-secret Application Settings at installation scope. Store Anthropic and Gemini Provider Credentials only in the operating-system credential vault; leave Codex-managed ChatGPT authentication under the supervised Codex runtime.
 - Implement three provider-native adapters behind the existing AI Provider Contract: OpenAI account through Codex-managed login, Anthropic BYOK, and Gemini BYOK. Do not copy ChatGPT token files or call undocumented ChatGPT backend routes.
-- Maintain one Provider Connection per supported provider and one application-wide AI Execution Selection for future Agent Runs. Do not add per-Agent provider selection, multiple same-provider accounts, routing, or automatic fallback.
+- Maintain one Provider Connection per supported provider. Application Settings holds the default AI Execution Selection copied into a new Tender; every Tender owns an optional independent selection for its future Agent Runs. Do not add per-Agent provider selection, multiple same-provider accounts, routing, or automatic fallback.
 - Load provider-qualified models from each ready connection's live catalogue. Populate reasoning choices only from exact machine-readable live capabilities; offer Gemini Automatic until its live API reports exact supported options.
-- Apply provider, model, and reasoning changes atomically and capture the exact effective selection and catalogue provenance in every new Agent Run. Existing and already queued runs remain pinned.
+- Apply Tender provider, model, and reasoning changes atomically and capture the exact effective selection and catalogue provenance in every new Agent Run. Existing and already queued runs remain pinned; changing the application default never rewrites an existing Tender.
 - Treat stale catalogues as explanation only. Capability or authentication drift pauses affected work as Waiting for AI Provider, preserves non-AI access, proposes a live compatible replacement, and requires explicit confirmation before changing selection.
 - Disclose provider data destination and cost account when connecting. Disconnect through provider-owned logout or local vault-secret removal, without claiming to revoke externally created API keys.
-- Healthy setup, runtime, provider, integrity, update, and recovery checks remain silent. Only a genuine blocker replaces or interrupts the workspace.
+- Diagnose setup, runtime, provider, integrity, update, and recovery health automatically through the redacted Quantix Doctor. Healthy checks remain quiet; findings state exact cause and impact, and only an Engineer-commanded typed action may repair local state.
 - Use a professional neutral visual system with one restrained accent, comfortable reading typography, clear hierarchy, established icons, visible focus, and reduced motion.
 - Follow the operating-system appearance preference; keep appearance controls in Settings.
 - Do not implement dashboard cards, permanent evidence inspectors, agent strips, Gantt charts, dependency graphs, tiny telemetry, decorative status motion, fictional Agent portraits, or an expert-density mode.
-- Do not use image generation for the design process. After specification approval, create a separate low-fidelity clickable prototype with plain components and realistic Tender data before production renderer implementation.
+- Treat the approved workspace and control concepts as production design references while keeping all interaction, text, controls, and data code-native. Do not ship raster mockups as application UI.
 - Freeze the current development prototype as rejected exploratory work. It is not an implementation foundation and must be removed when the approved replacement begins.
 - Keep generated Rust-owned TypeScript declarations committed and generated from their Rust DTOs when the workspace projection introduces or changes Host contracts.
 
@@ -202,7 +210,7 @@ The visual system is calm, readable, minimalist, and beginner-oriented. Secondar
 - Cover complete operational transparency: exact per-Run inputs, permissions, instructions, messages, handoffs, meaningful activities, failures, outputs, citations, and history without exposing secrets or hidden reasoning.
 - Cover provider unavailable, independent connection failures, offline/read-only access, Waiting for AI Provider, long startup, Addendum invalidation, interrupted and indeterminate Agent Runs, update/recovery blockers, and partial-task isolation.
 - Cover live provider connection and catalogue projections, credential-free renderer boundaries, atomic AI Execution Selection, capability removal, invalid-selection confirmation, no silent fallback, and exact per-Run selection retention.
-- Cover Archive and Trash discovery, safe-terminal refusal, Archived read-only access, restore, recoverable deletion, exact Permanent Tender Deletion consequences, Deletion Receipts, and Provider Cleanup Pending without duplicating Host lifecycle authority.
+- Cover Archive and Trash discovery, safe-terminal refusal, Archived read-only access, restore, recoverable deletion, recovery-required trash and purge, exact Permanent Tender Deletion consequences, Deletion Receipts, and Provider Cleanup Pending or Incomplete without duplicating Host lifecycle authority. Verify that receipts contain no Tender content, sensitive paths, or provider thread references.
 - Cover keyboard-only operation, focus movement and restoration, accessible dialogs and disclosures, status announcements, 200% zoom, high contrast, reduced motion, and no color-only meaning.
 - Reuse the current renderer precedent of mocking the Host adapter at the module boundary, but consolidate story coverage at the workspace level rather than reproducing one isolated test suite per visual panel.
 - Test Rust workspace projections and commands through the public Quantix Host interface, preserving current deterministic Host-level patterns and exact canonical records.
@@ -221,8 +229,7 @@ The visual system is calm, readable, minimalist, and beginner-oriented. Secondar
 - Mobile or web-specific layouts. The specification is for the native desktop workspace, with responsive behaviour inside its supported window sizes.
 - Providers beyond the initial OpenAI-account, Anthropic-BYOK, and Gemini-BYOK connections; OpenAI API-key access; multiple accounts for one provider; per-Agent provider selection; automatic routing or fallback; local models; and generic OpenAI-compatible endpoints.
 - Replacing canonical Tender lifecycle logic, approval semantics, Evidence, calculation, review, recovery, release, or retention rules already implemented by the Host.
-- Production visual polish before the low-fidelity interaction model passes usability validation.
-- Image-generated UI concepts, generated portraits, decorative illustrations, or generated design assets.
+- Generated portraits, decorative illustrations, or generated raster controls in the shipped application.
 - Automated test execution, release verification, or production builds during the specification phase.
 
 ## Further Notes

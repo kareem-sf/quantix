@@ -24,14 +24,17 @@
     "release:preflight": "cargo run --manifest-path src-tauri/Cargo.toml --bin quantix-product-acceptance -- release-check",
     "test": "npm run test:renderer && cargo test --manifest-path src-tauri/Cargo.toml --target-dir src-tauri/target/tests --features runtime-fixture",
     "test:renderer": "vitest run",
-    "verify": "npm run format:check && npm run check && npm test",
+    "verify:identity": "node scripts/validate-identity-assets.mjs",
+    "verify": "npm run verify:identity && npm run format:check && npm run check && npm test",
     "tauri": "tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "lucide-react": "^1.31.0",
+    "motion": "^13.1.0",
     "react": "^19.1.0",
+    "react-aria-components": "^1.20.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {

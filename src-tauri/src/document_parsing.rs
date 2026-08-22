@@ -1,4 +1,9 @@
-use std::{fs, io::Read, path::PathBuf, time::Duration};
+use std::{
+    fs,
+    io::Read,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 #[cfg(not(feature = "runtime-fixture"))]
 use anydoc::ConvertError;
@@ -402,10 +407,57 @@ impl QuantixHost {
         &self,
         command: ParseSourceArtifactCommand,
     ) -> Result<DocumentParseResult, TenderCommandError> {
+        let tender_id = command.tender_id.clone();
+        let operation_id = format!("parse-{}-{}", command.artifact_id, command.version);
+        self.record_tender_diagnostic(
+            &tender_id,
+            crate::DiagnosticSeverity::Info,
+            crate::DiagnosticComponent::Parsing,
+            "document_parse_started",
+            "A governed document parse started",
+            Some(operation_id.clone()),
+            None,
+            Some("started"),
+            None,
+        );
+        let started = Instant::now();
+        let result = self.parse_source_artifact_inner(command).await;
+        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match &result {
+            Ok(_) => self.record_tender_diagnostic(
+                &tender_id,
+                crate::DiagnosticSeverity::Info,
+                crate::DiagnosticComponent::Parsing,
+                "document_parse_completed",
+                "The governed document parse completed",
+                Some(operation_id),
+                Some(duration_ms),
+                Some("completed"),
+                None,
+            ),
+            Err(error) => self.record_tender_diagnostic(
+                &tender_id,
+                crate::DiagnosticSeverity::Error,
+                crate::DiagnosticComponent::Parsing,
+                "document_parse_failed",
+                "The governed document parse failed",
+                Some(operation_id),
+                Some(duration_ms),
+                Some("failed"),
+                Some(format!("{:?}", error.code)),
+            ),
+        }
+        result
+    }
+
+    async fn parse_source_artifact_inner(
+        &self,
+        command: ParseSourceArtifactCommand,
+    ) -> Result<DocumentParseResult, TenderCommandError> {
         command
             .validate()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-        self.require_runtime_verified()?;
+        self.require_document_tools()?;
         crate::tender_store::require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         let activity_key =
@@ -442,11 +494,55 @@ impl QuantixHost {
                     .locations
                     .iter()
                     .map(|location| location.original_text.clone())
-                    .collect();
+                    .collect::<Vec<_>>();
+                let embedding_operation =
+                    format!("embedding-{}-{}", command.artifact_id, command.version);
+                self.record_tender_diagnostic(
+                    &command.tender_id,
+                    crate::DiagnosticSeverity::Info,
+                    crate::DiagnosticComponent::Embedding,
+                    "document_embedding_started",
+                    "Evidence-location embedding started",
+                    Some(embedding_operation.clone()),
+                    None,
+                    Some("started"),
+                    None,
+                );
+                let embedding_started = Instant::now();
                 prepared.embeddings =
                     match crate::embedding::embed_evidence_locations(self, texts).await {
-                        Ok(embeddings) => embeddings,
-                        Err(_) => {
+                        Ok(embeddings) => {
+                            self.record_tender_diagnostic(
+                                &command.tender_id,
+                                crate::DiagnosticSeverity::Info,
+                                crate::DiagnosticComponent::Embedding,
+                                "document_embedding_completed",
+                                "Evidence-location embedding completed",
+                                Some(embedding_operation),
+                                Some(
+                                    u64::try_from(embedding_started.elapsed().as_millis())
+                                        .unwrap_or(u64::MAX),
+                                ),
+                                Some("completed"),
+                                None,
+                            );
+                            embeddings
+                        }
+                        Err(error) => {
+                            self.record_tender_diagnostic(
+                                &command.tender_id,
+                                crate::DiagnosticSeverity::Error,
+                                crate::DiagnosticComponent::Embedding,
+                                "document_embedding_failed",
+                                "Evidence-location embedding failed",
+                                Some(embedding_operation),
+                                Some(
+                                    u64::try_from(embedding_started.elapsed().as_millis())
+                                        .unwrap_or(u64::MAX),
+                                ),
+                                Some("failed"),
+                                Some(format!("{:?}", error.code)),
+                            );
                             return store
                                 .lock()
                                 .map_err(|_| {
@@ -549,7 +645,7 @@ impl QuantixHost {
         if command.query.trim().is_empty() || !command.distance_threshold.is_finite() {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        self.require_runtime_verified()?;
+        self.require_document_tools()?;
         crate::tender_store::require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         let query_embedding =

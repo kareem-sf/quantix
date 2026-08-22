@@ -1,0 +1,138 @@
+.quantix-window {
+  --quantix-title-bar-height: 0px;
+  --quantix-shell-gutter: 0px;
+  --quantix-shell-radius: 0px;
+
+  display: flex;
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  isolation: isolate;
+  color: var(--qx-text);
+  background: var(--qx-scene-gradient, var(--qx-canvas));
+}
+
+.quantix-window.has-custom-title-bar {
+  --quantix-title-bar-height: 35px;
+}
+
+.quantix-window__content {
+  display: grid;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  padding: 0 var(--quantix-shell-gutter) var(--quantix-shell-gutter);
+  overflow: hidden;
+  background: transparent;
+  perspective: 1400px;
+  perspective-origin: center;
+}
+
+.quantix-window:not(.has-custom-title-bar) .quantix-window__content {
+  padding-top: var(--quantix-shell-gutter);
+}
+
+.quantix-window__stage,
+.quantix-window__depth-envelope {
+  grid-area: 1 / 1;
+}
+
+.quantix-window__stage {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+  transform-origin: center 34%;
+}
+
+.quantix-window__depth-envelope {
+  position: relative;
+  z-index: 0;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.quantix-window__depth-envelope--ambient {
+  /* Keep the decorative overscan out of the shared grid track. A negative
+     grid margin changes the content track and can pull the stage beneath the
+     stationary title bar; absolute positioning preserves the overscan
+     without changing layout geometry. */
+  position: absolute;
+  inset: -36px;
+  margin: 0;
+  background:
+    radial-gradient(
+      circle at 24% 18%,
+      rgb(var(--qx-depth-neutral-rgb, 154 163 171) / 24%),
+      transparent 38%
+    ),
+    radial-gradient(
+      circle at 78% 68%,
+      rgb(var(--qx-depth-blue-rgb, 199 228 243) / 22%),
+      transparent 42%
+    );
+  transform-origin: center;
+}
+
+.quantix-window__depth-envelope--shadow,
+.quantix-window__depth-envelope--highlight {
+  align-self: stretch;
+  justify-self: stretch;
+  margin: 0;
+  border-radius: var(--quantix-shell-radius);
+  transform-style: preserve-3d;
+}
+
+.quantix-window__depth-envelope--shadow {
+  box-shadow: none;
+}
+
+.quantix-window__depth-envelope--highlight {
+  background: var(--qx-shell-highlight-gradient, transparent);
+  box-shadow: none;
+}
+
+.quantix-window.is-motion-static .quantix-window__depth-envelope {
+  transform: none !important;
+  will-change: auto;
+}
+
+@media (forced-colors: active) {
+  .quantix-window__depth-envelope--highlight {
+    background: transparent;
+  }
+}
+
+@media (max-width: 899px) {
+  .quantix-window {
+    --quantix-shell-gutter: 0px;
+    --quantix-shell-radius: 0px;
+  }
+
+  .quantix-window__depth-envelope {
+    display: none;
+  }
+
+  .quantix-window__content {
+    perspective: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quantix-window__depth-envelope {
+    transform: none !important;
+    will-change: auto;
+  }
+}
+
+html.quantix-reduced-motion .quantix-window__depth-envelope {
+  transform: none !important;
+  will-change: auto;
+}

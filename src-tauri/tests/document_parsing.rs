@@ -1,11 +1,10 @@
 use std::{fs, io, io::Write, path::Path, sync::Arc};
 
 use quantix_lib::{
-    ensure_quantix_setup, CreateTenderCommand, DeviceProtection, EvidenceLanguage,
-    EvidenceLocationKind, ImportTenderPackageCommand, ParseExceptionCode,
-    ParseSourceArtifactCommand, ParseState, QuantixHost, SearchEvidenceCommand,
-    SearchEvidenceSemanticCommand, SetupPlatform, SetupState, StoragePermissions, TenderErrorCode,
-    TextDirection, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    ensure_quantix_setup, CreateTenderCommand, EvidenceLanguage, EvidenceLocationKind,
+    ImportTenderPackageCommand, ParseExceptionCode, ParseSourceArtifactCommand, ParseState,
+    QuantixHost, SearchEvidenceCommand, SearchEvidenceSemanticCommand, SetupPlatform, SetupState,
+    StoragePermissions, TenderErrorCode, TextDirection, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use rusqlite::Connection;
 use zip::{write::SimpleFileOptions, ZipWriter};
@@ -23,10 +22,6 @@ impl SetupPlatform for ReadySetupPlatform {
 
     fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
         Ok(StoragePermissions::Restrictive)
-    }
-
-    fn device_protection(&self, _path: &Path) -> DeviceProtection {
-        DeviceProtection::Protected
     }
 }
 

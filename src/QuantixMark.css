@@ -1,0 +1,34 @@
+.quantix-mark {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: stretch;
+}
+
+.quantix-mark > img {
+  display: block;
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+}
+
+.quantix-mark__inverse {
+  visibility: hidden;
+}
+
+html[data-quantix-appearance="dark"] .quantix-mark__color {
+  visibility: hidden;
+}
+
+html[data-quantix-appearance="dark"] .quantix-mark__inverse {
+  visibility: visible;
+}
+
+@media (prefers-color-scheme: dark) {
+  html[data-quantix-appearance="system"] .quantix-mark__color {
+    visibility: hidden;
+  }
+
+  html[data-quantix-appearance="system"] .quantix-mark__inverse {
+    visibility: visible;
+  }
+}

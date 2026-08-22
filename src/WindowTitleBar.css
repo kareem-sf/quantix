@@ -1,0 +1,277 @@
+.window-title-bar {
+  --window-title-bar-background: var(--qx-wash-titlebar, transparent);
+  --window-title-bar-hover: var(--qx-wash-control-hover, transparent);
+  --window-title-bar-active: var(--qx-wash-control, transparent);
+
+  position: relative;
+  z-index: 1000;
+  display: flex;
+  width: 100%;
+  height: 35px;
+  min-height: 35px;
+  align-items: stretch;
+  border-bottom: 0;
+  color: var(--qx-text);
+  background: var(--window-title-bar-background);
+  direction: ltr;
+  font-family: var(--qx-font-ui);
+  font-size: 0.8125rem;
+  line-height: 1;
+  user-select: none;
+}
+
+.window-title-bar button {
+  display: inline-grid;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+  transition:
+    color var(--qx-motion-fast) var(--qx-motion-ease),
+    background-color var(--qx-motion-fast) var(--qx-motion-ease);
+}
+
+.window-title-bar button:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--qx-focus);
+  outline-offset: -2px;
+}
+
+.window-title-bar button:disabled {
+  color: var(--qx-text-disabled);
+  background: transparent;
+}
+
+.window-title-bar__app-controls,
+.window-title-bar__window-controls,
+.window-title-bar__menus > [role="menubar"] {
+  display: flex;
+  align-items: stretch;
+}
+
+.window-title-bar__app-controls {
+  padding-inline-start: 3px;
+}
+
+.window-title-bar .window-title-bar__icon-button {
+  width: 32px;
+  height: 29px;
+  margin-block: 3px;
+  border-radius: var(--qx-radius-sm);
+}
+
+.window-title-bar__icon-button:first-child {
+  width: 35px;
+}
+
+.window-title-bar__icon-button:not(:disabled):hover,
+.window-title-bar__menu-trigger:hover,
+.window-title-bar__caption-button:hover {
+  background: var(--window-title-bar-hover);
+}
+
+.window-title-bar__icon-button:not(:disabled):active,
+.window-title-bar__menu-trigger:active,
+.window-title-bar__menu-trigger[aria-expanded="true"],
+.window-title-bar__caption-button:active {
+  background: var(--window-title-bar-active);
+}
+
+.window-title-bar__menus {
+  display: flex;
+  align-items: stretch;
+}
+
+.window-title-bar__menu {
+  position: relative;
+  display: flex;
+}
+
+.window-title-bar .window-title-bar__menu-trigger {
+  min-width: 38px;
+  height: 29px;
+  margin-block: 3px;
+  padding: 0 9px;
+  border-radius: var(--qx-radius-sm);
+  font-size: 0.8125rem;
+  font-weight: 400;
+}
+
+.window-title-bar__menu-popover {
+  position: absolute;
+  inset-block-start: calc(100% - 1px);
+  inset-inline-start: 0;
+  display: grid;
+  min-width: 218px;
+  padding: var(--qx-space-1);
+  border: 0;
+  border-radius: var(--qx-radius-control);
+  box-shadow: var(--qx-shadow-popover);
+  color: var(--qx-text);
+  background: var(--qx-wash-popover, var(--qx-surface-raised));
+  animation: window-title-bar-menu-in var(--qx-motion-fast)
+    var(--qx-motion-ease) both;
+}
+
+.window-title-bar .window-title-bar__menu-item {
+  display: grid;
+  width: 100%;
+  height: 30px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--qx-space-6);
+  padding: 0 var(--qx-space-2);
+  border-radius: var(--qx-radius-sm);
+  text-align: start;
+  white-space: nowrap;
+  transition:
+    color var(--qx-motion-fast) var(--qx-motion-ease),
+    background-color var(--qx-motion-fast) var(--qx-motion-ease);
+}
+
+.window-title-bar__menu-item > span {
+  justify-self: start;
+}
+
+.window-title-bar__menu-item > kbd {
+  justify-self: end;
+  color: var(--qx-text-muted);
+  font-family: var(--qx-font-ui);
+  font-size: 0.75rem;
+}
+
+.window-title-bar .window-title-bar__menu-item:not(:disabled):hover,
+.window-title-bar .window-title-bar__menu-item:not(:disabled):focus-visible {
+  background: var(--qx-hover);
+}
+
+.window-title-bar .window-title-bar__menu-item:not(:disabled):active {
+  background: var(--qx-selected);
+}
+
+.window-title-bar .window-title-bar__menu-item:disabled {
+  color: var(--qx-text-disabled);
+}
+
+.window-title-bar__menu-separator {
+  display: none;
+}
+
+.window-title-bar__drag-region {
+  min-width: 24px;
+  flex: 1 1 auto;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.window-title-bar__window-controls {
+  margin-inline-start: auto;
+}
+
+.window-title-bar .window-title-bar__caption-button {
+  width: 46px;
+}
+
+@media (max-width: 419px) {
+  .window-title-bar__menus {
+    display: none;
+  }
+}
+
+.window-title-bar .window-title-bar__caption-button--close:hover,
+.window-title-bar .window-title-bar__caption-button--close:focus-visible {
+  color: #ffffff;
+  background: #c42b1c;
+}
+
+@keyframes window-title-bar-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.window-title-bar .window-title-bar__caption-button--close:active {
+  color: #ffffff;
+  background: #a61b0f;
+}
+
+.window-title-bar__restore-icon {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  border: 1px solid currentColor;
+}
+
+.window-title-bar__restore-icon::before {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border: 1px solid currentColor;
+  content: "";
+  inset-block-start: -4px;
+  inset-inline-start: 2px;
+}
+
+@media (prefers-contrast: more) {
+  .window-title-bar {
+    border-bottom: 0;
+  }
+
+  .window-title-bar button:focus-visible {
+    outline-width: 3px;
+  }
+}
+
+html.quantix-reduced-motion .window-title-bar button {
+  transition: none;
+}
+
+html.quantix-reduced-motion .window-title-bar__menu-popover {
+  animation: none;
+}
+
+@media (forced-colors: active) {
+  .window-title-bar {
+    --window-title-bar-background: transparent;
+    --window-title-bar-hover: Highlight;
+    --window-title-bar-active: Highlight;
+
+    border-bottom: 0;
+    color: CanvasText;
+  }
+
+  .window-title-bar__menu-popover {
+    border: 0;
+    box-shadow: none;
+    background: Canvas;
+  }
+
+  .window-title-bar button:focus-visible {
+    outline-color: Highlight;
+  }
+
+  .window-title-bar__menu-trigger:hover,
+  .window-title-bar__menu-trigger[aria-expanded="true"],
+  .window-title-bar__icon-button:not(:disabled):hover,
+  .window-title-bar__caption-button:hover,
+  .window-title-bar__menu-item:not(:disabled):hover,
+  .window-title-bar__menu-item:not(:disabled):focus-visible {
+    color: HighlightText;
+  }
+
+  .window-title-bar .window-title-bar__caption-button--close:hover,
+  .window-title-bar .window-title-bar__caption-button--close:focus-visible,
+  .window-title-bar .window-title-bar__caption-button--close:active {
+    color: HighlightText;
+    background: Highlight;
+  }
+}

@@ -1173,11 +1173,7 @@ impl QuantixHost {
             return (false, false);
         }
         let readiness = self.inspect_runtime_readiness_for_update().await;
-        let runtime_ready = matches!(
-            readiness.state,
-            RuntimeReadinessState::Ready | RuntimeReadinessState::AuthenticationRequired
-        ) && readiness.codex_version.as_deref()
-            == Some(offer.compatibility.codex_version.as_str())
+        let runtime_ready = readiness.state == RuntimeReadinessState::Ready
             && readiness.ocr_version.as_deref() == Some(offer.compatibility.ocr_version.as_str())
             && offer.compatibility.runtime_manifest_schema_version == RUNTIME_PROVENANCE_SCHEMA;
         let tenders_ready = self

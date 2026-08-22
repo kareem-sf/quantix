@@ -26,13 +26,15 @@ use crate::document_parsing::{
     SearchEvidenceSemanticCommand, TextDirection, MAX_EVIDENCE_LOCATIONS, MAX_MARKDOWN_BYTES,
 };
 use crate::tender_intake::{
-    prepare_package, ConfirmSourceRelationshipCommand, DocumentRegister, DocumentRegisterEntry,
-    ImportTenderPackageCommand, IntakeExceptionCode, PreparedIntake, RegistrationState,
-    SupersessionState, TenderPackageImportResult,
+    prepare_package_with_control, ConfirmSourceRelationshipCommand, DocumentRegister,
+    DocumentRegisterEntry, ImportTenderPackageCommand, IntakeExceptionCode, PackageIntakeControl,
+    PreparedIntake, RegistrationState, SupersessionState, TenderPackageImportResult,
 };
 use crate::{
     agent_runtime::{bootstrap_profile, BootstrapRole},
-    application_settings::AiExecutionSelection,
+    application_settings::{
+        AiExecutionSelection, TenderAiExecutionBinding, TenderAiSelectionReadiness,
+    },
 };
 use crate::{host::OrdinaryWorkLease, setup::SetupState, QuantixHost};
 
@@ -62,11 +64,13 @@ pub(crate) use coordinated_baselines::exact_approved_coordinated_baseline_is_cur
 pub use backups::{
     CreatePortableTenderArchiveCommand, CreateTenderBackupCommand, DeletionReceipt,
     ErasedTenderCopyClass, ImportPortableTenderArchiveCommand, PortableTenderArchiveRecord,
-    PrepareTenderRecoveryCommand, ProviderCleanupStatus, PurgeTrashedTenderCommand,
-    ResolveTenderRecoveryCommand, TenderBackupRecord, TenderBackupState, TenderRecoveryDecision,
+    PrepareTenderRecoveryCommand, ProviderCleanupStatus, ProviderReferenceDiscoveryState,
+    PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand, ResolveTenderRecoveryCommand,
+    TenderBackupRecord, TenderBackupState, TenderDeletionSourceState, TenderRecoveryDecision,
     TenderRecoveryDecisionRecord, TenderRecoveryRecord, TenderRecoveryState,
     TenderRetentionDecisionCommand, TenderRetentionDecisionRecord, TenderRetentionState,
-    TrashedTenderDecisionCommand, TrashedTenderRecord, TrashedTenderState,
+    TrashRecoveryRequiredTenderCommand, TrashedTenderDecisionCommand, TrashedTenderRecord,
+    TrashedTenderState,
 };
 pub(crate) use bid_decisions::BidPackageOperationBudget;
 pub use bid_decisions::{
@@ -234,9 +238,13 @@ pub use workspace::{
     InspectManagerWorkspaceCommand, ManagerConversation, ManagerWorkspaceProjection,
     ManagerWorkspaceTender, ManagerWorkspaceTenderState, RebindManagerIntakeProviderCommand,
     RecordEngineerWorkspaceMessageCommand, RetryManagerIntakeCommand,
-    SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand, TenderOfficeMessage,
-    TenderOfficeMessageAuthor, TenderOfficeMessageKind, WorkspaceActionKind,
-    WorkspaceCurrentAction, WorkspaceFilesSummary, WorkspaceTeamSummary, WorkspaceWorkSummary,
+    SearchManagerWorkspaceCommand, SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand,
+    TenderOfficeMessage, TenderOfficeMessageAuthor, TenderOfficeMessageKind, WorkspaceActionKind,
+    WorkspaceAgentReference, WorkspaceAgentRunReference, WorkspaceCapabilityReadiness,
+    WorkspaceCapabilityReadinessState, WorkspaceCurrentAction, WorkspaceDoctorBlockerArea,
+    WorkspaceDoctorBlockerSummary, WorkspaceFilesSummary, WorkspaceOutputReference,
+    WorkspaceSearchGroup, WorkspaceSearchHit, WorkspaceSearchProjection, WorkspaceSearchResultKind,
+    WorkspaceTaskRow, WorkspaceTaskState, WorkspaceTeamSummary, WorkspaceWorkSummary,
 };
 
 #[cfg(test)]
@@ -245,7 +253,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 33;
+#[cfg(test)]
+static CONTENT_VERIFY_PASS_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 35;
 
 pub(crate) fn record_agent_run_provider_binding(
     transaction: &Transaction<'_>,
@@ -279,6 +290,20 @@ CREATE TABLE tender (
   )),
   created_at TEXT NOT NULL
 );
+CREATE TABLE tender_ai_execution_binding (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  selection_json TEXT CHECK (
+    selection_json IS NULL OR json_valid(selection_json)
+  ),
+  readiness TEXT NOT NULL CHECK (readiness IN (
+    'local_only', 'ready', 'selection_required', 'provider_unavailable',
+    'catalogue_stale', 'model_unavailable', 'approval_required'
+  )),
+  status_summary TEXT NOT NULL CHECK (length(CAST(status_summary AS BLOB)) BETWEEN 1 AND 1000),
+  updated_at TEXT NOT NULL,
+  CHECK ((readiness = 'local_only') = (selection_json IS NULL))
+);
 CREATE TABLE tender_revisions (
   revision INTEGER PRIMARY KEY CHECK (revision > 0),
   tender_id TEXT NOT NULL,
@@ -301,6 +326,7 @@ CREATE TABLE manager_intake_runs (
   intake_run_id TEXT NOT NULL UNIQUE CHECK (length(intake_run_id) = 32),
   package_intake_id TEXT NOT NULL UNIQUE,
   stage TEXT NOT NULL CHECK (stage IN (
+    'waiting_for_local_tools', 'waiting_for_provider_approval',
     'waiting_for_provider', 'package_registered', 'reading_documents',
     'extracting_tender_facts', 'reviewing_tender_facts',
     'preparing_first_decision', 'waiting_for_engineer',
@@ -327,12 +353,17 @@ CREATE TABLE manager_intake_runs (
     OR (stage IN ('waiting_for_engineer', 'bid_decision_ready')
         AND failure_summary IS NULL AND completed_at IS NOT NULL)
     OR (stage IN (
+          'waiting_for_local_tools', 'waiting_for_provider_approval',
           'waiting_for_provider', 'package_registered', 'reading_documents',
           'extracting_tender_facts', 'reviewing_tender_facts',
           'preparing_first_decision'
         ) AND failure_summary IS NULL AND completed_at IS NULL)
   ),
-  CHECK (stage = 'waiting_for_provider' OR provider_selection_json IS NOT NULL)
+  CHECK (
+    stage IN ('waiting_for_local_tools', 'waiting_for_provider_approval',
+              'package_registered', 'reading_documents')
+    OR provider_selection_json IS NOT NULL
+  )
 );
 CREATE TABLE tender_office_messages (
   message_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3976,7 +4007,8 @@ pub enum TenderErrorCode {
     NotFound,
     OperationTimedOut,
     RecoveryRequired,
-    RuntimeRequired,
+    LocalDocumentToolsRequired,
+    AiProviderRequired,
     SetupRequired,
     StoreUnavailable,
 }
@@ -4115,6 +4147,128 @@ impl RawEvidenceLocation {
 }
 
 impl TenderStore {
+    /// Read the small, SQL-backed workspace projection without opening the
+    /// writer store.  Workspace refreshes run frequently, so they must not
+    /// perform the content-object hash walk that `open` and integrity
+    /// inspection intentionally perform.
+    pub(crate) fn read_workspace_tender(
+        root: &Path,
+        expected_tender_id: &TenderId,
+    ) -> Result<ManagerWorkspaceTender, TenderCommandError> {
+        let recovery = || TenderCommandError::new(TenderErrorCode::RecoveryRequired);
+        validate_tender_store_layout(root).map_err(|_| recovery())?;
+        let database = root.join("tender.sqlite");
+        // The schema comparison below includes sqlite-vec's virtual table
+        // module. Register it before opening the first connection in a fresh
+        // process so that the expected schema can be constructed faithfully.
+        register_sqlite_vec()?;
+        let connection = Connection::open_with_flags(
+            database,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|_| recovery())?;
+        configure_reader(&connection).map_err(|_| recovery())?;
+        let schema_version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .map_err(|_| recovery())?;
+        if schema_version != TENDER_SCHEMA_VERSION {
+            return Err(recovery());
+        }
+        // The workspace sidebar projection must not treat a store with an
+        // altered schema as active merely because its core rows are readable.
+        // In particular, a missing audit trigger is discovered only by the
+        // exact schema comparison below.  Keep the projection read-only and
+        // cheap, but surface the same recovery state that a full integrity
+        // inspection would report so cold-start workspace refreshes can still
+        // expose recovery-specific actions.
+        if inspect_store_structure(&connection, expected_tender_id)
+            .map_err(|_| recovery())?
+            .is_some()
+        {
+            return Err(recovery());
+        }
+
+        type WorkspaceTenderProjectionRow =
+            (String, u32, String, String, bool, Option<String>, bool);
+        let projection: Result<WorkspaceTenderProjectionRow, _> = connection.query_row(
+            "SELECT tender.tender_id,
+                    tender.current_revision,
+                    tender.lifecycle_phase,
+                    tender_revisions.name,
+                    tender_retention.state = 'archived',
+                    manager_workspace_state.last_activity_at,
+                    EXISTS(
+                      SELECT 1 FROM production_tasks
+                      WHERE status IN (
+                        'review_ready', 'remediation_ready', 'query_blocked',
+                        'attempt_limit_reached', 'indeterminate', 'failed'
+                      )
+                    ) OR EXISTS(
+                      SELECT 1 FROM manager_intake_runs
+                      WHERE stage IN (
+                        'waiting_for_local_tools', 'waiting_for_provider_approval',
+                        'waiting_for_provider', 'waiting_for_engineer',
+                        'bid_decision_ready', 'failed'
+                      )
+                    )
+             FROM tender
+             JOIN tender_revisions
+               ON tender_revisions.revision = tender.current_revision
+             JOIN tender_retention
+               ON tender_retention.singleton = 1
+             JOIN manager_workspace_state
+               ON manager_workspace_state.singleton = 1
+             WHERE tender.singleton = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        );
+        let (
+            tender_id,
+            revision,
+            lifecycle_phase,
+            name,
+            archived,
+            last_activity_at,
+            needs_engineer,
+        ) = projection.map_err(|_| recovery())?;
+        if tender_id != expected_tender_id.as_str() {
+            return Err(TenderCommandError::new(TenderErrorCode::RecoveryRequired));
+        }
+        if name.is_empty() || name.len() > MAX_TENDER_NAME_BYTES {
+            return Err(recovery());
+        }
+
+        Ok(ManagerWorkspaceTender {
+            tender_id,
+            name,
+            revision,
+            phase: TenderLifecyclePhase::parse(&lifecycle_phase)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::RecoveryRequired))?,
+            needs_engineer,
+            state: if archived {
+                ManagerWorkspaceTenderState::Archived
+            } else {
+                ManagerWorkspaceTenderState::Active
+            },
+            // These boundaries are deliberately authoritative only on the
+            // selected, fully-open store.  The lightweight sidebar projection
+            // never grants a retention command permission.
+            can_archive: false,
+            can_delete: false,
+            last_activity_at,
+        })
+    }
+
     fn create(root: &Path, tender_id: &TenderId, name: &str) -> Result<Self, TenderCommandError> {
         register_sqlite_vec()?;
         fs::create_dir(root).map_err(store_unavailable)?;
@@ -4145,6 +4299,14 @@ impl TenderStore {
             .execute(
                 "INSERT INTO tender_revisions (revision, tender_id, name, created_at) VALUES (1, ?1, ?2, ?3)",
                 params![tender_id.as_str(), name, created_at],
+            )
+            .map_err(sql_error)?;
+        transaction
+            .execute(
+                "INSERT INTO tender_ai_execution_binding (
+                   singleton, revision, selection_json, readiness, status_summary, updated_at
+                 ) VALUES (1, 1, NULL, 'local_only', ?1, ?1)",
+                ["No AI provider is selected; local-only Tender work remains available."],
             )
             .map_err(sql_error)?;
         transaction
@@ -4182,6 +4344,151 @@ impl TenderStore {
             recovery_required: false,
             archived: false,
         })
+    }
+
+    pub(crate) fn inspect_tender_ai_execution_binding(
+        &self,
+    ) -> Result<TenderAiExecutionBinding, TenderCommandError> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT revision, selection_json, readiness, status_summary
+                 FROM tender_ai_execution_binding WHERE singleton = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .map_err(sql_error)?;
+        let revision = u64::try_from(row.0)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let selection = row
+            .1
+            .as_deref()
+            .map(serde_json::from_str::<AiExecutionSelection>)
+            .transpose()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let readiness = parse_tender_ai_selection_readiness(&row.2)?;
+        if (readiness == TenderAiSelectionReadiness::LocalOnly) != selection.is_none() {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        Ok(TenderAiExecutionBinding {
+            revision,
+            selection,
+            readiness,
+            status_summary: row.3,
+        })
+    }
+
+    pub(crate) fn seed_application_ai_execution_binding(
+        &mut self,
+        application_home: &Path,
+        tender_id: &TenderId,
+    ) -> Result<TenderAiExecutionBinding, TenderCommandError> {
+        let current = self.inspect_tender_ai_execution_binding()?;
+        if current.revision != 1
+            || current.selection.is_some()
+            || current.readiness != TenderAiSelectionReadiness::LocalOnly
+        {
+            return Ok(current);
+        }
+        let default =
+            crate::application_settings::default_tender_ai_execution_binding(application_home)?;
+        self.update_tender_ai_execution_binding(
+            tender_id,
+            current.revision,
+            default.selection,
+            default.readiness,
+            &default.status_summary,
+        )
+    }
+
+    pub(crate) fn required_tender_ai_execution_selection(
+        &self,
+    ) -> Result<AiExecutionSelection, TenderCommandError> {
+        let binding = self.inspect_tender_ai_execution_binding()?;
+        binding
+            .selection
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))
+    }
+
+    pub(crate) fn update_tender_ai_execution_binding(
+        &mut self,
+        tender_id: &TenderId,
+        expected_revision: u64,
+        selection: Option<AiExecutionSelection>,
+        readiness: TenderAiSelectionReadiness,
+        status_summary: &str,
+    ) -> Result<TenderAiExecutionBinding, TenderCommandError> {
+        self.require_storage_writable()?;
+        if status_summary.trim().is_empty() || status_summary.len() > 1_000 {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        if (readiness == TenderAiSelectionReadiness::LocalOnly) != selection.is_none() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let next_revision = expected_revision
+            .checked_add(1)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let expected_revision_i64 = i64::try_from(expected_revision)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let next_revision_i64 = i64::try_from(next_revision)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let selection_json = selection
+            .as_ref()
+            .map(serde_json_canonicalizer::to_string)
+            .transpose()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let updated_at = sqlite_timestamp(&transaction)?;
+        let updated = transaction
+            .execute(
+                "UPDATE tender_ai_execution_binding
+                 SET revision = ?1, selection_json = ?2, readiness = ?3,
+                     status_summary = ?4, updated_at = ?5
+                 WHERE singleton = 1 AND revision = ?6",
+                params![
+                    next_revision_i64,
+                    selection_json,
+                    tender_ai_selection_readiness_as_str(readiness),
+                    status_summary,
+                    updated_at,
+                    expected_revision_i64,
+                ],
+            )
+            .map_err(sql_error)?;
+        if updated != 1 {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let tender_revision = transaction
+            .query_row(
+                "SELECT current_revision FROM tender WHERE singleton = 1 AND tender_id = ?1",
+                [tender_id.as_str()],
+                |row| row.get::<_, u32>(0),
+            )
+            .map_err(sql_error)?;
+        append_audit_event(
+            &transaction,
+            tender_id.as_str(),
+            "tender_ai_execution_binding_updated",
+            tender_revision,
+            json!({
+                "binding_revision": next_revision,
+                "readiness": tender_ai_selection_readiness_as_str(readiness),
+                "selection_present": selection.is_some(),
+            }),
+            &updated_at,
+        )?;
+        transaction.commit().map_err(sql_error)?;
+        self.inspect_tender_ai_execution_binding()
     }
 
     fn reconcile_interrupted_parses(
@@ -4291,7 +4598,12 @@ impl TenderStore {
             let Some(candidate_id) = name.to_str().and_then(host_staging_candidate_id) else {
                 continue;
             };
-            if !valid_identifier(candidate_id) {
+            let is_package_stage = name
+                .to_str()
+                .is_some_and(|name| name.starts_with("package-"));
+            if (!is_package_stage && !valid_identifier(candidate_id))
+                || (is_package_stage && !valid_package_operation_id(candidate_id))
+            {
                 continue;
             }
             remove_verified_directory(&staging_root, &entry.path())?;
@@ -5136,9 +5448,85 @@ impl TenderStore {
         &mut self,
         source: &Path,
     ) -> Result<TenderPackageImportResult, TenderCommandError> {
+        self.import_package_with_control(source, None)?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))
+    }
+
+    pub(crate) fn import_package_with_control(
+        &mut self,
+        source: &Path,
+        control: Option<&PackageIntakeControl>,
+    ) -> Result<Option<TenderPackageImportResult>, TenderCommandError> {
+        let content_root = self.root.join("content");
+        self.import_package_with_control_from_content_root(source, &content_root, control)
+    }
+
+    pub(crate) fn import_package_with_control_from_content_root(
+        &mut self,
+        source: &Path,
+        content_root: &Path,
+        control: Option<&PackageIntakeControl>,
+    ) -> Result<Option<TenderPackageImportResult>, TenderCommandError> {
         self.require_change_intake_writable()?;
-        let prepared = prepare_package(source, &self.root.join("content"))?;
-        self.publish_intake(prepared)
+        let Some(prepared) = prepare_package_with_control(source, content_root, control)? else {
+            return Ok(None);
+        };
+        // Once this point is reached publication is atomic.  Cancellation is
+        // intentionally disabled before opening the transaction so a request
+        // can never leave half of an intake visible in the database.
+        if control.is_some_and(PackageIntakeControl::is_cancelled) {
+            return Ok(None);
+        }
+        if let Some(control) = control {
+            control.set_stage(crate::tender_intake::PackageIntakeStage::RecordingDocuments);
+            control.set_total(Some(
+                u32::try_from(prepared.documents.len()).unwrap_or(u32::MAX),
+            ));
+            control.mark_finalization();
+        }
+        self.publish_intake(prepared, control).map(Some)
+    }
+
+    fn promote_staged_content(
+        &self,
+        prepared: &PreparedIntake,
+        staged_content_root: &Path,
+    ) -> Result<Vec<cacache::Integrity>, TenderCommandError> {
+        let live_content_root = self.root.join("content");
+        let mut promoted = Vec::new();
+        let result = (|| -> Result<(), TenderCommandError> {
+            for document in &prepared.documents {
+                let Some(integrity) = document.integrity.as_deref() else {
+                    continue;
+                };
+                let integrity = integrity
+                    .parse::<cacache::Integrity>()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+                let bytes = cacache::read_hash_sync(staged_content_root, &integrity)
+                    .map_err(content_store_error)?;
+                let existed = cacache::read_hash_sync(&live_content_root, &integrity).is_ok();
+                let written_integrity = cacache::write_hash_sync(&live_content_root, &bytes)
+                    .map_err(content_store_error)?;
+                if written_integrity.to_string() != integrity.to_string()
+                    || cacache::read_hash_sync(&live_content_root, &integrity)
+                        .map_err(content_store_error)?
+                        != bytes
+                {
+                    return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+                }
+                if !existed {
+                    promoted.push(integrity);
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            for integrity in &promoted {
+                let _ = cacache::remove_hash_sync(&live_content_root, integrity);
+            }
+            return Err(error);
+        }
+        Ok(promoted)
     }
 
     pub(crate) fn begin_parse(
@@ -5756,6 +6144,7 @@ impl TenderStore {
     fn publish_intake(
         &mut self,
         prepared: PreparedIntake,
+        control: Option<&PackageIntakeControl>,
     ) -> Result<TenderPackageImportResult, TenderCommandError> {
         self.require_change_intake_writable()?;
         let discovered_count = u32::try_from(prepared.documents.len())
@@ -5829,6 +6218,9 @@ impl TenderStore {
             .map_err(sql_error)?;
 
         for document in prepared.documents {
+            if let Some(control) = control {
+                control.set_current_path(Some(document.package_path.clone()));
+            }
             let artifact_id = random_identifier(&transaction)?;
             transaction
                 .execute(
@@ -5871,6 +6263,9 @@ impl TenderStore {
                     .map_err(sql_error)?;
                 if stored != (integrity.clone(), size_bytes) {
                     return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+                }
+                if let Some(control) = control {
+                    control.record_registered();
                 }
             }
             transaction
@@ -5948,6 +6343,10 @@ impl TenderStore {
             &created_at,
         )?;
         transaction.commit().map_err(sql_error)?;
+
+        if let Some(control) = control {
+            control.opening_workspace();
+        }
 
         Ok(TenderPackageImportResult {
             intake_id: intake_id.clone(),
@@ -6261,7 +6660,6 @@ impl QuantixHost {
         command: CreateTenderCommand,
     ) -> Result<TenderSummary, TenderCommandError> {
         let _ordinary_work = self.begin_ordinary_work()?;
-        self.require_runtime_verified()?;
         require_setup(self)?;
         command
             .validate()
@@ -6280,17 +6678,31 @@ impl QuantixHost {
             .application_home()
             .join("tenders")
             .join(tender_id.as_str());
-        let store = match TenderStore::create(&stage_root, &tender_id, name) {
+        let mut store = match TenderStore::create(&stage_root, &tender_id, name) {
             Ok(store) => store,
             Err(error) => {
                 let _ = fs::remove_dir_all(&stage_root);
                 return Err(error);
             }
         };
+        if let Err(error) =
+            store.seed_application_ai_execution_binding(self.application_home(), &tender_id)
+        {
+            let _ = fs::remove_dir_all(&stage_root);
+            return Err(error);
+        }
         let summary = store.summary()?;
+        if let Err(error) = self.upsert_catalogue_summary(&summary) {
+            let _ = fs::remove_dir_all(&stage_root);
+            return Err(error);
+        }
         drop(store);
         storage_publication_failpoint("tender_after_stage");
-        fs::rename(&stage_root, &final_root).map_err(store_unavailable)?;
+        if let Err(error) = fs::rename(&stage_root, &final_root) {
+            let _ = fs::remove_dir_all(&stage_root);
+            let _ = self.remove_catalogue_entry(&tender_id);
+            return Err(store_unavailable(error));
+        }
         storage_publication_failpoint("tender_after_publish");
         Ok(summary)
     }
@@ -6315,7 +6727,7 @@ impl QuantixHost {
         &self,
         command: ReviseTenderCommand,
     ) -> Result<TenderSummary, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_document_tools()?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         if command.validate().is_err() {
@@ -6337,7 +6749,7 @@ impl QuantixHost {
         &self,
         command: RegisterTenderContentCommand,
     ) -> Result<ContentVersionSummary, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_document_tools()?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         if command.validate().is_err()
@@ -6376,6 +6788,80 @@ impl QuantixHost {
         Ok(imported)
     }
 
+    /// Imports an add-package operation through a private staging cache.  No
+    /// source bytes are promoted to the live cache and no database transaction
+    /// is opened until preparation has completed and cancellation is disabled.
+    pub(crate) fn import_tender_package_with_control(
+        &self,
+        command: ImportTenderPackageCommand,
+        control: &PackageIntakeControl,
+    ) -> Result<Option<TenderPackageImportResult>, TenderCommandError> {
+        require_setup(self)?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let source = Path::new(&command.source_path);
+        if command.validate().is_err()
+            || !source.is_absolute()
+            || fs::symlink_metadata(source).is_err()
+        {
+            return self.reject_tender_command(&tender_id, "import_tender_package");
+        }
+        if control.is_cancelled() {
+            return Ok(None);
+        }
+        let store = self.tender_store(&tender_id)?;
+        let mut store = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let operation_id = control.snapshot().operation_id;
+        if !valid_package_operation_id(&operation_id) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let stage_root = store
+            .root
+            .join("staging")
+            .join(format!("package-{operation_id}"));
+        let staged_content_root = stage_root.join("content");
+        if let Err(error) = fs::create_dir(&stage_root) {
+            return Err(store_unavailable(error));
+        }
+        if let Err(error) = fs::create_dir(&staged_content_root) {
+            let _ = fs::remove_dir_all(&stage_root);
+            return Err(store_unavailable(error));
+        }
+
+        let outcome = (|| -> Result<Option<TenderPackageImportResult>, TenderCommandError> {
+            let Some(prepared) =
+                prepare_package_with_control(source, &staged_content_root, Some(control))?
+            else {
+                return Ok(None);
+            };
+            if control.is_cancelled() {
+                return Ok(None);
+            }
+            // Promotion and the database transaction form one non-cancellable
+            // finalization boundary.  The staging cache remains private until
+            // this point, so cancellation cannot expose partial intake rows.
+            control.set_stage(crate::tender_intake::PackageIntakeStage::RecordingDocuments);
+            control.set_total(Some(
+                u32::try_from(prepared.documents.len()).unwrap_or(u32::MAX),
+            ));
+            control.mark_finalization();
+            let promoted = store.promote_staged_content(&prepared, &staged_content_root)?;
+            match store.publish_intake(prepared, Some(control)) {
+                Ok(result) => Ok(Some(result)),
+                Err(error) => {
+                    for integrity in promoted {
+                        let _ = cacache::remove_hash_sync(store.root.join("content"), &integrity);
+                    }
+                    Err(error)
+                }
+            }
+        })();
+        drop(store);
+        let _ = fs::remove_dir_all(&stage_root);
+        outcome
+    }
+
     pub fn inspect_document_register(
         &self,
         tender_id: &str,
@@ -6394,7 +6880,7 @@ impl QuantixHost {
         &self,
         command: ConfirmSourceRelationshipCommand,
     ) -> Result<DocumentRegister, TenderCommandError> {
-        self.require_runtime_verified()?;
+        self.require_document_tools()?;
         require_setup(self)?;
         let tender_id = TenderId::parse(&command.tender_id)?;
         if command.validate().is_err()
@@ -6553,7 +7039,7 @@ impl QuantixHost {
             });
         }
         catalogue.sort_by(|left, right| left.tender_id.cmp(&right.tender_id));
-        let _ = self.replace_catalogue(&verified_summaries);
+        let _ = self.upsert_catalogue_summaries(&verified_summaries);
         Ok(catalogue)
     }
 
@@ -6704,7 +7190,10 @@ impl QuantixHost {
         Err(TenderCommandError::new(TenderErrorCode::InvalidCommand))
     }
 
-    fn replace_catalogue(&self, summaries: &[TenderSummary]) -> Result<(), TenderCommandError> {
+    fn upsert_catalogue_summaries(
+        &self,
+        summaries: &[TenderSummary],
+    ) -> Result<(), TenderCommandError> {
         let _guard = self
             .catalogue_lock()
             .lock()
@@ -6717,15 +7206,17 @@ impl QuantixHost {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_error)?;
-        transaction
-            .execute("DELETE FROM tender_catalogue", [])
-            .map_err(sql_error)?;
         for summary in summaries {
             transaction
                 .execute(
                     "INSERT INTO tender_catalogue (
                        tender_id, name, revision, audit_event_count, audit_chain_head
-                     ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                     ) VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(tender_id) DO UPDATE SET
+                       name = excluded.name,
+                       revision = excluded.revision,
+                       audit_event_count = excluded.audit_event_count,
+                       audit_chain_head = excluded.audit_chain_head",
                     params![
                         summary.tender_id,
                         summary.name,
@@ -6738,6 +7229,59 @@ impl QuantixHost {
         }
         transaction.commit().map_err(sql_error)?;
         storage_publication_failpoint("catalogue_after_commit");
+        Ok(())
+    }
+
+    pub(crate) fn upsert_catalogue_summary(
+        &self,
+        summary: &TenderSummary,
+    ) -> Result<(), TenderCommandError> {
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let connection = Connection::open(self.application_home().join("installation.sqlite"))
+            .map_err(sql_error)?;
+        connection
+            .busy_timeout(Duration::from_secs(5))
+            .map_err(sql_error)?;
+        connection
+            .execute(
+                "INSERT INTO tender_catalogue (
+                   tender_id, name, revision, audit_event_count, audit_chain_head
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(tender_id) DO UPDATE SET
+                   name = excluded.name,
+                   revision = excluded.revision,
+                   audit_event_count = excluded.audit_event_count,
+                   audit_chain_head = excluded.audit_chain_head",
+                params![
+                    summary.tender_id,
+                    summary.name,
+                    summary.revision,
+                    summary.audit_event_count as i64,
+                    summary.audit_chain_head,
+                ],
+            )
+            .map_err(sql_error)?;
+        Ok(())
+    }
+
+    pub(crate) fn remove_catalogue_entry(
+        &self,
+        tender_id: &TenderId,
+    ) -> Result<(), TenderCommandError> {
+        let _guard = self
+            .catalogue_lock()
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        Connection::open(self.application_home().join("installation.sqlite"))
+            .map_err(sql_error)?
+            .execute(
+                "DELETE FROM tender_catalogue WHERE tender_id = ?1",
+                [tender_id.as_str()],
+            )
+            .map_err(sql_error)?;
         Ok(())
     }
 }
@@ -6769,6 +7313,13 @@ pub(crate) fn reconcile_application_staging(
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
         remove_verified_directory(&staging, &entry.path())?;
+        Connection::open(application_home.join("installation.sqlite"))
+            .map_err(sql_error)?
+            .execute(
+                "DELETE FROM tender_catalogue WHERE tender_id = ?1",
+                [tender_id],
+            )
+            .map_err(sql_error)?;
         removed_tender_candidates = removed_tender_candidates
             .checked_add(1)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
@@ -6791,8 +7342,16 @@ fn valid_identifier(value: &str) -> bool {
             .all(|character| character.is_ascii_digit() || matches!(character, 'a'..='f'))
 }
 
+fn valid_package_operation_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+}
+
 fn host_staging_candidate_id(name: &str) -> Option<&str> {
-    ["parse-", "generation-"]
+    ["parse-", "generation-", "package-"]
         .into_iter()
         .find_map(|prefix| name.strip_prefix(prefix))
 }
@@ -6916,7 +7475,15 @@ fn configure_writer(connection: &mut Connection) -> Result<(), TenderCommandErro
     configure_sqlite_limits(connection)
 }
 
-fn register_sqlite_vec() -> Result<(), TenderCommandError> {
+/// Register sqlite-vec before any worker can open a Tender Store.
+///
+/// SQLite's auto-extension list is process-global.  Registration itself is
+/// protected by SQLite's global mutex, but invoking it lazily from concurrent
+/// store creation and workspace-refresh workers can re-enter SQLite startup
+/// while another connection is being opened.  The Host initializes this once
+/// during startup; the existing call sites retain the cheap OnceLock read as
+/// a defensive invariant for non-Host test/fresh-process entry points.
+pub(crate) fn register_sqlite_vec() -> Result<(), TenderCommandError> {
     static REGISTRATION: OnceLock<bool> = OnceLock::new();
     let registered = *REGISTRATION.get_or_init(|| {
         // sqlite-vec is statically linked; registering its entry point makes it
@@ -7339,6 +7906,8 @@ fn inspect_referenced_content_with_check(
     content_root: &Path,
     check: &mut dyn FnMut() -> Result<(), TenderCommandError>,
 ) -> Result<Option<TenderIntegrityIssue>, TenderCommandError> {
+    #[cfg(test)]
+    CONTENT_VERIFY_PASS_COUNT.fetch_add(1, Ordering::SeqCst);
     check()?;
     if let Err(error) = validate_content_cache_roots(content_root) {
         return if error.code == TenderErrorCode::IntegrityFailed {
@@ -7419,6 +7988,33 @@ fn sqlite_timestamp(transaction: &Transaction<'_>) -> Result<String, TenderComma
         .map_err(sql_error)
 }
 
+fn tender_ai_selection_readiness_as_str(readiness: TenderAiSelectionReadiness) -> &'static str {
+    match readiness {
+        TenderAiSelectionReadiness::LocalOnly => "local_only",
+        TenderAiSelectionReadiness::Ready => "ready",
+        TenderAiSelectionReadiness::SelectionRequired => "selection_required",
+        TenderAiSelectionReadiness::ProviderUnavailable => "provider_unavailable",
+        TenderAiSelectionReadiness::CatalogueStale => "catalogue_stale",
+        TenderAiSelectionReadiness::ModelUnavailable => "model_unavailable",
+        TenderAiSelectionReadiness::ApprovalRequired => "approval_required",
+    }
+}
+
+fn parse_tender_ai_selection_readiness(
+    value: &str,
+) -> Result<TenderAiSelectionReadiness, TenderCommandError> {
+    match value {
+        "local_only" => Ok(TenderAiSelectionReadiness::LocalOnly),
+        "ready" => Ok(TenderAiSelectionReadiness::Ready),
+        "selection_required" => Ok(TenderAiSelectionReadiness::SelectionRequired),
+        "provider_unavailable" => Ok(TenderAiSelectionReadiness::ProviderUnavailable),
+        "catalogue_stale" => Ok(TenderAiSelectionReadiness::CatalogueStale),
+        "model_unavailable" => Ok(TenderAiSelectionReadiness::ModelUnavailable),
+        "approval_required" => Ok(TenderAiSelectionReadiness::ApprovalRequired),
+        _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+    }
+}
+
 fn random_identifier(connection: &Connection) -> Result<String, TenderCommandError> {
     connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
@@ -7461,9 +8057,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::setup::{
-        DeviceProtection, SetupPlatform, StoragePermissions, MINIMUM_SETUP_FREE_SPACE_BYTES,
-    };
+    use crate::setup::{SetupPlatform, StoragePermissions, MINIMUM_SETUP_FREE_SPACE_BYTES};
 
     struct ReadySetupPlatform;
 
@@ -7479,10 +8073,6 @@ mod tests {
         fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
             Ok(StoragePermissions::Restrictive)
         }
-
-        fn device_protection(&self, _path: &Path) -> DeviceProtection {
-            DeviceProtection::Protected
-        }
     }
 
     #[test]
@@ -7494,6 +8084,121 @@ mod tests {
         })
         .expect_err("expired lock wait must fail");
         assert_eq!(error.code, TenderErrorCode::OperationTimedOut);
+    }
+
+    #[test]
+    fn tender_ai_binding_is_local_only_by_default_and_uses_compare_and_swap_revision() {
+        let root = tempfile::tempdir().expect("Tender Store root");
+        let tender_id = TenderId("0123456789abcdef0123456789abcdef".into());
+        let mut store =
+            TenderStore::create(&root.path().join("tender"), &tender_id, "AI binding test")
+                .expect("create Tender Store");
+
+        let initial = store
+            .inspect_tender_ai_execution_binding()
+            .expect("inspect default binding");
+        assert_eq!(initial.revision, 1);
+        assert_eq!(initial.selection, None);
+        assert_eq!(initial.readiness, TenderAiSelectionReadiness::LocalOnly);
+
+        let updated = store
+            .update_tender_ai_execution_binding(
+                &tender_id,
+                initial.revision,
+                None,
+                TenderAiSelectionReadiness::LocalOnly,
+                "Local-only work remains available.",
+            )
+            .expect("record local-only binding");
+        assert_eq!(updated.revision, 2);
+
+        let stale = store
+            .update_tender_ai_execution_binding(
+                &tender_id,
+                initial.revision,
+                None,
+                TenderAiSelectionReadiness::LocalOnly,
+                "stale revision must fail",
+            )
+            .expect_err("stale binding update");
+        assert_eq!(stale.code, TenderErrorCode::InvalidCommand);
+    }
+
+    #[test]
+    fn tender_ai_binding_rejects_local_only_readiness_with_a_selection() {
+        let root = tempfile::tempdir().expect("Tender Store root");
+        let tender_id = TenderId("fedcba9876543210fedcba9876543210".into());
+        let mut store = TenderStore::create(
+            &root.path().join("tender"),
+            &tender_id,
+            "AI binding validation",
+        )
+        .expect("create Tender Store");
+        let selection = AiExecutionSelection {
+            connection_id: "provider".into(),
+            provider: crate::application_settings::AiProviderKind::Gemini,
+            model_id: "model".into(),
+            reasoning: crate::application_settings::ProviderReasoningSelection::ProviderDefault,
+            catalogue_fetched_at: "catalogue".into(),
+            adapter_version: "adapter".into(),
+        };
+        let error = store
+            .update_tender_ai_execution_binding(
+                &tender_id,
+                1,
+                Some(selection),
+                TenderAiSelectionReadiness::LocalOnly,
+                "invalid local-only binding",
+            )
+            .expect_err("selection cannot be local-only");
+        assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+    }
+
+    #[test]
+    fn workspace_refresh_reuses_the_validated_selected_store() {
+        let user_home = tempfile::tempdir().expect("temporary user home");
+        let application_home = user_home.path().join(".quantix");
+        let host =
+            QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+        assert_eq!(host.ensure_setup().state, SetupState::Ready);
+        let tender = host
+            .create_tender(CreateTenderCommand {
+                name: "Workspace refresh projection".into(),
+            })
+            .expect("create Tender");
+        let other_tender = host
+            .create_tender(CreateTenderCommand {
+                name: "Workspace refresh sibling".into(),
+            })
+            .expect("create sibling Tender");
+        host.close_tender(&tender.tender_id)
+            .expect("close first Tender before cold projection");
+        host.close_tender(&other_tender.tender_id)
+            .expect("close sibling Tender before cold projection");
+        TENDER_STORE_OPEN_COUNT.store(0, Ordering::SeqCst);
+        CONTENT_VERIFY_PASS_COUNT.store(0, Ordering::SeqCst);
+
+        host.inspect_manager_workspace(InspectManagerWorkspaceCommand {
+            tender_id: Some(tender.tender_id.clone()),
+        })
+        .expect("initial workspace projection");
+        let first_open_count = TENDER_STORE_OPEN_COUNT.load(Ordering::SeqCst);
+        let first_verify_count = CONTENT_VERIFY_PASS_COUNT.load(Ordering::SeqCst);
+        assert_eq!(first_open_count, 1);
+        assert!(first_verify_count > 0);
+
+        host.inspect_manager_workspace(InspectManagerWorkspaceCommand {
+            tender_id: Some(tender.tender_id),
+        })
+        .expect("routine workspace refresh");
+        assert_eq!(
+            TENDER_STORE_OPEN_COUNT.load(Ordering::SeqCst),
+            first_open_count
+        );
+        assert_eq!(
+            CONTENT_VERIFY_PASS_COUNT.load(Ordering::SeqCst),
+            first_verify_count
+        );
     }
 
     #[test]
