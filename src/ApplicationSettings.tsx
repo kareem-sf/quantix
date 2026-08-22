@@ -117,6 +117,12 @@ function connectionStatus(connection: ProviderConnectionView): string {
 
 const CHATGPT_DATA_DISCLOSURE =
   "Tender content is sent to OpenAI through your connected ChatGPT account. Usage and limits belong to that account.";
+const CHATGPT_DATA_DESTINATION = "ChatGPT subscription";
+
+interface AccountFingerprint {
+  identity: string;
+  sha256: string;
+}
 
 interface DeviceLoginDetails {
   userCode: string;
@@ -135,23 +141,61 @@ function waitForLoginOwnerRelease(): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, 150));
 }
 
-function exactSelectionIsReady(view: ApplicationSettingsView): boolean {
+function accountFingerprintIdentity(
+  view: ApplicationSettingsView,
+): string | null {
   const selection = view.ai_execution_selection;
-  if (!selection) return false;
+  if (!selection) return null;
+  const connection = view.provider_connections.find(
+    (candidate) => candidate.connection_id === selection.connection_id,
+  );
+  if (!connection) return null;
+  return `${connection.connection_id}\0${connection.provider}\0${connection.account_label ?? "unknown"}`;
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+function exactSelectionIsReady(
+  view: ApplicationSettingsView,
+  accountFingerprint: string | null,
+): boolean {
+  const selection = view.ai_execution_selection;
+  if (!selection || view.chatgpt.state !== "connected") return false;
   const approval = view.ai_execution_approval;
   if (
     !approval ||
     approval.connection_id !== selection.connection_id ||
+    approval.provider !== selection.provider ||
     approval.model_id !== selection.model_id ||
-    reasoningKey(approval.reasoning) !== reasoningKey(selection.reasoning)
+    reasoningKey(approval.reasoning) !== reasoningKey(selection.reasoning) ||
+    approval.data_destination !== CHATGPT_DATA_DESTINATION ||
+    approval.account_fingerprint !== accountFingerprint
   ) {
     return false;
   }
   const connection = view.provider_connections.find(
     (candidate) =>
       candidate.connection_id === selection.connection_id &&
+      candidate.provider === selection.provider &&
       candidate.status === "ready",
   );
+  if (
+    !connection ||
+    connection.catalogue_fetched_at !== selection.catalogue_fetched_at ||
+    connection.adapter_version !== selection.adapter_version ||
+    connection.account_label === null ||
+    connection.account_label !== view.chatgpt.account_id
+  ) {
+    return false;
+  }
   const model = connection?.models.find(
     (candidate) => candidate.model_id === selection.model_id,
   );
@@ -162,6 +206,19 @@ function exactSelectionIsReady(view: ApplicationSettingsView): boolean {
         JSON.stringify(selection.reasoning),
     ),
   );
+}
+
+function catalogueProvenance(connection: ProviderConnectionView): string {
+  const catalogue = connection.catalogue_fetched_at;
+  if (!catalogue) return "No current ChatGPT catalogue is available.";
+  const parsedTimestamp = Date.parse(catalogue);
+  if (
+    /^\d{4}-\d{2}-\d{2}T/.test(catalogue) &&
+    Number.isFinite(parsedTimestamp)
+  ) {
+    return `Refreshed ${new Date(parsedTimestamp).toLocaleString()} · ${connection.adapter_version}`;
+  }
+  return `Built-in catalogue ${catalogue} · ${connection.adapter_version}`;
 }
 
 export function ApplicationSettings({
@@ -192,6 +249,8 @@ export function ApplicationSettings({
     null,
   );
   const [deviceCodeCopied, setDeviceCodeCopied] = useState(false);
+  const [accountFingerprint, setAccountFingerprint] =
+    useState<AccountFingerprint | null>(null);
   const [preferenceBusy, setPreferenceBusy] = useState(false);
   const [runtime, setRuntime] = useState<RuntimeReadiness | null>(null);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
@@ -237,7 +296,9 @@ export function ApplicationSettings({
         ownedLoginRef.current = null;
         deviceOpenerAttemptVersionRef.current += 1;
         deviceClipboardAttemptVersionRef.current += 1;
-        setDeviceLoginError(null);
+        if (view.chatgpt?.login_phase !== "failed") {
+          setDeviceLoginError(null);
+        }
         setDeviceOpenerError(null);
         setDeviceClipboardError(null);
       }
@@ -245,10 +306,9 @@ export function ApplicationSettings({
       setSettings(view);
       applyGeneralApplicationPreferences(view.general_preferences);
       onPreferencesChange?.(view.general_preferences);
-      onAiAvailabilityChange(exactSelectionIsReady(view));
       return view;
     },
-    [onAiAvailabilityChange, onPreferencesChange],
+    [onPreferencesChange],
   );
 
   const acceptAuthoritativeSettings = useCallback(
@@ -309,7 +369,14 @@ export function ApplicationSettings({
     deviceLogin === null &&
     ownedLoginRef.current !== "device";
   useEffect(() => {
-    if (!chatgptBrowserPending && !chatgptDevicePending) return;
+    if (
+      (!chatgptBrowserPending && !chatgptDevicePending) ||
+      chatgptLoginPhase === "completed" ||
+      chatgptLoginPhase === "failed" ||
+      chatgptLoginPhase === "cancelled"
+    ) {
+      return;
+    }
     const timer = window.setInterval(() => {
       if (loginPollInFlightRef.current || settingsMutationInFlightRef.current) {
         return;
@@ -320,7 +387,12 @@ export function ApplicationSettings({
       });
     }, 1_200);
     return () => window.clearInterval(timer);
-  }, [chatgptBrowserPending, chatgptDevicePending, refreshLatestSettings]);
+  }, [
+    chatgptBrowserPending,
+    chatgptDevicePending,
+    chatgptLoginPhase,
+    refreshLatestSettings,
+  ]);
 
   useEffect(() => {
     if (
@@ -367,6 +439,37 @@ export function ApplicationSettings({
     recommendedModel?.reasoning_options.find((option) => option.is_default) ??
     recommendedModel?.reasoning_options[0];
   const preferences = settings?.general_preferences;
+  const fingerprintIdentity = settings
+    ? accountFingerprintIdentity(settings)
+    : null;
+  const currentAccountFingerprint =
+    accountFingerprint?.identity === fingerprintIdentity
+      ? accountFingerprint.sha256
+      : null;
+  const selectionIsReady = settings
+    ? exactSelectionIsReady(settings, currentAccountFingerprint)
+    : false;
+
+  useEffect(() => {
+    if (!fingerprintIdentity || !globalThis.crypto?.subtle) return;
+    if (accountFingerprint?.identity === fingerprintIdentity) return;
+    let current = true;
+    void sha256Hex(fingerprintIdentity)
+      .then((sha256) => {
+        if (current)
+          setAccountFingerprint({ identity: fingerprintIdentity, sha256 });
+      })
+      .catch(() => {
+        if (current) setAccountFingerprint(null);
+      });
+    return () => {
+      current = false;
+    };
+  }, [accountFingerprint?.identity, fingerprintIdentity]);
+
+  useEffect(() => {
+    if (settings) onAiAvailabilityChange(selectionIsReady);
+  }, [onAiAvailabilityChange, selectionIsReady, settings]);
 
   const savePreferences = useCallback(
     async (preferences: GeneralApplicationPreferences) => {
@@ -1139,10 +1242,18 @@ export function ApplicationSettings({
                         <div className="application-settings__device-actions">
                           <button
                             type="button"
+                            className="application-settings__primary"
+                            disabled={busy}
+                            onClick={() => void connectChatGpt()}
+                          >
+                            Connect ChatGPT
+                          </button>
+                          <button
+                            type="button"
                             disabled={busy}
                             onClick={() => void connectChatGptOnAnotherDevice()}
                           >
-                            Try again
+                            Try device sign-in again
                           </button>
                         </div>
                       ) : (
@@ -1247,7 +1358,7 @@ export function ApplicationSettings({
                         ? `ChatGPT · ${activeModel?.display_name ?? persistedSelection.model_id} · ${reasoningName(persistedSelection.reasoning)}`
                         : "Connect ChatGPT to prepare a recommended model"}
                     </strong>
-                    {persistedSelection && !exactSelectionIsReady(settings!) ? (
+                    {persistedSelection && !selectionIsReady ? (
                       <>
                         <small>{CHATGPT_DATA_DISCLOSURE}</small>
                         <button
@@ -1391,11 +1502,7 @@ export function ApplicationSettings({
 
                     <div className="application-settings__provenance">
                       <strong>Catalogue provenance</strong>
-                      <span>
-                        {connection.catalogue_fetched_at
-                          ? `Refreshed ${new Date(connection.catalogue_fetched_at).toLocaleString()} · ${connection.adapter_version}`
-                          : "No current ChatGPT catalogue is available."}
-                      </span>
+                      <span>{catalogueProvenance(connection)}</span>
                       <small>
                         Model changes become the default for future Tenders.
                         Existing Tenders keep their saved selection.

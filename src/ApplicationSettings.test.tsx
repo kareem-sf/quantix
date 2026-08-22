@@ -70,7 +70,7 @@ const disconnectedConnection = {
   account_plan: null,
   models: [],
   catalogue_fetched_at: null,
-  adapter_version: "codex-v1",
+  adapter_version: "chatgpt-direct-v1",
   status_summary: "Connect ChatGPT.",
 };
 
@@ -79,7 +79,7 @@ const readyConnection = {
   status: "ready" as const,
   account_label: "engineer@example.com",
   account_plan: "plus",
-  catalogue_fetched_at: "2026-08-22T08:00:00Z",
+  catalogue_fetched_at: "chatgpt-direct-v1",
   models: [
     {
       model_id: "gpt-construction",
@@ -119,8 +119,8 @@ const preparedSelection = {
   provider: "codex" as const,
   model_id: "gpt-construction",
   reasoning: { kind: "codex_effort", value: "medium" } as const,
-  catalogue_fetched_at: "2026-08-22T08:00:00Z",
-  adapter_version: "codex-v1",
+  catalogue_fetched_at: "chatgpt-direct-v1",
+  adapter_version: "chatgpt-direct-v1",
 };
 
 function disconnectedView(
@@ -153,15 +153,16 @@ function connectedView(approved = false) {
     ai_execution_approval: approved
       ? {
           ...preparedSelection,
-          account_fingerprint: "account-fingerprint",
-          data_destination: "OpenAI through the connected ChatGPT account",
+          account_fingerprint:
+            "117d68e191e9e848c1172767d9ca54204ef5e4b20d1ead8855ef0f17f906f695",
+          data_destination: "ChatGPT subscription",
           approved_at: "2026-08-22T08:01:00Z",
         }
       : null,
     provider_connections: [readyConnection],
     chatgpt: {
       state: "connected" as const,
-      account_id: "chatgpt-account",
+      account_id: "engineer@example.com",
       plan_type: "plus",
       expires_at_ms: 1_800_000_000_000n,
       login_phase: "completed" as const,
@@ -169,11 +170,11 @@ function connectedView(approved = false) {
   };
 }
 
-function renderSettings() {
+function renderSettings(onAiAvailabilityChange = vi.fn()) {
   const rendered = render(
     <ApplicationSettings
       aiAvailable={false}
-      onAiAvailabilityChange={vi.fn()}
+      onAiAvailabilityChange={onAiAvailabilityChange}
       onClose={vi.fn()}
     />,
   );
@@ -365,6 +366,40 @@ describe("ApplicationSettings ChatGPT connection", () => {
     expect(await screen.findByText("NEW-CODE")).toBeTruthy();
     expect(host.cancelChatGptLogin).toHaveBeenCalledWith();
     expect(host.startChatGptDeviceLogin).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves device initiation guidance across a failed Host refresh until a recovery action", async () => {
+    host.startChatGptDeviceLogin.mockRejectedValue({
+      code: "store_unavailable",
+    });
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnectedView())
+      .mockResolvedValue(disconnectedView("failed"));
+    renderSettings();
+
+    fireEvent.click(await screen.findByText("Having trouble signing in?"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in on another device" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Sign in on another device is unavailable right now. You can still connect ChatGPT in your browser.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(
+      await screen.findByText(
+        "Sign in on another device is unavailable right now. You can still connect ChatGPT in your browser.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Connect ChatGPT" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Try device sign-in again" }),
+    ).toBeTruthy();
+    expect(screen.queryByText(/ChatGPT sign-in did not finish/i)).toBeNull();
   });
 
   it("shows, automatically opens, copies, opens again, waits on, and cancels the one-time-code fallback", async () => {
@@ -952,6 +987,101 @@ describe("ApplicationSettings ChatGPT connection", () => {
     ).toBeTruthy();
   });
 
+  it("does not accept approval for a different provider or data destination", async () => {
+    const wrongProvider = connectedView(true);
+    wrongProvider.ai_execution_approval!.provider =
+      "different-provider" as typeof preparedSelection.provider;
+    const onAiAvailabilityChange = vi.fn();
+    host.refreshApplicationSettings.mockResolvedValue(wrongProvider);
+    const { unmount } = renderSettings(onAiAvailabilityChange);
+
+    expect(
+      await screen.findByRole("button", { name: "Use ChatGPT" }),
+    ).toBeTruthy();
+    expect(onAiAvailabilityChange).toHaveBeenLastCalledWith(false);
+
+    unmount();
+    const wrongDestination = connectedView(true);
+    wrongDestination.ai_execution_approval!.data_destination =
+      "A different destination";
+    host.refreshApplicationSettings.mockResolvedValue(wrongDestination);
+    renderSettings(onAiAvailabilityChange);
+
+    expect(
+      await screen.findByRole("button", { name: "Use ChatGPT" }),
+    ).toBeTruthy();
+    expect(onAiAvailabilityChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("does not accept selection provenance from a different catalogue or adapter", async () => {
+    const staleCatalogue = connectedView(true);
+    staleCatalogue.ai_execution_selection.catalogue_fetched_at =
+      "chatgpt-direct-v0";
+    const onAiAvailabilityChange = vi.fn();
+    host.refreshApplicationSettings.mockResolvedValue(staleCatalogue);
+    const { unmount } = renderSettings(onAiAvailabilityChange);
+
+    expect(
+      await screen.findByRole("button", { name: "Use ChatGPT" }),
+    ).toBeTruthy();
+    expect(onAiAvailabilityChange).toHaveBeenLastCalledWith(false);
+
+    unmount();
+    const staleAdapter = connectedView(true);
+    staleAdapter.ai_execution_selection.adapter_version = "chatgpt-direct-v0";
+    host.refreshApplicationSettings.mockResolvedValue(staleAdapter);
+    renderSettings(onAiAvailabilityChange);
+
+    expect(
+      await screen.findByRole("button", { name: "Use ChatGPT" }),
+    ).toBeTruthy();
+    expect(onAiAvailabilityChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("does not accept malformed account fingerprint data", async () => {
+    const malformedFingerprint = connectedView(true);
+    malformedFingerprint.ai_execution_approval!.account_fingerprint =
+      "stale-account-fingerprint";
+    const onAiAvailabilityChange = vi.fn();
+    host.refreshApplicationSettings.mockResolvedValue(malformedFingerprint);
+    renderSettings(onAiAvailabilityChange);
+
+    expect(
+      await screen.findByRole("button", { name: "Use ChatGPT" }),
+    ).toBeTruthy();
+    expect(onAiAvailabilityChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("does not accept inconsistent or stale account approval data", async () => {
+    const inconsistentAccount = connectedView(true);
+    inconsistentAccount.chatgpt.account_id = "replacement@example.com";
+    const onAiAvailabilityChange = vi.fn();
+    host.refreshApplicationSettings.mockResolvedValue(inconsistentAccount);
+    const { unmount } = renderSettings(onAiAvailabilityChange);
+
+    expect(
+      await screen.findByRole("button", { name: "Use ChatGPT" }),
+    ).toBeTruthy();
+    expect(onAiAvailabilityChange).toHaveBeenLastCalledWith(false);
+
+    unmount();
+    const changedAccount = connectedView(true);
+    changedAccount.provider_connections = [
+      {
+        ...readyConnection,
+        account_label: "replacement@example.com",
+      },
+    ];
+    changedAccount.chatgpt.account_id = "replacement@example.com";
+    host.refreshApplicationSettings.mockResolvedValue(changedAccount);
+    renderSettings(onAiAvailabilityChange);
+
+    expect(
+      await screen.findByRole("button", { name: "Use ChatGPT" }),
+    ).toBeTruthy();
+    expect(onAiAvailabilityChange).toHaveBeenLastCalledWith(false);
+  });
+
   it("keeps model, reasoning, provenance, and future-Tender behavior in advanced settings", async () => {
     const initial = connectedView(true);
     host.refreshApplicationSettings.mockResolvedValue(initial);
@@ -969,6 +1099,12 @@ describe("ApplicationSettings ChatGPT connection", () => {
     const advanced = await screen.findByText("Advanced model settings");
     fireEvent.click(advanced);
     expect(screen.getByText("Catalogue provenance")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Built-in catalogue chatgpt-direct-v1 · chatgpt-direct-v1",
+      ),
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toContain("Invalid Date");
     expect(
       screen.getByText(/Model changes become the default for future Tenders/),
     ).toBeTruthy();
