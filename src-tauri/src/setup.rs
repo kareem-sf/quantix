@@ -30,7 +30,7 @@ const STAGED_INSTALLATION_COMPANIONS: [&str; 3] = [
 ];
 const INSTALLATION_TABLE_SQL: &str = "CREATE TABLE installation (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-           schema_version INTEGER NOT NULL CHECK (schema_version = 24)
+           schema_version INTEGER NOT NULL CHECK (schema_version = 25)
          )";
 pub(crate) const APPLICATION_SETTINGS_TABLE_SQL: &str = "CREATE TABLE application_settings (
            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
