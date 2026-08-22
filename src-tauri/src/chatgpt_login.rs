@@ -360,11 +360,14 @@ impl QuantixHost {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         // Signalling cannot interrupt an in-flight callback wait; the running
-        // flow stops at the next phase boundary instead.
+        // flow stops at the next phase boundary instead. Cancel cannot revoke
+        // a completed browser authorization: tokens persisted by a flow that
+        // finished stay on disk by design and inspect reflects them; the
+        // machine still ends Idle.
         if let Some(active) = state.active.take() {
             active.signal_cancel();
-            state.phase = ChatGptLoginPhase::Idle;
         }
+        state.phase = ChatGptLoginPhase::Idle;
     }
 
     pub fn disconnect_chatgpt(
@@ -765,6 +768,46 @@ mod tests {
         assert!(wait_until(|| {
             host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Idle
         }));
+    }
+
+    #[test]
+    fn cancel_after_completion_keeps_tokens_and_ends_idle() {
+        let (_dir, host, home) = fresh_host();
+        let id_token = jwt_id_token("acc-late-cancel", Some("plus"));
+        let issuer = start_mock_issuer(format!(
+            r#"{{"access_token":"at-9","refresh_token":"rt-9","id_token":"{id_token}","expires_in":3600}}"#
+        ));
+        let (url_tx, url_rx) = mpsc::channel();
+        let sender = Arc::new(std::sync::Mutex::new(Some(url_tx)));
+        host.begin_chatgpt_login(&[0], &issuer.base, move |url| {
+            if let Some(sender) = sender.lock().unwrap().take() {
+                let _ = sender.send(url.to_string());
+            }
+        })
+        .expect("flow starts");
+
+        spawn_callback_driver(
+            url_rx,
+            "/auth/callback?code=coded-late&state={state}".to_string(),
+        );
+        assert!(wait_until(|| {
+            host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Completed
+        }));
+
+        host.cancel_chatgpt_login();
+
+        assert_eq!(
+            host.chatgpt_login_state().lock().unwrap().phase,
+            ChatGptLoginPhase::Idle
+        );
+        match load(&home) {
+            LoadState::Connected(connection) => {
+                assert_eq!(connection.account_id, "acc-late-cancel");
+                assert_eq!(connection.plan_type.as_deref(), Some("plus"));
+                assert!(!needs_refresh(&connection, now_ms()));
+            }
+            other => panic!("completed authorization must persist past cancel, got {other:?}"),
+        }
     }
 
     #[test]
