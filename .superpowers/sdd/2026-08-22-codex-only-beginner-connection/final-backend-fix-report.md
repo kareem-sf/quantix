@@ -113,3 +113,30 @@ These test sources were deliberately not executed under the task constraint.
 - `chatgpt_login.rs`: `762CF28DF8A38718CF606964D308BC37DEA1851D692056860A5D8FF5815B0DCE`
 - `chatgpt_oauth/mod.rs`: `93A3C5842C9C514702C79BFC8EEFF76311CCCF2C2FD48D726D3EF89E89FC6E49`
 - `chatgpt_oauth/store.rs`: `1CAD2FC995134C981E86524345C041CFC407CF38532651F00E964D5133CD176B`
+
+## Execution-authorization follow-up
+
+### Commit
+
+`2f9381d2b87dc5e751f115e096a3a23de9b906f8` (`fix: revalidate provider execution approval`)
+
+### Security boundary
+
+- Cached per-Tender readiness is no longer an execution authority. `require_current_tender_ai_selection` copies the Tender selection while holding the Tender-store lock, releases that lock, then refreshes/projects current auth and requires the exact global selection and account-bound approval inside the connection-mutation boundary.
+- Production provider turns repeat this gate immediately before content handling: the same connection closure refreshes auth, publishes its matching settings projection, compares the prepared exact selection to the current global selection/approval, and returns the `StoredConnection` whose credentials the backend request will use. The connection mutex is released before content construction and provider network execution.
+- A disconnect or account replacement that linearizes before either gate returns an authentication-required failure. If it occurs between Tender preparation and provider-turn startup, the second gate prevents content from being sent under the replacement account.
+- Provider token refresh is forward-only. Application-settings projection and selection failures no longer restore a pre-refresh credential whose refresh token may have been consumed. The refreshed auth remains stored while the operation returns blocked; renderer identity matching and both execution gates remain false until its matching projection is published. Browser/device authorization-code rollback remains separate because that path did not consume the previous refresh credential.
+- Lock ordering remains Tender snapshot/release, then connection mutation, then SQLite. No connection mutex is held while taking a Tender-store lock or executing a provider request.
+
+### Static regression sources and evidence
+
+- A real cached `Ready` Tender followed by account replacement must return `AiProviderRequired` from `require_current_tender_ai_selection`.
+- A provider-turn selection approved for account A is rejected after auth changes to account B; the account-B projection also invalidates the old approval.
+- A simulated rotated refresh credential remains authoritative when SQLite projection fails; the consumed old refresh token is never restored.
+- `rustfmt --edition 2021` completed successfully on both modified Rust files. `git diff --check` and `git diff --cached --check` reported no whitespace errors, and read-only source audits confirmed production provider turn uses `project_approved_chatgpt_connection` and application-settings no longer calls `restore_unlocked`.
+- No tests, Cargo checks, builds, Clippy, development servers, application commands, or generators were run. These regression sources remain unexecuted and uncompiled by explicit instruction.
+
+### File SHA-256 hashes
+
+- `agent_runtime.rs`: `E731C3252AFF4F2944F9FDE6EC27B7490E83096303E2EE705974D746CBD13648`
+- `application_settings.rs`: `D5CF393DDC6674F2120433227BAD68077ACC570D103D416C8F4C42F5CCC4FDEF`
