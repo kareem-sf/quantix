@@ -14,11 +14,11 @@ pub(crate) use device::{
     device_login_deadline, DeviceAuthorization, DeviceClient, DevicePollOutcome,
 };
 pub(crate) use jwt::{extract_identity, ChatGptIdentity};
-#[cfg(test)]
-pub(crate) use store::save;
 pub(crate) use store::{
-    clear_unlocked, load, needs_refresh, refresh_connection, refresh_connection_unlocked,
-    restore_unlocked, save_unlocked, with_connection_mutation, with_connection_mutation_before,
-    LoadState, StoredConnection,
+    clear_unlocked, load, needs_refresh, refresh_connection_unlocked, restore_unlocked,
+    save_unlocked, with_connection_mutation, with_connection_mutation_before, LoadState,
+    StoredConnection,
 };
+#[cfg(test)]
+pub(crate) use store::{refresh_connection, save};
 pub(crate) use tokens::{IssuedTokens, TokenClient};

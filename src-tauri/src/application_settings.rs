@@ -665,6 +665,54 @@ pub(crate) fn project_approved_chatgpt_connection(
     })
 }
 
+/// Refreshes a provider turn after one authentication rejection without
+/// allowing a replacement account or revoked approval to inherit that retry.
+/// The account observation, refresh, settings projection, and exact approval
+/// check share the connection-mutation boundary.
+pub(crate) fn refresh_approved_chatgpt_connection(
+    application_home: &Path,
+    token_client: &TokenClient,
+    now_ms: u64,
+    expected_account_id: &str,
+    selection: &AiExecutionSelection,
+) -> Result<StoredConnection, ProviderFailure> {
+    with_connection_mutation(|| {
+        let current = match load(application_home) {
+            LoadState::Connected(connection) => *connection,
+            LoadState::Absent | LoadState::Unusable => return Err(chatgpt_authentication_failure()),
+        };
+        if current.account_id != expected_account_id {
+            return Err(chatgpt_authentication_failure());
+        }
+
+        let readiness =
+            project_chatgpt_connection_readiness_unlocked_with(application_home, || {
+                let connection =
+                    refresh_connection_unlocked(application_home, token_client, now_ms)
+                        .map_err(|_| chatgpt_authentication_failure())?;
+                if !chatgpt_subscription_is_supported(connection.plan_type.as_deref()) {
+                    return Err(chatgpt_subscription_failure());
+                }
+                Ok(connection)
+            })
+            .map_err(|_| connection_task_error())?;
+        let connection = readiness?;
+        if connection.account_id != expected_account_id {
+            return Err(chatgpt_authentication_failure());
+        }
+        let approved = exact_approved_selection_unlocked(
+            application_home,
+            &chatgpt_connection_view(&connection),
+            Some(selection),
+        )
+        .map_err(|_| connection_task_error())?;
+        if approved.as_ref() != Some(selection) {
+            return Err(chatgpt_authentication_failure());
+        }
+        Ok(connection)
+    })
+}
+
 fn project_approved_chatgpt_connection_with(
     application_home: &Path,
     selection: &AiExecutionSelection,
@@ -1842,6 +1890,51 @@ mod tests {
             Some("account-b")
         );
         assert!(view.ai_execution_approval.is_none());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn unauthorized_retry_rejects_replacement_account_before_refresh() {
+        let home = initialized_home("provider-retry-account-replacement");
+        let original = StoredConnection {
+            account_id: "account-a".to_owned(),
+            ..stored_connection(9_999_999_999, Some("plus"))
+        };
+        save(&home, &original).unwrap();
+        let selection = store_test_approval(
+            &home,
+            &chatgpt_connection_view(&original),
+            "ChatGPT subscription",
+        );
+        let replacement = StoredConnection {
+            account_id: "account-b".to_owned(),
+            ..stored_connection(9_999_999_999, Some("plus"))
+        };
+        save(&home, &replacement).unwrap();
+        let (issuer, requests) = mock_issuer(refresh_body("account-b", Some("plus"), None));
+        let token_client = TokenClient::new(&issuer).unwrap();
+
+        let failure = refresh_approved_chatgpt_connection(
+            &home,
+            &token_client,
+            9_999_999_999,
+            "account-a",
+            &selection,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            failure.category,
+            ProviderFailureCategory::AuthenticationRequired
+        );
+        assert!(
+            requests.lock().unwrap().is_empty(),
+            "a replacement account must be rejected before spending its refresh credential"
+        );
+        match load(&home) {
+            LoadState::Connected(current) => assert_eq!(current.account_id, "account-b"),
+            other => panic!("replacement account remains stored, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(&home);
     }
 

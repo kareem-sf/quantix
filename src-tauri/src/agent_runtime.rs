@@ -23,7 +23,8 @@ use crate::{
     },
     application_settings::{
         project_approved_chatgpt_connection, project_chatgpt_connection_readiness,
-        AiExecutionSelection, AiProviderKind, ProviderReasoningSelection,
+        refresh_approved_chatgpt_connection, AiExecutionSelection, AiProviderKind,
+        ProviderReasoningSelection,
     },
     chatgpt_login::PRODUCTION_ISSUER,
     chatgpt_oauth::TokenClient,
@@ -3539,12 +3540,20 @@ async fn chatgpt_provider_turn(
         .with_control_denial(call_id.to_owned(), request_fingerprint, denial_reason);
         on_denied(&event)
     };
+    let refresh_auth = |expected_account_id: &str| {
+        refresh_approved_chatgpt_connection(
+            host.application_home(),
+            &token_client,
+            epoch_milliseconds(),
+            expected_account_id,
+            &prepared.provider_selection,
+        )
+    };
 
     let turn_context = TurnContext {
         backend: &backend,
         auth: &connection,
-        token_client: &token_client,
-        home: host.application_home(),
+        refresh_auth: &refresh_auth,
         request,
         session_id: prepared.run_id.clone(),
         authorize_tool: &authorize_tool,

@@ -205,7 +205,7 @@ pub(crate) fn restore_unlocked(home: &Path, state: &LoadState) -> io::Result<()>
 /// Refreshes the currently persisted connection as one serialized operation.
 /// Callers retry with the returned value; a stale in-memory token is
 /// deliberately not an input because another operation may have rotated it.
-#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn refresh_connection(
     home: &Path,
     token_client: &TokenClient,

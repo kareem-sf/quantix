@@ -1,11 +1,7 @@
-use std::path::Path;
-
 use serde_json::Value;
 
 use crate::agent_runtime::{ProviderFailure, ProviderFailureCategory, ProviderUsage};
-use crate::chatgpt_oauth::{
-    refresh_connection as refresh_stored_connection, StoredConnection, TokenClient,
-};
+use crate::chatgpt_oauth::StoredConnection;
 
 use super::client::{
     BackendError, BackendRequest, ChatGptBackend, StreamEvent, TurnDisposition, UsageSnapshot,
@@ -14,12 +10,13 @@ use super::client::{
 pub(crate) type BackendEvent = StreamEvent;
 type ToolDeniedCallback<'a> =
     dyn FnMut(&str, &str, &str, &str) -> Result<(), ProviderFailure> + Send + 'a;
+type RefreshAuthCallback<'a> =
+    dyn Fn(&str) -> Result<StoredConnection, ProviderFailure> + Sync + 'a;
 
 pub(crate) struct TurnContext<'a> {
     pub backend: &'a dyn ChatGptBackend,
     pub auth: &'a StoredConnection,
-    pub token_client: &'a TokenClient,
-    pub home: &'a Path,
+    pub refresh_auth: &'a RefreshAuthCallback<'a>,
     pub request: BackendRequest,
     pub session_id: String,
     pub authorize_tool: &'a (dyn Fn(&str, &str) -> Result<Value, ToolRejection> + Sync),
@@ -98,11 +95,19 @@ pub(crate) async fn execute_provider_turn(
             return Err(callback_failure(failure, turn_advanced));
         }
         if matches!(outcome, Err(BackendError::AuthenticationRequired)) && !refreshed {
+            if cancelled || (ctx.is_cancelled)() {
+                return Err(interruption_failure(turn_advanced));
+            }
             refreshed = true;
-            auth = tokio::task::block_in_place(|| {
-                refresh_stored_connection(ctx.home, ctx.token_client, now_ms())
-                    .map_err(|()| authentication_failure())
-            })?;
+            let refreshed_auth =
+                tokio::task::block_in_place(|| (ctx.refresh_auth)(ctx.auth.account_id.as_str()))?;
+            if refreshed_auth.account_id != ctx.auth.account_id {
+                return Err(authentication_failure());
+            }
+            if cancelled || (ctx.is_cancelled)() {
+                return Err(interruption_failure(turn_advanced));
+            }
+            auth = refreshed_auth;
             outcome = create_response_once(
                 ctx.backend,
                 &auth,
@@ -281,12 +286,6 @@ fn accumulated_usage(snapshots: &[UsageSnapshot]) -> ProviderUsage {
     usage
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis() as u64)
-}
-
 fn authentication_failure() -> ProviderFailure {
     ProviderFailure::new(
         ProviderFailureCategory::AuthenticationRequired,
@@ -412,7 +411,9 @@ mod tests {
 
     use super::super::client::{build_request_body, parse_stream_bytes};
     use super::*;
-    use crate::chatgpt_oauth::{load, save, LoadState};
+    use crate::chatgpt_oauth::{
+        load, refresh_connection as refresh_stored_connection, save, LoadState, TokenClient,
+    };
 
     fn sse(frames: &[&str]) -> Vec<u8> {
         let mut bytes = frames.join("\n\n").into_bytes();
@@ -552,7 +553,7 @@ mod tests {
         dir
     }
 
-    const ISSUER_BODY: &str = r#"{"access_token":"at-new","refresh_token":"refresh-new","id_token":"idt-new","expires_in":3600}"#;
+    const ISSUER_BODY: &str = r#"{"access_token":"at-new","refresh_token":"refresh-new","id_token":"eyJhbGciOiJub25lIn0.eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2MtNzciLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJwbHVzIiwiY2hhdGdwdF9jb21wdXRlX3Jlc2lkZW5jeSI6InVzIn19.c2ln","expires_in":3600}"#;
 
     fn mock_issuer(body: &'static str) -> (TokenClient, Arc<Mutex<Vec<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -653,6 +654,28 @@ mod tests {
         is_cancelled: &'a (dyn Fn() -> bool + Sync),
         on_event: &'a mut (dyn FnMut(BackendEvent) + Send),
     ) -> Result<ProviderTurnResult, ProviderFailure> {
+        let refresh_auth = |_expected_account_id: &str| {
+            refresh_stored_connection(home, token_client, test_now_ms())
+                .map_err(|()| authentication_failure())
+        };
+        run_turn_with_refresh(
+            backend,
+            auth,
+            &refresh_auth,
+            authorize_tool,
+            is_cancelled,
+            on_event,
+        )
+    }
+
+    fn run_turn_with_refresh<'a>(
+        backend: &'a dyn ChatGptBackend,
+        auth: &'a StoredConnection,
+        refresh_auth: &'a RefreshAuthCallback<'a>,
+        authorize_tool: &'a (dyn Fn(&str, &str) -> Result<Value, ToolRejection> + Sync),
+        is_cancelled: &'a (dyn Fn() -> bool + Sync),
+        on_event: &'a mut (dyn FnMut(BackendEvent) + Send),
+    ) -> Result<ProviderTurnResult, ProviderFailure> {
         let mut fallible_event = |event| {
             on_event(event);
             Ok(())
@@ -661,8 +684,7 @@ mod tests {
         block_on_future(execute_provider_turn(TurnContext {
             backend,
             auth,
-            token_client,
-            home,
+            refresh_auth,
             request: sample_request(),
             session_id: "ses-turn-1".to_owned(),
             authorize_tool,
@@ -683,11 +705,14 @@ mod tests {
         on_event: &'a mut (dyn FnMut(BackendEvent) -> Result<(), ProviderFailure> + Send),
         on_tool_denied: &'a mut ToolDeniedCallback<'a>,
     ) -> Result<ProviderTurnResult, ProviderFailure> {
+        let refresh_auth = |_expected_account_id: &str| {
+            refresh_stored_connection(home, token_client, test_now_ms())
+                .map_err(|()| authentication_failure())
+        };
         block_on_future(execute_provider_turn(TurnContext {
             backend,
             auth,
-            token_client,
-            home,
+            refresh_auth: &refresh_auth,
             request: sample_request(),
             session_id: "ses-turn-1".to_owned(),
             authorize_tool,
@@ -695,6 +720,12 @@ mod tests {
             on_event,
             on_tool_denied,
         }))
+    }
+
+    fn test_now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_millis() as u64)
     }
 
     #[test]
@@ -1185,11 +1216,51 @@ mod tests {
             LoadState::Connected(loaded) => {
                 assert_eq!(loaded.access_token, "at-new");
                 assert_eq!(loaded.refresh_token, "refresh-new");
-                assert_eq!(loaded.id_token, "idt-new");
+                assert!(loaded.id_token.contains("eyJjaGF0Z3B0X2FjY291bnRfaWQi"));
             }
             other => panic!("expected a persisted refreshed connection, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn account_replacement_between_401_and_retry_never_receives_tender_content() {
+        let backend = ScriptedBackend::new(vec![
+            Err(BackendError::AuthenticationRequired),
+            Ok(sse(TEXT_COMPLETION)),
+        ]);
+        let auth = stored_connection("at-account-a");
+        let mut replacement = stored_connection("at-account-b");
+        replacement.account_id = "acc-replacement".to_owned();
+        let refresh_auth = |expected_account_id: &str| {
+            assert_eq!(expected_account_id, "acc-77");
+            Ok(cloned_connection(&replacement))
+        };
+        let mut sink = |_: BackendEvent| {};
+        let no_tools = |_name: &str, _arguments: &str| -> Result<Value, ToolRejection> {
+            panic!("no tool call expected")
+        };
+
+        let failure = run_turn_with_refresh(
+            &backend,
+            &auth,
+            &refresh_auth,
+            &no_tools,
+            &|| false,
+            &mut sink,
+        )
+        .expect_err("a replacement account must not inherit the approved retry");
+
+        assert_eq!(
+            failure.category,
+            ProviderFailureCategory::AuthenticationRequired
+        );
+        assert_eq!(
+            backend.access_tokens.lock().unwrap().clone(),
+            vec!["at-account-a".to_owned()],
+            "the replacement account must not receive the Tender request"
+        );
+        assert_eq!(backend.request_bodies().len(), 1, "no retry may be sent");
     }
 
     #[test]
