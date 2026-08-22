@@ -140,3 +140,33 @@ These test sources were deliberately not executed under the task constraint.
 
 - `agent_runtime.rs`: `E731C3252AFF4F2944F9FDE6EC27B7490E83096303E2EE705974D746CBD13648`
 - `application_settings.rs`: `D5CF393DDC6674F2120433227BAD68077ACC570D103D416C8F4C42F5CCC4FDEF`
+
+## Account-bound 401 retry follow-up
+
+### Commit
+
+`b458857eb6fad51c5b18fb3f057e78934146fedb` (`fix: bind provider retry to approved account`)
+
+### Security boundary
+
+- The backend turn executor no longer reloads whichever credential happens to be current after a 401. It receives a narrow refresh callback, passes the originally validated account identifier into it, and independently rejects any returned connection whose account identifier differs before a retry can be sent.
+- The production callback checks that the stored connection still belongs to the expected account while holding the connection-mutation boundary. A replacement account is rejected before its refresh credential or Tender content can be used.
+- A same-account refresh, its settings projection, and exact prepared-selection/account-bound approval revalidation occur inside that same boundary. The mutex is released before the single retry request, and no Tender-store lock or provider request occurs while it is held.
+- Provider cancellation is checked before the blocking refresh and again before the retry. A cancellation or any account, selection, approval, projection, or refresh failure stops the turn without a second content request.
+- The direct serialized-store refresh wrapper is now test-only; production 401 recovery must pass through the approval-aware application-settings composite.
+
+### Static regression sources and evidence
+
+- `account_replacement_between_401_and_retry_never_receives_tender_content` scripts an initial request with account A, a 401, and a refresh callback returning account B. It asserts authentication-required, one request body, and only account A's access token observed by the backend.
+- `unauthorized_retry_rejects_replacement_account_before_refresh` stores account B after account A was approved and asserts the production composite rejects it without contacting the refresh issuer or consuming account B's refresh credential.
+- The existing successful 401 source continues to cover one same-account refresh and one retry. Its fixture identity now carries the same account identifier as the approved connection so the account invariant is explicit.
+- `rustfmt --edition 2021` completed successfully on the five modified Rust files. `git diff --check` and `git diff --cached --check` reported no whitespace errors. Read-only symbol audits confirmed production runtime supplies `refresh_approved_chatgpt_connection`, the executor compares returned and original account identifiers before the second backend call, and the unrestricted serialized refresh wrapper is absent from production code.
+- No tests, Cargo checks, builds, Clippy, development servers, application commands, or generators were run. The regression sources remain unexecuted and uncompiled by explicit instruction.
+
+### File SHA-256 hashes
+
+- `agent_backend/turn_executor.rs`: `C09446D746C1B77A42BC5A5CEDC4A2899392BCEC59DA38653EE723EF13173E4B`
+- `agent_runtime.rs`: `B9025664CF8A6583F806123870B38E9EE573B0DE5E08BD7367D968B55E62013B`
+- `application_settings.rs`: `972A6922A3E06610B3F11E1257562CBFBA40ABF113F0562A319ED5C99E976296`
+- `chatgpt_oauth/mod.rs`: `510C5897BFD0906D4BCA23CCFE23C140F5E6C45D51934BA73A5C87BAFD6D96CC`
+- `chatgpt_oauth/store.rs`: `0A4D63177EFF01FEBA63B20A575CF7D7170C54197830F240064CE8DE67B93535`
