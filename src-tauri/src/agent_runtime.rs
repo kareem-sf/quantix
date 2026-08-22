@@ -22,8 +22,8 @@ use crate::{
         ReqwestBackend, StreamEvent, ToolRejection, TurnContext, UsageSnapshot, BACKEND_URL,
     },
     application_settings::{
-        chatgpt_connection_readiness, save_live_connection, AiExecutionSelection, AiProviderKind,
-        ProviderConnectionView, ProviderReasoningSelection,
+        project_chatgpt_connection_readiness, AiExecutionSelection, AiProviderKind,
+        ProviderReasoningSelection,
     },
     chatgpt_login::PRODUCTION_ISSUER,
     chatgpt_oauth::TokenClient,
@@ -56,8 +56,8 @@ use crate::{
 use crate::{
     application_settings::{
         codex_connection_version, codex_failure_connection_status, save_codex_connection_status,
-        ProviderConnectionStatus, ProviderModelOption, ProviderReasoningOption,
-        CODEX_CONNECTION_ID,
+        save_live_connection, ProviderConnectionStatus, ProviderConnectionView,
+        ProviderModelOption, ProviderReasoningOption, CODEX_CONNECTION_ID,
     },
     process_supervisor::{ProcessError, ProcessSpec, ProcessTermination, SupervisedConversation},
 };
@@ -2581,27 +2581,15 @@ impl QuantixHost {
         #[cfg(not(feature = "runtime-fixture"))]
         match self.try_inspect_chatgpt_subscription(cancellation).await {
             Ok(()) => CodexReadiness::Ready,
-            Err(failure) => {
-                let readiness = match failure.category {
-                    ProviderFailureCategory::AuthenticationRequired => {
-                        CodexReadiness::AuthenticationRequired
-                    }
-                    ProviderFailureCategory::SubscriptionRequired => {
-                        CodexReadiness::SubscriptionRequired
-                    }
-                    _ => CodexReadiness::Unavailable,
-                };
-                if crate::application_settings::save_chatgpt_connection_failure(
-                    self.application_home(),
-                    failure.category,
-                )
-                .is_err()
-                {
-                    CodexReadiness::Unavailable
-                } else {
-                    readiness
+            Err(failure) => match failure.category {
+                ProviderFailureCategory::AuthenticationRequired => {
+                    CodexReadiness::AuthenticationRequired
                 }
-            }
+                ProviderFailureCategory::SubscriptionRequired => {
+                    CodexReadiness::SubscriptionRequired
+                }
+                _ => CodexReadiness::Unavailable,
+            },
         }
     }
 
@@ -2675,16 +2663,13 @@ impl QuantixHost {
     ) -> Result<(), ProviderFailure> {
         let home = self.application_home().to_path_buf();
         let readiness = tokio::task::spawn_blocking(move || {
-            chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, epoch_milliseconds())
+            project_chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, epoch_milliseconds())
         });
-        let connection = tokio::select! {
+        tokio::select! {
             biased;
             _ = cancellation.cancelled() => return Err(readiness_interruption_failure()),
             readiness = readiness => readiness.map_err(|_| process_failure(false))??,
         };
-        let snapshot = crate::application_settings::chatgpt_connection_view(&connection);
-        save_live_connection(self.application_home(), &snapshot)
-            .map_err(|_| process_failure(false))?;
         Ok(())
     }
 }
@@ -3337,7 +3322,7 @@ async fn chatgpt_provider_turn(
     let mut on_accepted = Some(on_accepted);
     let home = host.application_home().to_path_buf();
     let readiness = tokio::task::spawn_blocking(move || {
-        chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, epoch_milliseconds())
+        project_chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, epoch_milliseconds())
     })
     .await;
     let connection = match readiness {

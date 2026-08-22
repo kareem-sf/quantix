@@ -14,8 +14,8 @@ use ts_rs::TS;
 use crate::{
     agent_runtime::{ProviderFailure, ProviderFailureCategory},
     chatgpt_oauth::{
-        load, needs_refresh, refresh_connection_unlocked, with_connection_mutation, LoadState,
-        StoredConnection, TokenClient,
+        load, needs_refresh, refresh_connection_unlocked, restore_unlocked,
+        with_connection_mutation, LoadState, StoredConnection, TokenClient,
     },
     setup::INSTALLATION_SCHEMA_VERSION,
     tender_store::{TenderCommandError, TenderErrorCode, TenderId, TENDER_SCHEMA_VERSION},
@@ -427,53 +427,33 @@ impl QuantixHost {
         if command.connection_id != CODEX_CONNECTION_ID {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        let connection = chatgpt_connection_readiness_async(
-            self.application_home().to_path_buf(),
-            crate::chatgpt_login::PRODUCTION_ISSUER,
-            current_time_ms(),
-        )
+        let application_home = self.application_home().to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            update_ai_execution_selection_projection(&application_home, &command)
+        })
         .await
-        .map(|connection| chatgpt_connection_view(&connection))
-        .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-        let selection = selection_from_command(&connection, &command)?;
-        save_connection_and_selection(self.application_home(), &connection, &selection)?;
-        load_application_settings(self.application_home())
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
     }
 
     pub async fn confirm_ai_execution_selection(
         &self,
         command: ConfirmAiExecutionSelectionCommand,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        let view = self.update_ai_execution_selection(command.into()).await?;
-        let selection = view
-            .ai_execution_selection
-            .as_ref()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-        let connection = view
-            .provider_connections
-            .iter()
-            .find(|connection| connection.connection_id == selection.connection_id)
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-        let approval = AiExecutionApproval {
-            connection_id: selection.connection_id.clone(),
-            provider: selection.provider,
-            account_fingerprint: account_fingerprint(connection),
-            model_id: selection.model_id.clone(),
-            reasoning: selection.reasoning.clone(),
-            data_destination: data_destination(connection.provider).to_owned(),
-            approved_at: Timestamp::now().to_string(),
-        };
-        let mut database = settings_connection(self.application_home())?;
-        let transaction = database
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(settings_store_error)?;
-        let mut stored = load_stored_settings(&transaction)?;
-        stored.ai_execution_approval = Some(approval);
-        store_application_settings(&transaction, &stored)?;
-        transaction.commit().map_err(settings_store_error)?;
-        let view = load_application_settings(self.application_home())?;
-        if let Some(selection) = view.ai_execution_selection.as_ref() {
-            self.refresh_matching_tender_ai_bindings(&view, selection)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if command.connection_id != CODEX_CONNECTION_ID {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let application_home = self.application_home().to_path_buf();
+        let update_command = command.into();
+        let view = tokio::task::spawn_blocking(move || {
+            confirm_ai_execution_selection_projection(&application_home, &update_command)
+        })
+        .await
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))??;
+        if let Some(selection) = view.ai_execution_selection.clone() {
+            self.refresh_matching_tender_ai_bindings(&view, &selection)?;
         }
         load_application_settings(self.application_home())
     }
@@ -630,34 +610,40 @@ fn refresh_application_settings_projection(
     issuer: &str,
     now_ms: u64,
 ) -> Result<(), TenderCommandError> {
-    refresh_application_settings_projection_with(application_home, || {
+    project_chatgpt_connection_readiness_with(application_home, || {
         chatgpt_connection_readiness_unlocked(application_home, issuer, now_ms)
     })
+    .map(|_| ())
 }
 
-fn refresh_application_settings_projection_with(
+pub(crate) fn project_chatgpt_connection_readiness(
     application_home: &Path,
-    inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
-) -> Result<(), TenderCommandError> {
-    with_connection_mutation(|| {
-        let connection = match inspect() {
-            Ok(connection) => chatgpt_connection_view(&connection),
-            Err(failure) => chatgpt_connection_failure_view(failure.category),
-        };
-        save_live_connection_unlocked(application_home, &connection)
-    })
-}
-
-async fn chatgpt_connection_readiness_async(
-    application_home: PathBuf,
-    issuer: &'static str,
+    issuer: &str,
     now_ms: u64,
 ) -> Result<StoredConnection, ProviderFailure> {
-    tokio::task::spawn_blocking(move || {
-        chatgpt_connection_readiness(&application_home, issuer, now_ms)
+    project_chatgpt_connection_readiness_with(application_home, || {
+        chatgpt_connection_readiness_unlocked(application_home, issuer, now_ms)
     })
-    .await
     .map_err(|_| connection_task_error())?
+}
+
+fn project_chatgpt_connection_readiness_with(
+    application_home: &Path,
+    inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
+) -> Result<Result<StoredConnection, ProviderFailure>, TenderCommandError> {
+    with_connection_mutation(|| {
+        let previous = load(application_home);
+        let readiness = inspect();
+        let projection = match readiness.as_ref() {
+            Ok(connection) => chatgpt_connection_view(connection),
+            Err(failure) => chatgpt_connection_failure_view(failure.category),
+        };
+        if let Err(error) = save_live_connection_unlocked(application_home, &projection) {
+            let _ = restore_unlocked(application_home, &previous);
+            return Err(error);
+        }
+        Ok(readiness)
+    })
 }
 
 fn connection_task_error() -> ProviderFailure {
@@ -731,14 +717,6 @@ fn chatgpt_connection_failure_view(category: ProviderFailureCategory) -> Provide
         adapter_version: CHATGPT_DIRECT_ADAPTER_VERSION.to_owned(),
         status_summary: status_summary.to_owned(),
     }
-}
-
-#[cfg(not(feature = "runtime-fixture"))]
-pub(crate) fn save_chatgpt_connection_failure(
-    application_home: &Path,
-    category: ProviderFailureCategory,
-) -> Result<(), TenderCommandError> {
-    save_live_connection(application_home, &chatgpt_connection_failure_view(category))
 }
 
 pub(crate) fn save_chatgpt_disconnected_unlocked(
@@ -946,6 +924,104 @@ fn selection_from_command(
     })
 }
 
+fn update_ai_execution_selection_projection(
+    application_home: &Path,
+    command: &UpdateAiExecutionSelectionCommand,
+) -> Result<ApplicationSettingsView, TenderCommandError> {
+    update_ai_execution_selection_projection_with(application_home, command, || {
+        chatgpt_connection_readiness_unlocked(
+            application_home,
+            crate::chatgpt_login::PRODUCTION_ISSUER,
+            current_time_ms(),
+        )
+    })
+}
+
+fn update_ai_execution_selection_projection_with(
+    application_home: &Path,
+    command: &UpdateAiExecutionSelectionCommand,
+    inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
+) -> Result<ApplicationSettingsView, TenderCommandError> {
+    mutate_ai_execution_selection_projection_with(application_home, command, false, inspect)
+}
+
+fn confirm_ai_execution_selection_projection(
+    application_home: &Path,
+    command: &UpdateAiExecutionSelectionCommand,
+) -> Result<ApplicationSettingsView, TenderCommandError> {
+    confirm_ai_execution_selection_projection_with(application_home, command, || {
+        chatgpt_connection_readiness_unlocked(
+            application_home,
+            crate::chatgpt_login::PRODUCTION_ISSUER,
+            current_time_ms(),
+        )
+    })
+}
+
+fn confirm_ai_execution_selection_projection_with(
+    application_home: &Path,
+    command: &UpdateAiExecutionSelectionCommand,
+    inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
+) -> Result<ApplicationSettingsView, TenderCommandError> {
+    mutate_ai_execution_selection_projection_with(application_home, command, true, inspect)
+}
+
+fn mutate_ai_execution_selection_projection_with(
+    application_home: &Path,
+    command: &UpdateAiExecutionSelectionCommand,
+    confirm: bool,
+    inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
+) -> Result<ApplicationSettingsView, TenderCommandError> {
+    with_connection_mutation(|| {
+        let previous = load(application_home);
+        let stored_connection = match inspect() {
+            Ok(connection) => connection,
+            Err(failure) => {
+                if let Err(error) = save_live_connection_unlocked(
+                    application_home,
+                    &chatgpt_connection_failure_view(failure.category),
+                ) {
+                    let _ = restore_unlocked(application_home, &previous);
+                    return Err(error);
+                }
+                return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
+            }
+        };
+        let connection = chatgpt_connection_view(&stored_connection);
+        let selection = match selection_from_command(&connection, command) {
+            Ok(selection) => selection,
+            Err(error) => {
+                if let Err(projection_error) =
+                    save_live_connection_unlocked(application_home, &connection)
+                {
+                    let _ = restore_unlocked(application_home, &previous);
+                    return Err(projection_error);
+                }
+                return Err(error);
+            }
+        };
+        let approval = confirm.then(|| AiExecutionApproval {
+            connection_id: selection.connection_id.clone(),
+            provider: selection.provider,
+            account_fingerprint: account_fingerprint(&connection),
+            model_id: selection.model_id.clone(),
+            reasoning: selection.reasoning.clone(),
+            data_destination: data_destination(connection.provider).to_owned(),
+            approved_at: Timestamp::now().to_string(),
+        });
+        if let Err(error) = save_connection_and_selection_unlocked(
+            application_home,
+            &connection,
+            &selection,
+            approval,
+        ) {
+            let _ = restore_unlocked(application_home, &previous);
+            return Err(error);
+        }
+        load_application_settings(application_home)
+    })
+}
+
 fn selection_with_current_provenance(
     connection: &ProviderConnectionView,
     preferred: &AiExecutionSelection,
@@ -971,6 +1047,13 @@ pub(crate) fn save_live_connection(
     connection: &ProviderConnectionView,
 ) -> Result<(), TenderCommandError> {
     with_connection_mutation(|| save_live_connection_unlocked(application_home, connection))
+}
+
+pub(crate) fn save_authorized_connection_projection_unlocked(
+    application_home: &Path,
+    connection: &StoredConnection,
+) -> Result<(), TenderCommandError> {
+    save_live_connection_unlocked(application_home, &chatgpt_connection_view(connection))
 }
 
 fn save_live_connection_unlocked(
@@ -1057,10 +1140,11 @@ pub(crate) fn save_codex_connection_status(
     transaction.commit().map_err(settings_store_error)
 }
 
-fn save_connection_and_selection(
+fn save_connection_and_selection_unlocked(
     application_home: &Path,
     connection: &ProviderConnectionView,
     selection: &AiExecutionSelection,
+    approval: Option<AiExecutionApproval>,
 ) -> Result<(), TenderCommandError> {
     let mut database = settings_connection(application_home)?;
     let transaction = database
@@ -1069,7 +1153,7 @@ fn save_connection_and_selection(
     upsert_connection(&transaction, connection)?;
     let mut stored = load_stored_settings(&transaction)?;
     stored.ai_execution_selection = Some(selection.clone());
-    stored.ai_execution_approval = None;
+    stored.ai_execution_approval = approval;
     store_application_settings(&transaction, &stored)?;
     transaction.commit().map_err(settings_store_error)
 }
@@ -1430,7 +1514,7 @@ mod tests {
         let (release_tx, release_rx) = mpsc::channel();
         let refresh_home = home.clone();
         let refresh = std::thread::spawn(move || {
-            refresh_application_settings_projection_with(&refresh_home, || {
+            project_chatgpt_connection_readiness_with(&refresh_home, || {
                 observed_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
                 Ok(stored)
@@ -1453,7 +1537,10 @@ mod tests {
         assert!(entered_rx.recv_timeout(Duration::from_millis(150)).is_err());
 
         release_tx.send(()).unwrap();
-        refresh.join().unwrap().unwrap();
+        assert_eq!(
+            refresh.join().unwrap().unwrap().unwrap().account_id,
+            "acc-77"
+        );
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         disconnect.join().unwrap();
 
@@ -1469,14 +1556,14 @@ mod tests {
     }
 
     #[test]
-    fn absent_refresh_projection_cannot_finish_after_login_persistence() {
+    fn runtime_failure_projection_cannot_finish_after_login_ready_projection() {
         let home = initialized_home("refresh-login-serialization");
         let connected = stored_connection(9_999_999, Some("plus"));
         let (observed_tx, observed_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         let refresh_home = home.clone();
         let refresh = std::thread::spawn(move || {
-            refresh_application_settings_projection_with(&refresh_home, || {
+            project_chatgpt_connection_readiness_with(&refresh_home, || {
                 observed_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
                 Err(chatgpt_authentication_failure())
@@ -1492,25 +1579,155 @@ mod tests {
             crate::chatgpt_oauth::with_connection_mutation(|| {
                 entered_tx.send(()).unwrap();
                 crate::chatgpt_oauth::save_unlocked(&login_home, &connected).unwrap();
+                save_authorized_connection_projection_unlocked(&login_home, &connected).unwrap();
             });
         });
         attempting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(entered_rx.recv_timeout(Duration::from_millis(150)).is_err());
 
         release_tx.send(()).unwrap();
-        refresh.join().unwrap().unwrap();
+        assert_eq!(
+            refresh.join().unwrap().unwrap().unwrap_err().category,
+            ProviderFailureCategory::AuthenticationRequired
+        );
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         login.join().unwrap();
 
         assert!(matches!(load(&home), LoadState::Connected(_)));
+        let view = load_application_settings(&home).unwrap();
         assert_eq!(
-            load_application_settings(&home)
-                .unwrap()
-                .provider_connections[0]
-                .status,
-            ProviderConnectionStatus::AuthenticationRequired,
-            "the absent projection linearized before the later login save"
+            view.chatgpt.state,
+            crate::chatgpt_login::ChatGptConnectionState::Connected
         );
+        assert_eq!(
+            view.provider_connections[0].status,
+            ProviderConnectionStatus::Ready
+        );
+        assert_eq!(
+            view.provider_connections[0].account_label.as_deref(),
+            Some("acc-77")
+        );
+        assert!(view.ai_execution_selection.is_some());
+        assert!(view.ai_execution_approval.is_none());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn selection_update_cannot_publish_after_a_later_disconnect() {
+        let home = initialized_home("selection-update-disconnect-serialization");
+        let stored = stored_connection(9_999_999, Some("plus"));
+        save(&home, &stored).unwrap();
+        save_live_connection(&home, &chatgpt_connection_view(&stored)).unwrap();
+        let command = UpdateAiExecutionSelectionCommand {
+            connection_id: CODEX_CONNECTION_ID.to_owned(),
+            model_id: "gpt-5.4".to_owned(),
+            reasoning: ProviderReasoningSelection::CodexEffort("high".to_owned()),
+        };
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let update_home = home.clone();
+        let update = std::thread::spawn(move || {
+            update_ai_execution_selection_projection_with(&update_home, &command, || {
+                observed_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(stored)
+            })
+        });
+        observed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let (attempting_tx, attempting_rx) = mpsc::channel();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let disconnect_home = home.clone();
+        let disconnect = std::thread::spawn(move || {
+            attempting_tx.send(()).unwrap();
+            crate::chatgpt_oauth::with_connection_mutation(|| {
+                entered_tx.send(()).unwrap();
+                crate::chatgpt_oauth::clear_unlocked(&disconnect_home).unwrap();
+                save_chatgpt_disconnected_unlocked(&disconnect_home).unwrap();
+            });
+        });
+        attempting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(entered_rx.recv_timeout(Duration::from_millis(150)).is_err());
+
+        release_tx.send(()).unwrap();
+        let selected = update.join().unwrap().unwrap();
+        assert_eq!(selected.ai_execution_selection.unwrap().model_id, "gpt-5.4");
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        disconnect.join().unwrap();
+
+        assert!(matches!(load(&home), LoadState::Absent));
+        let view = load_application_settings(&home).unwrap();
+        assert_eq!(
+            view.provider_connections[0].status,
+            ProviderConnectionStatus::AuthenticationRequired
+        );
+        assert!(view.ai_execution_selection.is_none());
+        assert!(view.ai_execution_approval.is_none());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn confirmation_cannot_publish_an_old_account_approval_after_account_replacement() {
+        let home = initialized_home("confirmation-account-serialization");
+        let original = StoredConnection {
+            account_id: "account-a".to_owned(),
+            ..stored_connection(9_999_999, Some("plus"))
+        };
+        save(&home, &original).unwrap();
+        save_live_connection(&home, &chatgpt_connection_view(&original)).unwrap();
+        let command = UpdateAiExecutionSelectionCommand {
+            connection_id: CODEX_CONNECTION_ID.to_owned(),
+            model_id: "gpt-5.5".to_owned(),
+            reasoning: ProviderReasoningSelection::CodexEffort("medium".to_owned()),
+        };
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let confirmation_home = home.clone();
+        let confirmation = std::thread::spawn(move || {
+            confirm_ai_execution_selection_projection_with(&confirmation_home, &command, || {
+                observed_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(original)
+            })
+        });
+        observed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let replacement = StoredConnection {
+            account_id: "account-b".to_owned(),
+            ..stored_connection(9_999_999, Some("plus"))
+        };
+        let (attempting_tx, attempting_rx) = mpsc::channel();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let replacement_home = home.clone();
+        let replacement_thread = std::thread::spawn(move || {
+            attempting_tx.send(()).unwrap();
+            crate::chatgpt_oauth::with_connection_mutation(|| {
+                entered_tx.send(()).unwrap();
+                crate::chatgpt_oauth::save_unlocked(&replacement_home, &replacement).unwrap();
+                save_authorized_connection_projection_unlocked(&replacement_home, &replacement)
+                    .unwrap();
+            });
+        });
+        attempting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(entered_rx.recv_timeout(Duration::from_millis(150)).is_err());
+
+        release_tx.send(()).unwrap();
+        let approved = confirmation.join().unwrap().unwrap();
+        assert!(approved.ai_execution_approval.is_some());
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        replacement_thread.join().unwrap();
+
+        match load(&home) {
+            LoadState::Connected(connection) => assert_eq!(connection.account_id, "account-b"),
+            other => panic!("expected replacement connection, got {other:?}"),
+        }
+        let view = load_application_settings(&home).unwrap();
+        assert_eq!(
+            view.provider_connections[0].account_label.as_deref(),
+            Some("account-b")
+        );
+        assert!(view.ai_execution_selection.is_some());
+        assert!(view.ai_execution_approval.is_none());
         let _ = std::fs::remove_dir_all(&home);
     }
 

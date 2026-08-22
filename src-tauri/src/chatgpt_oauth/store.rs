@@ -195,6 +195,13 @@ pub(crate) fn clear_unlocked(home: &Path) -> io::Result<()> {
     }
 }
 
+pub(crate) fn restore_unlocked(home: &Path, state: &LoadState) -> io::Result<()> {
+    match state {
+        LoadState::Connected(connection) => save_unlocked(home, connection),
+        LoadState::Absent | LoadState::Unusable => clear_unlocked(home),
+    }
+}
+
 /// Refreshes the currently persisted connection as one serialized operation.
 /// Callers retry with the returned value; a stale in-memory token is
 /// deliberately not an input because another operation may have rotated it.

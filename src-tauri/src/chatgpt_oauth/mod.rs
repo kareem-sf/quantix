@@ -18,7 +18,7 @@ pub(crate) use jwt::{extract_identity, ChatGptIdentity};
 pub(crate) use store::save;
 pub(crate) use store::{
     clear_unlocked, load, needs_refresh, refresh_connection, refresh_connection_unlocked,
-    save_unlocked, with_connection_mutation, with_connection_mutation_before, LoadState,
-    StoredConnection,
+    restore_unlocked, save_unlocked, with_connection_mutation, with_connection_mutation_before,
+    LoadState, StoredConnection,
 };
 pub(crate) use tokens::{IssuedTokens, TokenClient};

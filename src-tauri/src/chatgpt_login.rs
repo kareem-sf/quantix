@@ -7,11 +7,12 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::application_settings::{
-    load_application_settings, save_chatgpt_disconnected_unlocked, ApplicationSettingsView,
+    load_application_settings, save_authorized_connection_projection_unlocked,
+    save_chatgpt_disconnected_unlocked, ApplicationSettingsView,
 };
 use crate::chatgpt_oauth::{
-    clear_unlocked, device_login_deadline, extract_identity, load, needs_refresh, run_login,
-    save_unlocked, with_connection_mutation, with_connection_mutation_before,
+    clear_unlocked, device_login_deadline, extract_identity, load, needs_refresh, restore_unlocked,
+    run_login, save_unlocked, with_connection_mutation, with_connection_mutation_before,
     AuthorizationCompletion, DeviceAuthorization, DeviceClient, DevicePollOutcome, LoadState,
     StoredConnection, TokenClient,
 };
@@ -324,21 +325,60 @@ fn persist_authorized_connection_before(
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             return LoginOutcome::Failed;
         }
-        match save_unlocked(home, &connection) {
-            Ok(()) => {
-                if let Some(flow) = active {
-                    flow.mark_persisted();
-                }
-                LoginOutcome::Completed
-            }
-            Err(_) => LoginOutcome::Failed,
+        let previous = load(home);
+        if save_unlocked(home, &connection).is_err() {
+            return LoginOutcome::Failed;
         }
+        if active.is_some_and(|flow| flow.cancel.load(Ordering::Acquire)) {
+            return rollback_authorized_connection(home, &previous, false, LoginOutcome::Cancelled);
+        }
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return rollback_authorized_connection(home, &previous, false, LoginOutcome::Failed);
+        }
+        if save_authorized_connection_projection_unlocked(home, &connection).is_err() {
+            return rollback_authorized_connection(home, &previous, false, LoginOutcome::Failed);
+        }
+        if active.is_some_and(|flow| flow.cancel.load(Ordering::Acquire)) {
+            return rollback_authorized_connection(home, &previous, true, LoginOutcome::Cancelled);
+        }
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return rollback_authorized_connection(home, &previous, true, LoginOutcome::Failed);
+        }
+        if let Some(flow) = active {
+            flow.mark_persisted();
+        }
+        LoginOutcome::Completed
     };
     match deadline {
         Some(deadline) => {
             with_connection_mutation_before(deadline, persist).unwrap_or(LoginOutcome::Failed)
         }
         None => with_connection_mutation(persist),
+    }
+}
+
+fn rollback_authorized_connection(
+    home: &Path,
+    previous: &LoadState,
+    projection_was_published: bool,
+    outcome: LoginOutcome,
+) -> LoginOutcome {
+    let auth_restored = restore_unlocked(home, previous).is_ok();
+    let projection_restored = !projection_was_published
+        || match previous {
+            LoadState::Connected(connection) => {
+                save_authorized_connection_projection_unlocked(home, connection).is_ok()
+            }
+            LoadState::Absent | LoadState::Unusable => {
+                save_chatgpt_disconnected_unlocked(home).is_ok()
+            }
+        };
+    if auth_restored && projection_restored {
+        outcome
+    } else {
+        let _ = clear_unlocked(home);
+        let _ = save_chatgpt_disconnected_unlocked(home);
+        LoginOutcome::Failed
     }
 }
 
@@ -923,7 +963,7 @@ mod tests {
 
     #[test]
     fn core_completes_and_persists_the_connection() {
-        let home = temp_home("core-happy");
+        let (_dir, _host, home) = fresh_host();
         let id_token = jwt_id_token("acc-core", Some("plus"));
         let issuer = start_mock_issuer(format!(
             r#"{{"access_token":"at-1","refresh_token":"rt-1","id_token":"{id_token}","expires_in":3600}}"#
@@ -954,7 +994,23 @@ mod tests {
             }
             other => panic!("expected connected store, got {other:?}"),
         }
-        let _ = std::fs::remove_dir_all(&home);
+        let view = crate::application_settings::load_application_settings(&home).unwrap();
+        assert_eq!(view.chatgpt.state, ChatGptConnectionState::Connected);
+        assert_eq!(
+            view.provider_connections[0].status,
+            crate::application_settings::ProviderConnectionStatus::Ready
+        );
+        assert_eq!(
+            view.provider_connections[0].account_label.as_deref(),
+            Some("acc-core")
+        );
+        assert_eq!(
+            view.ai_execution_selection
+                .as_ref()
+                .map(|selection| selection.model_id.as_str()),
+            Some("gpt-5.5")
+        );
+        assert!(view.ai_execution_approval.is_none());
     }
 
     #[test]
@@ -1131,6 +1187,50 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
+    #[test]
+    fn ready_projection_failure_restores_the_previous_authorized_connection() {
+        let (_dir, _host, home) = fresh_host();
+        let previous = StoredConnection {
+            access_token: "at-previous".to_owned(),
+            refresh_token: "rt-previous".to_owned(),
+            id_token: "idt-previous".to_owned(),
+            expires_at_ms: now_ms() + 3_600_000,
+            account_id: "account-previous".to_owned(),
+            plan_type: Some("plus".to_owned()),
+            compute_residency: None,
+        };
+        save(&home, &previous).unwrap();
+        crate::application_settings::save_live_connection(
+            &home,
+            &crate::application_settings::chatgpt_connection_view(&previous),
+        )
+        .unwrap();
+        let database = rusqlite::Connection::open(home.join("installation.sqlite")).unwrap();
+        database
+            .execute("DROP TABLE provider_connections", [])
+            .unwrap();
+        drop(database);
+        let replacement = crate::chatgpt_oauth::IssuedTokens {
+            access_token: "at-replacement".to_owned(),
+            refresh_token: "rt-replacement".to_owned(),
+            id_token: jwt_id_token("account-replacement", Some("plus")),
+            expires_in_secs: 3_600,
+        };
+
+        assert_eq!(
+            persist_authorized_connection(&home, &replacement, None),
+            LoginOutcome::Failed
+        );
+        match load(&home) {
+            LoadState::Connected(connection) => {
+                assert_eq!(connection.access_token, "at-previous");
+                assert_eq!(connection.refresh_token, "rt-previous");
+                assert_eq!(connection.account_id, "account-previous");
+            }
+            other => panic!("projection failure must restore prior auth, got {other:?}"),
+        }
+    }
+
     fn fresh_host() -> (tempfile::TempDir, crate::QuantixHost, PathBuf) {
         let dir = tempfile::tempdir().expect("temporary application home");
         let host = crate::QuantixHost::new(dir.path(), dir.path());
@@ -1219,6 +1319,14 @@ mod tests {
             }
             other => panic!("expected refreshed store, got {other:?}"),
         }
+        let view = crate::application_settings::load_application_settings(&home).unwrap();
+        assert_eq!(view.chatgpt.state, ChatGptConnectionState::Connected);
+        assert_eq!(
+            view.provider_connections[0].status,
+            crate::application_settings::ProviderConnectionStatus::Ready
+        );
+        assert!(view.ai_execution_selection.is_some());
+        assert!(view.ai_execution_approval.is_none());
     }
 
     #[test]
