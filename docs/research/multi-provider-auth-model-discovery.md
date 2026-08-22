@@ -76,7 +76,7 @@ Sources checked on 2026-08-22:
 - [OpenAI: Authentication documentation](https://learn.chatgpt.com/docs/auth)
 - [OpenAI Codex: browser authorization construction](https://github.com/openai/codex/blob/main/codex-rs/login/src/server.rs)
 - [OpenAI Codex: device-code authorization implementation](https://github.com/openai/codex/blob/main/codex-rs/login/src/device_code_auth.rs)
-- [OpenCode: ChatGPT device-flow implementation](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/plugin/codex.ts)
+- [OpenCode: ChatGPT device-flow implementation](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/plugin/openai/codex.ts)
 
 OpenAI's sources are the authority for the integration. OpenCode is an
 implementation comparison that informed the fallback interaction, not an
