@@ -2,8 +2,9 @@
 import type { AiExecutionSelection } from "./AiExecutionSelection";
 import type { ApplicationDiagnostics } from "./ApplicationDiagnostics";
 import type { ApplicationStorageFacts } from "./ApplicationStorageFacts";
+import type { ChatGptConnectionStatus } from "./ChatGptConnectionStatus";
 import type { GeneralApplicationPreferences } from "./GeneralApplicationPreferences";
 import type { ProviderConnectionView } from "./ProviderConnectionView";
 import type { ProviderLoginView } from "./ProviderLoginView";
 
-export type ApplicationSettingsView = { general_preferences: GeneralApplicationPreferences, ai_execution_selection: AiExecutionSelection | null, provider_connections: Array<ProviderConnectionView>, active_provider_login: ProviderLoginView | null, storage: ApplicationStorageFacts, diagnostics: ApplicationDiagnostics, };
+export type ApplicationSettingsView = { general_preferences: GeneralApplicationPreferences, ai_execution_selection: AiExecutionSelection | null, provider_connections: Array<ProviderConnectionView>, active_provider_login: ProviderLoginView | null, chatgpt: ChatGptConnectionStatus, storage: ApplicationStorageFacts, diagnostics: ApplicationDiagnostics, };

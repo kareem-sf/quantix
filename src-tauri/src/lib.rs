@@ -3,6 +3,7 @@
 mod acceptance;
 mod agent_runtime;
 mod application_settings;
+mod chatgpt_login;
 pub(crate) mod chatgpt_oauth;
 mod document_parsing;
 mod embedding;
@@ -49,6 +50,10 @@ pub use application_settings::{
     ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
     StartProviderLoginCommand, UpdateAiExecutionSelectionCommand,
     UpdateGeneralApplicationPreferencesCommand,
+};
+pub use chatgpt_login::{
+    ChatGptConnectionState, ChatGptConnectionStatus, ChatGptPortHolders, StartChatGptLoginError,
+    StartChatGptLoginResult, StartChatGptLoginStatus,
 };
 pub use document_parsing::{
     DocumentParseResult, EvidenceBoundingBox, EvidenceDocument, EvidenceLanguage, EvidenceLocation,
@@ -308,17 +313,18 @@ mod tauri_commands {
         RunSubmissionSectionReviewCommand, RunTenderRecordExtractionCommand,
         RunTenderRecordReviewCommand, RuntimePreparationProgress, RuntimeReadiness,
         SearchEvidenceCommand, SearchEvidenceSemanticCommand, SelectManagerWorkspaceTenderCommand,
-        SelectPricingScenarioCommand, SetupOutcome, SetupState, StartManagerTenderCommand,
-        StartProviderLoginCommand, SubmissionArtifactContent, SubmissionItemContent,
-        SubmissionPackageVersion, SubmissionReleaseInspection, SubmissionSectionReviewRunResult,
-        TenderBackupRecord, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
-        TenderIntegrityReport, TenderPackageImportResult, TenderPackageSourceKind,
-        TenderProductionInspection, TenderQuery, TenderQueryPage, TenderRecordAuthority,
-        TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordPage,
-        TenderRecordReviewResult, TenderRecoveryRecord, TenderRetentionDecisionCommand,
-        TenderRetentionDecisionRecord, TenderSummary, TrashedTenderDecisionCommand,
-        TrashedTenderRecord, UpdateAiExecutionSelectionCommand,
-        UpdateGeneralApplicationPreferencesCommand, WorkPlanProposalInspection,
+        SelectPricingScenarioCommand, SetupOutcome, SetupState, StartChatGptLoginError,
+        StartChatGptLoginResult, StartManagerTenderCommand, StartProviderLoginCommand,
+        SubmissionArtifactContent, SubmissionItemContent, SubmissionPackageVersion,
+        SubmissionReleaseInspection, SubmissionSectionReviewRunResult, TenderBackupRecord,
+        TenderCatalogueEntry, TenderCommandError, TenderErrorCode, TenderIntegrityReport,
+        TenderPackageImportResult, TenderPackageSourceKind, TenderProductionInspection,
+        TenderQuery, TenderQueryPage, TenderRecordAuthority, TenderRecordDecisionResult,
+        TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult,
+        TenderRecoveryRecord, TenderRetentionDecisionCommand, TenderRetentionDecisionRecord,
+        TenderSummary, TrashedTenderDecisionCommand, TrashedTenderRecord,
+        UpdateAiExecutionSelectionCommand, UpdateGeneralApplicationPreferencesCommand,
+        WorkPlanProposalInspection,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -701,6 +707,43 @@ mod tauri_commands {
         command: ConnectGeminiCommand,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
         host.inner().connect_gemini(command).await
+    }
+
+    #[tauri::command]
+    pub(super) async fn start_chatgpt_login(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<StartChatGptLoginResult, StartChatGptLoginError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.start_chatgpt_login())
+            .await
+            .map_err(|_| StartChatGptLoginError::new(TenderErrorCode::StoreUnavailable))?
+    }
+
+    #[tauri::command]
+    pub(super) async fn cancel_chatgpt_login(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<(), TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            host.cancel_chatgpt_login();
+            Ok(())
+        })
+        .await
+        .map_err(|_| TenderCommandError {
+            code: TenderErrorCode::StoreUnavailable,
+        })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn disconnect_chatgpt(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.disconnect_chatgpt())
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
     }
 
     #[tauri::command]
@@ -2598,6 +2641,9 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::connect_anthropic,
             tauri_commands::disconnect_ai_provider,
             tauri_commands::connect_gemini,
+            tauri_commands::start_chatgpt_login,
+            tauri_commands::cancel_chatgpt_login,
+            tauri_commands::disconnect_chatgpt,
             tauri_commands::inspect_manager_workspace,
             tauri_commands::start_manager_tender,
             tauri_commands::resume_manager_intakes,

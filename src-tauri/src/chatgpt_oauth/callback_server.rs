@@ -177,7 +177,7 @@ fn bind_first_free(candidates: &[u16]) -> Option<(TcpListener, u16)> {
     })
 }
 
-fn resolve_holders(candidates: &[u16]) -> PortHolders {
+pub(crate) fn resolve_holders(candidates: &[u16]) -> PortHolders {
     let holder = |well_known_port: u16| {
         candidates
             .contains(&well_known_port)

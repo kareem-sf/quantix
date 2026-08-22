@@ -4,6 +4,7 @@ use quantix_lib::{
     ApplicationDiagnostics, ApplicationSettingsView, ApplicationStorageFacts,
     ApproveSubmissionReleaseCommand, BootstrapRole, CancelProviderLoginCommand,
     CodexProductionAssuranceEvidence, ConnectAnthropicCommand, ConnectGeminiCommand,
+    ChatGptConnectionState, ChatGptConnectionStatus, ChatGptPortHolders,
     CreatePortableTenderArchiveCommand, DeletionReceipt, DisconnectAiProviderCommand,
     ErasedTenderCopyClass, EvaluatePublicReleaseGateCommand, ExportReleaseCopyCommand,
     GeneralApplicationPreferences, ImportPortableTenderArchiveCommand,
@@ -21,7 +22,8 @@ use quantix_lib::{
     RecordNativePlatformQualificationCommand, ReleaseCopyExport, ReleaseCopyItem,
     RetryManagerIntakeCommand, RunDeterministicAcceptanceCommand, RuntimePreparationActivity,
     RuntimePreparationActivityStatus, RuntimePreparationProgress, RuntimePreparationStatus,
-    RuntimePreparationStep, SelectManagerWorkspaceTenderCommand, StartManagerTenderCommand,
+    RuntimePreparationStep, SelectManagerWorkspaceTenderCommand, StartChatGptLoginError,
+    StartChatGptLoginResult, StartChatGptLoginStatus, StartManagerTenderCommand,
     StartProviderLoginCommand, SubmissionReleaseApproval, SubmissionReleaseInspection,
     SubmissionReleaseState, TechnicalRiskAcceptance, TenderOfficeMessage,
     TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderRetentionDecisionCommand,
@@ -125,6 +127,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ConnectAnthropicCommand::export_all(&config)?;
     ConnectGeminiCommand::export_all(&config)?;
     DisconnectAiProviderCommand::export_all(&config)?;
+    ChatGptConnectionState::export_all(&config)?;
+    ChatGptConnectionStatus::export_all(&config)?;
+    ChatGptPortHolders::export_all(&config)?;
+    StartChatGptLoginError::export_all(&config)?;
+    StartChatGptLoginResult::export_all(&config)?;
+    StartChatGptLoginStatus::export_all(&config)?;
     AgentRunInspection::export_all(&config)?;
     AgentRunSummary::export_all(&config)?;
     RuntimePreparationActivity::export_all(&config)?;

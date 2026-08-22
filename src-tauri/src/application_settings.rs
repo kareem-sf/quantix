@@ -171,6 +171,7 @@ pub struct ApplicationSettingsView {
     pub ai_execution_selection: Option<AiExecutionSelection>,
     pub provider_connections: Vec<ProviderConnectionView>,
     pub active_provider_login: Option<ProviderLoginView>,
+    pub chatgpt: crate::chatgpt_login::ChatGptConnectionStatus,
     pub storage: ApplicationStorageFacts,
     pub diagnostics: ApplicationDiagnostics,
 }
@@ -1102,7 +1103,7 @@ fn store_application_settings(
     Ok(())
 }
 
-fn load_application_settings(
+pub(crate) fn load_application_settings(
     application_home: &Path,
 ) -> Result<ApplicationSettingsView, TenderCommandError> {
     let database = settings_connection(application_home)?;
@@ -1144,6 +1145,7 @@ fn load_application_settings(
         ai_execution_selection: settings.ai_execution_selection,
         provider_connections,
         active_provider_login: None,
+        chatgpt: crate::chatgpt_login::chatgpt_connection_status(application_home),
         storage: ApplicationStorageFacts {
             application_home: application_home.to_string_lossy().into_owned(),
             tender_backups_are_preserved: true,

@@ -6,7 +6,9 @@ mod store;
 mod tokens;
 
 pub(crate) use authorize::build_authorize_url;
-pub(crate) use callback_server::{CallbackFailure, CallbackOutcome, ExchangeFailure, PortHolders};
+pub(crate) use callback_server::{
+    resolve_holders, run_login, CallbackFailure, CallbackOutcome, ExchangeFailure, PortHolders,
+};
 pub(crate) use crypto::{
     base64url_decode, base64url_encode, generate_pkce, generate_state, OauthCodecError, PkceCodes,
     RandomError,
