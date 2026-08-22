@@ -70,6 +70,21 @@ impl TokenClient {
         ])
     }
 
+    pub(crate) fn exchange_device_code(
+        &self,
+        authorization_code: &str,
+        code_verifier: &str,
+    ) -> Result<IssuedTokens, TokenError> {
+        let redirect_uri = format!("{}/deviceauth/callback", self.issuer_base);
+        self.post_form(&[
+            ("grant_type", "authorization_code"),
+            ("code", authorization_code),
+            ("redirect_uri", redirect_uri.as_str()),
+            ("client_id", CLIENT_ID),
+            ("code_verifier", code_verifier),
+        ])
+    }
+
     pub(crate) fn refresh(&self, refresh_token: &str) -> Result<IssuedTokens, TokenError> {
         self.post_form(&[
             ("grant_type", "refresh_token"),
@@ -340,6 +355,34 @@ mod tests {
         assert_eq!(
             form_value(&request.form, "client_id"),
             "app_EMoamEEZ73f0CkXaXp7hrann"
+        );
+    }
+
+    #[test]
+    fn device_exchange_uses_the_issuer_callback_and_returned_verifier() {
+        let (base, captured) = start_issuer(move |_| (200, SUCCESS_BODY));
+        let client = TokenClient::new(&base).unwrap();
+
+        let tokens = client
+            .exchange_device_code("device-code-1", "device-verifier-1")
+            .unwrap();
+
+        assert_eq!(tokens.access_token, "at-1");
+        let requests = captured.lock().unwrap();
+        let request = &requests[0];
+        assert_eq!(request.path, "/oauth/token");
+        assert_eq!(
+            form_value(&request.form, "grant_type"),
+            "authorization_code"
+        );
+        assert_eq!(form_value(&request.form, "code"), "device-code-1");
+        assert_eq!(
+            form_value(&request.form, "redirect_uri"),
+            format!("{base}/deviceauth/callback")
+        );
+        assert_eq!(
+            form_value(&request.form, "code_verifier"),
+            "device-verifier-1"
         );
     }
 

@@ -32,14 +32,16 @@ pub(crate) enum CallbackFailure {
     StateMismatch,
     ExchangeRejected,
     ExchangeUnreachable,
+    Persistence,
     Startup,
     Timeout,
 }
 
-#[derive(Debug)]
-pub(crate) struct PortHolders {
-    pub port_1455: Option<u32>,
-    pub port_1457: Option<u32>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthorizationCompletion {
+    Connected,
+    Cancelled,
+    Failed,
 }
 
 struct PendingLogin {
@@ -51,6 +53,9 @@ struct PendingLogin {
 const CSRF_REASON: &str = "the sign-in response could not be verified";
 const MISSING_CODE_REASON: &str = "the provider did not send an authorization code";
 const UNREACHABLE_REASON: &str = "Quantix could not reach the sign-in service";
+const DENIED_REASON: &str = "ChatGPT did not approve the sign-in request";
+const PERSISTENCE_REASON: &str = "Quantix could not save the ChatGPT connection";
+const CANCELLED_REASON: &str = "The sign-in request was cancelled";
 const CANCEL_ACK_TEXT: &str = "Login cancelled. You can close this window.";
 const NOT_FOUND_TEXT: &str = "Not found";
 
@@ -75,8 +80,7 @@ fn page_shell(title: &str, body: &str) -> String {
 fn success_page() -> String {
     page_shell(
         "Quantix — ChatGPT connected",
-        "<h1>Authorization successful</h1>\
-         <p>Quantix is now connected to ChatGPT.</p>\
+        "<h1>ChatGPT connected to Quantix</h1>\
          <p>You can close this window.</p>",
     )
 }
@@ -107,6 +111,7 @@ pub(crate) fn run_login(
     port_candidates: &[u16],
     open_browser: impl FnOnce(&str),
     issuer: &str,
+    complete_authorization: impl FnOnce(&IssuedTokens) -> AuthorizationCompletion + Send + 'static,
 ) -> CallbackOutcome {
     let Some((listener, port)) = bind_first_free(port_candidates) else {
         return CallbackOutcome::Failed(CallbackFailure::PortBlocked);
@@ -131,6 +136,7 @@ pub(crate) fn run_login(
         },
         client,
         LOGIN_TIMEOUT,
+        complete_authorization,
     )
 }
 
@@ -142,28 +148,21 @@ fn bind_first_free(candidates: &[u16]) -> Option<(TcpListener, u16)> {
     })
 }
 
-pub(crate) fn resolve_holders(candidates: &[u16]) -> PortHolders {
-    let holder = |well_known_port: u16| {
-        candidates
-            .contains(&well_known_port)
-            .then(|| listening_pid(well_known_port))
-            .flatten()
-    };
-    PortHolders {
-        port_1455: holder(1455),
-        port_1457: holder(1457),
-    }
-}
-
-fn serve_until_terminal(
+fn serve_until_terminal<F>(
     listener: TcpListener,
     pending: PendingLogin,
     client: TokenClient,
     budget: Duration,
-) -> CallbackOutcome {
+    complete_authorization: F,
+) -> CallbackOutcome
+where
+    F: FnOnce(&IssuedTokens) -> AuthorizationCompletion + Send + 'static,
+{
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        if let Some(outcome) = accept_until_terminal(listener, &pending, &client, budget) {
+        if let Some(outcome) =
+            accept_until_terminal(listener, &pending, &client, budget, complete_authorization)
+        {
             let _ = tx.send(outcome);
         }
     });
@@ -174,21 +173,28 @@ fn serve_until_terminal(
     }
 }
 
-fn accept_until_terminal(
+fn accept_until_terminal<F>(
     listener: TcpListener,
     pending: &PendingLogin,
     client: &TokenClient,
     budget: Duration,
-) -> Option<CallbackOutcome> {
+    complete_authorization: F,
+) -> Option<CallbackOutcome>
+where
+    F: FnOnce(&IssuedTokens) -> AuthorizationCompletion,
+{
     listener.set_nonblocking(true).ok()?;
     let deadline = Instant::now() + budget;
+    let mut complete_authorization = Some(complete_authorization);
     loop {
         if Instant::now() >= deadline {
             return Some(CallbackOutcome::Failed(CallbackFailure::Timeout));
         }
         match listener.accept() {
             Ok((stream, _)) => {
-                if let Some(outcome) = handle_connection(stream, pending, client) {
+                if let Some(outcome) =
+                    handle_connection(stream, pending, client, &mut complete_authorization)
+                {
                     return Some(outcome);
                 }
             }
@@ -198,11 +204,15 @@ fn accept_until_terminal(
     }
 }
 
-fn handle_connection(
+fn handle_connection<F>(
     mut stream: TcpStream,
     pending: &PendingLogin,
     client: &TokenClient,
-) -> Option<CallbackOutcome> {
+    complete_authorization: &mut Option<F>,
+) -> Option<CallbackOutcome>
+where
+    F: FnOnce(&IssuedTokens) -> AuthorizationCompletion,
+{
     let _ = stream.set_read_timeout(Some(STREAM_READ_TIMEOUT));
     let head = read_request_head(&mut stream)?;
     let request_line = head.lines().next()?;
@@ -223,7 +233,13 @@ fn handle_connection(
         None => (target, ""),
     };
     match path {
-        CALLBACK_PATH => Some(handle_callback(query, pending, client, &mut stream)),
+        CALLBACK_PATH => Some(handle_callback(
+            query,
+            pending,
+            client,
+            complete_authorization,
+            &mut stream,
+        )),
         CANCEL_PATH => {
             write_response(
                 &mut stream,
@@ -245,24 +261,24 @@ fn handle_connection(
     }
 }
 
-fn handle_callback(
+fn handle_callback<F>(
     query: &str,
     pending: &PendingLogin,
     client: &TokenClient,
+    complete_authorization: &mut Option<F>,
     stream: &mut TcpStream,
-) -> CallbackOutcome {
+) -> CallbackOutcome
+where
+    F: FnOnce(&IssuedTokens) -> AuthorizationCompletion,
+{
     let params = parse_query(query);
 
-    if let Some(error) = param(&params, "error") {
-        let reason = param(&params, "error_description")
-            .filter(|detail| !detail.is_empty())
-            .unwrap_or(error)
-            .to_string();
+    if param(&params, "error").is_some() {
         write_response(
             stream,
             "400 Bad Request",
             "text/html; charset=utf-8",
-            &error_page(&reason),
+            &error_page(DENIED_REASON),
         );
         return CallbackOutcome::Failed(CallbackFailure::ProviderDenied);
     }
@@ -289,13 +305,39 @@ fn handle_callback(
 
     match client.exchange_code(&code, &pending.redirect_uri, &pending.pkce) {
         Ok(tokens) => {
-            write_response(
-                stream,
-                "200 OK",
-                "text/html; charset=utf-8",
-                &success_page(),
-            );
-            CallbackOutcome::Authorized(tokens)
+            let completion = complete_authorization
+                .take()
+                .map(|complete| complete(&tokens))
+                .unwrap_or(AuthorizationCompletion::Failed);
+            match completion {
+                AuthorizationCompletion::Connected => {
+                    write_response(
+                        stream,
+                        "200 OK",
+                        "text/html; charset=utf-8",
+                        &success_page(),
+                    );
+                    CallbackOutcome::Authorized(tokens)
+                }
+                AuthorizationCompletion::Cancelled => {
+                    write_response(
+                        stream,
+                        "400 Bad Request",
+                        "text/html; charset=utf-8",
+                        &error_page(CANCELLED_REASON),
+                    );
+                    CallbackOutcome::Cancelled
+                }
+                AuthorizationCompletion::Failed => {
+                    write_response(
+                        stream,
+                        "500 Internal Server Error",
+                        "text/html; charset=utf-8",
+                        &error_page(PERSISTENCE_REASON),
+                    );
+                    CallbackOutcome::Failed(CallbackFailure::Persistence)
+                }
+            }
         }
         Err(TokenError::Provider { kind, .. }) => {
             write_response(
@@ -397,59 +439,6 @@ fn write_response(stream: &mut TcpStream, status_line: &str, content_type: &str,
     let _ = stream.flush();
 }
 
-#[cfg(windows)]
-mod pid_table {
-    use windows::Win32::NetworkManagement::IpHelper::{
-        GetExtendedTcpTable, MIB_TCPTABLE_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
-    };
-    use windows::Win32::Networking::WinSock::AF_INET;
-
-    pub(super) fn listening_pid(port: u16) -> Option<u32> {
-        let mut size: u32 = 0;
-        unsafe {
-            GetExtendedTcpTable(
-                None,
-                &mut size,
-                false,
-                AF_INET.0 as u32,
-                TCP_TABLE_OWNER_PID_LISTENER,
-                0,
-            );
-            if size == 0 {
-                return None;
-            }
-            let mut buffer = vec![0u32; size as usize / 4 + 1];
-            let status = GetExtendedTcpTable(
-                Some(buffer.as_mut_ptr().cast()),
-                &mut size,
-                false,
-                AF_INET.0 as u32,
-                TCP_TABLE_OWNER_PID_LISTENER,
-                0,
-            );
-            if status != 0 {
-                return None;
-            }
-            let table = &*(buffer.as_ptr().cast::<MIB_TCPTABLE_OWNER_PID>());
-            let rows =
-                std::slice::from_raw_parts(table.table.as_ptr(), table.dwNumEntries as usize);
-            rows.iter()
-                .find(|row| ((row.dwLocalPort & 0xFFFF) as u16).swap_bytes() == port)
-                .map(|row| row.dwOwningPid)
-        }
-    }
-}
-
-#[cfg(windows)]
-fn listening_pid(port: u16) -> Option<u32> {
-    pid_table::listening_pid(port)
-}
-
-#[cfg(not(windows))]
-fn listening_pid(_port: u16) -> Option<u32> {
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Write};
@@ -472,6 +461,16 @@ mod tests {
     }
 
     fn spawn_login(port_candidates: &[u16], issuer_base: &str) -> LoginHarness {
+        spawn_login_with_completion(port_candidates, issuer_base, |_| {
+            AuthorizationCompletion::Connected
+        })
+    }
+
+    fn spawn_login_with_completion(
+        port_candidates: &[u16],
+        issuer_base: &str,
+        complete_authorization: impl FnOnce(&IssuedTokens) -> AuthorizationCompletion + Send + 'static,
+    ) -> LoginHarness {
         let (url_tx, url_rx) = mpsc::channel();
         let (outcome_tx, outcome_rx) = mpsc::channel();
         let candidates = port_candidates.to_vec();
@@ -483,6 +482,7 @@ mod tests {
                     let _ = url_tx.send(url.to_string());
                 },
                 &base,
+                complete_authorization,
             );
             let _ = outcome_tx.send(outcome);
         });
@@ -642,10 +642,9 @@ mod tests {
             &format!("/auth/callback?code=coded-abc&state={state}"),
         );
         assert!(
-            response.contains("Authorization successful"),
+            response.contains("ChatGPT connected to Quantix"),
             "page: {response}"
         );
-        assert!(response.contains("Quantix is now connected to ChatGPT."));
         assert!(response.contains("You can close this window."));
 
         match harness
@@ -679,6 +678,28 @@ mod tests {
     }
 
     #[test]
+    fn persistence_failure_is_reported_before_any_success_page() {
+        let (issuer_base, _forms) = start_mock_issuer();
+        let harness =
+            spawn_login_with_completion(&[0], &issuer_base, |_| AuthorizationCompletion::Failed);
+        let (port, url) = next_authorize_url(&harness);
+        let state = authorize_param(&url, "state");
+
+        let response = http_get(
+            port,
+            &format!("/auth/callback?code=coded-abc&state={state}"),
+        );
+
+        assert!(response.starts_with("HTTP/1.1 500"));
+        assert!(response.contains(PERSISTENCE_REASON));
+        assert!(!response.contains("ChatGPT connected to Quantix"));
+        assert!(matches!(
+            harness.outcomes.recv_timeout(WAIT).unwrap(),
+            CallbackOutcome::Failed(CallbackFailure::Persistence)
+        ));
+    }
+
+    #[test]
     fn unknown_path_404s_then_cancel_terminates_with_plain_ack() {
         let harness = spawn_login(&[0], "http://127.0.0.1:9");
         let (port, _url) = next_authorize_url(&harness);
@@ -709,7 +730,7 @@ mod tests {
 
         let forged = http_get(port, "/auth/callback?code=zz&state=forged-state");
         assert!(forged.contains("could not be verified"), "page: {forged}");
-        assert!(!forged.contains("Authorization successful"));
+        assert!(!forged.contains("ChatGPT connected to Quantix"));
 
         match harness
             .outcomes
@@ -747,8 +768,9 @@ mod tests {
             port,
             "/auth/callback?error=access_denied&error_description=User%20denied%20the%20request",
         );
-        assert!(page.contains("User denied the request"), "page: {page}");
-        assert!(!page.contains("Authorization successful"));
+        assert!(page.contains(DENIED_REASON), "page: {page}");
+        assert!(!page.contains("User denied the request"));
+        assert!(!page.contains("ChatGPT connected to Quantix"));
 
         match harness
             .outcomes
@@ -762,7 +784,7 @@ mod tests {
     }
 
     #[test]
-    fn blocked_both_candidates_reports_holder_pids() {
+    fn blocked_both_candidates_reports_only_the_blocked_outcome() {
         let Ok(gate_1455) = TcpListener::bind(("127.0.0.1", 1455)) else {
             println!("skipping: port 1455 occupied");
             return;
@@ -771,10 +793,6 @@ mod tests {
             println!("skipping: port 1457 occupied");
             return;
         };
-
-        let holders = resolve_holders(&[1455, 1457]);
-        assert_eq!(holders.port_1455, Some(std::process::id()));
-        assert_eq!(holders.port_1457, Some(std::process::id()));
 
         let harness = spawn_login(&[1455, 1457], "http://127.0.0.1:9");
         match harness
@@ -790,20 +808,6 @@ mod tests {
         drop(gate_1457);
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn listening_pid_resolves_own_listener() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        assert_eq!(listening_pid(port), Some(std::process::id()));
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn listening_pid_is_none_off_windows() {
-        assert_eq!(listening_pid(12345), None);
-    }
-
     #[test]
     fn serve_budget_expiry_yields_timeout() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -815,7 +819,13 @@ mod tests {
         let client = TokenClient::new("http://127.0.0.1:9").unwrap();
 
         let started = std::time::Instant::now();
-        let outcome = serve_until_terminal(listener, pending, client, Duration::from_millis(300));
+        let outcome = serve_until_terminal(
+            listener,
+            pending,
+            client,
+            Duration::from_millis(300),
+            |_| AuthorizationCompletion::Connected,
+        );
 
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(matches!(

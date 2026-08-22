@@ -10,8 +10,9 @@ use crate::application_settings::{
     load_application_settings, save_chatgpt_disconnected, ApplicationSettingsView,
 };
 use crate::chatgpt_oauth::{
-    clear_unlocked, extract_identity, load, needs_refresh, resolve_holders, run_login,
-    save_unlocked, with_connection_mutation, LoadState, PortHolders, StoredConnection,
+    clear_unlocked, extract_identity, load, needs_refresh, run_login, save_unlocked,
+    with_connection_mutation, AuthorizationCompletion, DeviceAuthorization, DeviceClient,
+    DevicePollOutcome, LoadState, StoredConnection, TokenClient,
 };
 use crate::host::QuantixHost;
 use crate::tender_store::{TenderCommandError, TenderErrorCode};
@@ -60,9 +61,9 @@ pub struct StartChatGptLoginResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 #[ts(export)]
-pub struct ChatGptPortHolders {
-    pub port_1455: Option<u32>,
-    pub port_1457: Option<u32>,
+pub struct StartChatGptDeviceLoginResult {
+    pub verification_url: String,
+    pub user_code: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -70,26 +71,11 @@ pub struct ChatGptPortHolders {
 #[ts(export)]
 pub struct StartChatGptLoginError {
     pub code: TenderErrorCode,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub port_holders: Option<ChatGptPortHolders>,
 }
 
 impl StartChatGptLoginError {
     pub(crate) fn new(code: TenderErrorCode) -> Self {
-        Self {
-            code,
-            port_holders: None,
-        }
-    }
-
-    fn port_blocked(holders: PortHolders) -> Self {
-        Self {
-            code: TenderErrorCode::OauthPortBlocked,
-            port_holders: Some(ChatGptPortHolders {
-                port_1455: holders.port_1455,
-                port_1457: holders.port_1457,
-            }),
-        }
+        Self { code }
     }
 }
 
@@ -107,6 +93,7 @@ impl std::error::Error for StartChatGptLoginError {}
 pub enum ChatGptLoginPhase {
     Idle,
     AwaitingBrowser,
+    AwaitingDevice,
     Completed,
     Failed,
     Cancelled,
@@ -155,6 +142,10 @@ impl ActiveLoginFlow {
             request_callback_cancel(port);
         }
     }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Acquire)
+    }
 }
 
 pub(crate) struct ChatGptLoginFlowState {
@@ -193,12 +184,22 @@ fn run_chatgpt_login_flow_for_active(
     port_candidates: &[u16],
     open_browser: impl FnOnce(&str),
     issuer: &str,
-    active: Option<&ActiveLoginFlow>,
+    active: Option<Arc<ActiveLoginFlow>>,
 ) -> LoginOutcome {
-    match run_login(port_candidates, open_browser, issuer) {
-        crate::chatgpt_oauth::CallbackOutcome::Authorized(tokens) => {
-            persist_authorized_connection(home, &tokens, active)
+    let persistence_home = home.to_path_buf();
+    let persistence_active = active.clone();
+    match run_login(port_candidates, open_browser, issuer, move |tokens| {
+        match persist_authorized_connection(
+            &persistence_home,
+            tokens,
+            persistence_active.as_deref(),
+        ) {
+            LoginOutcome::Completed => AuthorizationCompletion::Connected,
+            LoginOutcome::Cancelled => AuthorizationCompletion::Cancelled,
+            LoginOutcome::Failed => AuthorizationCompletion::Failed,
         }
+    }) {
+        crate::chatgpt_oauth::CallbackOutcome::Authorized(_) => LoginOutcome::Completed,
         crate::chatgpt_oauth::CallbackOutcome::Cancelled => LoginOutcome::Cancelled,
         crate::chatgpt_oauth::CallbackOutcome::Failed(
             crate::chatgpt_oauth::CallbackFailure::PortBlocked
@@ -206,10 +207,38 @@ fn run_chatgpt_login_flow_for_active(
             | crate::chatgpt_oauth::CallbackFailure::StateMismatch
             | crate::chatgpt_oauth::CallbackFailure::ExchangeRejected
             | crate::chatgpt_oauth::CallbackFailure::ExchangeUnreachable
+            | crate::chatgpt_oauth::CallbackFailure::Persistence
             | crate::chatgpt_oauth::CallbackFailure::Startup
             | crate::chatgpt_oauth::CallbackFailure::Timeout,
         ) => LoginOutcome::Failed,
     }
+}
+
+fn run_chatgpt_device_login_flow(
+    home: &Path,
+    issuer: &str,
+    client: DeviceClient,
+    authorization: DeviceAuthorization,
+    active: &Arc<ActiveLoginFlow>,
+) -> LoginOutcome {
+    let grant = match client.poll(&authorization, || active.is_cancelled()) {
+        Ok(DevicePollOutcome::Authorized(grant)) => grant,
+        Ok(DevicePollOutcome::Cancelled) => return LoginOutcome::Cancelled,
+        Ok(DevicePollOutcome::TimedOut) | Err(_) => return LoginOutcome::Failed,
+    };
+    if active.is_cancelled() {
+        return LoginOutcome::Cancelled;
+    }
+    let token_client = match TokenClient::new(issuer) {
+        Ok(client) => client,
+        Err(_) => return LoginOutcome::Failed,
+    };
+    let tokens =
+        match token_client.exchange_device_code(&grant.authorization_code, &grant.code_verifier) {
+            Ok(tokens) => tokens,
+            Err(_) => return LoginOutcome::Failed,
+        };
+    persist_authorized_connection(home, &tokens, Some(active))
 }
 
 fn persist_authorized_connection(
@@ -250,16 +279,11 @@ fn request_callback_cancel(port: u16) {
     }
 }
 
-fn blocked_login_ports(candidates: &[u16]) -> Option<PortHolders> {
-    let all_blocked = !candidates.is_empty()
+fn all_login_ports_blocked(candidates: &[u16]) -> bool {
+    !candidates.is_empty()
         && candidates
             .iter()
-            .all(|candidate| std::net::TcpListener::bind((LOOPBACK_HOST, *candidate)).is_err());
-    if all_blocked {
-        Some(resolve_holders(candidates))
-    } else {
-        None
-    }
+            .all(|candidate| std::net::TcpListener::bind((LOOPBACK_HOST, *candidate)).is_err())
 }
 
 fn open_in_system_browser(url: &str) {
@@ -346,8 +370,10 @@ impl QuantixHost {
                 });
             }
         }
-        if let Some(holders) = blocked_login_ports(port_candidates) {
-            return Err(StartChatGptLoginError::port_blocked(holders));
+        if all_login_ports_blocked(port_candidates) {
+            return Err(StartChatGptLoginError::new(
+                TenderErrorCode::OauthPortBlocked,
+            ));
         }
         let active = Arc::new(ActiveLoginFlow::new());
         state.phase = ChatGptLoginPhase::AwaitingBrowser;
@@ -366,7 +392,7 @@ impl QuantixHost {
                     &flow_ports,
                     opener,
                     &flow_issuer,
-                    Some(&thread_active),
+                    Some(Arc::clone(&thread_active)),
                 );
                 flow_host.finish_chatgpt_login_flow(&thread_active, outcome);
             });
@@ -380,6 +406,100 @@ impl QuantixHost {
         Ok(StartChatGptLoginResult {
             status: StartChatGptLoginStatus::AwaitingBrowser,
         })
+    }
+
+    pub fn start_chatgpt_device_login(
+        &self,
+    ) -> Result<StartChatGptDeviceLoginResult, StartChatGptLoginError> {
+        self.begin_chatgpt_device_login(PRODUCTION_ISSUER)
+    }
+
+    pub(crate) fn begin_chatgpt_device_login(
+        &self,
+        issuer: &str,
+    ) -> Result<StartChatGptDeviceLoginResult, StartChatGptLoginError> {
+        let active = Arc::new(ActiveLoginFlow::new());
+        {
+            let mut state = self
+                .chatgpt_login_state()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.active.is_some() {
+                return Err(StartChatGptLoginError::new(
+                    TenderErrorCode::OauthAlreadyRunning,
+                ));
+            }
+            state.phase = ChatGptLoginPhase::AwaitingDevice;
+            state.active = Some(Arc::clone(&active));
+        }
+
+        let client = match DeviceClient::new(issuer) {
+            Ok(client) => client,
+            Err(_) => {
+                self.fail_chatgpt_login_start(&active);
+                return Err(StartChatGptLoginError::new(
+                    TenderErrorCode::StoreUnavailable,
+                ));
+            }
+        };
+        let authorization = match client.initiate() {
+            Ok(authorization) => authorization,
+            Err(_) => {
+                self.fail_chatgpt_login_start(&active);
+                return Err(StartChatGptLoginError::new(
+                    TenderErrorCode::StoreUnavailable,
+                ));
+            }
+        };
+        if active.is_cancelled() {
+            self.fail_chatgpt_login_start(&active);
+            return Err(StartChatGptLoginError::new(
+                TenderErrorCode::StoreUnavailable,
+            ));
+        }
+
+        let result = StartChatGptDeviceLoginResult {
+            verification_url: authorization.verification_url.clone(),
+            user_code: authorization.user_code.clone(),
+        };
+        let flow_host = self.clone();
+        let flow_home = self.application_home().to_path_buf();
+        let flow_issuer = issuer.to_owned();
+        let thread_active = Arc::clone(&active);
+        let spawned = std::thread::Builder::new()
+            .name("chatgpt-device-login".to_owned())
+            .spawn(move || {
+                let outcome = run_chatgpt_device_login_flow(
+                    &flow_home,
+                    &flow_issuer,
+                    client,
+                    authorization,
+                    &thread_active,
+                );
+                flow_host.finish_chatgpt_login_flow(&thread_active, outcome);
+            });
+        if spawned.is_err() {
+            self.fail_chatgpt_login_start(&active);
+            return Err(StartChatGptLoginError::new(
+                TenderErrorCode::StoreUnavailable,
+            ));
+        }
+        Ok(result)
+    }
+
+    fn fail_chatgpt_login_start(&self, active: &Arc<ActiveLoginFlow>) {
+        let mut state = self
+            .chatgpt_login_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state
+            .active
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, active))
+        {
+            state.active = None;
+            state.phase = ChatGptLoginPhase::Failed;
+        }
     }
 
     fn finish_chatgpt_login_flow(&self, active: &Arc<ActiveLoginFlow>, outcome: LoginOutcome) {
@@ -508,6 +628,44 @@ mod tests {
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{token_body}",
                     token_body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        MockIssuer {
+            base: format!("http://127.0.0.1:{port}"),
+        }
+    }
+
+    fn start_pending_device_issuer() -> MockIssuer {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let responses = [
+                (
+                    200,
+                    r#"{"device_auth_id":"device-flow","user_code":"CODE-FLOW","interval":"1"}"#,
+                ),
+                (403, r#"{"pending":true}"#),
+            ];
+            for (status, body) in responses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut chunk = [0u8; 1024];
+                let mut raw = Vec::new();
+                while !raw.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let Ok(read) = stream.read(&mut chunk) else {
+                        return;
+                    };
+                    if read == 0 {
+                        return;
+                    }
+                    raw.extend_from_slice(&chunk[..read]);
+                }
+                let response = format!(
+                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
                 );
                 let _ = stream.write_all(response.as_bytes());
             }
@@ -845,7 +1003,39 @@ mod tests {
             .begin_chatgpt_login(&[0], &issuer.base, |_url| {})
             .expect_err("second flow rejected");
         assert_eq!(error.code, TenderErrorCode::OauthAlreadyRunning);
-        assert!(error.port_holders.is_none());
+        let device_error = host
+            .begin_chatgpt_device_login(&issuer.base)
+            .expect_err("device flow cannot overlap browser flow");
+        assert_eq!(device_error.code, TenderErrorCode::OauthAlreadyRunning);
+
+        host.cancel_chatgpt_login();
+        assert!(wait_until(|| {
+            host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Cancelled
+        }));
+    }
+
+    #[test]
+    fn device_flow_uses_the_shared_guard_and_cancellation_phase() {
+        let (_dir, host, _home) = fresh_host();
+        let issuer = start_pending_device_issuer();
+
+        let started = host
+            .begin_chatgpt_device_login(&issuer.base)
+            .expect("device flow starts");
+
+        assert_eq!(started.user_code, "CODE-FLOW");
+        assert_eq!(
+            started.verification_url,
+            format!("{}/codex/device", issuer.base)
+        );
+        assert_eq!(
+            host.chatgpt_login_state().lock().unwrap().phase,
+            ChatGptLoginPhase::AwaitingDevice
+        );
+        let error = host
+            .begin_chatgpt_login(&[0], &issuer.base, |_url| {})
+            .expect_err("browser flow cannot overlap device flow");
+        assert_eq!(error.code, TenderErrorCode::OauthAlreadyRunning);
 
         host.cancel_chatgpt_login();
         assert!(wait_until(|| {
@@ -988,7 +1178,7 @@ mod tests {
     }
 
     #[test]
-    fn begin_reports_blocked_ports_synchronously_with_holder_pids() {
+    fn begin_reports_blocked_ports_without_process_details() {
         let (_dir, host, _home) = fresh_host();
         let Ok(gate_1455) = TcpListener::bind(("127.0.0.1", 1455)) else {
             println!("skipping: port 1455 occupied");
@@ -1006,9 +1196,10 @@ mod tests {
             .expect_err("blocked ports reject synchronously");
 
         assert_eq!(error.code, TenderErrorCode::OauthPortBlocked);
-        let holders = error.port_holders.expect("holders payload present");
-        assert_eq!(holders.port_1455, Some(std::process::id()));
-        assert_eq!(holders.port_1457, Some(std::process::id()));
+        assert_eq!(
+            serde_json::to_value(&error).unwrap(),
+            serde_json::json!({ "code": "oauth_port_blocked" })
+        );
         assert_eq!(
             host.chatgpt_login_state().lock().unwrap().phase,
             ChatGptLoginPhase::Idle

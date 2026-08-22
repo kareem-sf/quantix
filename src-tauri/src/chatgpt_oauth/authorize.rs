@@ -35,6 +35,7 @@ pub(crate) fn build_authorize_url(redirect_uri: &str, pkce: &PkceCodes, state: &
 &code_challenge={code_challenge}\
 &code_challenge_method=S256\
 &id_token_add_organizations=true\
+&codex_cli_simplified_flow=true\
 &state={state}\
 &originator=quantix"
     )
@@ -68,6 +69,7 @@ mod tests {
 &code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM\
 &code_challenge_method=S256\
 &id_token_add_organizations=true\
+&codex_cli_simplified_flow=true\
 &state=a%20b%25c%26d%3De%2Bf%23g%3Fh\
 &originator=quantix"
         );

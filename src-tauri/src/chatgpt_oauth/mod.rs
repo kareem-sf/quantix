@@ -1,14 +1,16 @@
 pub(crate) mod authorize;
 mod callback_server;
 pub(crate) mod crypto;
+mod device;
 pub(crate) mod jwt;
 mod store;
 mod tokens;
 
 pub(crate) use callback_server::{
-    resolve_holders, run_login, CallbackFailure, CallbackOutcome, PortHolders,
+    run_login, AuthorizationCompletion, CallbackFailure, CallbackOutcome,
 };
 pub(crate) use crypto::PkceCodes;
+pub(crate) use device::{DeviceAuthorization, DeviceClient, DevicePollOutcome};
 pub(crate) use jwt::{extract_identity, ChatGptIdentity};
 #[cfg(test)]
 pub(crate) use store::save;
