@@ -1,6 +1,8 @@
 #![recursion_limit = "256"]
-
 mod acceptance;
+
+mod agent_backend;
+
 mod agent_runtime;
 mod application_settings;
 mod chatgpt_login;
