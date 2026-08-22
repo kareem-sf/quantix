@@ -3,14 +3,12 @@ use quantix_lib::{
     AgentRunSummary, AiExecutionApproval, AiExecutionSelection, AiProviderKind,
     AppearancePreference, ApplicationDiagnostics, ApplicationSettingsView, ApplicationStorageFacts,
     ApproveSubmissionReleaseCommand, BootstrapRole, CancelPackageIntakeCommand,
-    ChatGptConnectionState, ChatGptConnectionStatus, ChatGptPortHolders,
-    ChatGptProductionAssuranceEvidence, ConfirmAiExecutionSelectionCommand,
-    ConnectAnthropicCommand, ConnectGeminiCommand, CreatePortableTenderArchiveCommand,
-    DeepDiagnosticsSession, DeletionReceipt, DiagnosticComponent, DiagnosticCorrelation,
-    DiagnosticEvent, DiagnosticHealth, DiagnosticScope, DiagnosticSeverity,
-    DiagnosticSupportBundleResult, DiagnosticTimelineEvent, DiagnosticTimelineFilter,
-    DiagnosticTimelinePage, DiagnosticsDeepState, DiagnosticsDeepStatus, DiagnosticsStatus,
-    DiagnosticsStatusState, DisconnectAiProviderCommand, ErasedTenderCopyClass,
+    ChatGptConnectionState, ChatGptConnectionStatus, ChatGptProductionAssuranceEvidence,
+    ConfirmAiExecutionSelectionCommand, CreatePortableTenderArchiveCommand, DeepDiagnosticsSession,
+    DeletionReceipt, DiagnosticComponent, DiagnosticCorrelation, DiagnosticEvent, DiagnosticHealth,
+    DiagnosticScope, DiagnosticSeverity, DiagnosticSupportBundleResult, DiagnosticTimelineEvent,
+    DiagnosticTimelineFilter, DiagnosticTimelinePage, DiagnosticsDeepState, DiagnosticsDeepStatus,
+    DiagnosticsStatus, DiagnosticsStatusState, ErasedTenderCopyClass,
     EvaluatePublicReleaseGateCommand, ExportDiagnosticsSupportBundleCommand,
     ExportReleaseCopyCommand, GeneralApplicationPreferences, ImportPortableTenderArchiveCommand,
     InspectDiagnosticTimelineCommand, InspectDiagnosticsStatusCommand,
@@ -35,22 +33,23 @@ use quantix_lib::{
     RuntimePreparationActivityStatus, RuntimePreparationProgress, RuntimePreparationStatus,
     RuntimePreparationStep, RuntimeReadiness, RuntimeReadinessIssue, RuntimeReadinessState,
     SearchManagerWorkspaceCommand, SelectManagerWorkspaceTenderCommand, SetupIssue,
-    StartChatGptLoginError, StartChatGptLoginResult, StartChatGptLoginStatus,
-    StartManagerTenderCommand, StartTenderDeepDiagnosticsCommand, StopTenderDeepDiagnosticsCommand,
-    SubmissionReleaseApproval, SubmissionReleaseInspection, SubmissionReleaseState,
-    TechnicalRiskAcceptance, TenderAiExecutionBinding, TenderAiSelectionReadiness,
-    TenderDeletionSourceState, TenderErrorCode, TenderOfficeMessage, TenderOfficeMessageAuthor,
-    TenderOfficeMessageKind, TenderRetentionDecisionCommand, TenderRetentionDecisionRecord,
-    TenderRetentionState, TrashRecoveryRequiredTenderCommand, TrashedTenderDecisionCommand,
-    TrashedTenderRecord, TrashedTenderState, UpdateAiExecutionSelectionCommand,
-    UpdateCompatibilityManifest, UpdateDiagnostic, UpdateGeneralApplicationPreferencesCommand,
-    UpdateTenderAiExecutionSelectionCommand, WorkspaceActionKind, WorkspaceAgentReference,
-    WorkspaceAgentRunReference, WorkspaceCapabilityReadiness, WorkspaceCapabilityReadinessState,
-    WorkspaceCurrentAction, WorkspaceDoctorBlockerArea, WorkspaceDoctorBlockerSummary,
-    WorkspaceFilesSummary, WorkspaceMessageReference, WorkspaceMessageReferenceKind,
-    WorkspaceOutputReference, WorkspaceSearchGroup, WorkspaceSearchHit, WorkspaceSearchProjection,
-    WorkspaceSearchResultKind, WorkspaceTaskRow, WorkspaceTaskState, WorkspaceTeamSummary,
-    WorkspaceTenderDocument, WorkspaceWorkSummary,
+    StartChatGptDeviceLoginResult, StartChatGptLoginError, StartChatGptLoginResult,
+    StartChatGptLoginStatus, StartManagerTenderCommand, StartTenderDeepDiagnosticsCommand,
+    StopTenderDeepDiagnosticsCommand, SubmissionReleaseApproval, SubmissionReleaseInspection,
+    SubmissionReleaseState, TechnicalRiskAcceptance, TenderAiExecutionBinding,
+    TenderAiSelectionReadiness, TenderDeletionSourceState, TenderErrorCode, TenderOfficeMessage,
+    TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderRetentionDecisionCommand,
+    TenderRetentionDecisionRecord, TenderRetentionState, TrashRecoveryRequiredTenderCommand,
+    TrashedTenderDecisionCommand, TrashedTenderRecord, TrashedTenderState,
+    UpdateAiExecutionSelectionCommand, UpdateCompatibilityManifest, UpdateDiagnostic,
+    UpdateGeneralApplicationPreferencesCommand, UpdateTenderAiExecutionSelectionCommand,
+    WorkspaceActionKind, WorkspaceAgentReference, WorkspaceAgentRunReference,
+    WorkspaceCapabilityReadiness, WorkspaceCapabilityReadinessState, WorkspaceCurrentAction,
+    WorkspaceDoctorBlockerArea, WorkspaceDoctorBlockerSummary, WorkspaceFilesSummary,
+    WorkspaceMessageReference, WorkspaceMessageReferenceKind, WorkspaceOutputReference,
+    WorkspaceSearchGroup, WorkspaceSearchHit, WorkspaceSearchProjection, WorkspaceSearchResultKind,
+    WorkspaceTaskRow, WorkspaceTaskState, WorkspaceTeamSummary, WorkspaceTenderDocument,
+    WorkspaceWorkSummary,
 };
 use ts_rs::{Config, TS};
 
@@ -167,9 +166,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     InspectTenderAiExecutionCommand::export_all(&config)?;
     UpdateTenderAiExecutionSelectionCommand::export_all(&config)?;
     ConfirmAiExecutionSelectionCommand::export_all(&config)?;
-    ConnectAnthropicCommand::export_all(&config)?;
-    ConnectGeminiCommand::export_all(&config)?;
-    DisconnectAiProviderCommand::export_all(&config)?;
     InspectQuantixDoctorCommand::export_all(&config)?;
     QuantixDoctorSeverity::export_all(&config)?;
     QuantixDoctorArea::export_all(&config)?;
@@ -204,7 +200,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     RecordRendererDiagnosticCommand::export_all(&config)?;
     ChatGptConnectionState::export_all(&config)?;
     ChatGptConnectionStatus::export_all(&config)?;
-    ChatGptPortHolders::export_all(&config)?;
+    StartChatGptDeviceLoginResult::export_all(&config)?;
     StartChatGptLoginError::export_all(&config)?;
     StartChatGptLoginResult::export_all(&config)?;
     StartChatGptLoginStatus::export_all(&config)?;

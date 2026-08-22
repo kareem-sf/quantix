@@ -12,6 +12,7 @@ import {
   cancelChatGptLogin,
   disconnectChatGpt,
   inspectCurrentPublicReleaseGate,
+  startChatGptDeviceLogin,
   startChatGptLogin,
 } from "./quantixHost";
 
@@ -26,6 +27,18 @@ describe("Quantix host ChatGPT login commands", () => {
     await startChatGptLogin();
 
     expect(invokeMock).toHaveBeenCalledWith("start_chatgpt_login");
+  });
+
+  it("starts the ChatGPT device login without a payload", async () => {
+    const result = {
+      user_code: "CODE-123",
+      verification_url: "https://auth.openai.com/codex/device",
+    };
+    invokeMock.mockResolvedValue(result);
+
+    await expect(startChatGptDeviceLogin()).resolves.toBe(result);
+
+    expect(invokeMock).toHaveBeenCalledWith("start_chatgpt_device_login");
   });
 
   it("cancels the ChatGPT login without a payload", async () => {

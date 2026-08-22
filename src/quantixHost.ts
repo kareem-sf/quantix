@@ -112,11 +112,9 @@ import type { InspectManagerWorkspaceCommand } from "./bindings/InspectManagerWo
 import type { SearchManagerWorkspaceCommand } from "./bindings/SearchManagerWorkspaceCommand";
 import type { WorkspaceSearchProjection } from "./bindings/WorkspaceSearchProjection";
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
+import type { StartChatGptDeviceLoginResult } from "./bindings/StartChatGptDeviceLoginResult";
 import type { StartChatGptLoginResult } from "./bindings/StartChatGptLoginResult";
 import type { UpdateGeneralApplicationPreferencesCommand } from "./bindings/UpdateGeneralApplicationPreferencesCommand";
-import type { ConnectAnthropicCommand } from "./bindings/ConnectAnthropicCommand";
-import type { ConnectGeminiCommand } from "./bindings/ConnectGeminiCommand";
-import type { DisconnectAiProviderCommand } from "./bindings/DisconnectAiProviderCommand";
 import type { UpdateAiExecutionSelectionCommand } from "./bindings/UpdateAiExecutionSelectionCommand";
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
 import type { ManagerCapabilityDemandInput } from "./bindings/ManagerCapabilityDemandInput";
@@ -339,26 +337,12 @@ export function clearAiExecutionSelection(): Promise<ApplicationSettingsView> {
   return invoke<ApplicationSettingsView>("clear_ai_execution_selection");
 }
 
-export function connectAnthropic(
-  command: ConnectAnthropicCommand,
-): Promise<ApplicationSettingsView> {
-  return invoke<ApplicationSettingsView>("connect_anthropic", { command });
-}
-
-export function connectGemini(
-  command: ConnectGeminiCommand,
-): Promise<ApplicationSettingsView> {
-  return invoke<ApplicationSettingsView>("connect_gemini", { command });
-}
-
-export function disconnectAiProvider(
-  command: DisconnectAiProviderCommand,
-): Promise<ApplicationSettingsView> {
-  return invoke<ApplicationSettingsView>("disconnect_ai_provider", { command });
-}
-
 export function startChatGptLogin(): Promise<StartChatGptLoginResult> {
   return invoke<StartChatGptLoginResult>("start_chatgpt_login");
+}
+
+export function startChatGptDeviceLogin(): Promise<StartChatGptDeviceLoginResult> {
+  return invoke<StartChatGptDeviceLoginResult>("start_chatgpt_device_login");
 }
 
 export function cancelChatGptLogin(): Promise<void> {

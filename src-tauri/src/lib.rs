@@ -49,16 +49,15 @@ pub use agent_runtime::{
 pub use application_settings::{
     AiExecutionApproval, AiExecutionSelection, AiProviderKind, AppearancePreference,
     ApplicationDiagnostics, ApplicationSettingsView, ApplicationStorageFacts,
-    ConfirmAiExecutionSelectionCommand, ConnectAnthropicCommand, ConnectGeminiCommand,
-    DisconnectAiProviderCommand, GeneralApplicationPreferences, InspectTenderAiExecutionCommand,
-    ProviderConnectionStatus, ProviderConnectionView, ProviderModelOption, ProviderReasoningOption,
-    ProviderReasoningSelection, TenderAiExecutionBinding, TenderAiSelectionReadiness,
-    UpdateAiExecutionSelectionCommand, UpdateGeneralApplicationPreferencesCommand,
-    UpdateTenderAiExecutionSelectionCommand,
+    ConfirmAiExecutionSelectionCommand, GeneralApplicationPreferences,
+    InspectTenderAiExecutionCommand, ProviderConnectionStatus, ProviderConnectionView,
+    ProviderModelOption, ProviderReasoningOption, ProviderReasoningSelection,
+    TenderAiExecutionBinding, TenderAiSelectionReadiness, UpdateAiExecutionSelectionCommand,
+    UpdateGeneralApplicationPreferencesCommand, UpdateTenderAiExecutionSelectionCommand,
 };
 pub use chatgpt_login::{
-    ChatGptConnectionState, ChatGptConnectionStatus, ChatGptPortHolders, StartChatGptLoginError,
-    StartChatGptLoginResult, StartChatGptLoginStatus,
+    ChatGptConnectionState, ChatGptConnectionStatus, StartChatGptDeviceLoginResult,
+    StartChatGptLoginError, StartChatGptLoginResult, StartChatGptLoginStatus,
 };
 pub(crate) use diagnostics::RecordDiagnosticFact;
 pub use diagnostics::{
@@ -439,35 +438,34 @@ mod tauri_commands {
         CalculationWorkspaceInspection, CancelPackageIntakeCommand, ChangeAssessment,
         ChangeAssessmentPage, ChooseTenderPackageCommand, CommercialStrategy, ComplianceMatrixPage,
         ComposeTenderOfficeCommand, ConfirmAiExecutionSelectionCommand,
-        ConfirmSourceRelationshipCommand, ConnectAnthropicCommand, ConnectGeminiCommand,
-        ControlledBoqCalculationRun, CoordinatedBidBaseline, CoordinatedBidBaselinePage,
-        CostEstimatorBasisResult, CostEstimatorCalculationResult, CreateBidDecisionPackageCommand,
-        CreateCalculationScenarioCommand, CreateCommercialStrategyCommand,
-        CreateExternalRfiDraftCommand, CreatePortableTenderArchiveCommand,
-        CreatePricedCostBaselineCommand, CreatePricingAdjustmentCommand,
-        CreatePricingScenarioCommand, CreateTenderBackupCommand, CreateTenderCommand,
-        CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
+        ConfirmSourceRelationshipCommand, ControlledBoqCalculationRun, CoordinatedBidBaseline,
+        CoordinatedBidBaselinePage, CostEstimatorBasisResult, CostEstimatorCalculationResult,
+        CreateBidDecisionPackageCommand, CreateCalculationScenarioCommand,
+        CreateCommercialStrategyCommand, CreateExternalRfiDraftCommand,
+        CreatePortableTenderArchiveCommand, CreatePricedCostBaselineCommand,
+        CreatePricingAdjustmentCommand, CreatePricingScenarioCommand, CreateTenderBackupCommand,
+        CreateTenderCommand, CreateTenderEngineerEntryCommand, CreateTenderQueryCommand,
         DecideBidDecisionPackageCommand, DecideChangeAssessmentCommand,
         DecideCoordinatedBidBaselineCommand, DecideTenderQueryTreatmentCommand,
         DecideTenderRecordCommand, DecideWorkPlanProposalCommand, DecisionCockpit, DeletionReceipt,
-        DesignateBoqTableCommand, DisconnectAiProviderCommand, DoctorTenderInput,
-        DocumentParseResult, DocumentRegister, EstimateWorkspaceInspection, EvidenceDocument,
-        EvidenceSearchResult, EvidenceSemanticSearchResult, ExportApprovedExternalRfiCommand,
-        ExportReleaseCopyCommand, ExternalRfiDraft, ExternalRfiEligibleQueryPage,
-        ExternalRfiExportRecord, ExternalRfiPage, ExternalRfiResponseCandidatePage,
-        ExternalRfiReviewResult, FinalReviewInspection, GenerateSubmissionSectionsCommand,
-        ImportPortableTenderArchiveCommand, ImportTenderPackageCommand, InspectAgentRunCommand,
-        InspectAgentRunHistoryCommand, InspectBidDecisionApprovalHistoryCommand,
-        InspectBidDecisionPackageRecordsCommand, InspectCalculationWorkspaceCommand,
-        InspectChangeAssessmentsCommand, InspectComplianceMatrixCommand,
-        InspectCoordinatedBidBaselinesCommand, InspectDecisionCockpitCommand,
-        InspectEstimateWorkspaceCommand, InspectExternalRfiEligibleQueriesCommand,
-        InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
-        InspectManagerWorkspaceCommand, InspectPackageProductionCommand,
-        InspectPricingWorkspaceCommand, InspectProductionTaskReviewCommand,
-        InspectQuantixDoctorCommand, InspectSubmissionArtifactContentCommand,
-        InspectSubmissionPackageCommand, InspectSubmissionPackageItemContentCommand,
-        InspectTenderAiExecutionCommand, InspectTenderQueriesCommand, InspectTenderRecordsCommand,
+        DesignateBoqTableCommand, DoctorTenderInput, DocumentParseResult, DocumentRegister,
+        EstimateWorkspaceInspection, EvidenceDocument, EvidenceSearchResult,
+        EvidenceSemanticSearchResult, ExportApprovedExternalRfiCommand, ExportReleaseCopyCommand,
+        ExternalRfiDraft, ExternalRfiEligibleQueryPage, ExternalRfiExportRecord, ExternalRfiPage,
+        ExternalRfiResponseCandidatePage, ExternalRfiReviewResult, FinalReviewInspection,
+        GenerateSubmissionSectionsCommand, ImportPortableTenderArchiveCommand,
+        ImportTenderPackageCommand, InspectAgentRunCommand, InspectAgentRunHistoryCommand,
+        InspectBidDecisionApprovalHistoryCommand, InspectBidDecisionPackageRecordsCommand,
+        InspectCalculationWorkspaceCommand, InspectChangeAssessmentsCommand,
+        InspectComplianceMatrixCommand, InspectCoordinatedBidBaselinesCommand,
+        InspectDecisionCockpitCommand, InspectEstimateWorkspaceCommand,
+        InspectExternalRfiEligibleQueriesCommand, InspectExternalRfiResponseCandidatesCommand,
+        InspectExternalRfisCommand, InspectManagerWorkspaceCommand,
+        InspectPackageProductionCommand, InspectPricingWorkspaceCommand,
+        InspectProductionTaskReviewCommand, InspectQuantixDoctorCommand,
+        InspectSubmissionArtifactContentCommand, InspectSubmissionPackageCommand,
+        InspectSubmissionPackageItemContentCommand, InspectTenderAiExecutionCommand,
+        InspectTenderQueriesCommand, InspectTenderRecordsCommand,
         InterpretExternalRfiResponseCommand, InterruptAgentRunCommand,
         InvalidateBidDecisionApprovalCommand, LiveQualificationRun, ManagerWorkspaceProjection,
         OpenTenderCommand, PackageIntakeOperationKind, PackageIntakeProgress,
@@ -494,19 +492,19 @@ mod tauri_commands {
         RunTenderRecordReviewCommand, RuntimePreparationProgress, RuntimeReadiness,
         SearchEvidenceCommand, SearchEvidenceSemanticCommand, SearchManagerWorkspaceCommand,
         SelectManagerWorkspaceTenderCommand, SelectPricingScenarioCommand, SetupOutcome,
-        SetupState, StartChatGptLoginError, StartChatGptLoginResult, StartManagerTenderCommand,
-        StartupSplashPreferences, StartupSplashState, SubmissionArtifactContent,
-        SubmissionItemContent, SubmissionPackageVersion, SubmissionReleaseInspection,
-        SubmissionSectionReviewRunResult, TenderBackupRecord, TenderCatalogueEntry,
-        TenderCommandError, TenderErrorCode, TenderIntegrityReport, TenderPackageImportResult,
-        TenderPackageSourceKind, TenderProductionInspection, TenderQuery, TenderQueryPage,
-        TenderRecordAuthority, TenderRecordDecisionResult, TenderRecordExtractionResult,
-        TenderRecordPage, TenderRecordReviewResult, TenderRecoveryRecord,
-        TenderRetentionDecisionCommand, TenderRetentionDecisionRecord, TenderSummary,
-        TrashRecoveryRequiredTenderCommand, TrashedTenderDecisionCommand, TrashedTenderRecord,
-        UpdateAiExecutionSelectionCommand, UpdateGeneralApplicationPreferencesCommand,
-        UpdateTenderAiExecutionSelectionCommand, WorkPlanProposalInspection,
-        WorkspaceSearchProjection,
+        SetupState, StartChatGptDeviceLoginResult, StartChatGptLoginError, StartChatGptLoginResult,
+        StartManagerTenderCommand, StartupSplashPreferences, StartupSplashState,
+        SubmissionArtifactContent, SubmissionItemContent, SubmissionPackageVersion,
+        SubmissionReleaseInspection, SubmissionSectionReviewRunResult, TenderBackupRecord,
+        TenderCatalogueEntry, TenderCommandError, TenderErrorCode, TenderIntegrityReport,
+        TenderPackageImportResult, TenderPackageSourceKind, TenderProductionInspection,
+        TenderQuery, TenderQueryPage, TenderRecordAuthority, TenderRecordDecisionResult,
+        TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult,
+        TenderRecoveryRecord, TenderRetentionDecisionCommand, TenderRetentionDecisionRecord,
+        TenderSummary, TrashRecoveryRequiredTenderCommand, TrashedTenderDecisionCommand,
+        TrashedTenderRecord, UpdateAiExecutionSelectionCommand,
+        UpdateGeneralApplicationPreferencesCommand, UpdateTenderAiExecutionSelectionCommand,
+        WorkPlanProposalInspection, WorkspaceSearchProjection,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -1205,35 +1203,21 @@ mod tauri_commands {
     }
 
     #[tauri::command]
-    pub(super) async fn connect_anthropic(
-        host: tauri::State<'_, QuantixHost>,
-        command: ConnectAnthropicCommand,
-    ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        host.inner().connect_anthropic(command).await
-    }
-
-    #[tauri::command]
-    pub(super) async fn disconnect_ai_provider(
-        host: tauri::State<'_, QuantixHost>,
-        command: DisconnectAiProviderCommand,
-    ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        host.inner().disconnect_ai_provider(command).await
-    }
-
-    #[tauri::command]
-    pub(super) async fn connect_gemini(
-        host: tauri::State<'_, QuantixHost>,
-        command: ConnectGeminiCommand,
-    ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        host.inner().connect_gemini(command).await
-    }
-
-    #[tauri::command]
     pub(super) async fn start_chatgpt_login(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<StartChatGptLoginResult, StartChatGptLoginError> {
         let host = host.inner().clone();
         tauri::async_runtime::spawn_blocking(move || host.start_chatgpt_login())
+            .await
+            .map_err(|_| StartChatGptLoginError::new(TenderErrorCode::StoreUnavailable))?
+    }
+
+    #[tauri::command]
+    pub(super) async fn start_chatgpt_device_login(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<StartChatGptDeviceLoginResult, StartChatGptLoginError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.start_chatgpt_device_login())
             .await
             .map_err(|_| StartChatGptLoginError::new(TenderErrorCode::StoreUnavailable))?
     }
@@ -3337,9 +3321,6 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::update_tender_ai_execution,
             tauri_commands::confirm_ai_execution_selection,
             tauri_commands::clear_ai_execution_selection,
-            tauri_commands::connect_anthropic,
-            tauri_commands::disconnect_ai_provider,
-            tauri_commands::connect_gemini,
             tauri_commands::inspect_quantix_doctor,
             tauri_commands::repair_quantix_doctor,
             tauri_commands::inspect_diagnostics_status,
@@ -3350,6 +3331,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::export_diagnostics_support_bundle,
             tauri_commands::record_renderer_diagnostic,
             tauri_commands::start_chatgpt_login,
+            tauri_commands::start_chatgpt_device_login,
             tauri_commands::cancel_chatgpt_login,
             tauri_commands::disconnect_chatgpt,
             tauri_commands::inspect_manager_workspace,
