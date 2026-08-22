@@ -40,6 +40,16 @@ pub(crate) struct RedactedFailure {
     pub detail: String,
 }
 
+impl std::fmt::Display for RedactedFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "chatgpt stream failure ({:?}): {}",
+            self.code, self.detail
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum StreamEvent {
     ItemAdded(serde_json::Value),
@@ -307,11 +317,17 @@ impl<'a> SseParser<'a> {
             "response.incomplete" => {
                 let reason = value
                     .pointer("/response/incomplete_details/reason")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("unknown");
+                    .and_then(serde_json::Value::as_str);
+                let detail = match reason {
+                    Some("max_output_tokens") => {
+                        "stream ended early (output token cap reached)".to_string()
+                    }
+                    Some("content_filter") => "stream ended early (content filtered)".to_string(),
+                    _ => "stream ended early (unclassified reason)".to_string(),
+                };
                 (self.on_event)(StreamEvent::Errored(RedactedFailure {
                     code: FailureCode::ResponseIncomplete,
-                    detail: format!("stream ended early ({reason})"),
+                    detail,
                 }));
                 self.terminal = Some(Terminal::Failed);
             }
@@ -649,6 +665,31 @@ mod tests {
                 StreamEvent::Errored(failure) => assert_eq!(failure.code, code, "case {label}"),
                 other => panic!("case {label}: expected errored, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn incomplete_reason_is_redacted_to_static_detail() {
+        let frame = r#"data: {"type":"response.incomplete","response":{"id":"r","incomplete_details":{"reason":"canary_reason_x"}}}"#;
+        let mut bytes = frame.as_bytes().to_vec();
+        bytes.extend_from_slice(b"\n\n");
+        let collected: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&collected);
+        let disposition =
+            parse_stream_bytes(&bytes, &mut move |event| sink.lock().unwrap().push(event)).unwrap();
+
+        assert_eq!(disposition, TurnDisposition::Failed);
+        let events = collected.lock().unwrap();
+        match &events[0] {
+            StreamEvent::Errored(failure) => {
+                assert_eq!(failure.code, FailureCode::ResponseIncomplete);
+                let rendered = format!("{failure:?} / {failure}");
+                assert!(
+                    !rendered.contains("canary_reason_x"),
+                    "server-provided reason must not reach the rendered detail: {rendered}"
+                );
+            }
+            other => panic!("expected errored event, got {other:?}"),
         }
     }
 
