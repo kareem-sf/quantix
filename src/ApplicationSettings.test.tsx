@@ -520,6 +520,225 @@ describe("ApplicationSettings ChatGPT connection", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("clears opener and clipboard guidance only when its matching action succeeds", async () => {
+    host.startChatGptDeviceLogin.mockResolvedValue({
+      verification_url: "https://auth.openai.com/codex/device",
+      user_code: "DISTINCT-ERRORS",
+    });
+    host.openChatGptDeviceLoginPage.mockRejectedValueOnce(
+      new Error("automatic opener failure"),
+    );
+    vi.mocked(navigator.clipboard.writeText).mockRejectedValueOnce(
+      new Error("clipboard failure"),
+    );
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnectedView())
+      .mockResolvedValue(disconnectedView("awaiting_device"));
+    renderSettings();
+
+    fireEvent.click(await screen.findByText("Having trouble signing in?"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in on another device" }),
+    );
+    expect(await screen.findByText("DISTINCT-ERRORS")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Quantix could not open the OpenAI sign-in page.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain(
+        "Quantix could not copy the code.",
+      ),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open OpenAI sign-in page" }),
+    );
+    await waitFor(() =>
+      expect(host.openChatGptDeviceLoginPage).toHaveBeenCalledTimes(2),
+    );
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Quantix could not copy the code.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("ignores a superseded opener success that finishes after the current attempt fails", async () => {
+    let finishFirstOpen: (() => void) | undefined;
+    host.startChatGptDeviceLogin.mockResolvedValue({
+      verification_url: "https://auth.openai.com/codex/device",
+      user_code: "OPEN-ORDER",
+    });
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnectedView())
+      .mockResolvedValue(disconnectedView("awaiting_device"));
+    renderSettings();
+
+    fireEvent.click(await screen.findByText("Having trouble signing in?"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in on another device" }),
+    );
+    expect(await screen.findByText("OPEN-ORDER")).toBeTruthy();
+    host.openChatGptDeviceLoginPage
+      .mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          finishFirstOpen = resolve;
+        }),
+      )
+      .mockRejectedValueOnce(new Error("latest opener failed"));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open OpenAI sign-in page" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open OpenAI sign-in page" }),
+    );
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Quantix could not open the OpenAI sign-in page.",
+    );
+
+    await act(async () => {
+      finishFirstOpen?.();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Quantix could not open the OpenAI sign-in page.",
+    );
+  });
+
+  it("ignores a superseded copy failure that finishes after the current attempt succeeds", async () => {
+    let failFirstCopy: ((reason: Error) => void) | undefined;
+    host.startChatGptDeviceLogin.mockResolvedValue({
+      verification_url: "https://auth.openai.com/codex/device",
+      user_code: "COPY-ORDER",
+    });
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnectedView())
+      .mockResolvedValue(disconnectedView("awaiting_device"));
+    renderSettings();
+
+    fireEvent.click(await screen.findByText("Having trouble signing in?"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in on another device" }),
+    );
+    expect(await screen.findByText("COPY-ORDER")).toBeTruthy();
+    vi.mocked(navigator.clipboard.writeText)
+      .mockReturnValueOnce(
+        new Promise<void>((_resolve, reject) => {
+          failFirstCopy = reject;
+        }),
+      )
+      .mockResolvedValueOnce(undefined);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
+
+    await act(async () => {
+      failFirstCopy?.(new Error("superseded clipboard failure"));
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "Copied" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("invalidates pending device actions and clears their errors on a terminal login state", async () => {
+    let failPendingOpen: ((reason: Error) => void) | undefined;
+    let failPendingCopy: ((reason: Error) => void) | undefined;
+    host.startChatGptDeviceLogin.mockResolvedValue({
+      verification_url: "https://auth.openai.com/codex/device",
+      user_code: "TERMINAL-CODE",
+    });
+    host.openChatGptDeviceLoginPage
+      .mockRejectedValueOnce(new Error("automatic opener failure"))
+      .mockReturnValueOnce(
+        new Promise<void>((_resolve, reject) => {
+          failPendingOpen = reject;
+        }),
+      );
+    vi.mocked(navigator.clipboard.writeText)
+      .mockRejectedValueOnce(new Error("initial clipboard failure"))
+      .mockReturnValueOnce(
+        new Promise<void>((_resolve, reject) => {
+          failPendingCopy = reject;
+        }),
+      );
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnectedView())
+      .mockResolvedValueOnce(disconnectedView("awaiting_device"))
+      .mockResolvedValueOnce(disconnectedView("failed"));
+    renderSettings();
+
+    fireEvent.click(await screen.findByText("Having trouble signing in?"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in on another device" }),
+    );
+    expect(await screen.findByText("TERMINAL-CODE")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Quantix could not open the OpenAI sign-in page.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain(
+        "Quantix could not copy the code.",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open OpenAI sign-in page" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(
+      await screen.findByText(/ChatGPT sign-in did not finish/i),
+    ).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText("TERMINAL-CODE")).toBeNull();
+
+    await act(async () => {
+      failPendingOpen?.(new Error("late opener failure"));
+      failPendingCopy?.(new Error("late clipboard failure"));
+      await Promise.resolve();
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(document.body.textContent).not.toContain("code is still ready");
+  });
+
+  it("preserves a device opener error after an unrelated update succeeds", async () => {
+    host.startChatGptDeviceLogin.mockResolvedValue({
+      verification_url: "https://auth.openai.com/codex/device",
+      user_code: "KEEP-DEVICE-ERROR",
+    });
+    host.openChatGptDeviceLoginPage.mockRejectedValueOnce(
+      new Error("automatic opener failure"),
+    );
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnectedView())
+      .mockResolvedValue(disconnectedView("awaiting_device"));
+    host.checkQuantixUpdate.mockResolvedValue({ state: "up_to_date" });
+    renderSettings();
+
+    fireEvent.click(await screen.findByText("Having trouble signing in?"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in on another device" }),
+    );
+    expect(await screen.findByText("KEEP-DEVICE-ERROR")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Quantix could not open the OpenAI sign-in page.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Updates" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check for update" }));
+    await waitFor(() => expect(host.checkQuantixUpdate).toHaveBeenCalledWith());
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Quantix could not open the OpenAI sign-in page.",
+    );
+  });
+
   it("clears the one-time code when the Host reports failure", async () => {
     host.startChatGptDeviceLogin.mockResolvedValue({
       verification_url: "https://auth.openai.com/codex/device",

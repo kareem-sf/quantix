@@ -176,7 +176,16 @@ export function ApplicationSettings({
   );
   const [busy, setBusy] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [generalActionError, setGeneralActionError] = useState<string | null>(
+    null,
+  );
+  const [deviceLoginError, setDeviceLoginError] = useState<string | null>(null);
+  const [deviceOpenerError, setDeviceOpenerError] = useState<string | null>(
+    null,
+  );
+  const [deviceClipboardError, setDeviceClipboardError] = useState<
+    string | null
+  >(null);
   const [deviceFallbackVisible, setDeviceFallbackVisible] = useState(false);
   const [browserLoginStarted, setBrowserLoginStarted] = useState(false);
   const [deviceLogin, setDeviceLogin] = useState<DeviceLoginDetails | null>(
@@ -194,6 +203,8 @@ export function ApplicationSettings({
   const settingsRequestVersionRef = useRef(0);
   const loginPollInFlightRef = useRef(false);
   const settingsMutationInFlightRef = useRef(false);
+  const deviceOpenerAttemptVersionRef = useRef(0);
+  const deviceClipboardAttemptVersionRef = useRef(0);
   const [activeSection, setActiveSection] =
     useState<ApplicationSettingsSection>(initialSection);
 
@@ -202,6 +213,8 @@ export function ApplicationSettings({
     return () => {
       mountedRef.current = false;
       settingsRequestVersionRef.current += 1;
+      deviceOpenerAttemptVersionRef.current += 1;
+      deviceClipboardAttemptVersionRef.current += 1;
       if (ownedLoginRef.current) {
         ownedLoginRef.current = null;
         void cancelChatGptLogin();
@@ -222,6 +235,11 @@ export function ApplicationSettings({
         view.chatgpt?.login_phase === "cancelled"
       ) {
         ownedLoginRef.current = null;
+        deviceOpenerAttemptVersionRef.current += 1;
+        deviceClipboardAttemptVersionRef.current += 1;
+        setDeviceLoginError(null);
+        setDeviceOpenerError(null);
+        setDeviceClipboardError(null);
       }
       setRefreshError(null);
       setSettings(view);
@@ -236,7 +254,7 @@ export function ApplicationSettings({
   const acceptAuthoritativeSettings = useCallback(
     (view: ApplicationSettingsView) => {
       settingsRequestVersionRef.current += 1;
-      setActionError(null);
+      setGeneralActionError(null);
       return acceptSettings(view);
     },
     [acceptSettings],
@@ -357,7 +375,7 @@ export function ApplicationSettings({
       setSettings(optimistic);
       applyGeneralApplicationPreferences(preferences);
       onPreferencesChange?.(preferences);
-      setActionError(null);
+      setGeneralActionError(null);
       settingsMutationInFlightRef.current = true;
       try {
         acceptAuthoritativeSettings(
@@ -367,7 +385,7 @@ export function ApplicationSettings({
         setSettings(previous);
         applyGeneralApplicationPreferences(previous.general_preferences);
         onPreferencesChange?.(previous.general_preferences);
-        setActionError(settingsError(reason));
+        setGeneralActionError(settingsError(reason));
       } finally {
         settingsMutationInFlightRef.current = false;
         setPreferenceBusy(false);
@@ -387,13 +405,13 @@ export function ApplicationSettings({
       if (enabled) {
         try {
           if (!(await enableAttentionNotifications())) {
-            setActionError(
+            setGeneralActionError(
               "Operating-system notifications remain off because permission was not granted.",
             );
             return;
           }
         } catch {
-          setActionError(
+          setGeneralActionError(
             "Operating-system notifications are unavailable on this installation.",
           );
           return;
@@ -411,7 +429,7 @@ export function ApplicationSettings({
     async (modelId: string, reasoning: ProviderReasoningSelection) => {
       if (!connection || connection.status !== "ready") return;
       setBusy(true);
-      setActionError(null);
+      setGeneralActionError(null);
       settingsMutationInFlightRef.current = true;
       try {
         acceptAuthoritativeSettings(
@@ -422,7 +440,7 @@ export function ApplicationSettings({
           }),
         );
       } catch (reason) {
-        setActionError(settingsError(reason));
+        setGeneralActionError(settingsError(reason));
       } finally {
         settingsMutationInFlightRef.current = false;
         setBusy(false);
@@ -434,13 +452,13 @@ export function ApplicationSettings({
   const runSettingsAction = useCallback(
     async (operation: () => Promise<ApplicationSettingsView>) => {
       setBusy(true);
-      setActionError(null);
+      setGeneralActionError(null);
       settingsMutationInFlightRef.current = true;
       try {
         acceptAuthoritativeSettings(await operation());
         return true;
       } catch (reason) {
-        setActionError(settingsError(reason));
+        setGeneralActionError(settingsError(reason));
         return false;
       } finally {
         settingsMutationInFlightRef.current = false;
@@ -463,7 +481,12 @@ export function ApplicationSettings({
 
   const connectChatGpt = useCallback(async () => {
     setBusy(true);
-    setActionError(null);
+    setGeneralActionError(null);
+    setDeviceLoginError(null);
+    setDeviceOpenerError(null);
+    setDeviceClipboardError(null);
+    deviceOpenerAttemptVersionRef.current += 1;
+    deviceClipboardAttemptVersionRef.current += 1;
     setBrowserLoginStarted(false);
     setDeviceLogin(null);
     setDeviceCodeCopied(false);
@@ -491,7 +514,7 @@ export function ApplicationSettings({
       if (reasonHasCode(reason, "oauth_port_blocked")) {
         setDeviceFallbackVisible(true);
       }
-      setActionError(settingsError(reason));
+      setGeneralActionError(settingsError(reason));
     } finally {
       settingsMutationInFlightRef.current = false;
       if (mountedRef.current) setBusy(false);
@@ -501,7 +524,12 @@ export function ApplicationSettings({
   const connectChatGptOnAnotherDevice = useCallback(
     async (waitForBrowserCancellation = false) => {
       setBusy(true);
-      setActionError(null);
+      setGeneralActionError(null);
+      setDeviceLoginError(null);
+      setDeviceOpenerError(null);
+      setDeviceClipboardError(null);
+      deviceOpenerAttemptVersionRef.current += 1;
+      deviceClipboardAttemptVersionRef.current += 1;
       setBrowserLoginStarted(false);
       setDeviceLogin(null);
       setDeviceCodeCopied(false);
@@ -535,22 +563,33 @@ export function ApplicationSettings({
           return;
         }
         setDeviceLogin({ userCode: result.user_code });
+        const openerAttemptVersion = ++deviceOpenerAttemptVersionRef.current;
         let devicePageOpenFailure: string | null = null;
         try {
           await openChatGptDeviceLoginPage();
+          if (
+            mountedRef.current &&
+            openerAttemptVersion === deviceOpenerAttemptVersionRef.current
+          ) {
+            setDeviceOpenerError(null);
+          }
         } catch {
           devicePageOpenFailure =
             "Quantix could not open the OpenAI sign-in page. Your one-time code is still ready. Use the button below, or open the OpenAI sign-in page yourself.";
         }
         if (!(await refreshLatestSettings()) && mountedRef.current) {
           if (devicePageOpenFailure === null) {
-            setActionError(
+            setRefreshError(
               "Sign-in started. Quantix will keep checking while you use the one-time code.",
             );
           }
         }
-        if (devicePageOpenFailure !== null && mountedRef.current) {
-          setActionError(devicePageOpenFailure);
+        if (
+          devicePageOpenFailure !== null &&
+          mountedRef.current &&
+          openerAttemptVersion === deviceOpenerAttemptVersionRef.current
+        ) {
+          setDeviceOpenerError(devicePageOpenFailure);
         }
       } catch {
         if (!mountedRef.current) {
@@ -560,7 +599,7 @@ export function ApplicationSettings({
         }
         ownedLoginRef.current = null;
         setDeviceLogin(null);
-        setActionError(
+        setDeviceLoginError(
           "Sign in on another device is unavailable right now. You can still connect ChatGPT in your browser.",
         );
       } finally {
@@ -573,12 +612,26 @@ export function ApplicationSettings({
 
   const copyDeviceCode = useCallback(async () => {
     if (!deviceLogin) return;
+    const attemptVersion = ++deviceClipboardAttemptVersionRef.current;
+    setDeviceCodeCopied(false);
     try {
       await navigator.clipboard.writeText(deviceLogin.userCode);
+      if (
+        !mountedRef.current ||
+        attemptVersion !== deviceClipboardAttemptVersionRef.current
+      ) {
+        return;
+      }
       setDeviceCodeCopied(true);
-      setActionError(null);
+      setDeviceClipboardError(null);
     } catch {
-      setActionError(
+      if (
+        !mountedRef.current ||
+        attemptVersion !== deviceClipboardAttemptVersionRef.current
+      ) {
+        return;
+      }
+      setDeviceClipboardError(
         "Quantix could not copy the code. Select it and copy it manually.",
       );
     }
@@ -586,11 +639,24 @@ export function ApplicationSettings({
 
   const openDeviceSignInPage = useCallback(async () => {
     if (!deviceLogin) return;
+    const attemptVersion = ++deviceOpenerAttemptVersionRef.current;
     try {
       await openChatGptDeviceLoginPage();
-      setActionError(null);
+      if (
+        !mountedRef.current ||
+        attemptVersion !== deviceOpenerAttemptVersionRef.current
+      ) {
+        return;
+      }
+      setDeviceOpenerError(null);
     } catch {
-      setActionError(
+      if (
+        !mountedRef.current ||
+        attemptVersion !== deviceOpenerAttemptVersionRef.current
+      ) {
+        return;
+      }
+      setDeviceOpenerError(
         "Quantix could not open the OpenAI sign-in page. Your one-time code is still ready. Try again, or open the OpenAI sign-in page yourself.",
       );
     }
@@ -598,10 +664,15 @@ export function ApplicationSettings({
 
   const cancelChatGpt = useCallback(async () => {
     setBusy(true);
-    setActionError(null);
+    setGeneralActionError(null);
+    setDeviceLoginError(null);
+    deviceOpenerAttemptVersionRef.current += 1;
+    deviceClipboardAttemptVersionRef.current += 1;
     settingsMutationInFlightRef.current = true;
     try {
       await cancelChatGptLogin();
+      setDeviceOpenerError(null);
+      setDeviceClipboardError(null);
       ownedLoginRef.current = null;
       setBrowserLoginStarted(false);
       setDeviceLogin(null);
@@ -609,7 +680,7 @@ export function ApplicationSettings({
       await refreshLatestSettings();
       return true;
     } catch (reason) {
-      if (mountedRef.current) setActionError(settingsError(reason));
+      if (mountedRef.current) setDeviceLoginError(settingsError(reason));
       return false;
     } finally {
       settingsMutationInFlightRef.current = false;
@@ -651,7 +722,7 @@ export function ApplicationSettings({
         await checkQuantixUpdate()
           .then(setUpdate)
           .catch(() =>
-            setActionError(
+            setGeneralActionError(
               "The signed update source is unavailable. No local repair can fix an external outage.",
             ),
           );
@@ -659,7 +730,7 @@ export function ApplicationSettings({
         return;
       }
       setFactsBusy(true);
-      setActionError(null);
+      setGeneralActionError(null);
       try {
         const target =
           finding.repair_action === "inspect_tender_integrity"
@@ -676,7 +747,7 @@ export function ApplicationSettings({
         );
         setRuntime(await inspectRuntimeReadiness());
       } catch (reason) {
-        setActionError(settingsError(reason));
+        setGeneralActionError(settingsError(reason));
       } finally {
         setFactsBusy(false);
       }
@@ -688,7 +759,7 @@ export function ApplicationSettings({
     if (!doctor) return;
     setRepairAllOpen(false);
     setFactsBusy(true);
-    setActionError(null);
+    setGeneralActionError(null);
     try {
       let current = doctor;
       for (const finding of current.findings.filter((candidate) =>
@@ -712,7 +783,7 @@ export function ApplicationSettings({
       setRuntime(await inspectRuntimeReadiness());
       await refreshLatestSettings();
     } catch (reason) {
-      setActionError(settingsError(reason));
+      setGeneralActionError(settingsError(reason));
     } finally {
       setFactsBusy(false);
     }
@@ -720,11 +791,11 @@ export function ApplicationSettings({
 
   const checkForUpdate = useCallback(async () => {
     setFactsBusy(true);
-    setActionError(null);
+    setGeneralActionError(null);
     try {
       setUpdate(await checkQuantixUpdate());
     } catch {
-      setActionError(
+      setGeneralActionError(
         "Quantix could not reach the signed update source. Try again later.",
       );
     } finally {
@@ -738,7 +809,12 @@ export function ApplicationSettings({
         candidate.connection_id === persistedSelection?.connection_id,
     )
     ?.models.find((model) => model.model_id === persistedSelection?.model_id);
-  const error = actionError ?? refreshError;
+  const error =
+    deviceLoginError ??
+    deviceClipboardError ??
+    deviceOpenerError ??
+    generalActionError ??
+    refreshError;
 
   return (
     <main className="application-settings" data-active-section={activeSection}>
