@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -101,13 +101,20 @@ pub enum ChatGptLoginPhase {
 
 struct ActiveLoginFlow {
     cancel: AtomicBool,
+    decision: AtomicU8,
     callback_port: Mutex<Option<u16>>,
 }
+
+const FLOW_PENDING: u8 = 0;
+const FLOW_CANCELLED: u8 = 1;
+const FLOW_PERSISTED: u8 = 2;
+const FLOW_DISCONNECTED: u8 = 3;
 
 impl ActiveLoginFlow {
     fn new() -> Self {
         Self {
             cancel: AtomicBool::new(false),
+            decision: AtomicU8::new(FLOW_PENDING),
             callback_port: Mutex::new(None),
         }
     }
@@ -132,8 +139,7 @@ impl ActiveLoginFlow {
         }
     }
 
-    fn signal_cancel(&self) {
-        self.cancel.store(true, Ordering::Release);
+    fn wake_cancelled_flow(&self) {
         let port = *self
             .callback_port
             .lock()
@@ -146,11 +152,44 @@ impl ActiveLoginFlow {
     fn is_cancelled(&self) -> bool {
         self.cancel.load(Ordering::Acquire)
     }
+
+    // Decision changes are serialized by with_connection_mutation so cancel,
+    // persistence, and disconnect have one explicit winner.
+    fn claim_cancel(&self) -> bool {
+        match self.decision.load(Ordering::Acquire) {
+            FLOW_PENDING => {
+                self.decision.store(FLOW_CANCELLED, Ordering::Release);
+                self.cancel.store(true, Ordering::Release);
+                true
+            }
+            FLOW_CANCELLED => true,
+            FLOW_PERSISTED | FLOW_DISCONNECTED => false,
+            _ => false,
+        }
+    }
+
+    fn mark_persisted(&self) {
+        self.decision.store(FLOW_PERSISTED, Ordering::Release);
+    }
+
+    fn force_disconnect(&self) {
+        self.decision.store(FLOW_DISCONNECTED, Ordering::Release);
+        self.cancel.store(true, Ordering::Release);
+    }
+
+    fn was_cancelled(&self) -> bool {
+        self.decision.load(Ordering::Acquire) == FLOW_CANCELLED
+    }
+
+    fn was_disconnected(&self) -> bool {
+        self.decision.load(Ordering::Acquire) == FLOW_DISCONNECTED
+    }
 }
 
 pub(crate) struct ChatGptLoginFlowState {
     phase: ChatGptLoginPhase,
     active: Option<Arc<ActiveLoginFlow>>,
+    disconnecting: usize,
 }
 
 impl Default for ChatGptLoginFlowState {
@@ -158,6 +197,7 @@ impl Default for ChatGptLoginFlowState {
         Self {
             phase: ChatGptLoginPhase::Idle,
             active: None,
+            disconnecting: 0,
         }
     }
 }
@@ -255,7 +295,12 @@ fn persist_authorized_connection(
             return LoginOutcome::Cancelled;
         }
         match save_unlocked(home, &connection) {
-            Ok(()) => LoginOutcome::Completed,
+            Ok(()) => {
+                if let Some(flow) = active {
+                    flow.mark_persisted();
+                }
+                LoginOutcome::Completed
+            }
             Err(_) => LoginOutcome::Failed,
         }
     })
@@ -356,7 +401,7 @@ impl QuantixHost {
             .chatgpt_login_state()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.active.is_some() {
+        if state.active.is_some() || state.disconnecting > 0 {
             return Err(StartChatGptLoginError::new(
                 TenderErrorCode::OauthAlreadyRunning,
             ));
@@ -424,7 +469,7 @@ impl QuantixHost {
                 .chatgpt_login_state()
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if state.active.is_some() {
+            if state.active.is_some() || state.disconnecting > 0 {
                 return Err(StartChatGptLoginError::new(
                     TenderErrorCode::OauthAlreadyRunning,
                 ));
@@ -498,7 +543,13 @@ impl QuantixHost {
             .is_some_and(|current| Arc::ptr_eq(current, active))
         {
             state.active = None;
-            state.phase = ChatGptLoginPhase::Failed;
+            state.phase = if active.was_disconnected() {
+                ChatGptLoginPhase::Idle
+            } else if active.was_cancelled() {
+                ChatGptLoginPhase::Cancelled
+            } else {
+                ChatGptLoginPhase::Failed
+            };
         }
     }
 
@@ -515,45 +566,87 @@ impl QuantixHost {
             return;
         }
         state.active = None;
-        state.phase = match outcome {
-            LoginOutcome::Completed => ChatGptLoginPhase::Completed,
-            LoginOutcome::Cancelled => ChatGptLoginPhase::Cancelled,
-            LoginOutcome::Failed => ChatGptLoginPhase::Failed,
+        state.phase = if active.was_disconnected() || state.disconnecting > 0 {
+            ChatGptLoginPhase::Idle
+        } else if active.was_cancelled() {
+            ChatGptLoginPhase::Cancelled
+        } else {
+            match outcome {
+                LoginOutcome::Completed => ChatGptLoginPhase::Completed,
+                LoginOutcome::Cancelled => ChatGptLoginPhase::Cancelled,
+                LoginOutcome::Failed => ChatGptLoginPhase::Failed,
+            }
         };
     }
 
     pub fn cancel_chatgpt_login(&self) {
-        let mut state = self
+        let active = self
             .chatgpt_login_state()
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // Signalling cannot interrupt an in-flight callback wait; the running
-        // flow stops at the next phase boundary instead. Cancel cannot revoke
-        // a completed browser authorization: tokens persisted by a flow that
-        // finished stay on disk by design and inspect reflects them; the
-        // machine still ends Idle.
-        if let Some(active) = state.active.take() {
-            active.signal_cancel();
-            state.phase = ChatGptLoginPhase::Cancelled;
-        } else if state.phase != ChatGptLoginPhase::Cancelled {
-            state.phase = ChatGptLoginPhase::Idle;
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .active
+            .clone();
+        let Some(active) = active else {
+            let mut state = self
+                .chatgpt_login_state()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.phase != ChatGptLoginPhase::Cancelled {
+                state.phase = ChatGptLoginPhase::Idle;
+            }
+            return;
+        };
+
+        let cancellation_won = with_connection_mutation(|| active.claim_cancel());
+        if cancellation_won {
+            {
+                let mut state = self
+                    .chatgpt_login_state()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if state
+                    .active
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &active))
+                {
+                    state.phase = ChatGptLoginPhase::Cancelled;
+                }
+            }
+            active.wake_cancelled_flow();
         }
     }
 
     pub fn disconnect_chatgpt(&self) -> Result<ApplicationSettingsView, TenderCommandError> {
+        let active = {
+            let mut state = self
+                .chatgpt_login_state()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.disconnecting = state.disconnecting.saturating_add(1);
+            state.active.clone()
+        };
+        let clear_result = with_connection_mutation(|| {
+            if let Some(active) = active.as_deref() {
+                active.force_disconnect();
+            }
+            clear_unlocked(self.application_home())
+        });
+        if let Some(active) = active.as_deref() {
+            active.wake_cancelled_flow();
+        }
+
+        let result = (|| {
+            clear_result.map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            save_chatgpt_disconnected(self.application_home())?;
+            load_application_settings(self.application_home())
+        })();
         let mut state = self
             .chatgpt_login_state()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(active) = state.active.take() {
-            active.signal_cancel();
-        }
         state.phase = ChatGptLoginPhase::Idle;
-        drop(state);
-        with_connection_mutation(|| clear_unlocked(self.application_home()))
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
-        save_chatgpt_disconnected(self.application_home())?;
-        load_application_settings(self.application_home())
+        state.disconnecting = state.disconnecting.saturating_sub(1);
+        result
     }
 }
 
@@ -893,11 +986,31 @@ mod tests {
             started_rx
                 .recv_timeout(WAIT)
                 .expect("authorized flow reaches the persistence barrier");
-            active.signal_cancel();
+            active.force_disconnect();
             flow
         });
 
         assert_eq!(flow.join().unwrap(), LoginOutcome::Cancelled);
+        assert!(matches!(load(&home), LoadState::Absent));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn cancellation_winner_prevents_persistence() {
+        let home = temp_home("cancel-wins");
+        let active = Arc::new(ActiveLoginFlow::new());
+        let tokens = crate::chatgpt_oauth::IssuedTokens {
+            access_token: "at-cancelled".to_owned(),
+            refresh_token: "rt-cancelled".to_owned(),
+            id_token: jwt_id_token("acc-cancelled", Some("plus")),
+            expires_in_secs: 3_600,
+        };
+
+        assert!(with_connection_mutation(|| active.claim_cancel()));
+        assert_eq!(
+            persist_authorized_connection(&home, &tokens, Some(&active)),
+            LoginOutcome::Cancelled
+        );
         assert!(matches!(load(&home), LoadState::Absent));
         let _ = std::fs::remove_dir_all(&home);
     }
@@ -1015,6 +1128,71 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_keeps_flow_ownership_until_the_worker_finishes() {
+        let (_dir, host, _home) = fresh_host();
+        let active = Arc::new(ActiveLoginFlow::new());
+        {
+            let mut state = host.chatgpt_login_state().lock().unwrap();
+            state.phase = ChatGptLoginPhase::AwaitingDevice;
+            state.active = Some(Arc::clone(&active));
+        }
+
+        host.cancel_chatgpt_login();
+
+        {
+            let state = host.chatgpt_login_state().lock().unwrap();
+            assert_eq!(state.phase, ChatGptLoginPhase::Cancelled);
+            assert!(state
+                .active
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &active)));
+        }
+        assert_eq!(
+            host.begin_chatgpt_device_login("http://127.0.0.1:9")
+                .unwrap_err()
+                .code,
+            TenderErrorCode::OauthAlreadyRunning
+        );
+
+        host.finish_chatgpt_login_flow(&active, LoginOutcome::Cancelled);
+        assert!(host.chatgpt_login_state().lock().unwrap().active.is_none());
+    }
+
+    #[test]
+    fn persistence_wins_over_late_cancellation() {
+        let (_dir, host, home) = fresh_host();
+        let active = Arc::new(ActiveLoginFlow::new());
+        let tokens = crate::chatgpt_oauth::IssuedTokens {
+            access_token: "at-winner".to_owned(),
+            refresh_token: "rt-winner".to_owned(),
+            id_token: jwt_id_token("acc-winner", Some("plus")),
+            expires_in_secs: 3_600,
+        };
+        {
+            let mut state = host.chatgpt_login_state().lock().unwrap();
+            state.phase = ChatGptLoginPhase::AwaitingBrowser;
+            state.active = Some(Arc::clone(&active));
+        }
+
+        assert_eq!(
+            persist_authorized_connection(&home, &tokens, Some(&active)),
+            LoginOutcome::Completed
+        );
+        host.cancel_chatgpt_login();
+
+        assert_eq!(
+            host.chatgpt_login_state().lock().unwrap().phase,
+            ChatGptLoginPhase::AwaitingBrowser
+        );
+        host.finish_chatgpt_login_flow(&active, LoginOutcome::Completed);
+        assert_eq!(
+            host.chatgpt_login_state().lock().unwrap().phase,
+            ChatGptLoginPhase::Completed
+        );
+        assert!(matches!(load(&home), LoadState::Connected(_)));
+    }
+
+    #[test]
     fn device_flow_uses_the_shared_guard_and_cancellation_phase() {
         let (_dir, host, _home) = fresh_host();
         let issuer = start_pending_device_issuer();
@@ -1053,7 +1231,8 @@ mod tests {
         host.cancel_chatgpt_login();
         host.cancel_chatgpt_login();
         assert!(wait_until(|| {
-            host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Cancelled
+            let state = host.chatgpt_login_state().lock().unwrap();
+            state.phase == ChatGptLoginPhase::Cancelled && state.active.is_none()
         }));
         assert!(matches!(load(&home), LoadState::Absent));
 
@@ -1171,10 +1350,47 @@ mod tests {
         let view = host.disconnect_chatgpt().expect("disconnect succeeds");
         assert_eq!(view.chatgpt.state, ChatGptConnectionState::Absent);
         assert!(wait_until(|| {
-            host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Idle
+            let state = host.chatgpt_login_state().lock().unwrap();
+            state.phase == ChatGptLoginPhase::Idle && state.active.is_none()
         }));
-        assert!(host.chatgpt_login_state().lock().unwrap().active.is_none());
         assert!(matches!(load(&home), LoadState::Absent));
+    }
+
+    #[test]
+    fn disconnect_blocks_restart_and_prevents_a_late_worker_from_recreating_auth() {
+        let (_dir, host, home) = fresh_host();
+        let active = Arc::new(ActiveLoginFlow::new());
+        let tokens = crate::chatgpt_oauth::IssuedTokens {
+            access_token: "at-late".to_owned(),
+            refresh_token: "rt-late".to_owned(),
+            id_token: jwt_id_token("acc-late", Some("plus")),
+            expires_in_secs: 3_600,
+        };
+        {
+            let mut state = host.chatgpt_login_state().lock().unwrap();
+            state.phase = ChatGptLoginPhase::AwaitingBrowser;
+            state.active = Some(Arc::clone(&active));
+        }
+
+        host.disconnect_chatgpt().expect("disconnect succeeds");
+
+        assert!(host.chatgpt_login_state().lock().unwrap().active.is_some());
+        assert_eq!(
+            host.begin_chatgpt_device_login("http://127.0.0.1:9")
+                .unwrap_err()
+                .code,
+            TenderErrorCode::OauthAlreadyRunning
+        );
+        assert_eq!(
+            persist_authorized_connection(&home, &tokens, Some(&active)),
+            LoginOutcome::Cancelled
+        );
+        assert!(matches!(load(&home), LoadState::Absent));
+
+        host.finish_chatgpt_login_flow(&active, LoginOutcome::Cancelled);
+        let state = host.chatgpt_login_state().lock().unwrap();
+        assert_eq!(state.phase, ChatGptLoginPhase::Idle);
+        assert!(state.active.is_none());
     }
 
     #[test]
@@ -1263,7 +1479,7 @@ mod tests {
     #[test]
     fn cancelled_opener_skips_the_browser_and_self_cancels_the_server() {
         let flow = Arc::new(ActiveLoginFlow::new());
-        flow.signal_cancel();
+        assert!(with_connection_mutation(|| flow.claim_cancel()));
 
         let gate = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = gate.local_addr().unwrap().port();

@@ -1,6 +1,5 @@
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use super::authorize::build_authorize_url;
@@ -11,7 +10,6 @@ use super::{IssuedTokens, PkceCodes};
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 const ACCEPT_POLL: Duration = Duration::from_millis(25);
 const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(10);
-const SEND_GUARD: Duration = Duration::from_secs(5);
 const MAX_HEAD_BYTES: usize = 16 * 1024;
 const CALLBACK_PATH: &str = "/auth/callback";
 const CANCEL_PATH: &str = "/cancel";
@@ -111,7 +109,7 @@ pub(crate) fn run_login(
     port_candidates: &[u16],
     open_browser: impl FnOnce(&str),
     issuer: &str,
-    complete_authorization: impl FnOnce(&IssuedTokens) -> AuthorizationCompletion + Send + 'static,
+    complete_authorization: impl FnOnce(&IssuedTokens) -> AuthorizationCompletion,
 ) -> CallbackOutcome {
     let Some((listener, port)) = bind_first_free(port_candidates) else {
         return CallbackOutcome::Failed(CallbackFailure::PortBlocked);
@@ -156,21 +154,10 @@ fn serve_until_terminal<F>(
     complete_authorization: F,
 ) -> CallbackOutcome
 where
-    F: FnOnce(&IssuedTokens) -> AuthorizationCompletion + Send + 'static,
+    F: FnOnce(&IssuedTokens) -> AuthorizationCompletion,
 {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        if let Some(outcome) =
-            accept_until_terminal(listener, &pending, &client, budget, complete_authorization)
-        {
-            let _ = tx.send(outcome);
-        }
-    });
-    match rx.recv_timeout(budget + SEND_GUARD) {
-        Ok(outcome) => outcome,
-        Err(RecvTimeoutError::Timeout) => CallbackOutcome::Failed(CallbackFailure::Timeout),
-        Err(RecvTimeoutError::Disconnected) => CallbackOutcome::Failed(CallbackFailure::Startup),
-    }
+    accept_until_terminal(listener, &pending, &client, budget, complete_authorization)
+        .unwrap_or(CallbackOutcome::Failed(CallbackFailure::Startup))
 }
 
 fn accept_until_terminal<F>(
@@ -538,6 +525,10 @@ mod tests {
     }
 
     fn start_mock_issuer() -> (String, CapturedForms) {
+        start_mock_issuer_with_delay(Duration::ZERO)
+    }
+
+    fn start_mock_issuer_with_delay(delay: Duration) -> (String, CapturedForms) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let captured: CapturedForms = Arc::new(Mutex::new(Vec::new()));
@@ -547,6 +538,7 @@ mod tests {
                 let Ok(mut stream) = stream else { continue };
                 let form = read_post_form(&mut stream);
                 shared.lock().unwrap().push(form);
+                std::thread::sleep(delay);
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{MOCK_TOKEN_BODY}",
                     MOCK_TOKEN_BODY.len()
@@ -832,5 +824,45 @@ mod tests {
             outcome,
             CallbackOutcome::Failed(CallbackFailure::Timeout)
         ));
+    }
+
+    #[test]
+    fn accepted_callback_finishes_its_bounded_exchange_after_accept_budget_expires() {
+        let (issuer, _forms) = start_mock_issuer_with_delay(Duration::from_millis(200));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let pending = PendingLogin {
+            pkce: generate_pkce().unwrap(),
+            state: "accepted-state".to_owned(),
+            redirect_uri: format!("http://localhost:{port}/auth/callback"),
+        };
+        let client = TokenClient::new(&issuer).unwrap();
+        let mut callback_stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        callback_stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        callback_stream
+            .write_all(
+                b"GET /auth/callback?code=accepted-code&state=accepted-state HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+        let callback = std::thread::spawn(move || {
+            let mut response = String::new();
+            callback_stream.read_to_string(&mut response).unwrap();
+            response
+        });
+
+        let started = Instant::now();
+        let outcome =
+            serve_until_terminal(listener, pending, client, Duration::from_millis(50), |_| {
+                AuthorizationCompletion::Connected
+            });
+
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        assert!(matches!(outcome, CallbackOutcome::Authorized(_)));
+        assert!(callback
+            .join()
+            .unwrap()
+            .contains("ChatGPT connected to Quantix"));
     }
 }
