@@ -554,7 +554,7 @@ Tauri's Rust Core is privileged software. Quantix loads only bundled local UI co
 
 
 
-Quantix does not store an OpenAI API key. The Rust Host owns a browser PKCE flow for one eligible ChatGPT subscription, keeps the resulting OAuth tokens in the versioned `auth.json` below the Quantix Application Home, and sends bounded Provider Turns directly over HTTPS while consuming SSE. Tokens never enter Tender Stores, logs, diagnostics, backups, archives, exports or generated artifacts.
+Quantix has one AI connection: the Engineer's eligible ChatGPT subscription. The Rust Host owns a browser-first PKCE flow with Quantix's originator marker and the simplified Codex authorization marker, keeps resulting OAuth tokens in the versioned `auth.json` below the Quantix Application Home, and sends bounded Provider Turns directly over HTTPS while consuming SSE. If the browser return path is unavailable, the Engineer can explicitly choose the device-code fallback; Quantix never selects it silently. Tokens never enter Tender Stores, logs, diagnostics, backups, archives, exports or generated artifacts.
 
 Public distribution remains blocked until applicable OpenAI terms and product authorization permit Quantix's intended third-party subscription-backed integration. Technical acceptance and risk acceptance cannot waive contractual authorization. Legacy Codex app-server protocol material may remain only as deterministic test infrastructure behind the `runtime-fixture` feature; it is not staged, launched or supported by production builds.
 
@@ -1128,7 +1128,7 @@ Commercial depth	Mandatory evidence-linked Cost Estimating through an independen
 
 Deployment	Local single-user Tauri 2 desktop application with a genuine Rust Host and all Quantix-managed data under `~/.quantix`
 
-AI Provider	One Quantix-owned browser OAuth connection to the Engineer User's eligible ChatGPT subscription with direct HTTPS/SSE execution; no OpenAI API key, routing, fallback or generic agent framework
+AI Provider	One Quantix-owned ChatGPT OAuth connection with browser PKCE as the primary path and an explicit device-code fallback, plus direct HTTPS/SSE execution; no API keys, provider routing, fallback provider, or generic agent framework
 
 Document processing	In-process anydoc Markdown conversion for digital documents plus a pinned local RapidOCR runtime installed through bundled `uv`; provider reasoning remains online
 

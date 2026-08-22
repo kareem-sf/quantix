@@ -17,7 +17,7 @@ The open-source tender operating system defined by this repository.
 _Avoid_: Context (obsolete working name)
 
 **Quantix Application Home**:
-The Tendering Engineer's single local `~/.quantix` root containing every Quantix-managed Tender Store, non-secret setting, workspace, backup, archive, operational record, and the direct ChatGPT OAuth credential file `auth.json`. Connected Tender Packages and Provider Credentials held by the operating-system credential vault remain outside it.
+The Tendering Engineer's single local `~/.quantix` root containing every Quantix-managed Tender Store, non-secret setting, workspace, backup, archive, operational record, and the direct ChatGPT OAuth credential file `auth.json`. Connected Tender Packages remain outside it.
 _Avoid_: General provider credential store, connected project directory, arbitrary application-data folders
 
 **Quantix Setup**:
@@ -25,7 +25,7 @@ The first-run operation that establishes the Quantix Application Home and verifi
 _Avoid_: Tender intake, provider login, installer
 
 **Application Settings**:
-The application-wide, non-secret preferences and operational facts governing Quantix appearance, accessibility, notifications, AI Provider Connections, AI Execution Selection, data and storage, updates, and diagnostics independently of any one Tender. Changes save immediately, but a provider-selection change affects only future Agent Runs.
+The application-wide, non-secret preferences and operational facts governing Quantix appearance, accessibility, notifications, the ChatGPT connection, AI Execution Selection, data and storage, updates, and diagnostics independently of any one Tender. Changes save immediately, but an AI selection change affects only future Agent Runs.
 _Avoid_: Tender setting, Provider Credential, hidden configuration file
 
 **Tendering Engineer**:
@@ -53,11 +53,11 @@ A connected AI execution service that performs bounded Agent Profile work and re
 _Avoid_: Tender Office, workflow engine, system of record
 
 **Provider Connection**:
-The credential-free Quantix view of one configured AI Provider, including its stable identity, authentication method, readiness, account label when available, capability state, and compatibility with required capabilities. Quantix initially supports one OpenAI account connection through Quantix-owned ChatGPT OAuth, one Anthropic BYOK connection, and one Gemini BYOK connection; connecting several does not create automatic routing or fallback.
+The credential-free Quantix view of Quantix's one configured AI Provider: the Engineer's ChatGPT account. It includes the stable identity, readiness, account label when available, capability state, and compatibility with required capabilities. Quantix connects it through Quantix-owned ChatGPT OAuth; it does not support API-key connections, provider routing, or fallback.
 _Avoid_: Provider Credential, model router, fallback chain
 
 **Provider Credential**:
-A Secret authenticating one Provider Connection. Quantix stores the direct ChatGPT OAuth tokens in `<Quantix Application Home>/auth.json`; Anthropic and Gemini BYOK secrets remain in the operating-system credential vault. No Provider Credential enters Application Settings, a Tender Store, provider-visible context, logs, diagnostics, backups, archives, exports, or generated artifacts.
+A Secret authenticating the ChatGPT Provider Connection. Quantix stores direct ChatGPT OAuth tokens in `<Quantix Application Home>/auth.json`. No Provider Credential enters Application Settings, a Tender Store, provider-visible context, logs, diagnostics, backups, archives, exports, or generated artifacts.
 _Avoid_: Provider Connection, API key record, Tender data
 
 **Provider Capability Catalogue**:
@@ -65,7 +65,7 @@ The credential-free model and capability facts authorized by one ready Provider 
 _Avoid_: Unversioned model list, inferred compatibility table, stale authorization
 
 **AI Execution Selection**:
-The Tender-scoped choice of one ready Provider Connection, one provider-qualified model, and one provider-native reasoning setting for future Agent Runs in that Tender. Application Settings holds only the default copied into a newly created Tender. Every new Agent Run captures the effective selection and its Provider Capability Catalogue provenance; changing either default or Tender selection never rewrites active, queued, interrupted, or indeterminate work, and Quantix never silently substitutes another provider, model, or reasoning setting.
+The Tender-scoped choice of the ready ChatGPT Provider Connection, one ChatGPT model, and one reasoning setting for future Agent Runs in that Tender. Application Settings holds only the default copied into a newly created Tender. Every new Agent Run captures the effective selection and its Provider Capability Catalogue provenance; changing either default or Tender selection never rewrites active, queued, interrupted, or indeterminate work, and Quantix never silently substitutes a model or reasoning setting.
 _Avoid_: Bare model name, automatic fallback, per-Agent provider routing, application-wide runtime selection
 
 **AI Provider Contract**:

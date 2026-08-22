@@ -4,28 +4,77 @@ status: accepted
 
 # Connect ChatGPT through Quantix-owned OAuth
 
-Quantix connects one eligible ChatGPT subscription through a browser PKCE flow owned by the trusted Rust Host, stores the resulting OAuth connection at `<Quantix Application Home>/auth.json`, and executes bounded Provider Turns directly over HTTPS and server-sent events at `https://chatgpt.com/backend-api/codex/responses`. The production application no longer delegates authentication or execution to a Codex CLI or app-server process.
+Quantix has exactly one AI connection: the Tendering Engineer's eligible
+ChatGPT account. The trusted Rust Host owns the connection, stores its OAuth
+tokens at `<Quantix Application Home>/auth.json`, and executes bounded Provider
+Turns directly over HTTPS and server-sent events at
+`https://chatgpt.com/backend-api/codex/responses`.
 
-This decision supersedes ADR 0004 as the ChatGPT execution architecture and ADR 0008 as the Codex-specific adapter decision. ADR 0008's general Quantix-owned AI Provider Contract boundary remains accepted through ADR 0012: Quantix still owns Tender workflow, permissions, Typed Tools, evidence, audit, interruption, validation, and EITL controls. This decision amends ADR 0012's OpenAI authentication, credential, catalogue, logout, execution, and compatibility consequences. It also amends ADR 0014 only by changing the adapter and catalogue provenance captured by each Tender and Agent Run; Tender-scoped selection and the prohibition on silent fallback are unchanged.
+This decision supersedes ADR 0012 for provider count and authentication. It
+also supersedes ADR 0004 and ADR 0008 for the ChatGPT execution architecture.
+Quantix still owns Tender workflow, permissions, Typed Tools, evidence, audit,
+interruption, validation, and Engineer-in-the-Loop controls; the connected
+ChatGPT account owns none of those authorities.
 
 ## Consequences
 
-- The Rust Host owns ChatGPT browser login, OAuth state and PKCE verification, authorization-code exchange, refresh, readiness, and disconnect. It tries the registered loopback callback on port 1455 and then 1457, fails visibly before opening a browser when neither can bind, and does not add device-code login in this layer.
-- ChatGPT access, refresh, and ID tokens are Secret Provider Credentials stored in the versioned `auth.json` file directly below the Quantix Application Home. Writes are atomic and refresh, login, and disconnect mutations are serialized. Disconnect deletes the file. Its contents never enter Application Settings, `installation.sqlite`, a Tender Store, Provider Turn context, logs, diagnostics, backups, archives, exports, or generated artifacts. The file relies on the signed-in operating-system account, restrictive Application Home permissions, and full-disk encryption where required; its plaintext JSON format is an explicit local-operability trade-off, not permission to expose or copy it.
-- The direct ChatGPT adapter sends provider-native Responses requests and consumes the streamed SSE events behind the existing AI Provider Contract. Every request explicitly sends `store: false` and `stream: true`; encrypted reasoning state may be replayed only as needed to continue the same bounded tool loop. `store: false` requests that the response not be stored for server-side continuation, but does not make a claim about provider security, abuse-monitoring, or legal-retention systems.
-- Quantix, not the model or provider, validates every requested Typed Tool against the exact Permission Grant, executes an allowed tool inside the Agent Run boundary, records attributable usage and denials, validates candidate output, and preserves interruption and Indeterminate Agent Run semantics. No backend response can mutate canonical Tender state directly.
-- ChatGPT model discovery uses the stable built-in catalogue `chatgpt-direct-v1`, because the researched live models endpoint is not a validated dependency. This catalogue exposes `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.3-codex-spark`, each with `none`, `low`, `medium`, `high`, and `xhigh` reasoning and `medium` as the default. A model or reasoning change requires an explicit, tested catalogue-version change; model-name inference and silent forward compatibility are rejected.
-- Production preparation, packaging, startup, readiness, updates, and shutdown neither stage, bundle, locate, launch, supervise, nor version-gate a Codex executable. `CODEX_HOME`, Codex-owned login, app-server threads, and app-server protocol compatibility are no longer production concepts.
-- The `runtime-fixture` feature may retain deterministic legacy-shaped app-server fixtures and protocol schemas only where they provide existing acceptance coverage. They are test infrastructure, cannot be selected by a production build, and do not reinstate a Codex runtime dependency or compatibility promise.
-- The ChatGPT backend and the public OAuth client registration remain externally controlled integration surfaces. Authentication, subscription eligibility, malformed streams, incompatible events, rate limits, connectivity loss, or acceptance uncertainty fail closed through typed Provider Failures. Quantix never falls back to a different provider, model, reasoning setting, or unaccepted turn.
-- Public or commercial claims remain blocked until applicable OpenAI terms and product authorization support the intended direct subscription-backed integration. Passing technical acceptance cannot grant contractual authorization.
+- Browser PKCE is the primary sign-in path. The Rust Host binds its registered
+  loopback callback before opening the system browser, trying ports 1455 then
+  1457 internally. The authorization request contains
+  `codex_cli_simplified_flow=true` and `originator=quantix`. Ports, process
+  identifiers, OAuth terminology, and raw provider errors are never shown to
+  the Engineer.
+- The callback verifies state, exchanges the authorization code, validates the
+  identity, and persists the connection before its success page says
+  **ChatGPT connected to Quantix**. A failed or cancelled completion returns
+  plain-language guidance without tokens, codes, or response bodies.
+- **Sign in on another device** is an explicit troubleshooting fallback, never
+  a silent alternative. Quantix initiates the device flow at
+  `https://auth.openai.com/api/accounts/deviceauth/usercode`, shows the
+  returned one-time code and `https://auth.openai.com/codex/device`, then polls
+  `https://auth.openai.com/api/accounts/deviceauth/token`. It uses the
+  server-provided interval plus three seconds, treats HTTP 403 and 404 as
+  pending, allows cancellation, and stops after 15 minutes. The resulting
+  authorization code is exchanged with redirect URI
+  `https://auth.openai.com/deviceauth/callback`.
+- Browser and device attempts share one active-login guard. Refresh, login,
+  disconnect, and persistence mutations are serialized. Disconnect cancels an
+  active attempt and deletes `auth.json`.
+- ChatGPT access, refresh, and ID tokens are Secret Provider Credentials. They
+  are kept only in `auth.json`, written atomically, and never enter Application
+  Settings, `installation.sqlite`, a Tender Store, Provider Turn context,
+  logs, diagnostics, backups, archives, exports, or generated artifacts.
+- Quantix has no API-key connection, alternate AI provider, provider router,
+  provider fallback, or multiple-account selection. The persisted provider
+  value `codex` is an internal adapter name; user-facing copy says **ChatGPT**.
+- A ready connection prepares its recommended model and reasoning selection
+  without approving it. The Tendering Engineer explicitly approves ChatGPT as
+  the destination for future Tender content. Advanced model settings are kept
+  out of connection setup. Quantix never silently substitutes a model or
+  reasoning setting.
+- The direct adapter sends provider-native Responses requests with `store:
+  false` and `stream: true`. Quantix validates every requested Typed Tool
+  against its exact Permission Grant, runs permitted tools inside the Agent Run
+  boundary, and validates candidate output before canonical Tender state can
+  change.
+- Production preparation, packaging, startup, readiness, updates, and
+  shutdown do not stage, bundle, locate, launch, supervise, or version-gate a
+  Codex executable. Legacy app-server-shaped fixtures may remain only as
+  deterministic test infrastructure behind `runtime-fixture` and do not create
+  a production dependency or compatibility promise.
+- The browser authorization, device endpoints, subscription eligibility, and
+  direct backend are externally controlled. Authentication, connectivity,
+  malformed responses, rate limits, and acceptance uncertainty fail closed.
+  Public or commercial claims remain blocked until applicable OpenAI terms and
+  product authorization support Quantix's subscription-backed integration.
 
 ## Evidence
 
-- [Approved direct-provider design](../superpowers/specs/2026-08-21-chatgpt-direct-provider-design.md)
-- [ChatGPT backend contract research](../research/chatgpt-backend-contract.md)
+- [Approved beginner-connection design](../superpowers/specs/2026-08-22-codex-only-beginner-connection-design.md)
+- [Current connection research](../research/multi-provider-auth-model-discovery.md)
+- [OpenAI authentication documentation](https://learn.chatgpt.com/docs/auth)
+- [OpenAI Codex browser-login source](https://github.com/openai/codex/blob/main/codex-rs/login/src/server.rs)
+- [OpenAI Codex device-login source](https://github.com/openai/codex/blob/main/codex-rs/login/src/device_code_auth.rs)
 - [Host-controlled run permissions](./0006-enforce-agent-access-through-host-owned-run-grants.md)
-- [Provider-neutral AI without silent fallback](./0012-connect-provider-neutral-ai-without-silent-fallback.md)
 - [Tender-scoped AI execution](./0014-scope-ai-execution-and-asa-operations-per-tender.md)
-- [Superseded Codex thread decision](./0004-run-agent-profiles-through-host-controlled-codex-threads.md)
-- [Superseded Codex adapter decision](./0008-keep-codex-behind-a-quantix-owned-ai-provider-contract.md)
+- [Superseded provider-neutral decision](./0012-connect-provider-neutral-ai-without-silent-fallback.md)

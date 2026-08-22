@@ -146,21 +146,20 @@ The visual system is calm, readable, minimalist, and beginner-oriented. Secondar
 114d. As a Tendering Engineer, I want incomplete provider-reference discovery reported honestly in the Deletion Receipt, so that local deletion can finish without hiding the need for any external provider review.
 115. As a Tendering Engineer, I want one application Settings control fixed at the bottom of the sidebar, so that global configuration is distinct from Tender work.
 116. As a Tendering Engineer, I want Settings organized as General, AI & Models, Data & Storage, Updates, and About & Diagnostics with technical detail collapsed, so that beginner choices remain clear.
-117. As a Tendering Engineer, I want Settings to save the default for new Tenders immediately and each Manager composer to change its Tender's provider, model, and reasoning as one valid selection, so that the interface cannot leave a half-applied AI configuration or rewrite another Tender.
-118. As a Tendering Engineer, I want to connect an OpenAI account through managed Codex login and add Anthropic or Gemini API keys, so that Quantix is AI-powered without being a Codex-only product.
-119. As a Tendering Engineer, I want Quantix to use Codex-managed browser or device login without reading or copying raw ChatGPT tokens, so that account authentication remains with its documented owner.
-120. As a Tendering Engineer, I want Anthropic and Gemini API keys kept in the operating-system credential vault and excluded from every Tender record, log, diagnostic, archive, and export, so that BYOK does not expose credentials.
-121. As a Tendering Engineer, I want each connected provider's models loaded from its live catalogue, so that I never choose from a stale hard-coded model list.
-122. As a Tendering Engineer, I want Reasoning choices limited to exact live provider capabilities, with Gemini showing Automatic when exact options cannot be discovered, so that Quantix never invents support.
-123. As a Tendering Engineer, I want every Agent Run to retain the provider, model, reasoning setting, and catalogue provenance it started with, so that later default or Tender-selection changes do not rewrite ongoing or historical work.
-124. As a Tendering Engineer, I want a removed model or reasoning choice kept visible as unavailable with a compatible live recommendation, so that capability drift is explicit and requires my confirmation.
-125. As a Tendering Engineer, I want Quantix never to switch providers, models, or reasoning depth silently, so that data destination, cost account, and AI behavior remain intentional.
-126. As a Tendering Engineer, I want a failure in one Provider Connection not to disable another ready connection or non-AI Tender work, so that failures remain isolated.
-127. As a Tendering Engineer, I want a Tender Package registered safely and AI work shown as Waiting for AI Provider when no selected connection is ready, so that expected offline operation is not recorded as failed work.
-128. As a Tendering Engineer, I want a concise data-destination and cost-account disclosure when connecting a provider, so that I understand where Tender information may be processed.
-129. As a Tendering Engineer, I want Disconnect to remove local authentication safely, pause bound work, and explain any external key-revocation step, so that disconnection never implies unperformed provider-side revocation.
-130. As a Tendering Engineer, I want Quantix to warn me before the Tender Package picker when the AI default is incomplete, while allowing me to continue with local work, so that missing AI setup is intentional rather than a surprise.
-131. As a Tendering Engineer, I want About & Diagnostics to explain each health finding and offer only safe typed repairs after I approve their impact, so that Repair Required is actionable without granting Quantix autonomous repair authority.
+117. As a Tendering Engineer, I want Settings to prepare the default ChatGPT model and reasoning for new Tenders while requiring my explicit approval before Tender content is sent, so that connection setup stays simple and data destination remains intentional.
+118. As a Tendering Engineer, I want one **Connect ChatGPT** action that opens my browser and completes automatically, so that I do not have to understand providers, ports, OAuth, or terminals.
+119. As a Tendering Engineer, I want **Sign in on another device** offered only when the normal return path is unavailable or when I ask for help, so that the ordinary browser path remains the simple default.
+120. As a Tendering Engineer, I want the alternate sign-in to show one copyable code and an OpenAI page, wait for me, and let me cancel, so that I can finish sign-in from another device without technical setup.
+121. As a Tendering Engineer, I want ChatGPT tokens excluded from every Tender record, log, diagnostic, archive, and export, so that connection credentials remain separate from Tender information.
+122. As a Tendering Engineer, I want advanced model settings kept out of connection setup, so that a model choice never blocks a first connection.
+123. As a Tendering Engineer, I want every Agent Run to retain the ChatGPT model, reasoning setting, and catalogue provenance it started with, so that later selection changes do not rewrite ongoing or historical work.
+124. As a Tendering Engineer, I want an unavailable model or reasoning choice kept visible with a compatible recommendation, so that capability drift is explicit and requires my confirmation.
+125. As a Tendering Engineer, I want Quantix never to switch models or reasoning depth silently, so that AI behavior remains intentional.
+126. As a Tendering Engineer, I want a ChatGPT connection problem not to disable local Tender work, so that expected offline operation is not recorded as failed work.
+127. As a Tendering Engineer, I want a concise disclosure before I approve ChatGPT for future Tender content, so that I understand the data destination.
+128. As a Tendering Engineer, I want Disconnect to cancel an active sign-in and remove local authentication safely, so that the next use requires a deliberate fresh connection.
+129. As a Tendering Engineer, I want Quantix to warn me before the Tender Package picker when the ChatGPT default is incomplete, while allowing me to continue with local work, so that missing AI setup is intentional rather than a surprise.
+130. As a Tendering Engineer, I want About & Diagnostics to explain each health finding and offer only safe typed repairs after I approve their impact, so that Repair Required is actionable without granting Quantix autonomous repair authority.
 
 ## Implementation Decisions
 
@@ -185,13 +184,13 @@ The visual system is calm, readable, minimalist, and beginner-oriented. Secondar
 - Restore of a recovery-required Tender restores its files and identity but projects `Needs recovery` until an explicit repair succeeds. Provider-reference discovery may be `Pending` or `Incomplete`; either state is visible in the receipt and never blocks local deletion.
 - Disable Archive and Delete unless the Host proves the Tender is at the exact safe terminal boundary. The renderer never infers safety from visible activity alone.
 - Place one application Settings control at the bottom of the sidebar. Settings replaces the Tender content area with a focused application-wide view and is not a fourth Tender destination.
-- Persist non-secret Application Settings at installation scope. Store Anthropic and Gemini Provider Credentials only in the operating-system credential vault; leave Codex-managed ChatGPT authentication under the supervised Codex runtime.
-- Implement three provider-native adapters behind the existing AI Provider Contract: OpenAI account through Codex-managed login, Anthropic BYOK, and Gemini BYOK. Do not copy ChatGPT token files or call undocumented ChatGPT backend routes.
-- Maintain one Provider Connection per supported provider. Application Settings holds the default AI Execution Selection copied into a new Tender; every Tender owns an optional independent selection for its future Agent Runs. Do not add per-Agent provider selection, multiple same-provider accounts, routing, or automatic fallback.
-- Load provider-qualified models from each ready connection's live catalogue. Populate reasoning choices only from exact machine-readable live capabilities; offer Gemini Automatic until its live API reports exact supported options.
+- Persist non-secret Application Settings at installation scope. Keep ChatGPT authentication only in Quantix-owned `auth.json`; do not expose tokens to the renderer or copy them into Tender data.
+- Implement exactly one AI adapter: ChatGPT through Quantix-owned OAuth and direct HTTPS/SSE execution. Do not support API keys, alternative providers, routing, or provider fallback.
+- Maintain one ChatGPT Provider Connection. Application Settings holds the default AI Execution Selection copied into a new Tender; every Tender owns an optional independent selection for its future Agent Runs. Do not add per-Agent selection, multiple accounts, routing, or automatic fallback.
+- Use the ready ChatGPT connection's versioned catalogue and expose model and reasoning choices only in advanced settings.
 - Apply Tender provider, model, and reasoning changes atomically and capture the exact effective selection and catalogue provenance in every new Agent Run. Existing and already queued runs remain pinned; changing the application default never rewrites an existing Tender.
 - Treat stale catalogues as explanation only. Capability or authentication drift pauses affected work as Waiting for AI Provider, preserves non-AI access, proposes a live compatible replacement, and requires explicit confirmation before changing selection.
-- Disclose provider data destination and cost account when connecting. Disconnect through provider-owned logout or local vault-secret removal, without claiming to revoke externally created API keys.
+- Disclose the ChatGPT data destination before the Engineer approves future Tender content. Disconnect cancels an active sign-in and deletes Quantix's local `auth.json` without claiming an external-account action.
 - Diagnose setup, runtime, provider, integrity, update, and recovery health automatically through the redacted Quantix Doctor. Healthy checks remain quiet; findings state exact cause and impact, and only an Engineer-commanded typed action may repair local state.
 - Use a professional neutral visual system with one restrained accent, comfortable reading typography, clear hierarchy, established icons, visible focus, and reduced motion.
 - Follow the operating-system appearance preference; keep appearance controls in Settings.
@@ -227,7 +226,7 @@ The visual system is calm, readable, minimalist, and beginner-oriented. Secondar
 - A permanent dashboard, control-room layout, module catalogue, technical inspector, Agent monitor, review inbox, or separate decisions inbox.
 - Arbitrary user-created chats, unrestricted direct Agent delegation, or silent editing of controlled plans and records.
 - Mobile or web-specific layouts. The specification is for the native desktop workspace, with responsive behaviour inside its supported window sizes.
-- Providers beyond the initial OpenAI-account, Anthropic-BYOK, and Gemini-BYOK connections; OpenAI API-key access; multiple accounts for one provider; per-Agent provider selection; automatic routing or fallback; local models; and generic OpenAI-compatible endpoints.
+- Any AI connection other than the one ChatGPT account; API-key access; multiple ChatGPT accounts; per-Agent provider selection; automatic routing or fallback; local models; and generic OpenAI-compatible endpoints.
 - Replacing canonical Tender lifecycle logic, approval semantics, Evidence, calculation, review, recovery, release, or retention rules already implemented by the Host.
 - Generated portraits, decorative illustrations, or generated raster controls in the shipped application.
 - Automated test execution, release verification, or production builds during the specification phase.
