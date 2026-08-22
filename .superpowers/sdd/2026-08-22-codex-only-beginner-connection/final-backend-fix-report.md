@@ -170,3 +170,30 @@ These test sources were deliberately not executed under the task constraint.
 - `application_settings.rs`: `972A6922A3E06610B3F11E1257562CBFBA40ABF113F0562A319ED5C99E976296`
 - `chatgpt_oauth/mod.rs`: `510C5897BFD0906D4BCA23CCFE23C140F5E6C45D51934BA73A5C87BAFD6D96CC`
 - `chatgpt_oauth/store.rs`: `0A4D63177EFF01FEBA63B20A575CF7D7170C54197830F240064CE8DE67B93535`
+
+## Forced 401 refresh semantics follow-up
+
+### Commit
+
+`6203f390dc663b6b59fcb2447404a872f660fc73` (`fix: force refresh after provider rejection`)
+
+### Design
+
+- Provider-rejection recovery now uses the named `force_refresh_connection_unlocked` store primitive. Under the caller's connection-mutation boundary it reloads the expected account, always performs one refresh exchange even when the access token is not near expiry, parses the returned identity, and requires the same account identifier before saving the rotated credential.
+- The matching settings projection and exact prepared-selection/account-bound approval check still follow inside the same boundary. A refresh failure or returned-account mismatch publishes an authentication-required projection and prevents the retry; a different currently stored account is rejected before its refresh credential is used.
+- Normal proactive readiness is unchanged and continues to use `refresh_connection_unlocked`, including its `needs_refresh` threshold. Forced exchange is limited to the callback invoked after an explicit backend authentication rejection.
+
+### Static regression sources and evidence
+
+- `http_401_refreshes_once_and_retries_with_fresh_auth` now starts from a token whose expiry is `u64::MAX`, explicitly asserts proactive refresh is not due, and still requires exactly one exchange plus a retry using the distinct `at-new` access token.
+- `unauthorized_retry_forces_exchange_of_a_nonexpired_rejected_access_token` exercises the production application-settings composite with a non-expired account-A token and asserts one refresh request, persisted `at-new`, and retained matching approval.
+- `unauthorized_retry_never_persists_a_refreshed_different_account` returns account B from account A's exchange and asserts account A's prior access and refresh credentials remain stored while the settings projection and approval fail closed.
+- `rustfmt --edition 2021` completed successfully on the four modified Rust files. `git diff --check` and `git diff --cached --check` reported no whitespace errors. Read-only audits confirmed conditional refresh remains on the normal readiness path, the 401 composite calls only the force-refresh primitive, and returned account comparison precedes `save_unlocked`.
+- No tests, Cargo checks, builds, Clippy, development servers, application commands, or generators were run. The regression sources remain unexecuted and uncompiled by explicit instruction.
+
+### File SHA-256 hashes
+
+- `agent_backend/turn_executor.rs`: `6C499F02997DF3ECFB485A128A0885A3B58E2E2920C702FF74143A1FBA1DD83C`
+- `application_settings.rs`: `8D1F44952C4CFD4F7BD0121ABD9AD5F7070A498987AD112A98C49410B963197C`
+- `chatgpt_oauth/mod.rs`: `495D117D2810F1C3F65D7D3C645FE4A30828CE93A8B2F33CBCDA9BADE6A30141`
+- `chatgpt_oauth/store.rs`: `EEB863EC0477B95B488801409C644DDBA99757C621E99A17A432648BDCB9C978`
