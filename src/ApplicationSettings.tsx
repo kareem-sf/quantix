@@ -301,7 +301,9 @@ export function ApplicationSettings({
     (chatgptLoginPhase === "awaiting_browser" || browserLoginStarted);
   const chatgptDevicePending =
     !chatgptConnected &&
-    (chatgptLoginPhase === "awaiting_device" || deviceLogin !== null);
+    (chatgptLoginPhase === "awaiting_device" ||
+      deviceLogin !== null ||
+      deviceLoginError !== null);
   const orphanedDeviceLogin =
     chatgptLoginPhase === "awaiting_device" &&
     deviceLogin === null &&
@@ -809,12 +811,7 @@ export function ApplicationSettings({
         candidate.connection_id === persistedSelection?.connection_id,
     )
     ?.models.find((model) => model.model_id === persistedSelection?.model_id);
-  const error =
-    deviceLoginError ??
-    deviceClipboardError ??
-    deviceOpenerError ??
-    generalActionError ??
-    refreshError;
+  const globalError = generalActionError ?? refreshError;
 
   return (
     <main className="application-settings" data-active-section={activeSection}>
@@ -859,9 +856,9 @@ export function ApplicationSettings({
       </aside>
 
       <div className="application-settings__content">
-        {error ? (
+        {globalError ? (
           <p className="application-settings__error" role="alert">
-            {error}
+            {globalError}
           </p>
         ) : null}
 
@@ -1056,14 +1053,22 @@ export function ApplicationSettings({
                       </details>
                     </div>
                   ) : chatgptDevicePending ? (
-                    <div
-                      className="application-settings__device-sign-in"
-                      aria-live="polite"
-                    >
+                    <div className="application-settings__device-sign-in">
+                      {deviceLoginError ? (
+                        <p
+                          className="application-settings__error"
+                          role="alert"
+                          aria-label="Device sign-in problem"
+                        >
+                          {deviceLoginError}
+                        </p>
+                      ) : null}
                       <p>
                         {orphanedDeviceLogin
                           ? "The previous one-time code is no longer available. Get a new code to continue."
-                          : "Enter this one-time code on the OpenAI page, then return to Quantix."}
+                          : deviceLogin
+                            ? "Enter this one-time code on the OpenAI page, then return to Quantix."
+                            : "Sign in on another device to continue."}
                       </p>
                       {deviceLogin ? (
                         <>
@@ -1095,6 +1100,24 @@ export function ApplicationSettings({
                               page
                             </button>
                           </div>
+                          {deviceClipboardError ? (
+                            <p
+                              className="application-settings__error"
+                              role="alert"
+                              aria-label="Copy code problem"
+                            >
+                              {deviceClipboardError}
+                            </p>
+                          ) : null}
+                          {deviceOpenerError ? (
+                            <p
+                              className="application-settings__error"
+                              role="alert"
+                              aria-label="OpenAI page problem"
+                            >
+                              {deviceOpenerError}
+                            </p>
+                          ) : null}
                         </>
                       ) : orphanedDeviceLogin ? (
                         <div className="application-settings__device-actions">
@@ -1112,22 +1135,37 @@ export function ApplicationSettings({
                             Get a new one-time code
                           </button>
                         </div>
+                      ) : deviceLoginError ? (
+                        <div className="application-settings__device-actions">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void connectChatGptOnAnotherDevice()}
+                          >
+                            Try again
+                          </button>
+                        </div>
                       ) : (
                         <small>Waiting for sign-in to finish.</small>
                       )}
-                      {!orphanedDeviceLogin ? (
-                        <div className="application-settings__device-waiting">
+                      {deviceLogin && !orphanedDeviceLogin ? (
+                        <div
+                          className="application-settings__device-waiting"
+                          role="status"
+                        >
                           <LoaderCircle className="is-spinning" size={15} />
                           Waiting for you to finish signing in
                         </div>
                       ) : null}
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void cancelChatGpt()}
-                      >
-                        Cancel
-                      </button>
+                      {deviceLogin || orphanedDeviceLogin ? (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void cancelChatGpt()}
+                        >
+                          Cancel
+                        </button>
+                      ) : null}
                     </div>
                   ) : chatgptLoginPhase === "failed" ? (
                     <div className="application-settings__sign-in-state">

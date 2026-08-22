@@ -443,18 +443,21 @@ describe("ApplicationSettings ChatGPT connection", () => {
     });
 
     expect(screen.getByText("KEEP-CODE")).toBeTruthy();
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Quantix could not open the OpenAI sign-in page.",
-    );
+    expect(
+      screen.getByText(/Quantix could not open the OpenAI sign-in page\./),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("alert", { name: "OpenAI page problem" }),
+    ).toBeTruthy();
 
     await act(async () => {
       vi.advanceTimersByTime(1_200);
       await Promise.resolve();
     });
     expect(host.refreshApplicationSettings).toHaveBeenCalledTimes(3);
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Quantix could not open the OpenAI sign-in page.",
-    );
+    expect(
+      screen.getByText(/Quantix could not open the OpenAI sign-in page\./),
+    ).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(
@@ -499,18 +502,14 @@ describe("ApplicationSettings ChatGPT connection", () => {
       fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
       await Promise.resolve();
     });
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Quantix could not copy the code.",
-    );
+    expect(screen.getByText(/Quantix could not copy the code\./)).toBeTruthy();
 
     await act(async () => {
       vi.advanceTimersByTime(1_200);
       await Promise.resolve();
     });
     expect(host.refreshApplicationSettings).toHaveBeenCalledTimes(3);
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Quantix could not copy the code.",
-    );
+    expect(screen.getByText(/Quantix could not copy the code\./)).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
@@ -541,25 +540,36 @@ describe("ApplicationSettings ChatGPT connection", () => {
       screen.getByRole("button", { name: "Sign in on another device" }),
     );
     expect(await screen.findByText("DISTINCT-ERRORS")).toBeTruthy();
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Quantix could not open the OpenAI sign-in page.",
-    );
+    expect(
+      screen.getByText(/Quantix could not open the OpenAI sign-in page\./),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("alert", { name: "OpenAI page problem" }),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
     await waitFor(() =>
-      expect(screen.getByRole("alert").textContent).toContain(
-        "Quantix could not copy the code.",
-      ),
+      expect(
+        screen.getByText(/Quantix could not copy the code\./),
+      ).toBeTruthy(),
     );
+    expect(
+      screen.getByRole("alert", { name: "Copy code problem" }),
+    ).toBeTruthy();
+    expect(screen.getAllByRole("alert")).toHaveLength(2);
     fireEvent.click(
       screen.getByRole("button", { name: "Open OpenAI sign-in page" }),
     );
     await waitFor(() =>
       expect(host.openChatGptDeviceLoginPage).toHaveBeenCalledTimes(2),
     );
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Quantix could not copy the code.",
-    );
+    expect(screen.getByText(/Quantix could not copy the code\./)).toBeTruthy();
+    expect(
+      screen.queryByText(/Quantix could not open the OpenAI sign-in page\./),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("alert", { name: "OpenAI page problem" }),
+    ).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
     expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
@@ -596,17 +606,19 @@ describe("ApplicationSettings ChatGPT connection", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Open OpenAI sign-in page" }),
     );
-    expect((await screen.findByRole("alert")).textContent).toContain(
-      "Quantix could not open the OpenAI sign-in page.",
-    );
+    expect(
+      await screen.findByText(
+        /Quantix could not open the OpenAI sign-in page\./,
+      ),
+    ).toBeTruthy();
 
     await act(async () => {
       finishFirstOpen?.();
       await Promise.resolve();
     });
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Quantix could not open the OpenAI sign-in page.",
-    );
+    expect(
+      screen.getByText(/Quantix could not open the OpenAI sign-in page\./),
+    ).toBeTruthy();
   });
 
   it("ignores a superseded copy failure that finishes after the current attempt succeeds", async () => {
@@ -677,15 +689,15 @@ describe("ApplicationSettings ChatGPT connection", () => {
       screen.getByRole("button", { name: "Sign in on another device" }),
     );
     expect(await screen.findByText("TERMINAL-CODE")).toBeTruthy();
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Quantix could not open the OpenAI sign-in page.",
-    );
+    expect(
+      screen.getByText(/Quantix could not open the OpenAI sign-in page\./),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
     await waitFor(() =>
-      expect(screen.getByRole("alert").textContent).toContain(
-        "Quantix could not copy the code.",
-      ),
+      expect(
+        screen.getByText(/Quantix could not copy the code\./),
+      ).toBeTruthy(),
     );
     fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
     fireEvent.click(
@@ -693,18 +705,28 @@ describe("ApplicationSettings ChatGPT connection", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
-    expect(
-      await screen.findByText(/ChatGPT sign-in did not finish/i),
-    ).toBeTruthy();
-    expect(screen.queryByRole("alert")).toBeNull();
+    const terminalAlert = await screen.findByRole("alert");
+    expect(terminalAlert.textContent).toContain(
+      "ChatGPT sign-in did not finish",
+    );
     expect(screen.queryByText("TERMINAL-CODE")).toBeNull();
+    expect(screen.queryByText(/Quantix could not copy the code\./)).toBeNull();
+    expect(
+      screen.queryByText(/Quantix could not open the OpenAI sign-in page\./),
+    ).toBeNull();
 
     await act(async () => {
       failPendingOpen?.(new Error("late opener failure"));
       failPendingCopy?.(new Error("late clipboard failure"));
       await Promise.resolve();
     });
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "ChatGPT sign-in did not finish",
+    );
+    expect(screen.queryByText(/Quantix could not copy the code\./)).toBeNull();
+    expect(
+      screen.queryByText(/Quantix could not open the OpenAI sign-in page\./),
+    ).toBeNull();
     expect(document.body.textContent).not.toContain("code is still ready");
   });
 
@@ -727,16 +749,62 @@ describe("ApplicationSettings ChatGPT connection", () => {
       screen.getByRole("button", { name: "Sign in on another device" }),
     );
     expect(await screen.findByText("KEEP-DEVICE-ERROR")).toBeTruthy();
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Quantix could not open the OpenAI sign-in page.",
-    );
+    expect(
+      screen.getByText(/Quantix could not open the OpenAI sign-in page\./),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Updates" }));
     fireEvent.click(screen.getByRole("button", { name: "Check for update" }));
     await waitFor(() => expect(host.checkQuantixUpdate).toHaveBeenCalledWith());
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Quantix could not open the OpenAI sign-in page.",
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "ChatGPT & Models" }));
+    expect(
+      screen.getByText(/Quantix could not open the OpenAI sign-in page\./),
+    ).toBeTruthy();
+  });
+
+  it("shows an unrelated general failure independently from device guidance", async () => {
+    host.startChatGptDeviceLogin.mockResolvedValue({
+      verification_url: "https://auth.openai.com/codex/device",
+      user_code: "TWO-SOURCES",
+    });
+    host.openChatGptDeviceLoginPage.mockRejectedValueOnce(
+      new Error("automatic opener failure"),
     );
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnectedView())
+      .mockResolvedValue(disconnectedView("awaiting_device"));
+    host.checkQuantixUpdate.mockRejectedValue(new Error("update unavailable"));
+    renderSettings();
+
+    fireEvent.click(await screen.findByText("Having trouble signing in?"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in on another device" }),
+    );
+    expect(await screen.findByText("TWO-SOURCES")).toBeTruthy();
+    expect(
+      screen.getByText(/Quantix could not open the OpenAI sign-in page\./),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Updates" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check for update" }));
+    expect(
+      await screen.findByText(
+        "Quantix could not reach the signed update source. Try again later.",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "ChatGPT & Models" }));
+    expect(screen.getAllByRole("alert")).toHaveLength(2);
+    expect(
+      screen.getByText(/Quantix could not open the OpenAI sign-in page\./),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Quantix could not reach the signed update source. Try again later.",
+      ),
+    ).toBeTruthy();
   });
 
   it("clears the one-time code when the Host reports failure", async () => {
