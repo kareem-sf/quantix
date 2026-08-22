@@ -2327,6 +2327,8 @@ version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash",
  "serde",
  "serde_core",
@@ -4424,7 +4426,7 @@ dependencies = [
  "fs4",
  "garde",
  "getrandom 0.3.4",
- "infer",
+ "infer 0.22.0",
  "jiff",
  "jsonschema",
  "junction",
