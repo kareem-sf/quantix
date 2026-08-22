@@ -3,10 +3,10 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use super::{
-    build_authorize_url, generate_pkce, generate_state, IssuedTokens, PkceCodes, TokenClient,
-    TokenError, TokenErrorKind,
-};
+use super::authorize::build_authorize_url;
+use super::crypto::{generate_pkce, generate_state};
+use super::tokens::{TokenClient, TokenError, TokenErrorKind};
+use super::{IssuedTokens, PkceCodes};
 
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 const ACCEPT_POLL: Duration = Duration::from_millis(25);

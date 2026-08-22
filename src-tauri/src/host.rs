@@ -181,7 +181,9 @@ impl QuantixHost {
                 agent_provider: tokio::sync::Mutex::new(None),
                 provider_cleanup_execution: tokio::sync::Mutex::new(()),
                 provider_rate_limit: Mutex::new(None),
-                chatgpt_login_state: Mutex::new(crate::chatgpt_login::ChatGptLoginFlowState::default()),
+                chatgpt_login_state: Mutex::new(
+                    crate::chatgpt_login::ChatGptLoginFlowState::default(),
+                ),
                 runtime_verified: AtomicBool::new(false),
                 update_installation_active: AtomicBool::new(false),
             }),

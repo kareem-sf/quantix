@@ -2,7 +2,7 @@ const AUTH_CLAIMS_KEY: &str = "https://api.openai.com/auth";
 
 pub(crate) fn parse_jwt_claims(token: &str) -> Option<serde_json::Value> {
     let payload = token.split('.').nth(1)?;
-    let bytes = super::base64url_decode(payload).ok()?;
+    let bytes = super::crypto::base64url_decode(payload).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
@@ -41,7 +41,7 @@ pub(crate) fn extract_identity(token: &str) -> Option<ChatGptIdentity> {
 
 #[cfg(test)]
 mod tests {
-    use crate::chatgpt_oauth::base64url_encode;
+    use crate::chatgpt_oauth::crypto::base64url_encode;
     use serde_json::json;
 
     fn token_for(claims: serde_json::Value) -> String {

@@ -14,7 +14,7 @@ use crate::chatgpt_oauth::{
 use crate::host::QuantixHost;
 use crate::tender_store::{TenderCommandError, TenderErrorCode};
 
-const PRODUCTION_ISSUER: &str = "https://auth.openai.com";
+pub(crate) const PRODUCTION_ISSUER: &str = "https://auth.openai.com";
 const LOGIN_PORT_CANDIDATES: &[u16] = &[1455, 1457];
 const CANCEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const LOOPBACK_HOST: &str = "127.0.0.1";
@@ -370,10 +370,9 @@ impl QuantixHost {
         state.phase = ChatGptLoginPhase::Idle;
     }
 
-    pub fn disconnect_chatgpt(
-        &self,
-    ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        clear(self.application_home()).map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+    pub fn disconnect_chatgpt(&self) -> Result<ApplicationSettingsView, TenderCommandError> {
+        clear(self.application_home())
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
         let mut state = self
             .chatgpt_login_state()
             .lock()
@@ -397,9 +396,8 @@ mod tests {
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use super::*;
-    use crate::chatgpt_oauth::{
-        base64url_encode, build_authorize_url, generate_pkce, generate_state,
-    };
+    use crate::chatgpt_oauth::authorize::build_authorize_url;
+    use crate::chatgpt_oauth::crypto::{base64url_encode, generate_pkce, generate_state};
 
     const WAIT: Duration = Duration::from_secs(10);
 
@@ -426,7 +424,8 @@ mod tests {
             );
         }
         let payload = serde_json::json!({ "https://api.openai.com/auth": auth });
-        let header = crate::chatgpt_oauth::base64url_encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let header =
+            crate::chatgpt_oauth::crypto::base64url_encode(br#"{"alg":"RS256","typ":"JWT"}"#);
         let body = base64url_encode(payload.to_string().as_bytes());
         format!("{header}.{body}.c2ln")
     }
@@ -541,9 +540,14 @@ mod tests {
         );
         let started = now_ms();
 
-        let outcome = run_chatgpt_login_flow(&home, &[0], |url| {
-            let _ = url_tx.send(url.to_string());
-        }, &issuer.base);
+        let outcome = run_chatgpt_login_flow(
+            &home,
+            &[0],
+            |url| {
+                let _ = url_tx.send(url.to_string());
+            },
+            &issuer.base,
+        );
 
         assert!(matches!(outcome, LoginOutcome::Completed), "{outcome:?}");
         match load(&home) {
@@ -565,9 +569,14 @@ mod tests {
         let (url_tx, url_rx) = mpsc::channel();
         spawn_callback_driver(url_rx, "/cancel".to_string());
 
-        let outcome = run_chatgpt_login_flow(&home, &[0], |url| {
-            let _ = url_tx.send(url.to_string());
-        }, &issuer.base);
+        let outcome = run_chatgpt_login_flow(
+            &home,
+            &[0],
+            |url| {
+                let _ = url_tx.send(url.to_string());
+            },
+            &issuer.base,
+        );
 
         assert!(matches!(outcome, LoginOutcome::Cancelled), "{outcome:?}");
         assert!(matches!(load(&home), LoadState::Absent));
@@ -585,9 +594,14 @@ mod tests {
                 .to_string(),
         );
 
-        let outcome = run_chatgpt_login_flow(&home, &[0], |url| {
-            let _ = url_tx.send(url.to_string());
-        }, &issuer.base);
+        let outcome = run_chatgpt_login_flow(
+            &home,
+            &[0],
+            |url| {
+                let _ = url_tx.send(url.to_string());
+            },
+            &issuer.base,
+        );
 
         match outcome {
             LoginOutcome::Failed => {}
@@ -607,9 +621,14 @@ mod tests {
             gate_b.local_addr().unwrap().port(),
         ];
 
-        let outcome = run_chatgpt_login_flow(&home, &candidates, |_url| {
-            panic!("browser must not open when no port is available");
-        }, "http://127.0.0.1:9");
+        let outcome = run_chatgpt_login_flow(
+            &home,
+            &candidates,
+            |_url| {
+                panic!("browser must not open when no port is available");
+            },
+            "http://127.0.0.1:9",
+        );
 
         assert_eq!(outcome, LoginOutcome::Failed);
         let _ = std::fs::remove_dir_all(&home);
@@ -628,9 +647,14 @@ mod tests {
             "/auth/callback?code=coded-abc&state={state}".to_string(),
         );
 
-        let outcome = run_chatgpt_login_flow(&home, &[0], |url| {
-            let _ = url_tx.send(url.to_string());
-        }, &issuer.base);
+        let outcome = run_chatgpt_login_flow(
+            &home,
+            &[0],
+            |url| {
+                let _ = url_tx.send(url.to_string());
+            },
+            &issuer.base,
+        );
 
         assert_eq!(outcome, LoginOutcome::Failed);
         assert!(matches!(load(&home), LoadState::Absent));
@@ -846,12 +870,7 @@ mod tests {
         assert!(wait_until(|| {
             host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Idle
         }));
-        assert!(host
-            .chatgpt_login_state()
-            .lock()
-            .unwrap()
-            .active
-            .is_none());
+        assert!(host.chatgpt_login_state().lock().unwrap().active.is_none());
         assert!(matches!(load(&home), LoadState::Absent));
     }
 
@@ -956,4 +975,3 @@ mod tests {
         assert!(observed, "the loopback server received the cancel signal");
     }
 }
-

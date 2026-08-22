@@ -14,7 +14,9 @@ use ts_rs::TS;
 use walkdir::WalkDir;
 
 use crate::{
-    agent_runtime::{CodexReadiness, CODEX_PROTOCOL_SCHEMA, CODEX_VERSION},
+    agent_runtime::{ProviderFailureCategory, CODEX_PROTOCOL_SCHEMA, CODEX_VERSION},
+    application_settings::chatgpt_connection_readiness,
+    chatgpt_login::PRODUCTION_ISSUER,
     process_supervisor::{ProcessOutput, ProcessSpec, ProcessSupervisor, ProcessTermination},
     setup::SetupState,
     QuantixHost,
@@ -708,19 +710,11 @@ impl QuantixHost {
 
     async fn probe_runtime(&self, cancellation: CancellationToken) -> RuntimeReadiness {
         let layout = self.runtime_layout();
-        let codex = layout.codex_executable();
         let uv = layout.uv_executable();
-        let mut missing = Vec::new();
-        if !is_real_file(&codex) {
-            missing.push(RuntimeReadinessIssue::CodexExecutableMissing);
-        }
         if !is_real_file(&uv) {
-            missing.push(RuntimeReadinessIssue::UvExecutableMissing);
-        }
-        if !missing.is_empty() {
             return RuntimeReadiness::with_versions(
                 RuntimeReadinessState::MissingExecutable,
-                missing,
+                vec![RuntimeReadinessIssue::UvExecutableMissing],
                 &RuntimeVersions::default(),
                 false,
             );
@@ -734,15 +728,10 @@ impl QuantixHost {
             );
         }
 
+        // The bundled Codex artifact is no longer executed or gated here; its
+        // version is pinned by the hash-validated provenance manifest.
         let mut versions = RuntimeVersions {
-            codex: probe_version(
-                self.process_supervisor(),
-                self.application_home(),
-                &codex,
-                cancellation.clone(),
-            )
-            .await
-            .ok(),
+            codex: Some(CODEX_VERSION.to_owned()),
             uv: probe_version(
                 self.process_supervisor(),
                 self.application_home(),
@@ -753,17 +742,10 @@ impl QuantixHost {
             .ok(),
             ocr: None,
         };
-        let mut incompatible = Vec::new();
-        if versions.codex.as_deref() != Some(CODEX_VERSION) {
-            incompatible.push(RuntimeReadinessIssue::CodexVersionIncompatible);
-        }
         if versions.uv.as_deref() != Some(UV_VERSION) {
-            incompatible.push(RuntimeReadinessIssue::UvVersionIncompatible);
-        }
-        if !incompatible.is_empty() {
             return RuntimeReadiness::with_versions(
                 RuntimeReadinessState::IncompatibleVersion,
-                incompatible,
+                vec![RuntimeReadinessIssue::UvVersionIncompatible],
                 &versions,
                 false,
             );
@@ -827,32 +809,17 @@ impl QuantixHost {
                 true,
             );
         }
-        match self.inspect_codex_subscription(cancellation).await {
-            CodexReadiness::Ready => RuntimeReadiness::with_versions(
-                RuntimeReadinessState::Ready,
-                Vec::new(),
-                &versions,
-                false,
-            ),
-            CodexReadiness::AuthenticationRequired => RuntimeReadiness::with_versions(
-                RuntimeReadinessState::AuthenticationRequired,
-                vec![RuntimeReadinessIssue::CodexAuthenticationRequired],
-                &versions,
-                false,
-            ),
-            CodexReadiness::SubscriptionRequired => RuntimeReadiness::with_versions(
-                RuntimeReadinessState::AuthenticationRequired,
-                vec![RuntimeReadinessIssue::CodexSubscriptionRequired],
-                &versions,
-                false,
-            ),
-            CodexReadiness::Unavailable => RuntimeReadiness::with_versions(
-                RuntimeReadinessState::RepairRequired,
-                vec![RuntimeReadinessIssue::RuntimeProbeFailed],
-                &versions,
-                true,
-            ),
-        }
+        let home = self.application_home().to_path_buf();
+        let outcome = tokio::task::spawn_blocking(move || {
+            chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, epoch_milliseconds())
+        })
+        .await;
+        let (state, issues, repair_available) = match outcome {
+            Ok(Ok(_connection)) => chatgpt_readiness_gate(None),
+            Ok(Err(failure)) => chatgpt_readiness_gate(Some(failure.category)),
+            Err(_) => chatgpt_readiness_gate(Some(ProviderFailureCategory::ProcessFailed)),
+        };
+        RuntimeReadiness::with_versions(state, issues, &versions, repair_available)
     }
 
     async fn prepare_ocr_runtime(
@@ -861,10 +828,8 @@ impl QuantixHost {
     ) -> Result<RuntimeVersions, RuntimeError> {
         self.activate_runtime_preparation_step(RuntimePreparationStep::ValidateResources);
         let layout = self.runtime_layout();
-        let codex = layout.codex_executable();
         let uv = layout.uv_executable();
         for resource in [
-            &codex,
             &uv,
             &layout.ocr_project().join("pyproject.toml"),
             &layout.ocr_project().join("uv.lock"),
@@ -880,16 +845,9 @@ impl QuantixHost {
         }
         validate_runtime_provenance(layout)?;
         self.activate_runtime_preparation_step(RuntimePreparationStep::VerifyBundledTools);
-        let codex_version = probe_version(
-            self.process_supervisor(),
-            self.application_home(),
-            &codex,
-            cancellation.clone(),
-        )
-        .await?;
-        if codex_version != CODEX_VERSION {
-            return Err(RuntimeError::InvalidOutput);
-        }
+        // The bundled Codex artifact stays hash-pinned by the provenance
+        // manifest; only the uv tool that the managed runtime executes is
+        // version-probed here.
         let uv_version = probe_version(
             self.process_supervisor(),
             self.application_home(),
@@ -1018,7 +976,7 @@ impl QuantixHost {
             &staged_models,
             &environment,
             &layout.ocr_project(),
-            &codex_version,
+            CODEX_VERSION,
             &uv_version,
             &ocr_version,
         )?;
@@ -1028,10 +986,35 @@ impl QuantixHost {
         publish_model_manifest(self.application_home(), &manifest)?;
         runtime_fixture_trace("runtime readiness published");
         Ok(RuntimeVersions {
-            codex: Some(codex_version),
+            codex: Some(CODEX_VERSION.to_owned()),
             uv: Some(uv_version),
             ocr: Some(ocr_version),
         })
+    }
+}
+
+/// Maps stored-token ChatGPT connection readiness onto the final runtime
+/// readiness surfaces. `None` means a usable eligible connection is stored.
+fn chatgpt_readiness_gate(
+    failure: Option<ProviderFailureCategory>,
+) -> (RuntimeReadinessState, Vec<RuntimeReadinessIssue>, bool) {
+    match failure {
+        None => (RuntimeReadinessState::Ready, Vec::new(), false),
+        Some(ProviderFailureCategory::AuthenticationRequired) => (
+            RuntimeReadinessState::AuthenticationRequired,
+            vec![RuntimeReadinessIssue::CodexAuthenticationRequired],
+            false,
+        ),
+        Some(ProviderFailureCategory::SubscriptionRequired) => (
+            RuntimeReadinessState::AuthenticationRequired,
+            vec![RuntimeReadinessIssue::CodexSubscriptionRequired],
+            false,
+        ),
+        Some(_) => (
+            RuntimeReadinessState::RepairRequired,
+            vec![RuntimeReadinessIssue::RuntimeProbeFailed],
+            true,
+        ),
     }
 }
 
@@ -1892,6 +1875,59 @@ fn write_preparation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_runtime::ProviderFailureCategory;
+
+    #[test]
+    fn a_connected_eligible_store_maps_to_a_ready_runtime() {
+        assert_eq!(
+            chatgpt_readiness_gate(None),
+            (RuntimeReadinessState::Ready, Vec::new(), false,)
+        );
+    }
+
+    #[test]
+    fn an_unusable_or_expired_store_maps_to_authentication_required() {
+        assert_eq!(
+            chatgpt_readiness_gate(Some(ProviderFailureCategory::AuthenticationRequired)),
+            (
+                RuntimeReadinessState::AuthenticationRequired,
+                vec![RuntimeReadinessIssue::CodexAuthenticationRequired],
+                false,
+            )
+        );
+    }
+
+    #[test]
+    fn an_ineligible_plan_maps_to_the_subscription_blocker() {
+        assert_eq!(
+            chatgpt_readiness_gate(Some(ProviderFailureCategory::SubscriptionRequired)),
+            (
+                RuntimeReadinessState::AuthenticationRequired,
+                vec![RuntimeReadinessIssue::CodexSubscriptionRequired],
+                false,
+            )
+        );
+    }
+
+    #[test]
+    fn an_unexpected_gate_failure_demands_repair() {
+        assert_eq!(
+            chatgpt_readiness_gate(Some(ProviderFailureCategory::ProtocolInvalid)),
+            (
+                RuntimeReadinessState::RepairRequired,
+                vec![RuntimeReadinessIssue::RuntimeProbeFailed],
+                true,
+            )
+        );
+        assert_eq!(
+            chatgpt_readiness_gate(Some(ProviderFailureCategory::ProcessFailed)),
+            (
+                RuntimeReadinessState::RepairRequired,
+                vec![RuntimeReadinessIssue::RuntimeProbeFailed],
+                true,
+            )
+        );
+    }
 
     #[test]
     fn smoke_output_requires_the_expected_ocr_text_and_locations() {

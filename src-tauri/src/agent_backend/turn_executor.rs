@@ -3,7 +3,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::agent_runtime::{ProviderFailure, ProviderFailureCategory, ProviderUsage};
-use crate::chatgpt_oauth::{load, save, LoadState, StoredConnection, TokenClient};
+use crate::chatgpt_oauth::{save, StoredConnection, TokenClient};
 
 use super::client::{
     BackendError, BackendRequest, ChatGptBackend, StreamEvent, TurnDisposition, UsageSnapshot,
@@ -18,9 +18,9 @@ pub(crate) struct TurnContext<'a> {
     pub home: &'a Path,
     pub request: BackendRequest,
     pub session_id: String,
-    pub authorize_tool: &'a dyn Fn(&str, &str) -> Result<Value, ToolRejection>,
-    pub is_cancelled: &'a dyn Fn() -> bool,
-    pub on_event: &'a mut dyn FnMut(BackendEvent),
+    pub authorize_tool: &'a (dyn Fn(&str, &str) -> Result<Value, ToolRejection> + Sync),
+    pub is_cancelled: &'a (dyn Fn() -> bool + Sync),
+    pub on_event: &'a mut (dyn FnMut(BackendEvent) + Send),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,6 +388,7 @@ mod tests {
 
     use super::super::client::{build_request_body, parse_stream_bytes};
     use super::*;
+    use crate::chatgpt_oauth::{load, LoadState};
 
     fn sse(frames: &[&str]) -> Vec<u8> {
         let mut bytes = frames.join("\n\n").into_bytes();
@@ -607,9 +608,9 @@ mod tests {
         auth: &'a StoredConnection,
         token_client: &'a TokenClient,
         home: &'a Path,
-        authorize_tool: &'a dyn Fn(&str, &str) -> Result<Value, ToolRejection>,
-        is_cancelled: &'a dyn Fn() -> bool,
-        on_event: &'a mut dyn FnMut(BackendEvent),
+        authorize_tool: &'a (dyn Fn(&str, &str) -> Result<Value, ToolRejection> + Sync),
+        is_cancelled: &'a (dyn Fn() -> bool + Sync),
+        on_event: &'a mut (dyn FnMut(BackendEvent) + Send),
     ) -> Result<ProviderTurnResult, ProviderFailure> {
         block_on_future(execute_provider_turn(TurnContext {
             backend,

@@ -102,7 +102,7 @@ impl std::fmt::Display for BackendError {
 
 impl std::error::Error for BackendError {}
 
-pub(crate) trait ChatGptBackend: Send {
+pub(crate) trait ChatGptBackend: Send + Sync {
     fn create_response(
         &self,
         auth: &StoredConnection,

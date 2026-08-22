@@ -130,7 +130,7 @@ mod tests {
     use std::net::TcpStream;
     use std::sync::{Arc, Mutex};
 
-    use crate::chatgpt_oauth::{PkceCodes, TokenClient, TokenError, TokenErrorKind};
+    use super::{PkceCodes, TokenClient, TokenError, TokenErrorKind};
 
     type Captured = Arc<Mutex<Vec<MockRequest>>>;
 
