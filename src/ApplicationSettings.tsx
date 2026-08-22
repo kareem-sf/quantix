@@ -2,9 +2,7 @@ import {
   ArrowLeft,
   Bell,
   Bot,
-  Copy,
   Database,
-  ExternalLink,
   Info,
   LoaderCircle,
   LogOut,
@@ -21,6 +19,7 @@ import { enableAttentionNotifications } from "./applicationNotifications";
 import { QuantixMark } from "./QuantixMark";
 import { DiagnosticsTimeline } from "./DiagnosticsTimeline";
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
+import type { ChatGptPortHolders } from "./bindings/ChatGptPortHolders";
 import type { GeneralApplicationPreferences } from "./bindings/GeneralApplicationPreferences";
 import type { ProviderConnectionView } from "./bindings/ProviderConnectionView";
 import type { ProviderReasoningSelection } from "./bindings/ProviderReasoningSelection";
@@ -33,19 +32,18 @@ import { QuantixSwitch } from "./ui/QuantixSwitch";
 import { QuantixDialog } from "./ui/QuantixDialog";
 import "./ui/quantix-ui.css";
 import {
-  cancelProviderLogin,
+  cancelChatGptLogin,
   checkQuantixUpdate,
   confirmAiExecutionSelection,
   connectAnthropic,
   connectGemini,
   disconnectAiProvider,
+  disconnectChatGpt,
   inspectQuantixDoctor,
   inspectRuntimeReadiness,
-  logoutProvider,
-  openProviderLogin,
   repairQuantixDoctor,
   refreshApplicationSettings,
-  startProviderLogin,
+  startChatGptLogin,
   updateAiExecutionSelection,
   updateGeneralApplicationPreferences,
   validateQuantixUpdateRestart,
@@ -83,6 +81,30 @@ function settingsError(reason: unknown): string {
     if (reason.code === "ai_provider_required") {
       return "Waiting for AI Provider. Reconnect the selected provider or choose another ready connection.";
     }
+    if (reason.code === "oauth_port_blocked") {
+      const holders =
+        "port_holders" in reason
+          ? ((reason.port_holders ?? null) as ChatGptPortHolders | null)
+          : null;
+      const holdingProcesses = [
+        holders?.port_1455 != null
+          ? `port 1455 — PID ${holders.port_1455}`
+          : null,
+        holders?.port_1457 != null
+          ? `port 1457 — PID ${holders.port_1457}`
+          : null,
+      ].filter((detail): detail is string => detail !== null);
+      if (holdingProcesses.length > 0) {
+        return `Ports needed for ChatGPT sign-in are busy. Close these programs and try again: ${holdingProcesses.join("; ")}.`;
+      }
+      return "Ports needed for ChatGPT sign-in are busy. Close the programs using them and try again.";
+    }
+    if (reason.code === "oauth_already_running") {
+      return "A ChatGPT sign-in is already running. Finish it in your browser or cancel it first.";
+    }
+    if (reason.code === "runtime_required") {
+      return "Waiting for AI Provider. Reconnect the selected provider or choose another ready connection.";
+    }
     if (reason.code === "invalid_command") {
       return "Finish current AI work, then try this change again.";
     }
@@ -109,7 +131,7 @@ function connectionStatus(connection: ProviderConnectionView): string {
 function providerDisclosure(connection: ProviderConnectionView): string {
   switch (connection.provider) {
     case "codex":
-      return "Tender content is sent to OpenAI through your managed Codex session. Usage and limits belong to the connected OpenAI account.";
+      return "Tender content is sent to OpenAI through your connected ChatGPT account. Usage and limits belong to that account.";
     case "anthropic":
       return "Tender content is sent to the Anthropic API. Usage is billed to the Anthropic account that owns this key.";
     case "gemini":
@@ -173,6 +195,7 @@ export function ApplicationSettings({
   useEffect(() => {
     setActiveSection(initialSection);
   }, [initialSection]);
+  const [chatgptAwaiting, setChatgptAwaiting] = useState(false);
 
   const acceptSettings = useCallback(
     (view: ApplicationSettingsView) => {
@@ -201,27 +224,18 @@ export function ApplicationSettings({
     void load();
   }, [load]);
 
-  const login = settings?.active_provider_login;
+  const chatgpt = settings?.chatgpt ?? null;
+  const chatgptConnected = chatgpt?.state === "connected";
+  const chatgptSignInPending = chatgptAwaiting && !chatgptConnected;
   useEffect(() => {
-    const completedCataloguePending =
-      login?.status === "completed" &&
-      !settings?.provider_connections.some(
-        (connection) => connection.status === "ready",
-      );
-    if (
-      !login ||
-      (!completedCataloguePending &&
-        !["awaiting_user", "cancelling"].includes(login.status))
-    ) {
-      return;
-    }
+    if (!chatgptSignInPending) return;
     const timer = window.setInterval(() => {
       void refreshApplicationSettings()
         .then(acceptSettings)
         .catch((reason) => setError(settingsError(reason)));
     }, 1_200);
     return () => window.clearInterval(timer);
-  }, [acceptSettings, login, settings?.provider_connections]);
+  }, [acceptSettings, chatgptSignInPending]);
 
   const persistedSelection = settings?.ai_execution_selection;
   const connection = settings?.provider_connections.find(
@@ -360,15 +374,40 @@ export function ApplicationSettings({
     );
   }, [connection, connectionSelection, runSettingsAction, selectedReasoning]);
 
-  const beginLogin = (method: "browser" | "device_code") =>
-    runSettingsAction(() => startProviderLogin({ method }));
-  const cancelLogin = () =>
-    login
-      ? runSettingsAction(() =>
-          cancelProviderLogin({ login_id: login.login_id }),
-        )
-      : Promise.resolve();
-  const disconnect = () => runSettingsAction(logoutProvider);
+  const connectChatGpt = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await startChatGptLogin();
+      setChatgptAwaiting(result.status === "awaiting_browser");
+      acceptSettings(await refreshApplicationSettings());
+    } catch (reason) {
+      setError(settingsError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }, [acceptSettings]);
+
+  const cancelChatGpt = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await cancelChatGptLogin();
+      setChatgptAwaiting(false);
+      acceptSettings(await refreshApplicationSettings());
+    } catch (reason) {
+      setError(settingsError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }, [acceptSettings]);
+
+  const disconnectChatGptAccount = async () => {
+    if (await runSettingsAction(disconnectChatGpt)) {
+      setChatgptAwaiting(false);
+    }
+  };
+
   const disconnectConnection = (connection_id: string) =>
     runSettingsAction(() => disconnectAiProvider({ connection_id }));
 
@@ -389,16 +428,6 @@ export function ApplicationSettings({
       setConnectionId("gemini_byok");
     }
   };
-
-  const openLogin = useCallback(async () => {
-    if (!login) return;
-    setError(null);
-    try {
-      await openProviderLogin({ login_id: login.login_id });
-    } catch (reason) {
-      setError(settingsError(reason));
-    }
-  }, [login]);
 
   const loadHostFacts = useCallback(async () => {
     setFactsBusy(true);
@@ -730,109 +759,63 @@ export function ApplicationSettings({
                 </div>
                 <p>{connection.status_summary}</p>
 
-                {connection.provider === "codex" && login ? (
+                {connection.provider === "codex" ? (
                   <div
                     className="application-settings__login"
-                    data-status={login.status}
+                    data-status={chatgpt?.state ?? "absent"}
                   >
-                    <strong>{login.status_summary}</strong>
-                    {login.status === "awaiting_user" ? (
+                    {chatgptConnected && chatgpt ? (
                       <>
-                        {login.user_code ? (
-                          <div className="application-settings__device-code">
-                            <code>{login.user_code}</code>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                void navigator.clipboard.writeText(
-                                  login.user_code ?? "",
-                                )
-                              }
-                            >
-                              <Copy size={15} /> Copy code
-                            </button>
-                          </div>
-                        ) : null}
+                        <strong>{chatgpt.account_id}</strong>
+                        <span>
+                          {chatgpt.plan_type
+                            ? `${chatgpt.plan_type.replace(/_/g, " ")} plan · `
+                            : ""}
+                          Expires{" "}
+                          {chatgpt.expires_at_ms != null
+                            ? new Date(
+                                Number(chatgpt.expires_at_ms),
+                              ).toLocaleString()
+                            : "unknown"}
+                        </span>
+                        <div className="application-settings__login-actions">
+                          <button
+                            type="button"
+                            className="application-settings__logout"
+                            disabled={busy}
+                            onClick={() => void disconnectChatGptAccount()}
+                          >
+                            <LogOut size={15} /> Disconnect
+                          </button>
+                        </div>
+                      </>
+                    ) : chatgptSignInPending ? (
+                      <>
+                        <strong>
+                          <LoaderCircle className="is-spinning" size={15} />{" "}
+                          Finish signing in through your browser.
+                        </strong>
                         <div className="application-settings__login-actions">
                           <button
                             type="button"
                             disabled={busy}
-                            onClick={() => void openLogin()}
-                          >
-                            <ExternalLink size={15} /> Continue in browser
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void cancelLogin()}
+                            onClick={() => void cancelChatGpt()}
                           >
                             Cancel
                           </button>
                         </div>
                       </>
-                    ) : null}
-                    {["cancelled", "failed"].includes(login.status) &&
-                    canConnect ? (
+                    ) : (
                       <div className="application-settings__login-actions">
                         <button
                           type="button"
                           disabled={busy}
-                          onClick={() => void beginLogin("browser")}
+                          onClick={() => void connectChatGpt()}
                         >
-                          Try browser login
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void beginLogin("device_code")}
-                        >
-                          Use device code
+                          Connect ChatGPT
                         </button>
                       </div>
-                    ) : null}
-                    {login.status === "completed" && canDisconnect ? (
-                      <div className="application-settings__login-actions">
-                        <button
-                          type="button"
-                          className="application-settings__logout"
-                          disabled={busy}
-                          onClick={() => void disconnect()}
-                        >
-                          <LogOut size={15} /> Disconnect
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : connection.provider === "codex" ? (
-                  <div className="application-settings__login-actions">
-                    {canConnect ? (
-                      <>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void beginLogin("browser")}
-                        >
-                          Connect in browser
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void beginLogin("device_code")}
-                        >
-                          Use device code
-                        </button>
-                      </>
-                    ) : null}
-                    {canDisconnect ? (
-                      <button
-                        type="button"
-                        className="application-settings__logout"
-                        disabled={busy}
-                        onClick={() => void disconnect()}
-                      >
-                        <LogOut size={15} /> Disconnect
-                      </button>
-                    ) : null}
+                    )}
                   </div>
                 ) : connection.provider === "anthropic" && canConnect ? (
                   <form

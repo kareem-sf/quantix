@@ -8,8 +8,8 @@ use serde_json::{json, Value};
 use crate::agent_runtime::{
     approve_one_run_access, bootstrap_profile, bootstrap_task,
     permissions::{
-        bootstrap_tool_catalogue, derive_bootstrap_grant, one_run_grant_authorizes_tool,
-        permission_duration, BootstrapGrantRequest,
+        authorize_tool_call, bootstrap_tool_catalogue, derive_bootstrap_grant, permission_duration,
+        BootstrapGrantRequest, ToolCallDecision,
     },
     AccessApproval, AccessRequest, AgentAccessRequestStatus, AgentAccessRequestView,
     AgentProfileStatus, AgentProfileVersionView, AgentRunActivity, AgentRunHistoryItem,
@@ -2085,81 +2085,6 @@ impl TenderStore {
         transaction.commit().map_err(sql_error)
     }
 
-    pub(crate) fn checkpoint_agent_control_denial(
-        &mut self,
-        run_id: &str,
-        event: &PendingProviderEvent,
-    ) -> Result<(), TenderCommandError> {
-        if !self.active_change_allows_run(run_id)?
-            && !self.unresolved_change_allows_unaffected_run(run_id)?
-        {
-            self.require_change_intake_writable()?;
-        }
-        if event.kind != ProviderEventKind::ControlRequestDenied {
-            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-        }
-        let correlation_id = event
-            .correlation_id
-            .as_deref()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let request_fingerprint = event
-            .request_fingerprint
-            .as_deref()
-            .filter(|value| value.len() == 64)
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let denial_reason = event
-            .denial_reason
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let method = event
-            .opaque_reference
-            .as_deref()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sql_error)?;
-        let (tender_id, tender_revision): (String, u32) = transaction
-            .query_row(
-                "SELECT tender_id, current_revision FROM tender WHERE singleton = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(sql_error)?;
-        let running: bool = transaction
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM agent_runs
-                 WHERE run_id = ?1 AND status = 'running'
-                   AND NOT EXISTS (
-                     SELECT 1 FROM agent_run_cancellations
-                     WHERE agent_run_cancellations.run_id = agent_runs.run_id
-                   ))",
-                [run_id],
-                |row| row.get(0),
-            )
-            .map_err(sql_error)?;
-        if !running {
-            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-        }
-        let created_at = sqlite_timestamp(&transaction)?;
-        let sequence = next_provider_event_sequence(&transaction, run_id)?;
-        insert_event(&transaction, run_id, sequence, event.clone(), &created_at)?;
-        append_audit_event(
-            &transaction,
-            &tender_id,
-            "provider_control_request_denied",
-            tender_revision,
-            json!({
-                "correlation_id": correlation_id,
-                "method": method,
-                "reason": denial_reason.as_str(),
-                "request_fingerprint": request_fingerprint,
-                "run_id": run_id,
-            }),
-            &created_at,
-        )?;
-        transaction.commit().map_err(sql_error)
-    }
-
     pub(crate) fn create_agent_access_request(
         &mut self,
         tender_id: &TenderId,
@@ -2467,30 +2392,24 @@ impl TenderStore {
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(sql_error)?;
         drop(statement);
-        let mut authorized_grant = None;
+        let mut approved_requests = Vec::with_capacity(grants.len());
         for (request_id, supplement_json) in grants {
             let supplement: crate::agent_runtime::OneRunAccessGrant =
                 parse_canonical_json(&supplement_json)?;
-            let expires_at: Timestamp = supplement
-                .expires_at
-                .parse()
-                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-            if supplement.request_id == request_id
-                && supplement.run_id == run_id
-                && expires_at > now_timestamp
-                && one_run_grant_authorizes_tool(
-                    &grant,
-                    &profile_capabilities,
-                    &supplement,
-                    &definition,
-                )
-            {
-                authorized_grant = Some(supplement);
-                break;
-            }
+            approved_requests.push((request_id, supplement));
         }
-        let Some(authorized_grant) = authorized_grant else {
-            return Ok(false);
+        let authorized_grant = match authorize_tool_call(
+            &grant,
+            &profile_capabilities,
+            &approved_requests,
+            now_timestamp,
+            tool_name,
+        ) {
+            Ok(ToolCallDecision::Authorized(authorized)) => authorized.clone(),
+            Ok(ToolCallDecision::Denied(_)) => return Ok(false),
+            Err(_) => {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
         };
         let inserted = transaction
             .execute(

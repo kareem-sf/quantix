@@ -345,6 +345,7 @@ mod tests {
     use super::*;
     use crate::{
         application_settings::{AppearancePreference, GeneralApplicationPreferences},
+        chatgpt_login::{ChatGptConnectionState, ChatGptConnectionStatus},
         runtime_readiness::RuntimeReadinessIssue,
         setup::SetupIssue,
     };
@@ -361,6 +362,12 @@ mod tests {
             ai_execution_approval: None,
             provider_connections: Vec::new(),
             active_provider_login: None,
+            chatgpt: ChatGptConnectionStatus {
+                state: ChatGptConnectionState::Absent,
+                account_id: None,
+                plan_type: None,
+                expires_at_ms: None,
+            },
             storage: crate::application_settings::ApplicationStorageFacts {
                 application_home: "C:/quantix".into(),
                 tender_backups_are_preserved: true,

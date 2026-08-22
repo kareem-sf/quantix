@@ -4176,6 +4176,8 @@ fn tender_error_code(code: TenderErrorCode) -> &'static str {
         TenderErrorCode::IntegrityFailed => "integrity_failed",
         TenderErrorCode::InvalidCommand => "invalid_command",
         TenderErrorCode::NotFound => "not_found",
+        TenderErrorCode::OauthAlreadyRunning => "oauth_already_running",
+        TenderErrorCode::OauthPortBlocked => "oauth_port_blocked",
         TenderErrorCode::OperationTimedOut => "operation_timed_out",
         TenderErrorCode::RecoveryRequired => "recovery_required",
         TenderErrorCode::LocalDocumentToolsRequired => "local_document_tools_required",

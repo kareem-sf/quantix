@@ -2,6 +2,7 @@ use std::{
     ffi::OsString,
     fs, io,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -14,13 +15,19 @@ use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 
 use crate::{
-    application_settings::{
-        codex_connection_version, codex_failure_connection_status, load_anthropic_api_key,
-        load_gemini_api_key, save_codex_connection_status, save_live_connection,
-        AiExecutionSelection, AiProviderKind, ProviderConnectionStatus, ProviderConnectionView,
-        ProviderLoginMethod, ProviderLoginView, ProviderModelOption, ProviderReasoningOption,
-        ProviderReasoningSelection, CODEX_CONNECTION_ID,
+    agent_backend::{
+        execute_provider_turn as execute_chatgpt_backend_turn, BackendRequest, ReqwestBackend,
+        StreamEvent, ToolRejection, TurnContext, UsageSnapshot, BACKEND_URL,
     },
+    application_settings::{
+        chatgpt_connection_readiness, codex_connection_version, codex_failure_connection_status,
+        load_anthropic_api_key, load_gemini_api_key, save_codex_connection_status,
+        save_live_connection, AiExecutionSelection, AiProviderKind, ProviderConnectionStatus,
+        ProviderConnectionView, ProviderLoginMethod, ProviderLoginView, ProviderModelOption,
+        ProviderReasoningOption, ProviderReasoningSelection, CODEX_CONNECTION_ID,
+    },
+    chatgpt_login::PRODUCTION_ISSUER,
+    chatgpt_oauth::TokenClient,
     process_supervisor::{ProcessError, ProcessSpec, ProcessTermination, SupervisedConversation},
     tender_store::{
         lock_mutex_with_check, require_setup, BasisOfEstimateReviewResult,
@@ -56,8 +63,9 @@ pub(crate) mod permissions;
 pub(crate) use bootstrap_profile::{bootstrap_profile, bootstrap_task};
 pub(crate) use codex_actor::{valid_login_url, CodexProvider};
 use codex_protocol::{
-    execute_typed_tool, outcome_unknown, process_failure, protocol_failure, read_expected_response,
-    typed_tool_arguments_are_valid, typed_tool_is_known, write_rpc,
+    dynamic_tool_specs, execute_typed_tool, outcome_unknown, process_failure, protocol_failure,
+    provider_instruction_bundle, read_expected_response, typed_tool_arguments_are_valid,
+    typed_tool_is_known, validate_candidate, write_rpc,
 };
 use permissions::permission_duration;
 
@@ -132,22 +140,6 @@ impl AgentProvider {
     pub(crate) async fn delete_thread(&self, thread_ref: String) -> Result<(), ProviderFailure> {
         match self {
             Self::Codex(provider) => provider.delete_thread(thread_ref).await,
-        }
-    }
-
-    async fn run_turn(
-        &self,
-        prepared: PreparedAgentRun,
-        operation_limit: Duration,
-        cancellation: CancellationToken,
-        callbacks: RunCallbacks,
-    ) -> ProviderExecution {
-        match self {
-            Self::Codex(provider) => {
-                provider
-                    .run_turn(prepared, operation_limit, cancellation, callbacks)
-                    .await
-            }
         }
     }
 
@@ -786,18 +778,6 @@ impl PendingProviderEvent {
             opaque_reference: opaque_reference.map(str::to_owned),
         }
     }
-
-    fn with_control_denial(
-        mut self,
-        correlation_id: String,
-        request_fingerprint: String,
-        denial_reason: PermissionDenialReason,
-    ) -> Self {
-        self.correlation_id = Some(correlation_id);
-        self.request_fingerprint = Some(request_fingerprint);
-        self.denial_reason = Some(denial_reason);
-        self
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -832,7 +812,6 @@ type TurnAcceptedCallback = dyn FnOnce(&str) -> Result<(), ProviderFailure> + Se
 type TurnRequestedCallback = dyn FnOnce() -> Result<(), ProviderFailure> + Send;
 type TurnEventCallback =
     dyn FnMut(&PendingProviderEvent, &ProviderUsage) -> Result<(), ProviderFailure> + Send;
-type TurnDeniedCallback = dyn FnMut(&PendingProviderEvent) -> Result<(), ProviderFailure> + Send;
 type TurnToolCallCallback =
     dyn FnMut(&str, &str, &Value) -> Result<Option<String>, ProviderFailure> + Send;
 type ThreadArchivedCallback = dyn FnOnce(&str) -> Result<(), ProviderFailure> + Send;
@@ -844,7 +823,6 @@ struct RunCallbacks {
     on_requested: Box<TurnRequestedCallback>,
     on_accepted: Box<TurnAcceptedCallback>,
     on_event: Box<TurnEventCallback>,
-    on_denied: Box<TurnDeniedCallback>,
     on_tool_call: Box<TurnToolCallCallback>,
 }
 
@@ -2703,93 +2681,6 @@ async fn execute_provider_turn_from(
         Ok(duration) if !duration.is_zero() => duration,
         _ => return failed_execution(permission_failure(), started),
     };
-    let provider = if prepared.provider_selection.provider == AiProviderKind::Codex {
-        let mut provider_slot = host.agent_provider().lock().await;
-        let provider = match provider_slot.take() {
-            Some(provider) => match provider.refresh_readiness().await {
-                Ok(_) => provider,
-                Err(failure)
-                    if failure.category == ProviderFailureCategory::ProcessFailed
-                        && failure.retry_safe =>
-                {
-                    host.record_application_diagnostic(
-                        crate::DiagnosticSeverity::Info,
-                        crate::DiagnosticComponent::Provider,
-                        "provider_readiness_retry_started",
-                        "Provider readiness retry started after a retry-safe process failure",
-                        Some(format!("provider-turn-{}", prepared.run_id)),
-                        None,
-                        Some("started"),
-                        Some(format!("{:?}", failure.category)),
-                    );
-                    match AgentProvider::codex_readiness(
-                        host.process_supervisor(),
-                        host.runtime_layout().codex_executable(),
-                        host.application_home(),
-                        cancellation.clone(),
-                    )
-                    .await
-                    {
-                        Ok(provider) => {
-                            host.record_application_diagnostic(
-                                crate::DiagnosticSeverity::Info,
-                                crate::DiagnosticComponent::Provider,
-                                "provider_readiness_retry_completed",
-                                "Provider readiness retry completed",
-                                Some(format!("provider-turn-{}", prepared.run_id)),
-                                None,
-                                Some("completed"),
-                                None,
-                            );
-                            provider
-                        }
-                        Err(failure) => {
-                            host.record_application_diagnostic(
-                                crate::DiagnosticSeverity::Error,
-                                crate::DiagnosticComponent::Provider,
-                                "provider_readiness_retry_failed",
-                                "Provider readiness retry failed",
-                                Some(format!("provider-turn-{}", prepared.run_id)),
-                                None,
-                                Some("failed"),
-                                Some(format!("{:?}", failure.category)),
-                            );
-                            return failed_execution(failure, started);
-                        }
-                    }
-                }
-                Err(failure) => {
-                    return failed_execution(failure, started);
-                }
-            },
-            None => {
-                match AgentProvider::codex_readiness(
-                    host.process_supervisor(),
-                    host.runtime_layout().codex_executable(),
-                    host.application_home(),
-                    cancellation.clone(),
-                )
-                .await
-                {
-                    Ok(provider) => provider,
-                    Err(failure) => return failed_execution(failure, started),
-                }
-            }
-        };
-        let provider = provider.clone();
-        *provider_slot = Some(provider.clone());
-        Some(provider)
-    } else {
-        None
-    };
-    if let Some(provider) = provider.as_ref() {
-        if let Err(failure) = provider_connection_readiness(&provider.connection_snapshot()) {
-            return failed_execution(failure, started);
-        }
-    }
-    if let Some(execution) = cancellation_checkpoint(store, prepared, &cancellation, started) {
-        return execution;
-    }
     let archive_store = Arc::clone(store);
     let archive_prepared = prepared.clone();
     let thread_store = Arc::clone(store);
@@ -2798,12 +2689,10 @@ async fn execute_provider_turn_from(
     let checkpoint_store = Arc::clone(store);
     let event_store = Arc::clone(store);
     let event_host = host.clone();
-    let denial_store = Arc::clone(store);
     let tool_store = Arc::clone(store);
     let requested_run_id = prepared.run_id.clone();
     let run_id = prepared.run_id.clone();
     let event_run_id = prepared.run_id.clone();
-    let denial_run_id = prepared.run_id.clone();
     let tool_run_id = prepared.run_id.clone();
     let tool_prepared = prepared.clone();
     let callbacks = RunCallbacks {
@@ -2841,13 +2730,6 @@ async fn execute_provider_turn_from(
                 .lock()
                 .map_err(|_| outcome_unknown())?
                 .checkpoint_agent_provider_event(&event_run_id, event, usage)
-                .map_err(|_| outcome_unknown())
-        }),
-        on_denied: Box::new(move |event| {
-            denial_store
-                .lock()
-                .map_err(|_| outcome_unknown())?
-                .checkpoint_agent_control_denial(&denial_run_id, event)
                 .map_err(|_| outcome_unknown())
         }),
         on_tool_call: Box::new(move |correlation_id, tool_name, arguments| {
@@ -2901,11 +2783,16 @@ async fn execute_provider_turn_from(
     }
     let mut execution = match prepared.provider_selection.provider {
         AiProviderKind::Codex => {
-            provider
-                .as_ref()
-                .expect("Codex provider initialized above")
-                .run_turn(prepared.clone(), operation_limit, cancellation, callbacks)
-                .await
+            chatgpt_provider_turn(
+                host,
+                store,
+                prepared.clone(),
+                operation_limit,
+                cancellation,
+                callbacks,
+                started,
+            )
+            .await
         }
         AiProviderKind::Anthropic => {
             let api_key = match load_anthropic_api_key() {
@@ -2939,31 +2826,6 @@ async fn execute_provider_turn_from(
     host.observe_provider_usage(&execution.usage);
     execution.usage.elapsed_milliseconds =
         Some(started.elapsed().as_millis().try_into().unwrap_or(u64::MAX));
-    if let Some(provider) = provider.filter(AgentProvider::is_closed) {
-        let mut provider_slot = host.agent_provider().lock().await;
-        let removed = provider_slot
-            .as_ref()
-            .is_some_and(|current| current.same_instance(&provider) && current.is_closed());
-        if removed {
-            *provider_slot = None;
-        }
-        drop(provider_slot);
-        if removed {
-            host.record_application_diagnostic(
-                crate::DiagnosticSeverity::Info,
-                crate::DiagnosticComponent::Process,
-                "provider_process_cleanup_completed",
-                "Closed provider process was removed from the active supervisor slot",
-                Some(format!("provider-turn-{}", prepared.run_id)),
-                None,
-                Some("completed"),
-                None,
-            );
-            let (status, summary) =
-                codex_failure_connection_status(ProviderFailureCategory::ProcessFailed);
-            let _ = save_codex_connection_status(host.application_home(), status, summary);
-        }
-    }
     execution
 }
 
@@ -3059,6 +2921,340 @@ fn failed_execution(failure: ProviderFailure, started: Instant) -> ProviderExecu
         },
         failure: Some(failure),
         candidate_payload_json: None,
+    }
+}
+
+fn chatgpt_failure_execution(
+    thread_ref: Option<String>,
+    turn_ref: Option<String>,
+    failure: ProviderFailure,
+    started: Instant,
+) -> ProviderExecution {
+    let state = match failure.category {
+        ProviderFailureCategory::OutcomeUnknown => AgentRunState::Indeterminate,
+        ProviderFailureCategory::Interrupted => AgentRunState::Interrupted,
+        _ => AgentRunState::Failed,
+    };
+    let summary = match state {
+        AgentRunState::Indeterminate => "Provider Turn outcome is indeterminate",
+        AgentRunState::Interrupted => "Provider Turn interrupted",
+        _ => "Provider Turn failed",
+    };
+    ProviderExecution {
+        state,
+        provider_thread_ref: thread_ref.clone(),
+        provider_turn_ref: turn_ref.clone(),
+        events: vec![PendingProviderEvent::new(
+            ProviderEventKind::Terminal,
+            summary,
+            turn_ref.as_deref(),
+        )],
+        usage: ProviderUsage {
+            elapsed_milliseconds: Some(
+                started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+            ),
+            ..ProviderUsage::default()
+        },
+        failure: Some(failure),
+        candidate_payload_json: None,
+    }
+}
+
+fn epoch_milliseconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as u64)
+}
+
+fn merge_usage_snapshot(usage: &mut ProviderUsage, snapshot: &UsageSnapshot) {
+    usage.input_tokens = Some(usage.input_tokens.unwrap_or(0) + snapshot.input_tokens);
+    usage.output_tokens = Some(usage.output_tokens.unwrap_or(0) + snapshot.output_tokens);
+    usage.total_tokens = Some(usage.total_tokens.unwrap_or(0) + snapshot.total_tokens);
+    usage.cached_input_tokens =
+        Some(usage.cached_input_tokens.unwrap_or(0) + snapshot.cached_input_tokens.unwrap_or(0));
+    if snapshot.reasoning_output_tokens.is_some() {
+        usage.reasoning_output_tokens = Some(
+            usage.reasoning_output_tokens.unwrap_or(0)
+                + snapshot.reasoning_output_tokens.unwrap_or(0),
+        );
+    }
+}
+
+/// Drives one Codex-provider run against the Quantix-owned ChatGPT backend.
+/// Connection readiness comes from the stored token connection (refreshing an
+/// expired one through the issuer), and Typed Tool calls are authorized by the
+/// run's Permission Grant exactly like the previous control-request path.
+///
+/// Request mapping from the prepared run: the provider instruction bundle
+/// becomes `instructions`, Typed Tool specs become `tools`, and the Tender
+/// Task objective becomes the single user input item. Unlike the Codex
+/// app-server path, Data View payloads are not inlined into the request text
+/// (they remain materialized workspace inputs referenced by the bundle), the
+/// output contract is enforced by candidate validation instead of a wire
+/// `outputSchema` field, and the run id doubles as the session identity.
+async fn chatgpt_provider_turn(
+    host: &QuantixHost,
+    store: &Arc<Mutex<TenderStore>>,
+    prepared: PreparedAgentRun,
+    operation_limit: Duration,
+    cancellation: CancellationToken,
+    callbacks: RunCallbacks,
+    started: Instant,
+) -> ProviderExecution {
+    let RunCallbacks {
+        on_thread_archived,
+        on_thread_established,
+        on_requested,
+        on_accepted,
+        mut on_event,
+        on_tool_call: _,
+    } = callbacks;
+    let mut on_accepted = Some(on_accepted);
+    let home = host.application_home().to_path_buf();
+    let readiness = tokio::task::spawn_blocking(move || {
+        chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, epoch_milliseconds())
+    })
+    .await;
+    let connection = match readiness {
+        Ok(Ok(connection)) => connection,
+        Ok(Err(failure)) => return failed_execution(failure, started),
+        Err(_) => return failed_execution(process_failure(false), started),
+    };
+    if let Some(archived) = prepared.provider_thread_to_archive.as_deref() {
+        if let Err(failure) = on_thread_archived(archived) {
+            return failed_execution(failure, started);
+        }
+    }
+    let resumed = prepared.provider_thread_ref.is_some();
+    let thread_ref = prepared
+        .provider_thread_ref
+        .clone()
+        .unwrap_or_else(|| format!("chatgpt:{}", prepared.run_id));
+    if let Err(failure) = on_thread_established(&thread_ref, resumed) {
+        return failed_execution(failure, started);
+    }
+    if let Err(failure) = on_requested() {
+        return chatgpt_failure_execution(Some(thread_ref), None, failure, started);
+    }
+    let instruction = match provider_instruction_bundle(&prepared) {
+        Ok(instruction) => instruction,
+        Err(failure) => return chatgpt_failure_execution(Some(thread_ref), None, failure, started),
+    };
+    let tools = match dynamic_tool_specs(&prepared.permission_grant) {
+        Ok(tools) => tools,
+        Err(failure) => return chatgpt_failure_execution(Some(thread_ref), None, failure, started),
+    };
+    let output_schema: Value = match serde_json::from_str(&prepared.task.output_contract_json) {
+        Ok(schema) => schema,
+        Err(_) => {
+            return chatgpt_failure_execution(
+                Some(thread_ref),
+                None,
+                protocol_failure(false),
+                started,
+            )
+        }
+    };
+    let backend = match ReqwestBackend::new(BACKEND_URL) {
+        Ok(backend) => backend,
+        Err(_) => {
+            return chatgpt_failure_execution(
+                Some(thread_ref),
+                None,
+                process_failure(false),
+                started,
+            )
+        }
+    };
+    let token_client = match TokenClient::new(PRODUCTION_ISSUER) {
+        Ok(client) => client,
+        Err(_) => {
+            return chatgpt_failure_execution(
+                Some(thread_ref),
+                None,
+                process_failure(false),
+                started,
+            )
+        }
+    };
+    let request = BackendRequest {
+        model: prepared.provider_selection.model_id.clone(),
+        instructions: instruction,
+        input_items: vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": prepared.task.objective.clone()}],
+        })],
+        tools,
+        previous_response_id: None,
+        store: false,
+        include_reasoning: true,
+        session_id: String::new(),
+    };
+
+    let deadline = started.checked_add(operation_limit).unwrap_or(started);
+    let is_cancelled = || cancellation.is_cancelled() || Instant::now() >= deadline;
+
+    let tool_counter = Arc::new(AtomicU64::new(0));
+    let authorize_store = Arc::clone(store);
+    let authorize_prepared = prepared.clone();
+    let authorize_run_id = prepared.run_id.clone();
+    let authorize_tool = move |tool_name: &str, arguments: &str| -> Result<Value, ToolRejection> {
+        let arguments_value: Value = serde_json::from_str(arguments)
+            .map_err(|_| ToolRejection::NotPermitted("malformed_tool_arguments"))?;
+        if !typed_tool_is_known(tool_name) {
+            return Err(ToolRejection::NotPermitted(
+                PermissionDenialReason::ToolNotGranted.as_str(),
+            ));
+        }
+        let valid = typed_tool_arguments_are_valid(tool_name, &arguments_value)
+            .map_err(|_| ToolRejection::Failed("tool_validation_failed"))?;
+        if !valid {
+            return Err(ToolRejection::NotPermitted(
+                PermissionDenialReason::ToolNotGranted.as_str(),
+            ));
+        }
+        let correlation_id = format!(
+            "chatgpt-tool-{}",
+            tool_counter.fetch_add(1, Ordering::SeqCst)
+        );
+        let authorized = authorize_store
+            .lock()
+            .map_err(|_| ToolRejection::Failed("store_unavailable"))?
+            .authorize_agent_typed_tool(&authorize_run_id, &correlation_id, tool_name)
+            .map_err(|_| ToolRejection::Failed("store_unavailable"))?;
+        if !authorized {
+            return Err(ToolRejection::NotPermitted(
+                PermissionDenialReason::ToolNotGranted.as_str(),
+            ));
+        }
+        let record = |succeeded: bool| -> Result<(), ToolRejection> {
+            authorize_store
+                .lock()
+                .map_err(|_| ToolRejection::Failed("store_unavailable"))?
+                .record_agent_typed_tool_execution(
+                    &authorize_run_id,
+                    &correlation_id,
+                    tool_name,
+                    succeeded,
+                )
+                .map_err(|_| ToolRejection::Failed("audit_unavailable"))
+        };
+        match execute_typed_tool(&authorize_prepared, tool_name, &arguments_value) {
+            Ok(output) => {
+                let payload: Value = serde_json::from_str(&output).unwrap_or(Value::String(output));
+                record(true)?;
+                Ok(payload)
+            }
+            Err(_) => {
+                record(false)?;
+                Err(ToolRejection::Failed("tool_execution_failed"))
+            }
+        }
+    };
+
+    let mut accepted_ref: Option<String> = None;
+    let mut streamed_usage = ProviderUsage::default();
+    let mut final_text: Option<String> = None;
+    let mut persistence_failure: Option<ProviderFailure> = None;
+    let mut sink = |event: StreamEvent| match event {
+        StreamEvent::Completed { response_id, usage } => {
+            merge_usage_snapshot(&mut streamed_usage, &usage);
+            if accepted_ref.is_none() && persistence_failure.is_none() {
+                if let Some(callback) = on_accepted.take() {
+                    match callback(&response_id) {
+                        Ok(()) => accepted_ref = Some(response_id),
+                        Err(failure) => persistence_failure = Some(failure),
+                    }
+                }
+            }
+            if persistence_failure.is_none() {
+                let observed = PendingProviderEvent::new(
+                    ProviderEventKind::UsageObserved,
+                    "ChatGPT usage observed",
+                    None,
+                );
+                if let Err(failure) = on_event(&observed, &streamed_usage) {
+                    persistence_failure = Some(failure);
+                }
+            }
+        }
+        StreamEvent::ItemDone(frame) => {
+            if frame.pointer("/item/type").and_then(Value::as_str) != Some("message") {
+                return;
+            }
+            let mut text = String::new();
+            if let Some(parts) = frame.pointer("/item/content").and_then(Value::as_array) {
+                for part in parts {
+                    if part.get("type").and_then(Value::as_str) == Some("output_text") {
+                        if let Some(chunk) = part.get("text").and_then(Value::as_str) {
+                            text.push_str(chunk);
+                        }
+                    }
+                }
+            }
+            final_text = Some(text);
+        }
+        StreamEvent::ItemAdded(_)
+        | StreamEvent::TextDelta(_)
+        | StreamEvent::FunctionCallDelta { .. }
+        | StreamEvent::FunctionCallDone { .. }
+        | StreamEvent::Errored(_) => {}
+    };
+
+    let turn_context = TurnContext {
+        backend: &backend,
+        auth: &connection,
+        token_client: &token_client,
+        home: host.application_home(),
+        request,
+        session_id: prepared.run_id.clone(),
+        authorize_tool: &authorize_tool,
+        is_cancelled: &is_cancelled,
+        on_event: &mut sink,
+    };
+    let outcome = execute_chatgpt_backend_turn(turn_context).await;
+    if let Some(failure) = persistence_failure {
+        return if accepted_ref.is_some() {
+            indeterminate_execution(&thread_ref, accepted_ref, failure, started)
+        } else {
+            chatgpt_failure_execution(Some(thread_ref), None, failure, started)
+        };
+    }
+    match outcome {
+        Ok(result) => {
+            let candidate = validate_candidate(
+                final_text.as_deref(),
+                &output_schema,
+                prepared
+                    .task
+                    .resource_budget
+                    .output_bytes
+                    .min(PROVIDER_OUTPUT_LIMIT as u32),
+            );
+            match candidate {
+                Ok(candidate) => {
+                    let turn_ref = accepted_ref.clone();
+                    ProviderExecution {
+                        state: AgentRunState::Completed,
+                        provider_thread_ref: Some(thread_ref),
+                        provider_turn_ref: accepted_ref,
+                        events: vec![PendingProviderEvent::new(
+                            ProviderEventKind::Terminal,
+                            "Provider Turn completed",
+                            turn_ref.as_deref(),
+                        )],
+                        usage: result.usage,
+                        failure: None,
+                        candidate_payload_json: Some(candidate),
+                    }
+                }
+                Err(failure) => {
+                    chatgpt_failure_execution(Some(thread_ref), accepted_ref, failure, started)
+                }
+            }
+        }
+        Err(failure) => chatgpt_failure_execution(Some(thread_ref), accepted_ref, failure, started),
     }
 }
 
@@ -3239,17 +3435,6 @@ fn subscription_failure() -> ProviderFailure {
     )
 }
 
-fn turn_acceptance_unknown() -> ProviderFailure {
-    ProviderFailure::new(
-        ProviderFailureCategory::OutcomeUnknown,
-        false,
-        "Resolve the quarantined Agent Run before retrying.",
-        Some(
-            "The Provider Turn may have started, but its identity and outcome could not be established.",
-        ),
-    )
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[doc(hidden)]
 pub enum CodexReadiness {
@@ -3259,7 +3444,10 @@ pub enum CodexReadiness {
     Unavailable,
 }
 
-fn chatgpt_subscription_is_supported(account_type: Option<&str>, plan_type: Option<&str>) -> bool {
+pub(crate) fn chatgpt_subscription_is_supported(
+    account_type: Option<&str>,
+    plan_type: Option<&str>,
+) -> bool {
     account_type == Some("chatgpt")
         && plan_type.is_some_and(|plan| SUPPORTED_CHATGPT_PLANS.contains(&plan))
 }
@@ -3706,20 +3894,6 @@ fn restricted_codex_arguments() -> Vec<OsString> {
         arguments.push(OsString::from(feature));
     }
     arguments
-}
-
-fn stream_provider_events(
-    execution: &mut ProviderExecution,
-    on_event: &mut TurnEventCallback,
-) -> Result<(), ProviderFailure> {
-    let events = std::mem::take(&mut execution.events);
-    for event in events {
-        if let Err(failure) = on_event(&event, &execution.usage) {
-            execution.events.push(event);
-            return Err(failure);
-        }
-    }
-    Ok(())
 }
 
 fn valid_identifier(value: &str) -> bool {

@@ -829,14 +829,10 @@ impl QuantixHost {
     async fn probe_runtime(&self, cancellation: CancellationToken) -> RuntimeReadiness {
         let layout = self.runtime_layout();
         let uv = layout.uv_executable();
-        let mut missing = Vec::new();
         if !is_real_file(&uv) {
-            missing.push(RuntimeReadinessIssue::UvExecutableMissing);
-        }
-        if !missing.is_empty() {
             return RuntimeReadiness::with_versions(
                 RuntimeReadinessState::MissingExecutable,
-                missing,
+                vec![RuntimeReadinessIssue::UvExecutableMissing],
                 &RuntimeVersions::default(),
                 false,
             );
@@ -850,9 +846,9 @@ impl QuantixHost {
             );
         }
 
+        // The bundled Codex artifact is no longer executed or gated here; its
+        // version is pinned by the hash-validated provenance manifest.
         let mut versions = RuntimeVersions {
-            // Codex is an AI provider, not a local document-processing tool. Its
-            // account/session readiness is inspected by the provider layer.
             codex: Some(CODEX_VERSION.to_owned()),
             uv: probe_version(
                 self.process_supervisor(),
@@ -864,14 +860,10 @@ impl QuantixHost {
             .ok(),
             ocr: None,
         };
-        let mut incompatible = Vec::new();
         if versions.uv.as_deref() != Some(UV_VERSION) {
-            incompatible.push(RuntimeReadinessIssue::UvVersionIncompatible);
-        }
-        if !incompatible.is_empty() {
             return RuntimeReadiness::with_versions(
                 RuntimeReadinessState::IncompatibleVersion,
-                incompatible,
+                vec![RuntimeReadinessIssue::UvVersionIncompatible],
                 &versions,
                 false,
             );
@@ -949,10 +941,8 @@ impl QuantixHost {
         }
         self.activate_runtime_preparation_step(RuntimePreparationStep::ValidateResources);
         let layout = self.runtime_layout();
-        let codex = layout.codex_executable();
         let uv = layout.uv_executable();
         for resource in [
-            &codex,
             &uv,
             &layout.ocr_project().join("pyproject.toml"),
             &layout.ocr_project().join("uv.lock"),
@@ -970,7 +960,6 @@ impl QuantixHost {
         self.activate_runtime_preparation_step(RuntimePreparationStep::VerifyBundledTools);
         // Do not execute or authenticate through Codex while preparing local
         // document tools. Provider discovery and account checks are separate.
-        let codex_version = CODEX_VERSION.to_owned();
         let uv_version = probe_version(
             self.process_supervisor(),
             self.application_home(),
@@ -1107,7 +1096,7 @@ impl QuantixHost {
             &staged_models,
             &environment,
             &layout.ocr_project(),
-            &codex_version,
+            CODEX_VERSION,
             &uv_version,
             &ocr_version,
         )?;
@@ -1118,7 +1107,7 @@ impl QuantixHost {
         runtime_fixture_trace("runtime readiness published");
         candidate.commit()?;
         Ok(RuntimeVersions {
-            codex: Some(codex_version),
+            codex: Some(CODEX_VERSION.to_owned()),
             uv: Some(uv_version),
             ocr: Some(ocr_version),
         })

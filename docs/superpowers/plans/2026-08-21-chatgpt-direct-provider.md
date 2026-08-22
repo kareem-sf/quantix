@@ -60,8 +60,10 @@
 fn base64url_roundtrips_and_avoids_padding() {
     let input = b"subjects?_";
     let encoded = super::base64url_encode(input);
-    assert_eq!(encoded, "c3ViamVjdHM_X18"); // no '+', '/', '='
+    assert_eq!(encoded, "c3ViamVjdHM_Xw"); // no '+', '/', '='
     assert_eq!(super::base64url_decode(&encoded).unwrap(), input);
+    // second remainder path (len % 4 == 3)
+    assert_eq!(super::base64url_encode(b"subjects?__"), "c3ViamVjdHM_X18");
 }
 
 #[test]
@@ -83,7 +85,7 @@ fn state_is_unique_and_urlsafe() {
 ```
 
 - [ ] **Step 2: Run** `cargo test -p quantix --lib chatgpt_oauth` → expect FAIL (unresolved)
-- [ ] **Step 3: Implement** — RFC 4648 base64url alphabet without padding (`+`→`-`, `/`→`_`, strip `=`); decode reverses with strict length checks; `generate_pkce` fills 43 bytes via `getrandom::fill` then maps each byte modulo 64 through the unreserved charset before hashing (hash the *charset-encoded verifier string*, matching OpenCode which hashes the ASCII verifier).
+- [ ] **Step 3: Implement** using the existing `base64 = "0.22.1"` dependency (`engine::general_purpose::URL_SAFE_NO_PAD`, strict decode, `DecodeError` mapped to the codec error); `generate_pkce` fills 43 bytes via `getrandom::fill` then maps each byte modulo 64 through the 64-char subset `[A-Za-z0-9-_]` of the unreserved charset before hashing (hash the *charset-encoded verifier string*).
 - [ ] **Step 4: Run** again → PASS
 - [ ] **Step 5: Commit** `feat: add chatgpt oauth crypto primitives`
 

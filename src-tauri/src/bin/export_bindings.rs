@@ -3,13 +3,14 @@ use quantix_lib::{
     AgentRunSummary, AiExecutionApproval, AiExecutionSelection, AiProviderKind,
     AppearancePreference, ApplicationDiagnostics, ApplicationSettingsView, ApplicationStorageFacts,
     ApproveSubmissionReleaseCommand, BootstrapRole, CancelPackageIntakeCommand,
-    CancelProviderLoginCommand, CodexProductionAssuranceEvidence,
-    ConfirmAiExecutionSelectionCommand, ConnectAnthropicCommand, ConnectGeminiCommand,
-    CreatePortableTenderArchiveCommand, DeepDiagnosticsSession, DeletionReceipt,
-    DiagnosticComponent, DiagnosticCorrelation, DiagnosticEvent, DiagnosticHealth, DiagnosticScope,
-    DiagnosticSeverity, DiagnosticSupportBundleResult, DiagnosticTimelineEvent,
-    DiagnosticTimelineFilter, DiagnosticTimelinePage, DiagnosticsDeepState, DiagnosticsDeepStatus,
-    DiagnosticsStatus, DiagnosticsStatusState, DisconnectAiProviderCommand, ErasedTenderCopyClass,
+    CancelProviderLoginCommand, ChatGptConnectionState, ChatGptConnectionStatus,
+    ChatGptPortHolders, CodexProductionAssuranceEvidence, ConfirmAiExecutionSelectionCommand,
+    ConnectAnthropicCommand, ConnectGeminiCommand, CreatePortableTenderArchiveCommand,
+    DeepDiagnosticsSession, DeletionReceipt, DiagnosticComponent, DiagnosticCorrelation,
+    DiagnosticEvent, DiagnosticHealth, DiagnosticScope, DiagnosticSeverity,
+    DiagnosticSupportBundleResult, DiagnosticTimelineEvent, DiagnosticTimelineFilter,
+    DiagnosticTimelinePage, DiagnosticsDeepState, DiagnosticsDeepStatus, DiagnosticsStatus,
+    DiagnosticsStatusState, DisconnectAiProviderCommand, ErasedTenderCopyClass,
     EvaluatePublicReleaseGateCommand, ExportDiagnosticsSupportBundleCommand,
     ExportReleaseCopyCommand, GeneralApplicationPreferences, ImportPortableTenderArchiveCommand,
     InspectDiagnosticTimelineCommand, InspectDiagnosticsStatusCommand,
@@ -35,6 +36,7 @@ use quantix_lib::{
     RuntimePreparationActivityStatus, RuntimePreparationProgress, RuntimePreparationStatus,
     RuntimePreparationStep, RuntimeReadiness, RuntimeReadinessIssue, RuntimeReadinessState,
     SearchManagerWorkspaceCommand, SelectManagerWorkspaceTenderCommand, SetupIssue,
+    StartChatGptLoginError, StartChatGptLoginResult, StartChatGptLoginStatus,
     StartManagerTenderCommand, StartProviderLoginCommand, StartTenderDeepDiagnosticsCommand,
     StopTenderDeepDiagnosticsCommand, SubmissionReleaseApproval, SubmissionReleaseInspection,
     SubmissionReleaseState, TechnicalRiskAcceptance, TenderAiExecutionBinding,
@@ -205,6 +207,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ExportDiagnosticsSupportBundleCommand::export_all(&config)?;
     RendererDiagnosticKind::export_all(&config)?;
     RecordRendererDiagnosticCommand::export_all(&config)?;
+    ChatGptConnectionState::export_all(&config)?;
+    ChatGptConnectionStatus::export_all(&config)?;
+    ChatGptPortHolders::export_all(&config)?;
+    StartChatGptLoginError::export_all(&config)?;
+    StartChatGptLoginResult::export_all(&config)?;
+    StartChatGptLoginStatus::export_all(&config)?;
     AgentRunInspection::export_all(&config)?;
     AgentRunSummary::export_all(&config)?;
     RuntimePreparationActivity::export_all(&config)?;

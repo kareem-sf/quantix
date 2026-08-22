@@ -9,9 +9,10 @@ use ts_rs::TS;
 
 use crate::{
     agent_runtime::{
-        inspect_anthropic_connection, inspect_gemini_connection, valid_login_url, AgentProvider,
-        ProviderFailure, ProviderFailureCategory, CODEX_VERSION,
+        chatgpt_subscription_is_supported, inspect_anthropic_connection, inspect_gemini_connection,
+        valid_login_url, AgentProvider, ProviderFailure, ProviderFailureCategory, CODEX_VERSION,
     },
+    chatgpt_oauth::{load, needs_refresh, save, LoadState, StoredConnection, TokenClient},
     setup::INSTALLATION_SCHEMA_VERSION,
     tender_store::{TenderCommandError, TenderErrorCode, TenderId, TENDER_SCHEMA_VERSION},
     QuantixHost,
@@ -208,6 +209,7 @@ pub struct ApplicationSettingsView {
     pub ai_execution_approval: Option<AiExecutionApproval>,
     pub provider_connections: Vec<ProviderConnectionView>,
     pub active_provider_login: Option<ProviderLoginView>,
+    pub chatgpt: crate::chatgpt_login::ChatGptConnectionStatus,
     pub storage: ApplicationStorageFacts,
     pub diagnostics: ApplicationDiagnostics,
 }
@@ -1037,6 +1039,58 @@ pub(crate) fn codex_failure_connection_status(
     }
 }
 
+pub(crate) fn chatgpt_authentication_failure() -> ProviderFailure {
+    ProviderFailure::new(
+        ProviderFailureCategory::AuthenticationRequired,
+        true,
+        "Connect your ChatGPT subscription in Settings before retrying.",
+        Some("No usable ChatGPT connection is stored."),
+    )
+}
+
+pub(crate) fn chatgpt_subscription_failure() -> ProviderFailure {
+    ProviderFailure::new(
+        ProviderFailureCategory::SubscriptionRequired,
+        true,
+        "Connect an eligible ChatGPT subscription in Settings before retrying.",
+        Some("The connected ChatGPT account is not an eligible subscription."),
+    )
+}
+
+/// Connection readiness for the Quantix-owned ChatGPT provider: a usable
+/// stored token connection whose `plan_type` claim names an eligible ChatGPT
+/// plan. An expired connection is refreshed through the issuer once; a failed
+/// refresh surfaces as `AuthenticationRequired`.
+pub(crate) fn chatgpt_connection_readiness(
+    application_home: &Path,
+    issuer: &str,
+    now_ms: u64,
+) -> Result<StoredConnection, ProviderFailure> {
+    let mut connection = match load(application_home) {
+        LoadState::Connected(connection) => *connection,
+        LoadState::Absent | LoadState::Unusable => return Err(chatgpt_authentication_failure()),
+    };
+    if !chatgpt_subscription_is_supported(Some("chatgpt"), connection.plan_type.as_deref()) {
+        return Err(chatgpt_subscription_failure());
+    }
+    if needs_refresh(&connection, now_ms) {
+        let client = TokenClient::new(issuer).map_err(|_| chatgpt_authentication_failure())?;
+        let issued = client
+            .refresh(&connection.refresh_token)
+            .map_err(|_| chatgpt_authentication_failure())?;
+        connection = StoredConnection {
+            access_token: issued.access_token,
+            refresh_token: issued.refresh_token,
+            id_token: issued.id_token,
+            expires_at_ms: now_ms.saturating_add(issued.expires_in_secs.saturating_mul(1_000)),
+            account_id: connection.account_id,
+            plan_type: connection.plan_type,
+        };
+        save(application_home, &connection).map_err(|_| chatgpt_authentication_failure())?;
+    }
+    Ok(connection)
+}
+
 /// Returns the application-wide selection that should seed a new Tender.
 /// A missing selection is intentional and represents a local-only Tender
 /// until the Engineer chooses and approves an AI destination.
@@ -1472,7 +1526,7 @@ pub(crate) fn seed_runtime_fixture_ai_selection(
     transaction.commit().map_err(settings_store_error)
 }
 
-fn load_application_settings(
+pub(crate) fn load_application_settings(
     application_home: &Path,
 ) -> Result<ApplicationSettingsView, TenderCommandError> {
     let database = settings_connection(application_home)?;
@@ -1515,6 +1569,7 @@ fn load_application_settings(
         ai_execution_approval: settings.ai_execution_approval,
         provider_connections,
         active_provider_login: None,
+        chatgpt: crate::chatgpt_login::chatgpt_connection_status(application_home),
         storage: ApplicationStorageFacts {
             application_home: application_home.to_string_lossy().into_owned(),
             tender_backups_are_preserved: true,
@@ -1740,4 +1795,213 @@ fn settings_json_error(_: serde_json::Error) -> TenderCommandError {
 
 pub(crate) fn codex_connection_version() -> String {
     CODEX_VERSION.to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use crate::chatgpt_login::PRODUCTION_ISSUER;
+
+    const ISSUER_BODY: &str = r#"{"access_token":"at-new","refresh_token":"rt-new","id_token":"idt-new","expires_in":3600}"#;
+
+    fn temp_home(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("quantix-settings-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn stored_connection(expires_at_ms: u64, plan_type: Option<&str>) -> StoredConnection {
+        StoredConnection {
+            access_token: "at-current".to_owned(),
+            refresh_token: "rt-current".to_owned(),
+            id_token: "idt-current".to_owned(),
+            expires_at_ms,
+            account_id: "acc-77".to_owned(),
+            plan_type: plan_type.map(str::to_owned),
+        }
+    }
+
+    fn mock_issuer(body: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let bodies: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let shared = Arc::clone(&bodies);
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                if let Some(form) = read_form(&mut stream) {
+                    shared.lock().unwrap().push(form);
+                }
+                write_body(&mut stream, body);
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), bodies)
+    }
+
+    fn read_form(stream: &mut TcpStream) -> Option<String> {
+        let mut raw = Vec::new();
+        let mut chunk = [0u8; 512];
+        loop {
+            if raw.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+            let read = stream.read(&mut chunk).ok()?;
+            if read == 0 {
+                break;
+            }
+            raw.extend_from_slice(&chunk[..read]);
+        }
+        let split = raw.windows(4).position(|window| window == b"\r\n\r\n")?;
+        Some(String::from_utf8_lossy(&raw[split + 4..]).to_string())
+    }
+
+    fn write_body(stream: &mut TcpStream, body: &str) {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.flush();
+    }
+
+    #[test]
+    fn a_fresh_eligible_connection_is_ready_without_contacting_the_issuer() {
+        let home = temp_home("ready");
+        save(&home, &stored_connection(9_999_999, Some("plus"))).unwrap();
+
+        let connection = chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, 1_000_000)
+            .expect("fresh eligible connection is ready");
+
+        assert_eq!(connection.access_token, "at-current");
+        assert_eq!(connection.plan_type.as_deref(), Some("plus"));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn an_expired_connection_refreshes_through_the_issuer_and_persists() {
+        let home = temp_home("refresh-required");
+        save(&home, &stored_connection(1_000_000, Some("team"))).unwrap();
+        let (issuer, bodies) = mock_issuer(ISSUER_BODY);
+
+        let connection = chatgpt_connection_readiness(&home, &issuer, 2_000_000)
+            .expect("expired connection must auto-refresh");
+
+        assert_eq!(connection.access_token, "at-new");
+        assert_eq!(connection.refresh_token, "rt-new");
+        assert_eq!(connection.account_id, "acc-77");
+        assert_eq!(connection.plan_type.as_deref(), Some("team"));
+        assert_eq!(connection.expires_at_ms, 2_000_000 + 3_600_000);
+        let forms = bodies.lock().unwrap();
+        assert_eq!(forms.len(), 1, "exactly one refresh call");
+        assert!(forms[0].contains("grant_type=refresh_token"));
+        drop(forms);
+        match load(&home) {
+            LoadState::Connected(persisted) => {
+                assert_eq!(persisted.refresh_token, "rt-new");
+            }
+            other => panic!("expected persisted refreshed store, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn an_absent_store_requires_authentication() {
+        let home = temp_home("absent");
+
+        let failure = chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, 1_000_000)
+            .expect_err("no store must block readiness");
+
+        assert_eq!(
+            failure.category,
+            ProviderFailureCategory::AuthenticationRequired
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn an_unusable_store_requires_authentication() {
+        let home = temp_home("unusable");
+        std::fs::write(home.join("auth.json"), "<html>garbage</html>").unwrap();
+
+        let failure = chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, 1_000_000)
+            .expect_err("corrupt store must block readiness");
+
+        assert_eq!(
+            failure.category,
+            ProviderFailureCategory::AuthenticationRequired
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn an_ineligible_plan_requires_a_subscription_before_any_refresh() {
+        let home = temp_home("blocked-plan");
+        save(&home, &stored_connection(1_000, Some("free"))).unwrap();
+        let (issuer, bodies) = mock_issuer(ISSUER_BODY);
+
+        let failure = chatgpt_connection_readiness(&home, &issuer, 2_000_000)
+            .expect_err("ineligible plans must not run");
+
+        assert_eq!(
+            failure.category,
+            ProviderFailureCategory::SubscriptionRequired
+        );
+        assert!(
+            bodies.lock().unwrap().is_empty(),
+            "an ineligible plan must not spend a refresh call"
+        );
+        match load(&home) {
+            LoadState::Connected(persisted) => {
+                assert_eq!(persisted.refresh_token, "rt-current", "store untouched");
+            }
+            other => panic!("expected untouched store, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_missing_plan_claim_requires_a_subscription() {
+        let home = temp_home("missing-plan");
+        save(&home, &stored_connection(9_999_999, None)).unwrap();
+
+        let failure = chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, 1_000_000)
+            .expect_err("a missing plan claim must block readiness");
+
+        assert_eq!(
+            failure.category,
+            ProviderFailureCategory::SubscriptionRequired
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_rejected_refresh_requires_authentication_without_clobbering_the_store() {
+        let home = temp_home("rejected-refresh");
+        save(&home, &stored_connection(1_000, Some("plus"))).unwrap();
+        let (issuer, _bodies) = mock_issuer(r#"{"error":"invalid_grant"}"#);
+
+        // The issuer answers HTTP 400 for invalid grants; the mock above always
+        // answers 200 with an unparseable success payload instead, which the
+        // token client also rejects as malformed.
+        let failure = chatgpt_connection_readiness(&home, &issuer, 2_000_000)
+            .expect_err("a failed refresh must block readiness");
+
+        assert_eq!(
+            failure.category,
+            ProviderFailureCategory::AuthenticationRequired
+        );
+        match load(&home) {
+            LoadState::Connected(persisted) => {
+                assert_eq!(persisted.refresh_token, "rt-current", "store preserved");
+            }
+            other => panic!("expected preserved store, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
 }

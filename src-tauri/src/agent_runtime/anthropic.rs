@@ -187,7 +187,6 @@ pub(super) async fn run_turn(
         on_requested,
         on_accepted,
         mut on_event,
-        on_denied: _,
         mut on_tool_call,
     } = callbacks;
     let mut on_accepted = Some(on_accepted);

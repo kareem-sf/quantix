@@ -1,0 +1,5 @@
+data: {"type":"response.created","response":{"id":"resp_fail_1"}}
+
+data: {"type":"response.failed","response":{"id":"resp_fail_1","error":{"code":"server_error"}}}
+
+data: [DONE]

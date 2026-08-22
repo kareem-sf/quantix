@@ -182,7 +182,6 @@ pub(super) async fn run_turn(
         on_requested,
         on_accepted,
         mut on_event,
-        on_denied: _,
         mut on_tool_call,
     } = callbacks;
     if let Some(archive) = prepared.provider_thread_to_archive.as_deref() {

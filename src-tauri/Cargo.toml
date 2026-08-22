@@ -55,13 +55,14 @@ docx-rs = "0.4.22"
 fastembed = { version = "=6.0.0", default-features = false, features = ["ort-download-binaries"] }
 fs4 = "1.1.0"
 garde = { version = "0.23.0", features = ["derive"] }
+getrandom = "0.3"
 infer = "0.19.0"
 jsonschema = { version = "0.40.0", default-features = false }
 jiff = { version = "0.2.35", default-features = false, features = ["std"] }
 keyring = { version = "4.1.6", features = ["v1"] }
 minisign-verify = "=0.2.5"
 processkit = { version = "=3.2.0", default-features = false }
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "query", "rustls"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "query", "rustls", "blocking", "form"] }
 rusqlite = { version = "0.40.1", features = ["backup", "bundled", "limits", "load_extension"] }
 rust_xlsxwriter = "0.93.0"
 rust_decimal = { version = "1.42.1", default-features = false, features = ["std"] }
@@ -95,7 +96,9 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2
 [target.'cfg(windows)'.dependencies]
 junction = { version = "2.0.0", default-features = false }
 windows-permissions = "0.2.4"
-windows = { version = "=0.62.2", features = ["Win32_Storage_FileSystem", "Win32_System_Threading"] }
+# wmi ranges `windows` and `windows-core` independently, so pin its pair to
+# one minor line. Tauri retains its own compatible 0.61 dependency line.
+windows = { version = "=0.62.2", features = ["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
 windows-core = "=0.62.2"
 
 [dev-dependencies]

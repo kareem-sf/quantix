@@ -112,6 +112,7 @@ import type { InspectManagerWorkspaceCommand } from "./bindings/InspectManagerWo
 import type { SearchManagerWorkspaceCommand } from "./bindings/SearchManagerWorkspaceCommand";
 import type { WorkspaceSearchProjection } from "./bindings/WorkspaceSearchProjection";
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
+import type { StartChatGptLoginResult } from "./bindings/StartChatGptLoginResult";
 import type { UpdateGeneralApplicationPreferencesCommand } from "./bindings/UpdateGeneralApplicationPreferencesCommand";
 import type { CancelProviderLoginCommand } from "./bindings/CancelProviderLoginCommand";
 import type { ConnectAnthropicCommand } from "./bindings/ConnectAnthropicCommand";
@@ -379,6 +380,18 @@ export function disconnectAiProvider(
   command: DisconnectAiProviderCommand,
 ): Promise<ApplicationSettingsView> {
   return invoke<ApplicationSettingsView>("disconnect_ai_provider", { command });
+}
+
+export function startChatGptLogin(): Promise<StartChatGptLoginResult> {
+  return invoke<StartChatGptLoginResult>("start_chatgpt_login");
+}
+
+export function cancelChatGptLogin(): Promise<void> {
+  return invoke<void>("cancel_chatgpt_login");
+}
+
+export function disconnectChatGpt(): Promise<ApplicationSettingsView> {
+  return invoke<ApplicationSettingsView>("disconnect_chatgpt");
 }
 
 export function inspectManagerWorkspace(

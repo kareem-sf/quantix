@@ -62,6 +62,7 @@ struct QuantixHostInner {
     provider_cleanup_execution: tokio::sync::Mutex<()>,
     provider_rate_limit: Mutex<Option<ProviderRateLimit>>,
     document_tools_verified: AtomicBool,
+    chatgpt_login_state: Mutex<crate::chatgpt_login::ChatGptLoginFlowState>,
     update_installation_active: AtomicBool,
     diagnostics: DiagnosticsStore,
     renderer_diagnostic_rate: Mutex<(u64, u32)>,
@@ -239,6 +240,9 @@ impl QuantixHost {
                 provider_cleanup_execution: tokio::sync::Mutex::new(()),
                 provider_rate_limit: Mutex::new(None),
                 document_tools_verified: AtomicBool::new(false),
+                chatgpt_login_state: Mutex::new(
+                    crate::chatgpt_login::ChatGptLoginFlowState::default(),
+                ),
                 update_installation_active: AtomicBool::new(false),
                 diagnostics,
                 renderer_diagnostic_rate: Mutex::new((0, 0)),
@@ -491,6 +495,12 @@ impl QuantixHost {
 
     pub(crate) fn provider_cleanup_execution(&self) -> &tokio::sync::Mutex<()> {
         &self.inner.provider_cleanup_execution
+    }
+
+    pub(crate) fn chatgpt_login_state(
+        &self,
+    ) -> &Mutex<crate::chatgpt_login::ChatGptLoginFlowState> {
+        &self.inner.chatgpt_login_state
     }
 
     pub(crate) fn observe_provider_usage(&self, usage: &ProviderUsage) {

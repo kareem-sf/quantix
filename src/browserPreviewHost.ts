@@ -451,6 +451,12 @@ function applicationSettings(): ApplicationSettingsView {
     general_preferences: preferences,
     ai_execution_selection: null,
     ai_execution_approval: null,
+    chatgpt: {
+      state: "absent",
+      account_id: null,
+      plan_type: null,
+      expires_at_ms: null,
+    },
     provider_connections: [],
     active_provider_login: null,
     storage: {

@@ -4005,6 +4005,8 @@ pub enum TenderErrorCode {
     IntegrityFailed,
     InvalidCommand,
     NotFound,
+    OauthAlreadyRunning,
+    OauthPortBlocked,
     OperationTimedOut,
     RecoveryRequired,
     LocalDocumentToolsRequired,
@@ -8073,6 +8075,18 @@ mod tests {
         fn storage_permissions(&self, _path: &Path) -> io::Result<StoragePermissions> {
             Ok(StoragePermissions::Restrictive)
         }
+    }
+
+    #[test]
+    fn oauth_error_codes_serialize_as_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&TenderErrorCode::OauthPortBlocked).expect("serialize code"),
+            r#""oauth_port_blocked""#
+        );
+        assert_eq!(
+            serde_json::to_string(&TenderErrorCode::OauthAlreadyRunning).expect("serialize code"),
+            r#""oauth_already_running""#
+        );
     }
 
     #[test]
