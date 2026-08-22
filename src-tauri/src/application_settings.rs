@@ -14,8 +14,8 @@ use ts_rs::TS;
 use crate::{
     agent_runtime::{ProviderFailure, ProviderFailureCategory},
     chatgpt_oauth::{
-        load, needs_refresh, refresh_connection_unlocked, restore_unlocked,
-        with_connection_mutation, LoadState, StoredConnection, TokenClient,
+        load, needs_refresh, refresh_connection_unlocked, with_connection_mutation, LoadState,
+        StoredConnection, TokenClient,
     },
     setup::INSTALLATION_SCHEMA_VERSION,
     tender_store::{TenderCommandError, TenderErrorCode, TenderId, TENDER_SCHEMA_VERSION},
@@ -325,31 +325,13 @@ impl QuantixHost {
         &self,
         preferred: Option<&AiExecutionSelection>,
     ) -> Result<Option<AiExecutionSelection>, TenderCommandError> {
-        let view = self.refresh_application_settings().await?;
-        let preferred = preferred
-            .cloned()
-            .or_else(|| view.ai_execution_selection.clone());
-        let Some(preferred) = preferred else {
-            return Ok(None);
-        };
-        let Some(approval) = view.ai_execution_approval.as_ref() else {
-            return Ok(None);
-        };
-        let Some(connection) = view
-            .provider_connections
-            .iter()
-            .find(|connection| connection.connection_id == preferred.connection_id)
-        else {
-            return Ok(None);
-        };
-        if !selection_is_supported(connection, &preferred) {
-            return Ok(None);
-        }
-        let selection = selection_with_current_provenance(connection, &preferred)?;
-        if !approval_matches(connection, &selection, approval) {
-            return Ok(None);
-        }
-        Ok(Some(selection))
+        let application_home = self.application_home().to_path_buf();
+        let preferred = preferred.cloned();
+        tokio::task::spawn_blocking(move || {
+            refresh_exact_ai_execution_selection_projection(&application_home, preferred.as_ref())
+        })
+        .await
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
     }
 
     pub(crate) async fn require_current_tender_ai_selection(
@@ -364,10 +346,9 @@ impl QuantixHost {
         let selection = binding
             .selection
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-        if binding.readiness != TenderAiSelectionReadiness::Ready {
-            return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
-        }
-        Ok(selection)
+        self.refresh_exact_ai_execution_selection(Some(&selection))
+            .await?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))
     }
 
     pub fn inspect_tender_ai_execution(
@@ -632,18 +613,101 @@ fn project_chatgpt_connection_readiness_with(
     inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
 ) -> Result<Result<StoredConnection, ProviderFailure>, TenderCommandError> {
     with_connection_mutation(|| {
-        let previous = load(application_home);
-        let readiness = inspect();
-        let projection = match readiness.as_ref() {
-            Ok(connection) => chatgpt_connection_view(connection),
-            Err(failure) => chatgpt_connection_failure_view(failure.category),
-        };
-        if let Err(error) = save_live_connection_unlocked(application_home, &projection) {
-            let _ = restore_unlocked(application_home, &previous);
-            return Err(error);
-        }
-        Ok(readiness)
+        project_chatgpt_connection_readiness_unlocked_with(application_home, inspect)
     })
+}
+
+fn project_chatgpt_connection_readiness_unlocked_with(
+    application_home: &Path,
+    inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
+) -> Result<Result<StoredConnection, ProviderFailure>, TenderCommandError> {
+    let readiness = inspect();
+    let projection = match readiness.as_ref() {
+        Ok(connection) => chatgpt_connection_view(connection),
+        Err(failure) => chatgpt_connection_failure_view(failure.category),
+    };
+    save_live_connection_unlocked(application_home, &projection)?;
+    Ok(readiness)
+}
+
+fn refresh_exact_ai_execution_selection_projection(
+    application_home: &Path,
+    preferred: Option<&AiExecutionSelection>,
+) -> Result<Option<AiExecutionSelection>, TenderCommandError> {
+    with_connection_mutation(|| {
+        let readiness =
+            project_chatgpt_connection_readiness_unlocked_with(application_home, || {
+                chatgpt_connection_readiness_unlocked(
+                    application_home,
+                    crate::chatgpt_login::PRODUCTION_ISSUER,
+                    current_time_ms(),
+                )
+            })?;
+        let Ok(connection) = readiness else {
+            return Ok(None);
+        };
+        exact_approved_selection_unlocked(
+            application_home,
+            &chatgpt_connection_view(&connection),
+            preferred,
+        )
+    })
+}
+
+pub(crate) fn project_approved_chatgpt_connection(
+    application_home: &Path,
+    issuer: &str,
+    now_ms: u64,
+    selection: &AiExecutionSelection,
+) -> Result<StoredConnection, ProviderFailure> {
+    project_approved_chatgpt_connection_with(application_home, selection, || {
+        chatgpt_connection_readiness_unlocked(application_home, issuer, now_ms)
+    })
+}
+
+fn project_approved_chatgpt_connection_with(
+    application_home: &Path,
+    selection: &AiExecutionSelection,
+    inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
+) -> Result<StoredConnection, ProviderFailure> {
+    with_connection_mutation(|| {
+        let readiness =
+            project_chatgpt_connection_readiness_unlocked_with(application_home, inspect)
+                .map_err(|_| connection_task_error())?;
+        let connection = readiness?;
+        let approved = exact_approved_selection_unlocked(
+            application_home,
+            &chatgpt_connection_view(&connection),
+            Some(selection),
+        )
+        .map_err(|_| connection_task_error())?;
+        if approved.as_ref() != Some(selection) {
+            return Err(chatgpt_authentication_failure());
+        }
+        Ok(connection)
+    })
+}
+
+fn exact_approved_selection_unlocked(
+    application_home: &Path,
+    connection: &ProviderConnectionView,
+    preferred: Option<&AiExecutionSelection>,
+) -> Result<Option<AiExecutionSelection>, TenderCommandError> {
+    let database = settings_connection(application_home)?;
+    let settings = load_stored_settings(&database)?;
+    let Some(preferred) = preferred.or(settings.ai_execution_selection.as_ref()) else {
+        return Ok(None);
+    };
+    if settings.ai_execution_selection.as_ref() != Some(preferred)
+        || !selection_is_supported(connection, preferred)
+        || !settings
+            .ai_execution_approval
+            .as_ref()
+            .is_some_and(|approval| approval_matches(connection, preferred, approval))
+    {
+        return Ok(None);
+    }
+    Ok(Some(preferred.clone()))
 }
 
 fn connection_task_error() -> ProviderFailure {
@@ -973,17 +1037,13 @@ fn mutate_ai_execution_selection_projection_with(
     inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
 ) -> Result<ApplicationSettingsView, TenderCommandError> {
     with_connection_mutation(|| {
-        let previous = load(application_home);
         let stored_connection = match inspect() {
             Ok(connection) => connection,
             Err(failure) => {
-                if let Err(error) = save_live_connection_unlocked(
+                save_live_connection_unlocked(
                     application_home,
                     &chatgpt_connection_failure_view(failure.category),
-                ) {
-                    let _ = restore_unlocked(application_home, &previous);
-                    return Err(error);
-                }
+                )?;
                 return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
             }
         };
@@ -991,12 +1051,7 @@ fn mutate_ai_execution_selection_projection_with(
         let selection = match selection_from_command(&connection, command) {
             Ok(selection) => selection,
             Err(error) => {
-                if let Err(projection_error) =
-                    save_live_connection_unlocked(application_home, &connection)
-                {
-                    let _ = restore_unlocked(application_home, &previous);
-                    return Err(projection_error);
-                }
+                save_live_connection_unlocked(application_home, &connection)?;
                 return Err(error);
             }
         };
@@ -1009,36 +1064,13 @@ fn mutate_ai_execution_selection_projection_with(
             data_destination: data_destination(connection.provider).to_owned(),
             approved_at: Timestamp::now().to_string(),
         });
-        if let Err(error) = save_connection_and_selection_unlocked(
+        save_connection_and_selection_unlocked(
             application_home,
             &connection,
             &selection,
             approval,
-        ) {
-            let _ = restore_unlocked(application_home, &previous);
-            return Err(error);
-        }
+        )?;
         load_application_settings(application_home)
-    })
-}
-
-fn selection_with_current_provenance(
-    connection: &ProviderConnectionView,
-    preferred: &AiExecutionSelection,
-) -> Result<AiExecutionSelection, TenderCommandError> {
-    if !selection_is_supported(connection, preferred) {
-        return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
-    }
-    Ok(AiExecutionSelection {
-        connection_id: connection.connection_id.clone(),
-        provider: connection.provider,
-        model_id: preferred.model_id.clone(),
-        reasoning: preferred.reasoning.clone(),
-        catalogue_fetched_at: connection
-            .catalogue_fetched_at
-            .clone()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?,
-        adapter_version: connection.adapter_version.clone(),
     })
 }
 
@@ -1728,6 +1760,120 @@ mod tests {
         );
         assert!(view.ai_execution_selection.is_some());
         assert!(view.ai_execution_approval.is_none());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[tokio::test]
+    async fn stale_cached_tender_readiness_cannot_authorize_a_replacement_account() {
+        let home = initialized_home("stale-tender-ready-account-replacement");
+        let host = crate::QuantixHost::new(&home, &home);
+        let original = StoredConnection {
+            account_id: "account-a".to_owned(),
+            ..stored_connection(9_999_999_999, Some("plus"))
+        };
+        save(&home, &original).unwrap();
+        store_test_approval(
+            &home,
+            &chatgpt_connection_view(&original),
+            "ChatGPT subscription",
+        );
+        let tender = host
+            .create_tender(crate::tender_store::CreateTenderCommand {
+                name: "Cached ready tender".to_owned(),
+            })
+            .unwrap();
+        let tender_id = TenderId::parse(&tender.tender_id).unwrap();
+        assert_eq!(
+            host.inspect_tender_ai_execution(InspectTenderAiExecutionCommand {
+                tender_id: tender.tender_id.clone(),
+            })
+            .unwrap()
+            .readiness,
+            TenderAiSelectionReadiness::Ready
+        );
+
+        let replacement = StoredConnection {
+            account_id: "account-b".to_owned(),
+            ..stored_connection(9_999_999_999, Some("plus"))
+        };
+        save(&home, &replacement).unwrap();
+        save_live_connection(&home, &chatgpt_connection_view(&replacement)).unwrap();
+
+        assert_eq!(
+            host.require_current_tender_ai_selection(&tender_id)
+                .await
+                .unwrap_err()
+                .code,
+            TenderErrorCode::AiProviderRequired
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn provider_turn_rejects_a_selection_approved_for_another_account() {
+        let home = initialized_home("provider-turn-account-selection");
+        let original = StoredConnection {
+            account_id: "account-a".to_owned(),
+            ..stored_connection(9_999_999_999, Some("plus"))
+        };
+        save(&home, &original).unwrap();
+        let selection = store_test_approval(
+            &home,
+            &chatgpt_connection_view(&original),
+            "ChatGPT subscription",
+        );
+        let replacement = StoredConnection {
+            account_id: "account-b".to_owned(),
+            ..stored_connection(9_999_999_999, Some("plus"))
+        };
+        save(&home, &replacement).unwrap();
+
+        let failure =
+            project_approved_chatgpt_connection_with(&home, &selection, || Ok(replacement))
+                .unwrap_err();
+
+        assert_eq!(
+            failure.category,
+            ProviderFailureCategory::AuthenticationRequired
+        );
+        let view = load_application_settings(&home).unwrap();
+        assert_eq!(
+            view.provider_connections[0].account_label.as_deref(),
+            Some("account-b")
+        );
+        assert!(view.ai_execution_approval.is_none());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn projection_failure_never_restores_a_consumed_refresh_token() {
+        let home = initialized_home("projection-failure-forward-only-refresh");
+        let previous = stored_connection(1_000, Some("plus"));
+        save(&home, &previous).unwrap();
+        let database = rusqlite::Connection::open(home.join("installation.sqlite")).unwrap();
+        database
+            .execute("DROP TABLE provider_connections", [])
+            .unwrap();
+        drop(database);
+        let rotated = StoredConnection {
+            access_token: "at-rotated".to_owned(),
+            refresh_token: "rt-rotated".to_owned(),
+            expires_at_ms: 9_999_999_999,
+            ..previous
+        };
+
+        assert!(project_chatgpt_connection_readiness_with(&home, || {
+            crate::chatgpt_oauth::save_unlocked(&home, &rotated).unwrap();
+            Ok(rotated.clone())
+        })
+        .is_err());
+        match load(&home) {
+            LoadState::Connected(connection) => {
+                assert_eq!(connection.access_token, "at-rotated");
+                assert_eq!(connection.refresh_token, "rt-rotated");
+            }
+            other => panic!("rotated connection must remain authoritative, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(&home);
     }
 

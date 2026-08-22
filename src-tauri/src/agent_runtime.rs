@@ -22,8 +22,8 @@ use crate::{
         ReqwestBackend, StreamEvent, ToolRejection, TurnContext, UsageSnapshot, BACKEND_URL,
     },
     application_settings::{
-        project_chatgpt_connection_readiness, AiExecutionSelection, AiProviderKind,
-        ProviderReasoningSelection,
+        project_approved_chatgpt_connection, project_chatgpt_connection_readiness,
+        AiExecutionSelection, AiProviderKind, ProviderReasoningSelection,
     },
     chatgpt_login::PRODUCTION_ISSUER,
     chatgpt_oauth::TokenClient,
@@ -3321,8 +3321,14 @@ async fn chatgpt_provider_turn(
     } = callbacks;
     let mut on_accepted = Some(on_accepted);
     let home = host.application_home().to_path_buf();
+    let approved_selection = prepared.provider_selection.clone();
     let readiness = tokio::task::spawn_blocking(move || {
-        project_chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, epoch_milliseconds())
+        project_approved_chatgpt_connection(
+            &home,
+            PRODUCTION_ISSUER,
+            epoch_milliseconds(),
+            &approved_selection,
+        )
     })
     .await;
     let connection = match readiness {
