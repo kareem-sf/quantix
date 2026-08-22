@@ -1,6 +1,6 @@
 ---
 status: superseded
-superseded_by: 0012-connect-provider-neutral-ai-without-silent-fallback
+superseded_by: 0016-connect-chatgpt-through-quantix-owned-oauth
 ---
 
 # Keep Codex behind a Quantix-owned AI Provider contract
