@@ -1,10 +1,12 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
 } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const host = vi.hoisted(() => ({
@@ -178,6 +180,19 @@ function renderSettings() {
   return rendered;
 }
 
+function ClosableSettings() {
+  const [open, setOpen] = useState(true);
+  return open ? (
+    <ApplicationSettings
+      aiAvailable={false}
+      onAiAvailabilityChange={vi.fn()}
+      onClose={() => setOpen(false)}
+    />
+  ) : (
+    <p>Settings closed</p>
+  );
+}
+
 beforeEach(() => {
   host.refreshApplicationSettings.mockResolvedValue(disconnectedView());
   host.cancelChatGptLogin.mockResolvedValue(undefined);
@@ -189,6 +204,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.clearAllMocks();
 });
@@ -285,6 +301,70 @@ describe("ApplicationSettings ChatGPT connection", () => {
     expect(host.startChatGptDeviceLogin).toHaveBeenCalledTimes(2);
   });
 
+  it("cancels a device initiation owned by Settings when the screen closes, including a late result", async () => {
+    let finishDeviceStart:
+      | ((result: { verification_url: string; user_code: string }) => void)
+      | undefined;
+    host.startChatGptDeviceLogin.mockReturnValue(
+      new Promise<{
+        verification_url: string;
+        user_code: string;
+      }>((resolve) => {
+        finishDeviceStart = resolve;
+      }),
+    );
+    render(<ClosableSettings />);
+    fireEvent.click(screen.getByRole("button", { name: "ChatGPT & Models" }));
+    fireEvent.click(await screen.findByText("Having trouble signing in?"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in on another device" }),
+    );
+    await waitFor(() =>
+      expect(host.startChatGptDeviceLogin).toHaveBeenCalledWith(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to workspace" }));
+    expect(await screen.findByText("Settings closed")).toBeTruthy();
+    expect(host.cancelChatGptLogin).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishDeviceStart?.({
+        verification_url: "https://auth.openai.com/codex/device",
+        user_code: "TOO-LATE",
+      });
+      await Promise.resolve();
+    });
+    expect(host.cancelChatGptLogin).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("TOO-LATE")).toBeNull();
+  });
+
+  it("recovers an orphaned device attempt with a new one-time code", async () => {
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnectedView("awaiting_device"))
+      .mockResolvedValueOnce(disconnectedView("cancelled"))
+      .mockResolvedValue(disconnectedView("awaiting_device"));
+    host.startChatGptDeviceLogin
+      .mockRejectedValueOnce({ code: "oauth_already_running" })
+      .mockResolvedValue({
+        verification_url: "https://auth.openai.com/codex/device",
+        user_code: "NEW-CODE",
+      });
+    renderSettings();
+
+    expect(
+      await screen.findByText(
+        "The previous one-time code is no longer available. Get a new code to continue.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Get a new one-time code" }),
+    );
+
+    expect(await screen.findByText("NEW-CODE")).toBeTruthy();
+    expect(host.cancelChatGptLogin).toHaveBeenCalledWith();
+    expect(host.startChatGptDeviceLogin).toHaveBeenCalledTimes(2);
+  });
+
   it("shows, copies, opens, waits on, and cancels the one-time-code fallback", async () => {
     const open = vi.spyOn(window, "open").mockImplementation(() => null);
     host.startChatGptDeviceLogin.mockResolvedValue({
@@ -361,6 +441,47 @@ describe("ApplicationSettings ChatGPT connection", () => {
     ).toBeTruthy();
   });
 
+  it("keeps login polling single-flight and clears a transient error after recovery", async () => {
+    vi.useFakeTimers();
+    let finishRecovery:
+      ((view: ReturnType<typeof connectedView>) => void) | undefined;
+    const recovering = new Promise<ReturnType<typeof connectedView>>(
+      (resolve) => {
+        finishRecovery = resolve;
+      },
+    );
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(disconnectedView("awaiting_browser"))
+      .mockRejectedValueOnce({ code: "store_unavailable" })
+      .mockReturnValueOnce(recovering);
+    renderSettings();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_200);
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Quantix could not complete this local action",
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_200);
+      await Promise.resolve();
+      vi.advanceTimersByTime(3_600);
+    });
+    expect(host.refreshApplicationSettings).toHaveBeenCalledTimes(3);
+
+    await act(async () => {
+      finishRecovery?.(connectedView(true));
+      await Promise.resolve();
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getAllByText("Connected")).toHaveLength(2);
+  });
+
   it("shows the connected account and plan without exposing expiry", async () => {
     host.refreshApplicationSettings.mockResolvedValue(connectedView(true));
     renderSettings();
@@ -368,6 +489,31 @@ describe("ApplicationSettings ChatGPT connection", () => {
     expect(await screen.findByText("engineer@example.com")).toBeTruthy();
     expect(screen.getByText("plus plan")).toBeTruthy();
     expect(screen.getAllByText("Connected")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/expires|expiry/i);
+  });
+
+  it("explains how to recover when the account is connected but ChatGPT is unavailable", async () => {
+    const unavailable = connectedView(true);
+    host.refreshApplicationSettings.mockResolvedValue({
+      ...unavailable,
+      provider_connections: [
+        {
+          ...readyConnection,
+          status: "temporarily_unavailable",
+          status_summary: "ChatGPT could not load the current model catalogue.",
+        },
+      ],
+    });
+    renderSettings();
+
+    expect(await screen.findByText("ChatGPT needs attention")).toBeTruthy();
+    expect(
+      screen.getByText("ChatGPT could not load the current model catalogue."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/Select Refresh above.*disconnect it and connect again/),
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/expires|expiry/i);
   });

@@ -583,6 +583,23 @@ button {
   color: var(--qx-success);
 }
 
+.application-settings__connection-attention {
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+  border: 1px solid var(--qx-warning);
+  border-radius: 10px;
+  color: var(--qx-warning);
+  background: var(--qx-warning-soft);
+  font-size: 0.8125rem;
+}
+
+.application-settings__connection-attention p,
+.application-settings__connection-attention small {
+  color: var(--qx-text-muted);
+  line-height: 1.5;
+}
+
 .application-settings__active-choice {
   display: flex;
   gap: 11px;
@@ -3655,9 +3672,25 @@ html.quantix-reduced-motion *::after {
   .tender-search > form button,
   .workspace-team__runs li button,
   .agent-workroom__heading button,
+  .application-settings__section-heading button,
+  .application-settings__login-actions button,
+  .application-settings__device-actions button,
+  .application-settings__device-sign-in > button,
+  .application-settings__trouble button,
+  .application-settings__connected-account button,
+  .application-settings__active-choice button,
+  .application-settings__trouble summary,
+  .application-settings__advanced summary,
   .qx-ui-dialog .retention-dialog__actions button {
     border: 1px solid ButtonText !important;
     background: ButtonFace;
+  }
+
+  .application-settings__device-code,
+  .application-settings__connection-attention {
+    border: 1px solid ButtonText !important;
+    color: ButtonText;
+    background: Canvas;
   }
 
   .qx-ui-dialog .retention-dialog__actions button {

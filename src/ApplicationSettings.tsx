@@ -14,7 +14,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { m } from "motion/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { applyGeneralApplicationPreferences } from "./applicationPreferences";
 import { enableAttentionNotifications } from "./applicationNotifications";
@@ -188,14 +188,41 @@ export function ApplicationSettings({
   const [factsBusy, setFactsBusy] = useState(false);
   const [doctor, setDoctor] = useState<QuantixDoctorReport | null>(null);
   const [repairAllOpen, setRepairAllOpen] = useState(false);
+  const mountedRef = useRef(false);
+  const ownedLoginRef = useRef<"browser" | "device" | null>(null);
+  const settingsRequestVersionRef = useRef(0);
+  const loginPollInFlightRef = useRef(false);
+  const settingsMutationInFlightRef = useRef(false);
   const [activeSection, setActiveSection] =
     useState<ApplicationSettingsSection>(initialSection);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      settingsRequestVersionRef.current += 1;
+      if (ownedLoginRef.current) {
+        ownedLoginRef.current = null;
+        void cancelChatGptLogin();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     setActiveSection(initialSection);
   }, [initialSection]);
   const acceptSettings = useCallback(
     (view: ApplicationSettingsView) => {
+      if (!mountedRef.current) return view;
+      if (
+        view.chatgpt?.state === "connected" ||
+        view.chatgpt?.login_phase === "completed" ||
+        view.chatgpt?.login_phase === "failed" ||
+        view.chatgpt?.login_phase === "cancelled"
+      ) {
+        ownedLoginRef.current = null;
+      }
+      setError(null);
       setSettings(view);
       applyGeneralApplicationPreferences(view.general_preferences);
       onPreferencesChange?.(view.general_preferences);
@@ -205,17 +232,42 @@ export function ApplicationSettings({
     [onAiAvailabilityChange, onPreferencesChange],
   );
 
+  const acceptAuthoritativeSettings = useCallback(
+    (view: ApplicationSettingsView) => {
+      settingsRequestVersionRef.current += 1;
+      return acceptSettings(view);
+    },
+    [acceptSettings],
+  );
+
+  const refreshLatestSettings = useCallback(async () => {
+    const requestVersion = ++settingsRequestVersionRef.current;
+    try {
+      const view = await refreshApplicationSettings();
+      if (
+        !mountedRef.current ||
+        requestVersion !== settingsRequestVersionRef.current
+      ) {
+        return null;
+      }
+      return acceptSettings(view);
+    } catch (reason) {
+      if (
+        mountedRef.current &&
+        requestVersion === settingsRequestVersionRef.current
+      ) {
+        setError(settingsError(reason));
+      }
+      return null;
+    }
+  }, [acceptSettings]);
+
   const load = useCallback(async () => {
     setBusy(true);
     setError(null);
-    try {
-      acceptSettings(await refreshApplicationSettings());
-    } catch (reason) {
-      setError(settingsError(reason));
-    } finally {
-      setBusy(false);
-    }
-  }, [acceptSettings]);
+    await refreshLatestSettings();
+    if (mountedRef.current) setBusy(false);
+  }, [refreshLatestSettings]);
 
   useEffect(() => {
     void load();
@@ -230,15 +282,23 @@ export function ApplicationSettings({
   const chatgptDevicePending =
     !chatgptConnected &&
     (chatgptLoginPhase === "awaiting_device" || deviceLogin !== null);
+  const orphanedDeviceLogin =
+    chatgptLoginPhase === "awaiting_device" &&
+    deviceLogin === null &&
+    ownedLoginRef.current !== "device";
   useEffect(() => {
     if (!chatgptBrowserPending && !chatgptDevicePending) return;
     const timer = window.setInterval(() => {
-      void refreshApplicationSettings()
-        .then(acceptSettings)
-        .catch((reason) => setError(settingsError(reason)));
+      if (loginPollInFlightRef.current || settingsMutationInFlightRef.current) {
+        return;
+      }
+      loginPollInFlightRef.current = true;
+      void refreshLatestSettings().finally(() => {
+        loginPollInFlightRef.current = false;
+      });
     }, 1_200);
     return () => window.clearInterval(timer);
-  }, [acceptSettings, chatgptBrowserPending, chatgptDevicePending]);
+  }, [chatgptBrowserPending, chatgptDevicePending, refreshLatestSettings]);
 
   useEffect(() => {
     if (
@@ -296,8 +356,9 @@ export function ApplicationSettings({
       applyGeneralApplicationPreferences(preferences);
       onPreferencesChange?.(preferences);
       setError(null);
+      settingsMutationInFlightRef.current = true;
       try {
-        acceptSettings(
+        acceptAuthoritativeSettings(
           await updateGeneralApplicationPreferences({ preferences }),
         );
       } catch (reason) {
@@ -306,10 +367,16 @@ export function ApplicationSettings({
         onPreferencesChange?.(previous.general_preferences);
         setError(settingsError(reason));
       } finally {
+        settingsMutationInFlightRef.current = false;
         setPreferenceBusy(false);
       }
     },
-    [acceptSettings, onPreferencesChange, preferenceBusy, settings],
+    [
+      acceptAuthoritativeSettings,
+      onPreferencesChange,
+      preferenceBusy,
+      settings,
+    ],
   );
 
   const setAttentionNotifications = useCallback(
@@ -343,8 +410,9 @@ export function ApplicationSettings({
       if (!connection || connection.status !== "ready") return;
       setBusy(true);
       setError(null);
+      settingsMutationInFlightRef.current = true;
       try {
-        acceptSettings(
+        acceptAuthoritativeSettings(
           await updateAiExecutionSelection({
             connection_id: connection.connection_id,
             model_id: modelId,
@@ -354,27 +422,30 @@ export function ApplicationSettings({
       } catch (reason) {
         setError(settingsError(reason));
       } finally {
+        settingsMutationInFlightRef.current = false;
         setBusy(false);
       }
     },
-    [acceptSettings, connection],
+    [acceptAuthoritativeSettings, connection],
   );
 
   const runSettingsAction = useCallback(
     async (operation: () => Promise<ApplicationSettingsView>) => {
       setBusy(true);
       setError(null);
+      settingsMutationInFlightRef.current = true;
       try {
-        acceptSettings(await operation());
+        acceptAuthoritativeSettings(await operation());
         return true;
       } catch (reason) {
         setError(settingsError(reason));
         return false;
       } finally {
+        settingsMutationInFlightRef.current = false;
         setBusy(false);
       }
     },
-    [acceptSettings],
+    [acceptAuthoritativeSettings],
   );
 
   const confirmSelection = useCallback(async () => {
@@ -394,19 +465,36 @@ export function ApplicationSettings({
     setBrowserLoginStarted(false);
     setDeviceLogin(null);
     setDeviceCodeCopied(false);
+    ownedLoginRef.current = "browser";
+    settingsMutationInFlightRef.current = true;
     try {
       const result = await startChatGptLogin();
+      if (!mountedRef.current) {
+        ownedLoginRef.current = null;
+        await cancelChatGptLogin();
+        return;
+      }
+      if (result.status === "connected") {
+        ownedLoginRef.current = null;
+      }
       setBrowserLoginStarted(result.status === "awaiting_browser");
-      acceptSettings(await refreshApplicationSettings());
+      await refreshLatestSettings();
     } catch (reason) {
+      if (!mountedRef.current) {
+        ownedLoginRef.current = null;
+        void cancelChatGptLogin();
+        return;
+      }
+      ownedLoginRef.current = null;
       if (reasonHasCode(reason, "oauth_port_blocked")) {
         setDeviceFallbackVisible(true);
       }
       setError(settingsError(reason));
     } finally {
-      setBusy(false);
+      settingsMutationInFlightRef.current = false;
+      if (mountedRef.current) setBusy(false);
     }
-  }, [acceptSettings]);
+  }, [refreshLatestSettings]);
 
   const connectChatGptOnAnotherDevice = useCallback(
     async (waitForBrowserCancellation = false) => {
@@ -415,9 +503,16 @@ export function ApplicationSettings({
       setBrowserLoginStarted(false);
       setDeviceLogin(null);
       setDeviceCodeCopied(false);
+      ownedLoginRef.current = "device";
+      settingsMutationInFlightRef.current = true;
       try {
         let result: Awaited<ReturnType<typeof startChatGptDeviceLogin>>;
         for (let attempt = 0; ; attempt += 1) {
+          if (!mountedRef.current) {
+            ownedLoginRef.current = null;
+            await cancelChatGptLogin();
+            return;
+          }
           try {
             result = await startChatGptDeviceLogin();
             break;
@@ -432,27 +527,37 @@ export function ApplicationSettings({
             await waitForLoginOwnerRelease();
           }
         }
+        if (!mountedRef.current) {
+          ownedLoginRef.current = null;
+          await cancelChatGptLogin();
+          return;
+        }
         setDeviceLogin({
           verificationUrl: result.verification_url,
           userCode: result.user_code,
         });
-        try {
-          acceptSettings(await refreshApplicationSettings());
-        } catch {
+        if (!(await refreshLatestSettings()) && mountedRef.current) {
           setError(
             "Sign-in started. Quantix will keep checking while you use the one-time code.",
           );
         }
       } catch {
+        if (!mountedRef.current) {
+          ownedLoginRef.current = null;
+          void cancelChatGptLogin();
+          return;
+        }
+        ownedLoginRef.current = null;
         setDeviceLogin(null);
         setError(
           "Sign in on another device is unavailable right now. You can still connect ChatGPT in your browser.",
         );
       } finally {
-        setBusy(false);
+        settingsMutationInFlightRef.current = false;
+        if (mountedRef.current) setBusy(false);
       }
     },
-    [acceptSettings],
+    [refreshLatestSettings],
   );
 
   const copyDeviceCode = useCallback(async () => {
@@ -475,20 +580,23 @@ export function ApplicationSettings({
   const cancelChatGpt = useCallback(async () => {
     setBusy(true);
     setError(null);
+    settingsMutationInFlightRef.current = true;
     try {
       await cancelChatGptLogin();
+      ownedLoginRef.current = null;
       setBrowserLoginStarted(false);
       setDeviceLogin(null);
       setDeviceCodeCopied(false);
-      acceptSettings(await refreshApplicationSettings());
+      await refreshLatestSettings();
       return true;
     } catch (reason) {
-      setError(settingsError(reason));
+      if (mountedRef.current) setError(settingsError(reason));
       return false;
     } finally {
-      setBusy(false);
+      settingsMutationInFlightRef.current = false;
+      if (mountedRef.current) setBusy(false);
     }
-  }, [acceptSettings]);
+  }, [refreshLatestSettings]);
 
   const disconnectChatGptAccount = async () => {
     if (await runSettingsAction(disconnectChatGpt)) {
@@ -583,13 +691,13 @@ export function ApplicationSettings({
       }
       setDoctor(current);
       setRuntime(await inspectRuntimeReadiness());
-      acceptSettings(await refreshApplicationSettings());
+      await refreshLatestSettings();
     } catch (reason) {
       setError(settingsError(reason));
     } finally {
       setFactsBusy(false);
     }
-  }, [acceptSettings, doctor]);
+  }, [doctor, refreshLatestSettings]);
 
   const checkForUpdate = useCallback(async () => {
     setFactsBusy(true);
@@ -775,30 +883,45 @@ export function ApplicationSettings({
                   </div>
 
                   {chatgptConnected && chatgpt ? (
-                    <div className="application-settings__connected-account">
-                      <div>
-                        <Check size={16} aria-hidden="true" />
-                        <span>
-                          <strong>Connected</strong>
-                          {(connection.account_plan ?? chatgpt.plan_type) ? (
-                            <small>
-                              {(
-                                connection.account_plan ?? chatgpt.plan_type
-                              )?.replace(/_/g, " ")}
-                              {" plan"}
-                            </small>
-                          ) : null}
-                        </span>
+                    <>
+                      <div className="application-settings__connected-account">
+                        <div>
+                          <Check size={16} aria-hidden="true" />
+                          <span>
+                            <strong>Connected</strong>
+                            {(connection.account_plan ?? chatgpt.plan_type) ? (
+                              <small>
+                                {(
+                                  connection.account_plan ?? chatgpt.plan_type
+                                )?.replace(/_/g, " ")}
+                                {" plan"}
+                              </small>
+                            ) : null}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="application-settings__logout"
+                          disabled={busy}
+                          onClick={() => void disconnectChatGptAccount()}
+                        >
+                          <LogOut size={15} /> Disconnect
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        className="application-settings__logout"
-                        disabled={busy}
-                        onClick={() => void disconnectChatGptAccount()}
-                      >
-                        <LogOut size={15} /> Disconnect
-                      </button>
-                    </div>
+                      {connection.status !== "ready" ? (
+                        <div
+                          className="application-settings__connection-attention"
+                          role="status"
+                        >
+                          <strong>ChatGPT needs attention</strong>
+                          <p>{connection.status_summary}</p>
+                          <small>
+                            Select Refresh above. If ChatGPT is still
+                            unavailable, disconnect it and connect again.
+                          </small>
+                        </div>
+                      ) : null}
+                    </>
                   ) : chatgptBrowserPending ? (
                     <div
                       className="application-settings__sign-in-state"
@@ -841,8 +964,9 @@ export function ApplicationSettings({
                       aria-live="polite"
                     >
                       <p>
-                        Enter this one-time code on the OpenAI page, then return
-                        to Quantix.
+                        {orphanedDeviceLogin
+                          ? "The previous one-time code is no longer available. Get a new code to continue."
+                          : "Enter this one-time code on the OpenAI page, then return to Quantix."}
                       </p>
                       {deviceLogin ? (
                         <>
@@ -875,13 +999,31 @@ export function ApplicationSettings({
                             </button>
                           </div>
                         </>
+                      ) : orphanedDeviceLogin ? (
+                        <div className="application-settings__device-actions">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => {
+                              void cancelChatGpt().then((cancelled) => {
+                                if (cancelled) {
+                                  return connectChatGptOnAnotherDevice(true);
+                                }
+                              });
+                            }}
+                          >
+                            Get a new one-time code
+                          </button>
+                        </div>
                       ) : (
                         <small>Waiting for sign-in to finish.</small>
                       )}
-                      <div className="application-settings__device-waiting">
-                        <LoaderCircle className="is-spinning" size={15} />
-                        Waiting for you to finish signing in
-                      </div>
+                      {!orphanedDeviceLogin ? (
+                        <div className="application-settings__device-waiting">
+                          <LoaderCircle className="is-spinning" size={15} />
+                          Waiting for you to finish signing in
+                        </div>
+                      ) : null}
                       <button
                         type="button"
                         disabled={busy}
