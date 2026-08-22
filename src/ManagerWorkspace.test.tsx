@@ -11,6 +11,7 @@ import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
+import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
 
 const host = vi.hoisted(() => ({
   archiveTender: vi.fn(),
@@ -310,6 +311,43 @@ const tenderAiProviderConnection = {
   adapter_version: "codex-v1",
   status_summary: "Ready to run Tender work.",
 };
+
+function readyApplicationSettings(): ApplicationSettingsView {
+  const selection = {
+    connection_id: "codex_chatgpt",
+    provider: "codex" as const,
+    model_id: "gpt-live-a",
+    reasoning: { kind: "codex_effort" as const, value: "medium" },
+    catalogue_fetched_at: "chatgpt-direct-v1",
+    adapter_version: "chatgpt-direct-v1",
+  };
+  return {
+    ...applicationFacts,
+    ai_execution_selection: selection,
+    ai_execution_approval: {
+      ...selection,
+      reasoning: { ...selection.reasoning },
+      account_fingerprint:
+        "117d68e191e9e848c1172767d9ca54204ef5e4b20d1ead8855ef0f17f906f695",
+      data_destination: "ChatGPT subscription",
+      approved_at: "2026-08-22T08:01:00Z",
+    },
+    provider_connections: [
+      {
+        ...tenderAiProviderConnection,
+        catalogue_fetched_at: "chatgpt-direct-v1",
+        adapter_version: "chatgpt-direct-v1",
+      },
+    ],
+    chatgpt: {
+      state: "connected",
+      account_id: "engineer@example.com",
+      plan_type: "plus",
+      expires_at_ms: 1_800_000_000_000n,
+      login_phase: "completed",
+    },
+  };
+}
 
 beforeEach(() => {
   host.inspectPackageIntakeProgress.mockResolvedValue(null);
@@ -1580,16 +1618,17 @@ describe("ManagerWorkspace", () => {
         provider: "codex",
         model_id: "gpt-live-a",
         reasoning: { kind: "codex_effort", value: "medium" },
-        catalogue_fetched_at: "2026-08-15T10:00:00Z",
-        adapter_version: "0.147.0",
+        catalogue_fetched_at: "chatgpt-direct-v1",
+        adapter_version: "chatgpt-direct-v1",
       },
       ai_execution_approval: {
         connection_id: "codex_chatgpt",
         provider: "codex",
-        account_fingerprint: "account-fingerprint",
+        account_fingerprint:
+          "117d68e191e9e848c1172767d9ca54204ef5e4b20d1ead8855ef0f17f906f695",
         model_id: "gpt-live-a",
         reasoning: { kind: "codex_effort", value: "medium" },
-        data_destination: "OpenAI through the connected ChatGPT account",
+        data_destination: "ChatGPT subscription",
         approved_at: "2026-08-15T10:01:00Z",
       },
       provider_connections: [
@@ -1632,14 +1671,14 @@ describe("ManagerWorkspace", () => {
               ],
             },
           ],
-          catalogue_fetched_at: "2026-08-15T10:00:00Z",
-          adapter_version: "0.147.0",
+          catalogue_fetched_at: "chatgpt-direct-v1",
+          adapter_version: "chatgpt-direct-v1",
           status_summary: "Ready to run Tender work.",
         },
       ],
       chatgpt: {
         state: "connected",
-        account_id: "engineer-account",
+        account_id: "engineer@example.com",
         plan_type: "plus",
         expires_at_ms: 1_800_000_000_000n,
         login_phase: "completed",
@@ -2761,6 +2800,73 @@ describe("ManagerWorkspace", () => {
     await waitFor(() => {
       expect(host.startManagerTender).toHaveBeenCalledWith("directory", true);
     });
+  });
+
+  it("does not start AI Tender work with approval metadata rejected by the exact Settings contract", async () => {
+    const empty: ManagerWorkspaceProjection = {
+      ...projection,
+      catalogue: [],
+      selected_tender: null,
+      conversation: null,
+      current_action: {
+        kind: "start_tender",
+        title: "Start a Tender",
+        summary: "Choose the Tender Package.",
+        action_label: "Choose Tender Package",
+        requires_engineer: true,
+      },
+      intake: null,
+    };
+    const settings = readyApplicationSettings();
+    settings.ai_execution_approval!.data_destination =
+      "A different destination";
+    host.inspectManagerWorkspace.mockResolvedValue(empty);
+    host.inspectApplicationSettings.mockResolvedValue(settings);
+    host.startManagerTender.mockResolvedValue(null);
+    render(<ManagerWorkspace />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Choose Tender Package" }),
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "Continue without AI" }),
+    ).toBeTruthy();
+    expect(host.startManagerTender).not.toHaveBeenCalled();
+  });
+
+  it("starts AI Tender work when the shared exact Settings contract is ready", async () => {
+    const empty: ManagerWorkspaceProjection = {
+      ...projection,
+      catalogue: [],
+      selected_tender: null,
+      conversation: null,
+      current_action: {
+        kind: "start_tender",
+        title: "Start a Tender",
+        summary: "Choose the Tender Package.",
+        action_label: "Choose Tender Package",
+        requires_engineer: true,
+      },
+      intake: null,
+    };
+    host.inspectManagerWorkspace.mockResolvedValue(empty);
+    host.inspectApplicationSettings.mockResolvedValue(
+      readyApplicationSettings(),
+    );
+    host.startManagerTender.mockResolvedValue(null);
+    render(<ManagerWorkspace />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Choose Tender Package" }),
+    );
+
+    await waitFor(() => {
+      expect(host.startManagerTender).toHaveBeenCalledWith("directory", false);
+    });
+    expect(
+      screen.queryByRole("button", { name: "Continue without AI" }),
+    ).toBeNull();
   });
 
   it("registers a Tender package even while every AI Provider is unavailable", async () => {

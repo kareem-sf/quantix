@@ -1,4 +1,13 @@
+// @ts-expect-error Node builtin types are intentionally absent from the renderer.
+import { webcrypto } from "node:crypto";
 import { vi } from "vitest";
+
+if (!globalThis.crypto?.subtle) {
+  Object.defineProperty(globalThis, "crypto", {
+    configurable: true,
+    value: webcrypto,
+  });
+}
 
 const testAppWindow = vi.hoisted(() => ({
   close: vi.fn(() => Promise.resolve()),

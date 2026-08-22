@@ -40,6 +40,7 @@ vi.mock("./quantixHost", () => host);
 vi.mock("./applicationNotifications", () => notifications);
 
 import { ApplicationSettings } from "./ApplicationSettings";
+import { exactApplicationAiSelectionIsReady } from "./applicationAiSelectionReadiness";
 
 const applicationFacts = {
   general_preferences: {
@@ -147,12 +148,17 @@ function disconnectedView(
 }
 
 function connectedView(approved = false) {
+  const selection = {
+    ...preparedSelection,
+    reasoning: { ...preparedSelection.reasoning },
+  };
   return {
     ...applicationFacts,
-    ai_execution_selection: preparedSelection,
+    ai_execution_selection: selection,
     ai_execution_approval: approved
       ? {
-          ...preparedSelection,
+          ...selection,
+          reasoning: { ...selection.reasoning },
           account_fingerprint:
             "117d68e191e9e848c1172767d9ca54204ef5e4b20d1ead8855ef0f17f906f695",
           data_destination: "ChatGPT subscription",
@@ -173,7 +179,6 @@ function connectedView(approved = false) {
 function renderSettings(onAiAvailabilityChange = vi.fn()) {
   const rendered = render(
     <ApplicationSettings
-      aiAvailable={false}
       onAiAvailabilityChange={onAiAvailabilityChange}
       onClose={vi.fn()}
     />,
@@ -186,7 +191,6 @@ function ClosableSettings() {
   const [open, setOpen] = useState(true);
   return open ? (
     <ApplicationSettings
-      aiAvailable={false}
       onAiAvailabilityChange={vi.fn()}
       onClose={() => setOpen(false)}
     />
@@ -213,6 +217,60 @@ afterEach(() => {
 });
 
 describe("ApplicationSettings ChatGPT connection", () => {
+  it("recognizes the exact production approval through the shared contract", async () => {
+    expect(await exactApplicationAiSelectionIsReady(connectedView(true))).toBe(
+      true,
+    );
+  });
+
+  it("does not let an older account digest authorize a newer Settings snapshot", async () => {
+    let finishDigest: ((value: ArrayBuffer) => void) | undefined;
+    const digest = vi
+      .spyOn(globalThis.crypto.subtle, "digest")
+      .mockReturnValueOnce(
+        new Promise<ArrayBuffer>((resolve) => {
+          finishDigest = resolve;
+        }),
+      );
+    const onAiAvailabilityChange = vi.fn();
+    host.refreshApplicationSettings
+      .mockResolvedValueOnce(connectedView(true))
+      .mockResolvedValue(disconnectedView());
+    renderSettings(onAiAvailabilityChange);
+    await waitFor(() => expect(digest).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(
+      await screen.findByRole("button", { name: "Connect ChatGPT" }),
+    ).toBeTruthy();
+    const fingerprint =
+      "117d68e191e9e848c1172767d9ca54204ef5e4b20d1ead8855ef0f17f906f695";
+    await act(async () => {
+      finishDigest?.(
+        Uint8Array.from(
+          fingerprint.match(/.{2}/g)!.map((byte) => Number.parseInt(byte, 16)),
+        ).buffer as ArrayBuffer,
+      );
+      await Promise.resolve();
+    });
+
+    expect(onAiAvailabilityChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("keeps approval unavailable when account fingerprinting fails", async () => {
+    vi.spyOn(globalThis.crypto.subtle, "digest").mockRejectedValueOnce(
+      new Error("digest unavailable"),
+    );
+    const onAiAvailabilityChange = vi.fn();
+    host.refreshApplicationSettings.mockResolvedValue(connectedView(true));
+    renderSettings(onAiAvailabilityChange);
+
+    expect(
+      await screen.findByRole("button", { name: "Use ChatGPT" }),
+    ).toBeTruthy();
+    expect(onAiAvailabilityChange).toHaveBeenLastCalledWith(false);
+  });
+
   it("shows one beginner ChatGPT card with browser sign-in as the primary action", async () => {
     renderSettings();
 
@@ -1100,9 +1158,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
     fireEvent.click(advanced);
     expect(screen.getByText("Catalogue provenance")).toBeTruthy();
     expect(
-      screen.getByText(
-        "Built-in catalogue chatgpt-direct-v1 · chatgpt-direct-v1",
-      ),
+      screen.getByText("Built-in catalogue version: chatgpt-direct-v1"),
     ).toBeTruthy();
     expect(document.body.textContent).not.toContain("Invalid Date");
     expect(

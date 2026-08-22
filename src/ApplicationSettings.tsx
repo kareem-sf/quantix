@@ -28,6 +28,7 @@ import type { RuntimeReadiness } from "./bindings/RuntimeReadiness";
 import type { UpdateStatus } from "./bindings/UpdateStatus";
 import type { QuantixDoctorFinding } from "./bindings/QuantixDoctorFinding";
 import type { QuantixDoctorReport } from "./bindings/QuantixDoctorReport";
+import { exactApplicationAiSelectionIsReady } from "./applicationAiSelectionReadiness";
 import { QuantixSelect } from "./ui/QuantixSelect";
 import { QuantixSwitch } from "./ui/QuantixSwitch";
 import { QuantixDialog } from "./ui/QuantixDialog";
@@ -50,7 +51,6 @@ import {
 } from "./quantixHost";
 
 interface ApplicationSettingsProps {
-  aiAvailable: boolean;
   onAiAvailabilityChange: (available: boolean) => void;
   onPreferencesChange?: (preferences: GeneralApplicationPreferences) => void;
   initialSection?: "general" | "ai" | "about";
@@ -117,15 +117,14 @@ function connectionStatus(connection: ProviderConnectionView): string {
 
 const CHATGPT_DATA_DISCLOSURE =
   "Tender content is sent to OpenAI through your connected ChatGPT account. Usage and limits belong to that account.";
-const CHATGPT_DATA_DESTINATION = "ChatGPT subscription";
-
-interface AccountFingerprint {
-  identity: string;
-  sha256: string;
-}
 
 interface DeviceLoginDetails {
   userCode: string;
+}
+
+interface AiSelectionReadinessResult {
+  settings: ApplicationSettingsView;
+  ready: boolean;
 }
 
 function reasonHasCode(reason: unknown, code: string): boolean {
@@ -141,84 +140,10 @@ function waitForLoginOwnerRelease(): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, 150));
 }
 
-function accountFingerprintIdentity(
-  view: ApplicationSettingsView,
-): string | null {
-  const selection = view.ai_execution_selection;
-  if (!selection) return null;
-  const connection = view.provider_connections.find(
-    (candidate) => candidate.connection_id === selection.connection_id,
-  );
-  if (!connection) return null;
-  return `${connection.connection_id}\0${connection.provider}\0${connection.account_label ?? "unknown"}`;
-}
-
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await globalThis.crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(value),
-  );
-  return Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
-}
-
-function exactSelectionIsReady(
-  view: ApplicationSettingsView,
-  accountFingerprint: string | null,
-): boolean {
-  const selection = view.ai_execution_selection;
-  if (!selection || view.chatgpt.state !== "connected") return false;
-  const approval = view.ai_execution_approval;
-  if (
-    !approval ||
-    approval.connection_id !== selection.connection_id ||
-    approval.provider !== selection.provider ||
-    approval.model_id !== selection.model_id ||
-    reasoningKey(approval.reasoning) !== reasoningKey(selection.reasoning) ||
-    approval.data_destination !== CHATGPT_DATA_DESTINATION ||
-    approval.account_fingerprint !== accountFingerprint
-  ) {
-    return false;
-  }
-  const connection = view.provider_connections.find(
-    (candidate) =>
-      candidate.connection_id === selection.connection_id &&
-      candidate.provider === selection.provider &&
-      candidate.status === "ready",
-  );
-  if (
-    !connection ||
-    connection.catalogue_fetched_at !== selection.catalogue_fetched_at ||
-    connection.adapter_version !== selection.adapter_version ||
-    connection.account_label === null ||
-    connection.account_label !== view.chatgpt.account_id
-  ) {
-    return false;
-  }
-  const model = connection?.models.find(
-    (candidate) => candidate.model_id === selection.model_id,
-  );
-  return Boolean(
-    model?.reasoning_options.some(
-      (option) =>
-        JSON.stringify(option.selection) ===
-        JSON.stringify(selection.reasoning),
-    ),
-  );
-}
-
 function catalogueProvenance(connection: ProviderConnectionView): string {
   const catalogue = connection.catalogue_fetched_at;
   if (!catalogue) return "No current ChatGPT catalogue is available.";
-  const parsedTimestamp = Date.parse(catalogue);
-  if (
-    /^\d{4}-\d{2}-\d{2}T/.test(catalogue) &&
-    Number.isFinite(parsedTimestamp)
-  ) {
-    return `Refreshed ${new Date(parsedTimestamp).toLocaleString()} · ${connection.adapter_version}`;
-  }
-  return `Built-in catalogue ${catalogue} · ${connection.adapter_version}`;
+  return `Built-in catalogue version: ${catalogue}`;
 }
 
 export function ApplicationSettings({
@@ -249,8 +174,8 @@ export function ApplicationSettings({
     null,
   );
   const [deviceCodeCopied, setDeviceCodeCopied] = useState(false);
-  const [accountFingerprint, setAccountFingerprint] =
-    useState<AccountFingerprint | null>(null);
+  const [aiSelectionReadiness, setAiSelectionReadiness] =
+    useState<AiSelectionReadinessResult | null>(null);
   const [preferenceBusy, setPreferenceBusy] = useState(false);
   const [runtime, setRuntime] = useState<RuntimeReadiness | null>(null);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
@@ -439,33 +364,26 @@ export function ApplicationSettings({
     recommendedModel?.reasoning_options.find((option) => option.is_default) ??
     recommendedModel?.reasoning_options[0];
   const preferences = settings?.general_preferences;
-  const fingerprintIdentity = settings
-    ? accountFingerprintIdentity(settings)
-    : null;
-  const currentAccountFingerprint =
-    accountFingerprint?.identity === fingerprintIdentity
-      ? accountFingerprint.sha256
-      : null;
-  const selectionIsReady = settings
-    ? exactSelectionIsReady(settings, currentAccountFingerprint)
-    : false;
+  const selectionIsReady = Boolean(
+    settings &&
+    aiSelectionReadiness?.settings === settings &&
+    aiSelectionReadiness.ready,
+  );
 
   useEffect(() => {
-    if (!fingerprintIdentity || !globalThis.crypto?.subtle) return;
-    if (accountFingerprint?.identity === fingerprintIdentity) return;
+    if (!settings) return;
     let current = true;
-    void sha256Hex(fingerprintIdentity)
-      .then((sha256) => {
-        if (current)
-          setAccountFingerprint({ identity: fingerprintIdentity, sha256 });
+    void exactApplicationAiSelectionIsReady(settings)
+      .then((ready) => {
+        if (current) setAiSelectionReadiness({ settings, ready });
       })
       .catch(() => {
-        if (current) setAccountFingerprint(null);
+        if (current) setAiSelectionReadiness({ settings, ready: false });
       });
     return () => {
       current = false;
     };
-  }, [accountFingerprint?.identity, fingerprintIdentity]);
+  }, [settings]);
 
   useEffect(() => {
     if (settings) onAiAvailabilityChange(selectionIsReady);

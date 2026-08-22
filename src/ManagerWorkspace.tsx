@@ -53,6 +53,7 @@ import type { AgentRunInspection } from "./bindings/AgentRunInspection";
 import type { WorkspaceTaskRow } from "./bindings/WorkspaceTaskRow";
 import type { AiExecutionSelection } from "./bindings/AiExecutionSelection";
 import { ApplicationSettings } from "./ApplicationSettings";
+import { exactApplicationAiSelectionIsReady } from "./applicationAiSelectionReadiness";
 import { notifyAttentionRequired } from "./applicationNotifications";
 import { TenderFocusedAction } from "./TenderFocusedAction";
 import { QuantixMark } from "./QuantixMark";
@@ -210,32 +211,6 @@ function initialNavigationHistory(
 ): NavigationHistory {
   const tenderId = projection?.selected_tender?.tender_id ?? null;
   return { entries: [{ tenderId, surface: "manager" }], index: 0 };
-}
-
-function exactSelectionIsReady(settings: ApplicationSettingsView): boolean {
-  const selection = settings.ai_execution_selection;
-  if (!selection) return false;
-  const connection = settings.provider_connections.find(
-    (candidate) =>
-      candidate.connection_id === selection.connection_id &&
-      candidate.status === "ready",
-  );
-  const model = connection?.models.find(
-    (candidate) => candidate.model_id === selection.model_id,
-  );
-  const approval = settings.ai_execution_approval;
-  return Boolean(
-    approval &&
-    approval.connection_id === selection.connection_id &&
-    approval.model_id === selection.model_id &&
-    JSON.stringify(approval.reasoning) ===
-      JSON.stringify(selection.reasoning) &&
-    model?.reasoning_options.some(
-      (option) =>
-        JSON.stringify(option.selection) ===
-        JSON.stringify(selection.reasoning),
-    ),
-  );
 }
 
 function setupWarningCopy(issue: SetupIssue): string {
@@ -2169,13 +2144,17 @@ export function ManagerWorkspace({
   );
   const [contextOpen, setContextOpen] = useState(() => contextRail);
   const [operation, setOperation] = useState<WorkspaceOperation | null>(null);
-  const isBusy = operation !== null;
+  const [aiPreflightChecking, setAiPreflightChecking] = useState(false);
+  const isBusy = operation !== null || aiPreflightChecking;
   const [showNavigationPanel, setShowNavigationPanel] = useState(false);
   const [packageTask, setPackageTask] = useState<PackageTaskState | null>(null);
   const [operationFailure, setOperationFailure] =
     useState<WorkspaceOperationFailure | null>(null);
   const [error, setError] = useState<string | null>(null);
   const refreshRunning = useRef(false);
+  const settingsSnapshotRequestVersion = useRef(0);
+  const aiStatusRequestVersion = useRef(0);
+  const aiPreflightInFlight = useRef(false);
   const operationRef = useRef<WorkspaceOperation | null>(null);
   const failedOperationRef = useRef<{
     work: () => Promise<unknown>;
@@ -2344,19 +2323,36 @@ export function ManagerWorkspace({
   }, [acceptRuntimeReadiness]);
 
   const refreshSettingsSnapshot = useCallback(async () => {
+    const snapshotRequestVersion = ++settingsSnapshotRequestVersion.current;
+    const statusRequestVersion = ++aiStatusRequestVersion.current;
     try {
       const settings = await inspectApplicationSettings();
       if (!settings) {
-        setAiStatus("unavailable");
+        if (statusRequestVersion === aiStatusRequestVersion.current) {
+          setAiStatus("unavailable");
+        }
         return;
       }
-      setSettingsSnapshot(settings);
-      const nextPreferences = settings.general_preferences;
-      setPreferences(nextPreferences);
-      applyGeneralApplicationPreferences(nextPreferences);
-      setAiStatus(exactSelectionIsReady(settings) ? "ready" : "unavailable");
+      let ready = false;
+      try {
+        ready = await exactApplicationAiSelectionIsReady(settings);
+      } catch {
+        // A failed local approval check is unavailable, while the settings
+        // snapshot itself remains useful and current.
+      }
+      if (snapshotRequestVersion === settingsSnapshotRequestVersion.current) {
+        const nextPreferences = settings.general_preferences;
+        setSettingsSnapshot(settings);
+        setPreferences(nextPreferences);
+        applyGeneralApplicationPreferences(nextPreferences);
+      }
+      if (statusRequestVersion === aiStatusRequestVersion.current) {
+        setAiStatus(ready ? "ready" : "unavailable");
+      }
     } catch {
-      setAiStatus("unavailable");
+      if (statusRequestVersion === aiStatusRequestVersion.current) {
+        setAiStatus("unavailable");
+      }
     }
   }, []);
 
@@ -2374,6 +2370,7 @@ export function ManagerWorkspace({
   );
   const handleAiAvailabilityChange = useCallback(
     (available: boolean) => {
+      aiStatusRequestVersion.current += 1;
       setAiStatus(available ? "ready" : "unavailable");
       if (available && pendingTenderStart) {
         setAiPreflightReason(
@@ -2917,14 +2914,23 @@ export function ManagerWorkspace({
 
   const startTender = useCallback(
     async (kind: TenderPackageSourceKind): Promise<boolean> => {
+      if (aiPreflightInFlight.current) return false;
+      aiPreflightInFlight.current = true;
+      const snapshotRequestVersion = ++settingsSnapshotRequestVersion.current;
+      const statusRequestVersion = ++aiStatusRequestVersion.current;
+      setAiPreflightChecking(true);
       setRecoveryTarget(null);
       setError(null);
       try {
         const settings = await inspectApplicationSettings();
-        setSettingsSnapshot(settings);
-        const ready = exactSelectionIsReady(settings);
-        setAiStatus(ready ? "ready" : "unavailable");
-        if (ready) return continueStartTender(kind);
+        if (snapshotRequestVersion === settingsSnapshotRequestVersion.current) {
+          setSettingsSnapshot(settings);
+        }
+        const ready = await exactApplicationAiSelectionIsReady(settings);
+        if (statusRequestVersion === aiStatusRequestVersion.current) {
+          setAiStatus(ready ? "ready" : "unavailable");
+        }
+        if (ready) return await continueStartTender(kind);
         setPendingTenderStart(kind);
         setAiPreflightReason(
           settings.ai_execution_selection
@@ -2940,6 +2946,9 @@ export function ManagerWorkspace({
         );
         setAiPreflightOpen(true);
         return false;
+      } finally {
+        aiPreflightInFlight.current = false;
+        setAiPreflightChecking(false);
       }
     },
     [continueStartTender],
@@ -3871,7 +3880,6 @@ export function ManagerWorkspace({
                 />
               ) : settingsOpen ? (
                 <ApplicationSettings
-                  aiAvailable={aiStatus === "ready"}
                   onAiAvailabilityChange={handleAiAvailabilityChange}
                   onPreferencesChange={handlePreferencesChange}
                   initialSection={settingsSection}
