@@ -15,9 +15,9 @@ pub(crate) use device::{
 };
 pub(crate) use jwt::{extract_identity, ChatGptIdentity};
 pub(crate) use store::{
-    clear_unlocked, load, needs_refresh, refresh_connection_unlocked, restore_unlocked,
-    save_unlocked, with_connection_mutation, with_connection_mutation_before, LoadState,
-    StoredConnection,
+    clear_unlocked, force_refresh_connection_unlocked, load, needs_refresh,
+    refresh_connection_unlocked, restore_unlocked, save_unlocked, with_connection_mutation,
+    with_connection_mutation_before, LoadState, StoredConnection,
 };
 #[cfg(test)]
 pub(crate) use store::{refresh_connection, save};

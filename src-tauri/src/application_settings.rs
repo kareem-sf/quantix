@@ -14,8 +14,8 @@ use ts_rs::TS;
 use crate::{
     agent_runtime::{ProviderFailure, ProviderFailureCategory},
     chatgpt_oauth::{
-        load, needs_refresh, refresh_connection_unlocked, with_connection_mutation, LoadState,
-        StoredConnection, TokenClient,
+        force_refresh_connection_unlocked, load, needs_refresh, refresh_connection_unlocked,
+        with_connection_mutation, LoadState, StoredConnection, TokenClient,
     },
     setup::INSTALLATION_SCHEMA_VERSION,
     tender_store::{TenderCommandError, TenderErrorCode, TenderId, TENDER_SCHEMA_VERSION},
@@ -687,9 +687,13 @@ pub(crate) fn refresh_approved_chatgpt_connection(
 
         let readiness =
             project_chatgpt_connection_readiness_unlocked_with(application_home, || {
-                let connection =
-                    refresh_connection_unlocked(application_home, token_client, now_ms)
-                        .map_err(|_| chatgpt_authentication_failure())?;
+                let connection = force_refresh_connection_unlocked(
+                    application_home,
+                    token_client,
+                    now_ms,
+                    expected_account_id,
+                )
+                .map_err(|_| chatgpt_authentication_failure())?;
                 if !chatgpt_subscription_is_supported(connection.plan_type.as_deref()) {
                     return Err(chatgpt_subscription_failure());
                 }
@@ -1888,6 +1892,102 @@ mod tests {
         assert_eq!(
             view.provider_connections[0].account_label.as_deref(),
             Some("account-b")
+        );
+        assert!(view.ai_execution_approval.is_none());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn unauthorized_retry_forces_exchange_of_a_nonexpired_rejected_access_token() {
+        let home = initialized_home("provider-retry-forced-refresh");
+        let now_ms = 1_000_000;
+        let original = StoredConnection {
+            expires_at_ms: 2_000_000,
+            account_id: "account-a".to_owned(),
+            ..stored_connection(2_000_000, Some("plus"))
+        };
+        assert!(!needs_refresh(&original, now_ms));
+        save(&home, &original).unwrap();
+        let selection = store_test_approval(
+            &home,
+            &chatgpt_connection_view(&original),
+            "ChatGPT subscription",
+        );
+        let (issuer, requests) = mock_issuer(refresh_body("account-a", Some("plus"), None));
+        let token_client = TokenClient::new(&issuer).unwrap();
+
+        let refreshed = refresh_approved_chatgpt_connection(
+            &home,
+            &token_client,
+            now_ms,
+            "account-a",
+            &selection,
+        )
+        .expect("a 401 must force one exchange even before proactive refresh is due");
+
+        assert_eq!(refreshed.account_id, "account-a");
+        assert_eq!(refreshed.access_token, "at-new");
+        assert_ne!(refreshed.access_token, original.access_token);
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1, "the rejected token is exchanged once");
+        assert!(requests[0].contains("grant_type=refresh_token"));
+        assert!(requests[0].contains("refresh_token=rt-current"));
+        drop(requests);
+        match load(&home) {
+            LoadState::Connected(current) => assert_eq!(current.access_token, "at-new"),
+            other => panic!("forced refresh must persist account A, got {other:?}"),
+        }
+        assert!(load_application_settings(&home)
+            .unwrap()
+            .ai_execution_approval
+            .is_some());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn unauthorized_retry_never_persists_a_refreshed_different_account() {
+        let home = initialized_home("provider-retry-returned-account-mismatch");
+        let now_ms = 1_000_000;
+        let original = StoredConnection {
+            expires_at_ms: 2_000_000,
+            account_id: "account-a".to_owned(),
+            ..stored_connection(2_000_000, Some("plus"))
+        };
+        save(&home, &original).unwrap();
+        let selection = store_test_approval(
+            &home,
+            &chatgpt_connection_view(&original),
+            "ChatGPT subscription",
+        );
+        let (issuer, requests) = mock_issuer(refresh_body("account-b", Some("plus"), None));
+        let token_client = TokenClient::new(&issuer).unwrap();
+
+        let failure = refresh_approved_chatgpt_connection(
+            &home,
+            &token_client,
+            now_ms,
+            "account-a",
+            &selection,
+        )
+        .expect_err("a different returned identity must fail before persistence");
+
+        assert_eq!(
+            failure.category,
+            ProviderFailureCategory::AuthenticationRequired
+        );
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        match load(&home) {
+            LoadState::Connected(current) => {
+                assert_eq!(current.account_id, "account-a");
+                assert_eq!(current.access_token, "at-current");
+                assert_eq!(current.refresh_token, "rt-current");
+            }
+            other => panic!("account A must remain stored, got {other:?}"),
+        }
+        let view = load_application_settings(&home).unwrap();
+        assert_eq!(
+            view.provider_connections[0].status,
+            ProviderConnectionStatus::AuthenticationRequired
         );
         assert!(view.ai_execution_approval.is_none());
         let _ = std::fs::remove_dir_all(&home);

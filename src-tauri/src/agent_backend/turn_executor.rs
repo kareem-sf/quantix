@@ -412,7 +412,8 @@ mod tests {
     use super::super::client::{build_request_body, parse_stream_bytes};
     use super::*;
     use crate::chatgpt_oauth::{
-        load, refresh_connection as refresh_stored_connection, save, LoadState, TokenClient,
+        force_refresh_connection_unlocked, load, needs_refresh, save, with_connection_mutation,
+        LoadState, TokenClient,
     };
 
     fn sse(frames: &[&str]) -> Vec<u8> {
@@ -654,9 +655,16 @@ mod tests {
         is_cancelled: &'a (dyn Fn() -> bool + Sync),
         on_event: &'a mut (dyn FnMut(BackendEvent) + Send),
     ) -> Result<ProviderTurnResult, ProviderFailure> {
-        let refresh_auth = |_expected_account_id: &str| {
-            refresh_stored_connection(home, token_client, test_now_ms())
-                .map_err(|()| authentication_failure())
+        let refresh_auth = |expected_account_id: &str| {
+            with_connection_mutation(|| {
+                force_refresh_connection_unlocked(
+                    home,
+                    token_client,
+                    test_now_ms(),
+                    expected_account_id,
+                )
+            })
+            .map_err(|()| authentication_failure())
         };
         run_turn_with_refresh(
             backend,
@@ -705,9 +713,16 @@ mod tests {
         on_event: &'a mut (dyn FnMut(BackendEvent) -> Result<(), ProviderFailure> + Send),
         on_tool_denied: &'a mut ToolDeniedCallback<'a>,
     ) -> Result<ProviderTurnResult, ProviderFailure> {
-        let refresh_auth = |_expected_account_id: &str| {
-            refresh_stored_connection(home, token_client, test_now_ms())
-                .map_err(|()| authentication_failure())
+        let refresh_auth = |expected_account_id: &str| {
+            with_connection_mutation(|| {
+                force_refresh_connection_unlocked(
+                    home,
+                    token_client,
+                    test_now_ms(),
+                    expected_account_id,
+                )
+            })
+            .map_err(|()| authentication_failure())
         };
         block_on_future(execute_provider_turn(TurnContext {
             backend,
@@ -1182,7 +1197,11 @@ mod tests {
             Err(BackendError::AuthenticationRequired),
             Ok(sse(TEXT_COMPLETION)),
         ]);
-        let auth = stored_connection("at-stale");
+        let auth = StoredConnection {
+            expires_at_ms: u64::MAX,
+            ..stored_connection("at-stale")
+        };
+        assert!(!needs_refresh(&auth, test_now_ms()));
         let (token_client, issuer_bodies) = mock_issuer(ISSUER_BODY);
         let home = temp_home("refresh-once");
         save(&home, &auth).unwrap();

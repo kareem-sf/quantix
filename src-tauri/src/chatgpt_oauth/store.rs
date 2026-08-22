@@ -238,6 +238,35 @@ pub(crate) fn refresh_connection_unlocked(
     Ok(refreshed)
 }
 
+/// Exchanges the expected account's refresh credential even when its access
+/// token is not near expiry. This is reserved for recovery after the provider
+/// has explicitly rejected that access token. A changed returned identity is
+/// rejected before any credential is persisted.
+pub(crate) fn force_refresh_connection_unlocked(
+    home: &Path,
+    token_client: &TokenClient,
+    now_ms: u64,
+    expected_account_id: &str,
+) -> Result<StoredConnection, ()> {
+    let current = match load(home) {
+        LoadState::Connected(connection) => *connection,
+        LoadState::Absent | LoadState::Unusable => return Err(()),
+    };
+    if current.account_id != expected_account_id {
+        return Err(());
+    }
+    let issued = token_client
+        .refresh(&current.refresh_token)
+        .map_err(|_| ())?;
+    let identity = extract_identity(&issued.id_token).ok_or(())?;
+    if identity.account_id != expected_account_id {
+        return Err(());
+    }
+    let refreshed = StoredConnection::from_issued(&issued, &identity, now_ms);
+    save_unlocked(home, &refreshed).map_err(|_| ())?;
+    Ok(refreshed)
+}
+
 fn unique_temporary_path(home: &Path) -> PathBuf {
     home.join(format!(
         ".auth.json.{}.{}.tmp",
