@@ -25,6 +25,7 @@
 - Create src-tauri/src/tender_store/tender_record_proposals.rs for provider DTOs, schemas, handles, resolution, and validation reports.
 - Modify src-tauri/src/tender_store.rs for module registration and persistence schema.
 - Modify src-tauri/src/tender_store/tender_records.rs for task/data-view construction and repair preparation.
+- Modify src-tauri/src/agent_backend/client.rs, fixture_client.rs, turn_executor.rs, and src-tauri/src/agent_runtime.rs so the direct ChatGPT request sends the task contract as strict Structured Outputs.
 - Modify src-tauri/src/tender_store/agent_records.rs for rejected-output persistence and normalized publication.
 - Modify src-tauri/src/agent_runtime.rs for public issue/repair DTOs and bounded orchestration.
 - Modify src-tauri/src/agent_runtime/codex_protocol.rs for repair feedback and truthful transport diagnostics.
@@ -39,11 +40,16 @@
 - Create: src-tauri/src/tender_store/tender_record_proposals.rs
 - Modify: src-tauri/src/tender_store.rs
 - Modify: src-tauri/src/tender_store/tender_records.rs
+- Modify: src-tauri/src/agent_backend/client.rs
+- Modify: src-tauri/src/agent_backend/fixture_client.rs
+- Modify: src-tauri/src/agent_backend/turn_executor.rs
+- Modify: src-tauri/src/agent_runtime.rs
 - Test: src-tauri/src/tender_store/tender_record_proposals.rs
+- Test: src-tauri/src/agent_backend/client.rs
 
 **Interfaces:**
-- Consumes: TenderEvidenceReference, TenderRecordAuthority, TenderRecordCandidateBatch, canonical JSON helpers.
-- Produces: TenderRecordProposalContext::new, output_contract_json, provider_evidence, evidence_reference, authority_reference, resolve, and record_extraction_profile_contract.
+- Consumes: TenderEvidenceReference, TenderRecordAuthority, TenderRecordCandidateBatch, canonical JSON helpers, and BackendRequest.
+- Produces: TenderRecordProposalContext::new, output_contract_json, provider_evidence, evidence_reference, authority_reference, resolve, record_extraction_profile_contract, and a strict text.format.json_schema request body.
 
 - [ ] **Step 1: Write failing handle/schema tests**
 
@@ -135,8 +141,24 @@ Change record_extraction_task to call the task context output_contract_json. Cha
 
 - [ ] **Step 6: Run focused tests and verify GREEN**
 
+Before running the focused tests, add output_schema: serde_json::Value to BackendRequest, populate it from prepared.task.output_contract_json in chatgpt_provider_turn, and make build_request_body emit:
+
+~~~rust
+json!({
+    "format": {
+        "type": "json_schema",
+        "name": "quantix_tender_output",
+        "strict": true,
+        "schema": req.output_schema.clone(),
+    }
+})
+~~~
+
+Update every BackendRequest fixture constructor and assert the exact text.format object in the client unit test.
+
 ~~~powershell
 cargo test --manifest-path src-tauri/Cargo.toml --lib tender_record_proposals --features runtime-fixture
+cargo test --manifest-path src-tauri/Cargo.toml --lib request_body_matches_contract_shape --features runtime-fixture
 ~~~
 
 Expected: all proposal module tests PASS.
@@ -144,7 +166,7 @@ Expected: all proposal module tests PASS.
 - [ ] **Step 7: Commit**
 
 ~~~powershell
-git add src-tauri/src/tender_store.rs src-tauri/src/tender_store/tender_record_proposals.rs src-tauri/src/tender_store/tender_records.rs
+git add src-tauri/src/tender_store.rs src-tauri/src/tender_store/tender_record_proposals.rs src-tauri/src/tender_store/tender_records.rs src-tauri/src/agent_backend/client.rs src-tauri/src/agent_backend/fixture_client.rs src-tauri/src/agent_backend/turn_executor.rs src-tauri/src/agent_runtime.rs
 git commit -m "feat: add task scoped tender proposal contract"
 ~~~
 
