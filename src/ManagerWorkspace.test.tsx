@@ -2522,6 +2522,8 @@ describe("ManagerWorkspace", () => {
         parseable_document_count: 1,
         parsed_document_count: 1,
         extraction_run_count: 1,
+        blocking_agent_run_id: null,
+        retry_not_before_epoch_seconds: null,
       },
     };
     host.inspectManagerWorkspace.mockResolvedValue(intakeProjection);
@@ -2643,6 +2645,8 @@ describe("ManagerWorkspace", () => {
         parseable_document_count: 1,
         parsed_document_count: 1,
         extraction_run_count: 0,
+        blocking_agent_run_id: null,
+        retry_not_before_epoch_seconds: null,
       },
     });
     host.retryManagerIntake.mockResolvedValue(undefined);
@@ -3047,6 +3051,8 @@ describe("ManagerWorkspace", () => {
         parseable_document_count: 1,
         parsed_document_count: 0,
         extraction_run_count: 0,
+        blocking_agent_run_id: null,
+        retry_not_before_epoch_seconds: null,
       },
     };
     host.inspectManagerWorkspace.mockResolvedValue(waiting);
@@ -3080,6 +3086,8 @@ describe("ManagerWorkspace", () => {
         parseable_document_count: 1,
         parsed_document_count: 0,
         extraction_run_count: 0,
+        blocking_agent_run_id: null,
+        retry_not_before_epoch_seconds: null,
       },
     };
     host.inspectManagerWorkspace.mockResolvedValue(pausedProjection);
@@ -3157,6 +3165,8 @@ describe("ManagerWorkspace", () => {
         parseable_document_count: 123,
         parsed_document_count: 123,
         extraction_run_count: 0,
+        blocking_agent_run_id: null,
+        retry_not_before_epoch_seconds: null,
       },
     };
     host.inspectManagerWorkspace.mockResolvedValue(extractingProjection);
@@ -3218,6 +3228,8 @@ describe("ManagerWorkspace", () => {
         parseable_document_count: 1,
         parsed_document_count: 0,
         extraction_run_count: 0,
+        blocking_agent_run_id: null,
+        retry_not_before_epoch_seconds: null,
       },
     };
     host.inspectManagerWorkspace.mockResolvedValue(retryProjection);

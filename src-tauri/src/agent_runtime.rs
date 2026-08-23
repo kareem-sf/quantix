@@ -1287,6 +1287,19 @@ impl QuantixHost {
         result
     }
 
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    pub fn set_document_tools_verified_for_verification(&self, verified: bool) {
+        self.set_document_tools_verified(verified);
+    }
+
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    pub fn start_manager_intake_background_for_verification(
+        &self,
+        tender_id: &str,
+    ) -> Result<(), TenderCommandError> {
+        self.start_manager_intake_background(tender_id.to_owned())
+    }
+
     async fn run_manager_intake_pipeline(&self, tender_id: &str) -> Result<(), TenderCommandError> {
         require_setup(self)?;
         let _execution = self.manager_intake_execution_guard(tender_id).await?;
@@ -1667,12 +1680,6 @@ impl QuantixHost {
         {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        let run_started = Instant::now();
-        let provider_selection = if deterministic_outcome.is_some() {
-            deterministic_provider_selection()
-        } else {
-            self.require_current_tender_ai_selection(&tender_id).await?
-        };
         if command
             .retry_of_run_id
             .as_deref()
@@ -1680,7 +1687,18 @@ impl QuantixHost {
         {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-
+        if let Some(retry_of_run_id) = command.retry_of_run_id.as_deref() {
+            store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                .require_bootstrap_retry_not_manager_owned(retry_of_run_id)?;
+        }
+        let run_started = Instant::now();
+        let provider_selection = if deterministic_outcome.is_some() {
+            deterministic_provider_selection()
+        } else {
+            self.require_current_tender_ai_selection(&tender_id).await?
+        };
         let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
         let _active = ActiveAgentRunGuard {
             host: self.clone(),

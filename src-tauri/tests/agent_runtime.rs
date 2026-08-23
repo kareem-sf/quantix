@@ -209,6 +209,43 @@ fn agent_run_count(application_home: &Path, tender_id: &str) -> u32 {
     .expect("count Agent Runs")
 }
 
+fn set_manager_cooldown_deadline(harness: &Harness, offset_seconds: i64) {
+    let connection = harness.database();
+    let trigger_sql: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema
+             WHERE type = 'trigger'
+               AND name = 'manager_intake_provider_rate_limit_consumptions_no_update'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("load rate-limit consumption immutability trigger");
+    connection
+        .execute_batch("DROP TRIGGER manager_intake_provider_rate_limit_consumptions_no_update")
+        .expect("enable coherent cooldown time fixture");
+    connection
+        .execute(
+            "UPDATE manager_intake_provider_rate_limit_consumptions
+             SET retry_not_before_epoch_seconds = unixepoch('now') + ?1
+             WHERE source_run_id = (
+               SELECT blocking_agent_run_id FROM manager_intake_runs
+               ORDER BY intake_run_sequence DESC LIMIT 1
+             )",
+            [offset_seconds],
+        )
+        .expect("set consumed cooldown deadline");
+    connection
+        .execute(
+            "UPDATE manager_intake_runs
+             SET retry_not_before_epoch_seconds = unixepoch('now') + ?1",
+            [offset_seconds],
+        )
+        .expect("set projected cooldown deadline");
+    connection
+        .execute_batch(&trigger_sql)
+        .expect("restore rate-limit consumption immutability trigger");
+}
+
 async fn wait_for_exact_agent_run_count(
     application_home: &Path,
     tender_id: &str,
@@ -257,14 +294,7 @@ async fn manager_cooldown_resumes_once_and_survives_restart() {
     let future = Harness::new("rate-limited");
     prepare_rate_limited_manager_intake(&future).await;
     let baseline = agent_run_count(&future.application_home, &future.tender_id);
-    future
-        .database()
-        .execute(
-            "UPDATE manager_intake_runs
-             SET retry_not_before_epoch_seconds = unixepoch('now') + 3600",
-            [],
-        )
-        .expect("store distant future cooldown");
+    set_manager_cooldown_deadline(&future, 3600);
 
     future
         .host
@@ -281,14 +311,7 @@ async fn manager_cooldown_resumes_once_and_survives_restart() {
         "a future cooldown must not call the provider"
     );
 
-    future
-        .database()
-        .execute(
-            "UPDATE manager_intake_runs
-             SET retry_not_before_epoch_seconds = unixepoch('now') + 1",
-            [],
-        )
-        .expect("store restart-sized future cooldown");
+    set_manager_cooldown_deadline(&future, 1);
     let Harness {
         _root: root,
         application_home,
@@ -324,14 +347,7 @@ async fn manager_cooldown_resumes_once_and_survives_restart() {
     let expired = Harness::new("rate-limited");
     prepare_rate_limited_manager_intake(&expired).await;
     let expired_baseline = agent_run_count(&expired.application_home, &expired.tender_id);
-    expired
-        .database()
-        .execute(
-            "UPDATE manager_intake_runs
-             SET retry_not_before_epoch_seconds = unixepoch('now') - 1",
-            [],
-        )
-        .expect("store expired cooldown");
+    set_manager_cooldown_deadline(&expired, -1);
     let Harness {
         _root: expired_root,
         application_home: expired_application_home,
@@ -408,14 +424,8 @@ async fn rebind_cannot_bypass_future_cooldown() {
     let initial_runs: u32 = connection
         .query_row("SELECT COUNT(*) FROM agent_runs", [], |row| row.get(0))
         .expect("count initial runs");
-    connection
-        .execute(
-            "UPDATE manager_intake_runs
-             SET retry_not_before_epoch_seconds = unixepoch('now') + 3600",
-            [],
-        )
-        .expect("set fixed future cooldown");
     drop(connection);
+    set_manager_cooldown_deadline(&harness, 3600);
 
     harness
         .host
@@ -432,14 +442,7 @@ async fn rebind_cannot_bypass_future_cooldown() {
         initial_runs
     );
 
-    harness
-        .database()
-        .execute(
-            "UPDATE manager_intake_runs
-             SET retry_not_before_epoch_seconds = unixepoch('now') - 1",
-            [],
-        )
-        .expect("expire cooldown");
+    set_manager_cooldown_deadline(&harness, -1);
     fs::write(
         harness.fixture_executable.with_extension("agent-scenario"),
         "manager-intake",
@@ -466,6 +469,130 @@ async fn rebind_cannot_bypass_future_cooldown() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("expired cooldown did not admit exactly one Agent Run");
+}
+
+#[tokio::test]
+async fn generic_retry_cannot_bypass_manager_owned_recovery_during_cooldown() {
+    let harness = Harness::new("rate-limited");
+    prepare_rate_limited_manager_intake(&harness).await;
+    set_manager_cooldown_deadline(&harness, 3600);
+    let manager_run_id: String = harness
+        .database()
+        .query_row(
+            "SELECT runs.run_id
+             FROM agent_runs AS runs
+             JOIN tender_tasks AS tasks USING (task_id)
+             WHERE EXISTS (
+               SELECT 1 FROM json_each(tasks.exact_inputs_json)
+               WHERE json_extract(value, '$.kind') = 'manager_intake_run'
+             )
+             ORDER BY runs.run_sequence LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("find Manager-owned extraction run");
+    let before = agent_run_count(&harness.application_home, &harness.tender_id);
+
+    let error = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: Some(manager_run_id.clone()),
+        })
+        .await
+        .expect_err("generic retry must not own Manager extraction recovery");
+
+    assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+    assert_eq!(
+        agent_run_count(&harness.application_home, &harness.tender_id),
+        before
+    );
+    assert_eq!(
+        harness
+            .database()
+            .query_row(
+                "SELECT COUNT(*) FROM agent_runs WHERE retry_of_run_id = ?1",
+                [&manager_run_id],
+                |row| row.get::<_, u32>(0),
+            )
+            .expect("count forbidden Manager retry children"),
+        0
+    );
+}
+
+#[tokio::test]
+async fn local_tools_preflight_preserves_a_future_manager_cooldown() {
+    let harness = Harness::new("rate-limited");
+    prepare_rate_limited_manager_intake(&harness).await;
+    set_manager_cooldown_deadline(&harness, 3600);
+    let expected: (String, Option<String>, Option<i64>, u32) = harness
+        .database()
+        .query_row(
+            "SELECT stage, blocking_agent_run_id,
+                    retry_not_before_epoch_seconds, provider_retry_attempt_count
+             FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("read authoritative future cooldown");
+    let before = agent_run_count(&harness.application_home, &harness.tender_id);
+
+    harness
+        .host
+        .set_document_tools_verified_for_verification(false);
+    harness
+        .host
+        .start_manager_intake_background_for_verification(&harness.tender_id)
+        .expect("start background intake with unavailable tools");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    harness
+        .host
+        .set_document_tools_verified_for_verification(true);
+    harness
+        .host
+        .run_manager_intake_for_verification(&harness.tender_id)
+        .await
+        .expect("restored tools before deadline remain blocked");
+
+    let actual: (String, Option<String>, Option<i64>, u32) = harness
+        .database()
+        .query_row(
+            "SELECT stage, blocking_agent_run_id,
+                    retry_not_before_epoch_seconds, provider_retry_attempt_count
+             FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("read preserved future cooldown");
+    assert_eq!(actual, expected);
+    assert_eq!(
+        agent_run_count(&harness.application_home, &harness.tender_id),
+        before,
+        "preflight transitions must not create provider work before the deadline"
+    );
+}
+
+#[tokio::test]
+async fn cold_open_rejects_cooldown_consumption_projection_mismatch() {
+    let harness = Harness::new("rate-limited");
+    prepare_rate_limited_manager_intake(&harness).await;
+    harness
+        .database()
+        .execute(
+            "UPDATE manager_intake_runs SET provider_retry_attempt_count = 2",
+            [],
+        )
+        .expect("inject cooldown consumption projection mismatch");
+
+    let cold =
+        QuantixHost::with_setup_platform(&harness.application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&cold).state, SetupState::Ready);
+    assert_eq!(
+        cold.inspect_tender_integrity(&harness.tender_id)
+            .expect("inspect mismatched cooldown projection")
+            .state,
+        TenderIntegrityState::RecoveryRequired
+    );
 }
 
 #[tokio::test]
@@ -859,14 +986,14 @@ async fn engineer_interruption_persists_a_terminal_interrupted_run() {
 
 #[tokio::test]
 async fn manager_intake_cancellation_discards_a_schema_valid_candidate() {
-    let harness = Harness::new("manager-intake");
+    let harness = Harness::new("manager-intake-cancellation");
     harness.parsed_pdf_evidence().await;
     let host = harness.host.clone();
     let tender_id = harness.tender_id.clone();
     let intake =
         tokio::spawn(async move { host.run_manager_intake_for_verification(&tender_id).await });
 
-    let run_id = tokio::time::timeout(Duration::from_secs(10), async {
+    let run_id = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let connection = harness.database();
             let run_id = connection
@@ -893,7 +1020,7 @@ async fn manager_intake_cancellation_discards_a_schema_valid_candidate() {
     .await
     .expect("Manager Intake outcome is running");
 
-    tokio::time::timeout(Duration::from_secs(10), async {
+    tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if harness
                 .fixture_executable

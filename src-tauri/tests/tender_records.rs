@@ -6,8 +6,8 @@ use quantix_lib::{
     ChangeAssessmentStatus, ConfirmSourceRelationshipCommand, CreateBidDecisionPackageCommand,
     CreateTenderCommand, CreateTenderEngineerEntryCommand, DecideChangeAssessmentCommand,
     DecideTenderRecordCommand, ImportTenderPackageCommand, InspectChangeAssessmentsCommand,
-    OutputValidationIssue, ParseSourceArtifactCommand, ProviderEventKind, ProviderFailureCategory,
-    QuantixHost, ResolveIndeterminateAgentRunCommand, ReviseTenderCommand,
+    OutputValidationIssue, ParseSourceArtifactCommand, ProviderEventKind, ProviderFailure,
+    ProviderFailureCategory, QuantixHost, ResolveIndeterminateAgentRunCommand, ReviseTenderCommand,
     RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, RuntimeLayout, SetupPlatform,
     SetupState, SourceRelationshipKind, StoragePermissions, TenderErrorCode,
     TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase,
@@ -782,6 +782,135 @@ async fn byte_batch_plan_is_persisted_and_resumed() {
         [],
     );
     assert!(immutable_binding_delete.is_err());
+}
+
+#[tokio::test]
+async fn cold_open_rejects_incomplete_or_drifted_manager_extraction_plans() {
+    for mutation in [
+        "missing_plan",
+        "estimate_drift",
+        "cap_exceeded",
+        "duplicate_evidence",
+        "omitted_evidence",
+    ] {
+        let harness = RuntimeHarness::new("manager-intake");
+        harness
+            .parsed_pdf_evidence_package(
+                &format!("cold-plan-{mutation}"),
+                &[
+                    ("cold-plan-a", b"TENDER_RECORD_GOLDEN"),
+                    ("cold-plan-b", b"TENDER_RECORD_GOLDEN"),
+                ],
+            )
+            .await;
+        harness
+            .host
+            .persist_manager_intake_byte_plan_for_verification(&harness.tender_id, u64::MAX)
+            .expect("persist Manager extraction plan");
+        assert_eq!(
+            harness
+                .host
+                .inspect_tender_integrity(&harness.tender_id)
+                .expect("inspect valid Manager extraction plan")
+                .state,
+            TenderIntegrityState::Ready
+        );
+        let connection = rusqlite::Connection::open(
+            harness
+                .application_home
+                .join("tenders")
+                .join(&harness.tender_id)
+                .join("tender.sqlite"),
+        )
+        .expect("open plan mutation database");
+        match mutation {
+            "missing_plan" => {
+                connection
+                    .execute_batch("DROP TRIGGER manager_intake_extraction_plan_batches_no_delete;")
+                    .expect("enable missing plan mutation");
+                connection
+                    .execute("DELETE FROM manager_intake_extraction_plan_batches", [])
+                    .expect("remove required later-stage plan");
+            }
+            "estimate_drift" | "cap_exceeded" => {
+                connection
+                    .execute_batch("DROP TRIGGER manager_intake_extraction_plan_batches_no_update;")
+                    .expect("enable plan estimate mutation");
+                let replacement = if mutation == "cap_exceeded" {
+                    512_i64 * 1024 + 1
+                } else {
+                    connection
+                        .query_row(
+                            "SELECT estimated_request_bytes + 1
+                             FROM manager_intake_extraction_plan_batches WHERE ordinal = 1",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .expect("derive drifted request estimate")
+                };
+                connection
+                    .execute(
+                        "UPDATE manager_intake_extraction_plan_batches
+                         SET estimated_request_bytes = ?1",
+                        [replacement],
+                    )
+                    .expect("drift persisted request estimate");
+            }
+            "duplicate_evidence" | "omitted_evidence" => {
+                connection
+                    .execute_batch("DROP TRIGGER manager_intake_extraction_plan_batches_no_update;")
+                    .expect("enable plan evidence mutation");
+                let inputs_json: String = connection
+                    .query_row(
+                        "SELECT canonical_inputs_json
+                         FROM manager_intake_extraction_plan_batches WHERE ordinal = 1",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .expect("read planned inputs");
+                let mut inputs: serde_json::Value =
+                    serde_json::from_str(&inputs_json).expect("parse planned inputs");
+                let evidence = inputs["evidence"]
+                    .as_array_mut()
+                    .expect("planned Evidence array");
+                assert!(evidence.len() >= 2);
+                if mutation == "duplicate_evidence" {
+                    evidence[1] = evidence[0].clone();
+                } else {
+                    evidence.pop();
+                }
+                let mutated =
+                    serde_json_canonicalizer::to_string(&inputs).expect("canonical mutated inputs");
+                let fingerprint = Sha256::digest(mutated.as_bytes())
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                connection
+                    .execute(
+                        "UPDATE manager_intake_extraction_plan_batches
+                         SET canonical_inputs_json = ?1, batch_fingerprint = ?2
+                         WHERE ordinal = 1",
+                        rusqlite::params![mutated, fingerprint],
+                    )
+                    .expect("persist self-consistent Evidence coverage mutation");
+            }
+            _ => unreachable!(),
+        }
+        drop(connection);
+
+        let cold = QuantixHost::with_setup_platform(
+            &harness.application_home,
+            Arc::new(ReadySetupPlatform),
+        );
+        assert_eq!(ensure_quantix_setup(&cold).state, SetupState::Ready);
+        assert_eq!(
+            cold.inspect_tender_integrity(&harness.tender_id)
+                .expect("inspect corrupted Manager extraction plan")
+                .state,
+            TenderIntegrityState::RecoveryRequired,
+            "{mutation}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1667,6 +1796,104 @@ async fn manager_intake_links_a_pre_repair_transport_retry_without_spending_repa
             .state,
         TenderIntegrityState::RecoveryRequired
     );
+}
+
+#[tokio::test]
+async fn manager_intake_does_not_retry_a_local_request_budget_failure_after_restart() {
+    let harness = RuntimeHarness::new("process-failure-before-turn");
+    harness
+        .parsed_pdf_evidence("budget-terminal-source", b"TENDER_RECORD_GOLDEN")
+        .await;
+    harness
+        .host
+        .run_manager_intake_for_verification(&harness.tender_id)
+        .await
+        .expect("persist initial retry-safe transport failure");
+    let runs = tender_record_extraction_runs(&harness.application_home, &harness.tender_id);
+    assert_eq!(runs.len(), 1);
+    let source_run_id = runs[0].0.clone();
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(&database).expect("open failed Manager run");
+    let trigger_sql: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema
+             WHERE type = 'trigger' AND name = 'agent_runs_terminal_facts_no_rewrite'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("load terminal immutability trigger");
+    connection
+        .execute_batch("DROP TRIGGER agent_runs_terminal_facts_no_rewrite")
+        .expect("enable terminal failure mutation");
+    let failure_json: String = connection
+        .query_row(
+            "SELECT failure_json FROM agent_runs WHERE run_id = ?1",
+            [&source_run_id],
+            |row| row.get(0),
+        )
+        .expect("read source failure");
+    let mut failure: ProviderFailure =
+        serde_json::from_str(&failure_json).expect("parse source failure");
+    failure.category = ProviderFailureCategory::RequestBudgetExceeded;
+    failure.retry_safe = false;
+    connection
+        .execute(
+            "UPDATE agent_runs SET failure_json = ?2 WHERE run_id = ?1",
+            rusqlite::params![
+                source_run_id,
+                serde_json_canonicalizer::to_string(&failure)
+                    .expect("canonical local budget failure")
+            ],
+        )
+        .expect("persist nonretryable local budget failure");
+    connection
+        .execute_batch(&trigger_sql)
+        .expect("restore terminal immutability trigger");
+    drop(connection);
+    harness.set_agent_scenario("manager-intake");
+    let turn_count_path = harness.codex.with_extension("record-extraction-turn-count");
+    let request_count = fs::read_to_string(&turn_count_path)
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    let reopened = reopen_runtime_host(
+        &harness.application_home,
+        &harness._root.path().join("resources"),
+    );
+
+    let error = reopened
+        .run_manager_intake_for_verification(&harness.tender_id)
+        .await
+        .expect_err("local request budget failure remains terminal");
+
+    assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+    let after = tender_record_extraction_runs(&harness.application_home, &harness.tender_id);
+    assert_eq!(after.len(), 1, "no recovery child may be created");
+    assert_eq!(
+        fs::read_to_string(&turn_count_path)
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .unwrap_or(0),
+        request_count
+    );
+    let source = reopened
+        .inspect_agent_run(quantix_lib::InspectAgentRunCommand {
+            tender_id: harness.tender_id.clone(),
+            run_id: source_run_id,
+        })
+        .expect("inspect terminal local budget failure");
+    assert_eq!(
+        source.failure.as_ref().map(|failure| failure.category),
+        Some(ProviderFailureCategory::RequestBudgetExceeded)
+    );
+    assert!(source
+        .failure
+        .as_ref()
+        .is_some_and(|failure| !failure.retry_safe));
 }
 
 #[tokio::test]

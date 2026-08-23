@@ -588,12 +588,13 @@ impl TenderStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_error)?;
-        let (intake_run_id, attempts): (String, u32) = transaction
+        let (intake_run_id, attempts, current_deadline): (String, u32, Option<i64>) = transaction
             .query_row(
-                "SELECT intake_run_id, provider_retry_attempt_count
+                "SELECT intake_run_id, provider_retry_attempt_count,
+                        retry_not_before_epoch_seconds
                  FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .map_err(sql_error)?;
         let updated_at = sqlite_timestamp(&transaction)?;
@@ -715,6 +716,9 @@ impl TenderStore {
                 }),
                 &updated_at,
             )?;
+        } else if current_deadline.is_some_and(|deadline| deadline > now) {
+            transaction.commit().map_err(sql_error)?;
+            return Ok(());
         } else if transaction
             .execute(
                 "UPDATE manager_intake_runs
@@ -740,8 +744,25 @@ impl TenderStore {
 
     pub(crate) fn wait_manager_intake_for_local_tools(&mut self) -> Result<(), TenderCommandError> {
         self.require_storage_writable()?;
-        let updated_at = connection_timestamp(&self.connection)?;
-        self.connection
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let deadline: Option<i64> = transaction
+            .query_row(
+                "SELECT retry_not_before_epoch_seconds FROM manager_intake_runs
+                 ORDER BY intake_run_sequence DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        let now = sqlite_epoch_seconds(&transaction)?;
+        if deadline.is_some_and(|deadline| deadline > now) {
+            transaction.commit().map_err(sql_error)?;
+            return Ok(());
+        }
+        let updated_at = sqlite_timestamp(&transaction)?;
+        transaction
             .execute(
                 "UPDATE manager_intake_runs
                  SET stage = 'waiting_for_local_tools', current_manager_run_id = NULL,
@@ -759,15 +780,32 @@ impl TenderStore {
                 [updated_at],
             )
             .map_err(sql_error)?;
-        Ok(())
+        transaction.commit().map_err(sql_error)
     }
 
     pub(crate) fn wait_manager_intake_for_provider_approval(
         &mut self,
     ) -> Result<(), TenderCommandError> {
         self.require_storage_writable()?;
-        let updated_at = connection_timestamp(&self.connection)?;
-        self.connection
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let deadline: Option<i64> = transaction
+            .query_row(
+                "SELECT retry_not_before_epoch_seconds FROM manager_intake_runs
+                 ORDER BY intake_run_sequence DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        let now = sqlite_epoch_seconds(&transaction)?;
+        if deadline.is_some_and(|deadline| deadline > now) {
+            transaction.commit().map_err(sql_error)?;
+            return Ok(());
+        }
+        let updated_at = sqlite_timestamp(&transaction)?;
+        transaction
             .execute(
                 "UPDATE manager_intake_runs
                  SET stage = 'waiting_for_provider_approval', current_manager_run_id = NULL,
@@ -784,7 +822,7 @@ impl TenderStore {
                 [updated_at],
             )
             .map_err(sql_error)?;
-        Ok(())
+        transaction.commit().map_err(sql_error)
     }
 
     pub(crate) fn unresolved_manager_intake_run_ids(
@@ -1106,6 +1144,16 @@ impl TenderStore {
             current_manager_intake_plan_context(&transaction)?;
         let mut planned = load_manager_intake_plan(&transaction, &intake_run_id)?;
         if planned.is_empty() {
+            let stage: String = transaction
+                .query_row(
+                    "SELECT stage FROM manager_intake_runs WHERE intake_run_id = ?1",
+                    [&intake_run_id],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            if stage != ManagerIntakeStage::ReadingDocuments.as_str() {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
             let (evidence, authorities) = current_manager_intake_plan_inputs(&transaction)?;
             planned = build_manager_intake_plan(
                 &transaction,
@@ -1650,15 +1698,21 @@ impl TenderStore {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT stage, provider_selection_json
+                "SELECT intake_run_id, stage, provider_selection_json,
+                        blocking_agent_run_id, retry_not_before_epoch_seconds,
+                        provider_retry_attempt_count
                  FROM manager_intake_runs ORDER BY intake_run_sequence",
             )
             .map_err(sql_error)?;
         let mut rows = statement.query([]).map_err(sql_error)?;
         while let Some(row) = rows.next().map_err(sql_error)? {
             check()?;
-            let stage = ManagerIntakeStage::parse(&row.get::<_, String>(0).map_err(sql_error)?)?;
-            let binding = row.get::<_, Option<String>>(1).map_err(sql_error)?;
+            let intake_run_id = row.get::<_, String>(0).map_err(sql_error)?;
+            let stage = ManagerIntakeStage::parse(&row.get::<_, String>(1).map_err(sql_error)?)?;
+            let binding = row.get::<_, Option<String>>(2).map_err(sql_error)?;
+            let blocking_run_id = row.get::<_, Option<String>>(3).map_err(sql_error)?;
+            let retry_deadline = row.get::<_, Option<i64>>(4).map_err(sql_error)?;
+            let projected_attempt = row.get::<_, u32>(5).map_err(sql_error)?;
             if !matches!(
                 stage,
                 ManagerIntakeStage::WaitingForLocalTools
@@ -1678,6 +1732,103 @@ impl TenderStore {
                 {
                     return Ok(false);
                 }
+            }
+            let consumptions = self
+                .connection
+                .prepare(
+                    "SELECT consumption.source_run_id,
+                            consumption.provider_retry_attempt_count,
+                            consumption.retry_not_before_epoch_seconds,
+                            runs.failure_json
+                     FROM manager_intake_provider_rate_limit_consumptions AS consumption
+                     JOIN agent_runs AS runs ON runs.run_id = consumption.source_run_id
+                     WHERE consumption.intake_run_id = ?1
+                     ORDER BY consumption.rowid",
+                )
+                .and_then(|mut statement| {
+                    statement
+                        .query_map([&intake_run_id], |consumption| {
+                            Ok((
+                                consumption.get::<_, String>(0)?,
+                                consumption.get::<_, u32>(1)?,
+                                consumption.get::<_, Option<i64>>(2)?,
+                                consumption.get::<_, Option<String>>(3)?,
+                            ))
+                        })?
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .map_err(sql_error)?;
+            let mut expected_attempt = 1_u32;
+            for (_, attempt, deadline, failure_json) in &consumptions {
+                let failure = failure_json
+                    .as_deref()
+                    .map(parse_canonical::<crate::agent_runtime::ProviderFailure>)
+                    .transpose()?;
+                if *attempt != expected_attempt
+                    || failure.as_ref().is_none_or(|failure| {
+                        failure.category != ProviderFailureCategory::RateLimited
+                    })
+                    || ((*attempt <= 3) != deadline.is_some())
+                {
+                    return Ok(false);
+                }
+                expected_attempt = if *attempt == 4 { 1 } else { attempt + 1 };
+            }
+            let latest_consumption = consumptions.last();
+            if projected_attempt == 0 {
+                if latest_consumption.is_some_and(|(_, attempt, _, _)| *attempt != 4) {
+                    return Ok(false);
+                }
+            } else if latest_consumption
+                .is_none_or(|(_, attempt, _, _)| *attempt != projected_attempt)
+            {
+                return Ok(false);
+            }
+            if let Some(deadline) = retry_deadline {
+                if stage != ManagerIntakeStage::WaitingForProvider
+                    || !(1..=3).contains(&projected_attempt)
+                    || latest_consumption.is_none_or(
+                        |(source_run_id, attempt, consumed_deadline, _)| {
+                            blocking_run_id.as_deref() != Some(source_run_id.as_str())
+                                || *attempt != projected_attempt
+                                || *consumed_deadline != Some(deadline)
+                        },
+                    )
+                {
+                    return Ok(false);
+                }
+            } else if projected_attempt == 4
+                && (stage != ManagerIntakeStage::Failed
+                    || latest_consumption.is_none_or(|(source_run_id, attempt, deadline, _)| {
+                        blocking_run_id.as_deref() != Some(source_run_id.as_str())
+                            || *attempt != 4
+                            || deadline.is_some()
+                    }))
+            {
+                return Ok(false);
+            } else if blocking_run_id.is_some() {
+                return Ok(false);
+            }
+
+            let plan_count: u32 = self
+                .connection
+                .query_row(
+                    "SELECT COUNT(*) FROM manager_intake_extraction_plan_batches
+                     WHERE intake_run_id = ?1",
+                    [&intake_run_id],
+                    |plan| plan.get(0),
+                )
+                .map_err(sql_error)?;
+            if matches!(
+                stage,
+                ManagerIntakeStage::ExtractingTenderFacts
+                    | ManagerIntakeStage::ReviewingTenderFacts
+                    | ManagerIntakeStage::PreparingFirstDecision
+                    | ManagerIntakeStage::WaitingForEngineer
+                    | ManagerIntakeStage::BidDecisionReady
+            ) && plan_count == 0
+            {
+                return Ok(false);
             }
         }
         drop(rows);
@@ -1779,6 +1930,15 @@ impl TenderStore {
                 || canonical_json(&inputs)? != inputs_json
                 || inputs.request_context.request_context_sha256 != context_sha256
                 || !record_extraction_request_plan_context_is_valid(&inputs.request_context)?
+                || u64::try_from(inputs.request_context.request_body_json.len()).ok()
+                    != Some(inputs.request_context.request_body_bytes)
+                || u64::try_from(estimated_bytes).ok()
+                    != Some(estimated_record_extraction_request_bytes(
+                        inputs.request_context.request_body_bytes,
+                    )?)
+                || u64::try_from(estimated_bytes)
+                    .ok()
+                    .is_none_or(|bytes| bytes > record_extraction_request_hard_cap_bytes())
                 || manager_intake_batch_fingerprint(&inputs)? != fingerprint
             {
                 return Ok(false);
@@ -1786,6 +1946,86 @@ impl TenderStore {
         }
         drop(plan_rows);
         drop(plan_statement);
+        let intake_ids = self
+            .connection
+            .prepare(
+                "SELECT DISTINCT intake_run_id
+                 FROM manager_intake_extraction_plan_batches ORDER BY intake_run_id",
+            )
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .map_err(sql_error)?;
+        for intake_run_id in intake_ids {
+            check()?;
+            let planned_inputs = self
+                .connection
+                .prepare(
+                    "SELECT canonical_inputs_json
+                     FROM manager_intake_extraction_plan_batches
+                     WHERE intake_run_id = ?1 ORDER BY ordinal",
+                )
+                .and_then(|mut statement| {
+                    statement
+                        .query_map([&intake_run_id], |row| row.get::<_, String>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .map_err(sql_error)?
+                .into_iter()
+                .map(|inputs| parse_canonical::<ManagerIntakeBatchInputs>(&inputs))
+                .collect::<Result<Vec<_>, _>>()?;
+            let flattened = planned_inputs
+                .iter()
+                .flat_map(|inputs| inputs.evidence.iter().cloned())
+                .collect::<Vec<_>>();
+            let expected_evidence = self
+                .connection
+                .prepare(
+                    "SELECT el.artifact_id, el.version, el.ordinal
+                     FROM evidence_locations AS el
+                     JOIN source_artifacts AS artifacts
+                       ON artifacts.artifact_id = el.artifact_id
+                     JOIN manager_intake_runs AS intake
+                       ON intake.package_intake_id = artifacts.intake_id
+                     WHERE intake.intake_run_id = ?1
+                       AND NOT EXISTS (
+                         SELECT 1 FROM source_relationships AS relationships
+                         WHERE relationships.prior_artifact_id = el.artifact_id
+                           AND relationships.prior_version = el.version
+                           AND relationships.relationship_kind = 'replacement'
+                       )
+                     ORDER BY el.artifact_id, el.version, el.ordinal",
+                )
+                .and_then(|mut statement| {
+                    statement
+                        .query_map([&intake_run_id], |row| {
+                            Ok(TenderEvidenceReference {
+                                artifact_id: row.get(0)?,
+                                version: row.get(1)?,
+                                ordinal: row.get(2)?,
+                            })
+                        })?
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .map_err(sql_error)?;
+            if flattened != expected_evidence
+                || flattened.iter().collect::<HashSet<_>>().len() != flattened.len()
+                || planned_inputs.iter().any(|inputs| {
+                    inputs.evidence.iter().collect::<HashSet<_>>().len() != inputs.evidence.len()
+                        || inputs
+                            .authorities
+                            .iter()
+                            .map(|authority| authority.authority_id.as_str())
+                            .collect::<HashSet<_>>()
+                            .len()
+                            != inputs.authorities.len()
+                })
+            {
+                return Ok(false);
+            }
+        }
         let mut binding_statement = self
             .connection
             .prepare(

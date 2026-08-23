@@ -955,10 +955,13 @@ fn terminal_noncandidate_retry_is_allowed(run: &AgentRunInspection) -> bool {
         AgentRunState::Failed | AgentRunState::Interrupted
     ) && run.proposed_result.is_none()
         && run.failure.as_ref().is_some_and(|failure| {
-            !matches!(
-                failure.category,
-                ProviderFailureCategory::OutputInvalid | ProviderFailureCategory::OutcomeUnknown
-            )
+            failure.retry_safe
+                && !matches!(
+                    failure.category,
+                    ProviderFailureCategory::OutputInvalid
+                        | ProviderFailureCategory::OutcomeUnknown
+                        | ProviderFailureCategory::RequestBudgetExceeded
+                )
         })
         && !run.events.iter().any(|event| {
             matches!(

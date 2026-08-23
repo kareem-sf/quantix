@@ -185,6 +185,30 @@ fn load_agent_run_provider_binding(
 }
 
 impl TenderStore {
+    pub(crate) fn require_bootstrap_retry_not_manager_owned(
+        &self,
+        retry_of_run_id: &str,
+    ) -> Result<(), TenderCommandError> {
+        let task_id: String = self
+            .connection
+            .query_row(
+                "SELECT task_id FROM agent_runs WHERE run_id = ?1",
+                [retry_of_run_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql_error)?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if load_task(&self.connection, &task_id)?
+            .exact_inputs
+            .iter()
+            .any(|input| input.kind == "manager_intake_run")
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        Ok(())
+    }
+
     pub(crate) fn inspect_bootstrap_team(
         &self,
     ) -> Result<Vec<BootstrapTeamMember>, TenderCommandError> {
@@ -295,23 +319,38 @@ impl TenderStore {
             }
 
             let (profile, task) = if let Some(retry_of_run_id) = retry_of_run_id {
-                let prior: Option<(String, String, Option<String>)> = transaction
+                let prior: Option<(String, String, Option<String>, Option<String>)> = transaction
                     .query_row(
                         "SELECT status, task_id,
                                 (SELECT disposition FROM agent_run_recovery_dispositions
-                                 WHERE agent_run_recovery_dispositions.run_id = agent_runs.run_id)
+                                 WHERE agent_run_recovery_dispositions.run_id = agent_runs.run_id),
+                                failure_json
                          FROM agent_runs WHERE run_id = ?1",
                         [retry_of_run_id],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                     )
                     .optional()
                     .map_err(sql_error)?;
-                let (prior_status, task_id, recovery_disposition) = prior
+                let (prior_status, task_id, recovery_disposition, failure_json) = prior
                     .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-                if prior_status == "running"
-                    || (prior_status == "indeterminate"
-                        && recovery_disposition.as_deref() != Some("retry_task"))
+                let task = load_task(&transaction, &task_id)?;
+                if task
+                    .exact_inputs
+                    .iter()
+                    .any(|input| input.kind == "manager_intake_run")
                 {
+                    return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+                }
+                let retry_authorized = match prior_status.as_str() {
+                    "failed" => failure_json
+                        .as_deref()
+                        .and_then(|failure| parse_canonical_json::<ProviderFailure>(failure).ok())
+                        .is_some_and(|failure| failure.retry_safe),
+                    "interrupted" => true,
+                    "indeterminate" => recovery_disposition.as_deref() == Some("retry_task"),
+                    _ => false,
+                };
+                if !retry_authorized {
                     return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
                 }
                 if prior_status == "indeterminate"
@@ -329,7 +368,7 @@ impl TenderStore {
                 }
                 (
                     load_profile(&transaction, task_profile(&transaction, &task_id)?)?,
-                    load_task(&transaction, &task_id)?,
+                    task,
                 )
             } else {
                 let profile_id: Option<String> = transaction

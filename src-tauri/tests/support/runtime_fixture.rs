@@ -1195,6 +1195,7 @@ fn run_agent_turn(
             | "record-review"
             | "record-review-delayed"
             | "manager-intake"
+            | "manager-intake-cancellation"
             | "manager-intake-bid"
             | "manager-intake-repair-invalid-then-valid"
             | "manager-intake-repair-invalid-twice"
@@ -1674,14 +1675,23 @@ fn run_agent_turn(
                 executable.with_extension("manager-output-waiting"),
                 b"waiting",
             )?;
-            for _ in 0..2_000 {
-                if executable
+            if scenario == "manager-intake-cancellation" {
+                while !executable
                     .with_extension("manager-output-release")
                     .is_file()
                 {
-                    break;
+                    std::thread::sleep(std::time::Duration::from_millis(5));
                 }
-                std::thread::sleep(std::time::Duration::from_millis(5));
+            } else {
+                for _ in 0..2_000 {
+                    if executable
+                        .with_extension("manager-output-release")
+                        .is_file()
+                    {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
             }
             if !executable
                 .with_extension("manager-output-release")
