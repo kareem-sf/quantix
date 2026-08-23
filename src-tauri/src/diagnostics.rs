@@ -431,6 +431,7 @@ struct State {
     reported_dropped_normal: u64,
     reported_dropped_critical: u64,
     writer_error: Option<String>,
+    writer_active: bool,
     deep: Option<DeepState>,
     retired: HashSet<String>,
     deleting: HashSet<String>,
@@ -477,6 +478,7 @@ impl DiagnosticsStore {
                 reported_dropped_normal: 0,
                 reported_dropped_critical: 0,
                 writer_error: None,
+                writer_active: false,
                 deep: None,
                 retired: HashSet::new(),
                 deleting: HashSet::new(),
@@ -662,6 +664,23 @@ impl DiagnosticsStore {
             deep_active_tender,
             deep_remaining_seconds,
             deep_bytes,
+        }
+    }
+
+    /// Wait until every currently accepted diagnostic has been flushed. This is
+    /// deliberately fixture-only so production callers cannot make workflow
+    /// progress depend on the asynchronous journal writer.
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    pub fn drain_for_test(&self) -> io::Result<()> {
+        let mut state = self.inner.state.lock().expect("diagnostics state");
+        loop {
+            if let Some(error) = state.writer_error.as_deref() {
+                return Err(io::Error::other(error.to_owned()));
+            }
+            if state.normal.is_empty() && state.critical.is_empty() && !state.writer_active {
+                return Ok(());
+            }
+            state = self.inner.wake.wait(state).expect("diagnostics wake");
         }
     }
 
@@ -1172,6 +1191,10 @@ fn writer_loop(inner: Arc<Inner>) {
                 break;
             }
         }
+        let wrote_batch = !batch.is_empty();
+        if wrote_batch {
+            guard.writer_active = true;
+        }
         let drop_report = if !batch.is_empty()
             && (guard.dropped_normal > guard.reported_dropped_normal
                 || guard.dropped_critical > guard.reported_dropped_critical)
@@ -1236,6 +1259,11 @@ fn writer_loop(inner: Arc<Inner>) {
                 inner.state.lock().expect("diagnostics state").writer_error =
                     Some(scrub_token(&error.to_string(), 200));
             }
+        }
+        if wrote_batch {
+            let mut state = inner.state.lock().expect("diagnostics state");
+            state.writer_active = false;
+            inner.wake.notify_all();
         }
         let retired = inner
             .state

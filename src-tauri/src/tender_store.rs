@@ -257,7 +257,7 @@ static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static CONTENT_VERIFY_PASS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 38;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 39;
 
 pub(crate) fn record_agent_run_provider_binding(
     transaction: &Transaction<'_>,

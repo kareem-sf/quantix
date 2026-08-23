@@ -842,12 +842,37 @@ impl PendingProviderEvent {
 #[derive(Debug, Clone)]
 pub(crate) struct ProviderExecution {
     pub state: AgentRunState,
+    pub transport_disposition: ProviderTransportDisposition,
+    pub candidate_disposition: CandidateDisposition,
     pub provider_thread_ref: Option<String>,
     pub provider_turn_ref: Option<String>,
     pub events: Vec<PendingProviderEvent>,
     pub usage: ProviderUsage,
     pub failure: Option<ProviderFailure>,
     pub candidate_payload_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProviderTransportDisposition {
+    Completed,
+    Failed,
+    Interrupted,
+    Indeterminate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CandidateDisposition {
+    NotEvaluated,
+    Validated,
+    Rejected(Vec<String>),
+}
+
+impl CandidateDisposition {
+    pub(crate) fn rejected(mut codes: Vec<String>) -> Self {
+        codes.sort();
+        codes.dedup();
+        Self::Rejected(codes)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3098,20 +3123,21 @@ fn record_provider_turn_diagnostic(
     execution: &ProviderExecution,
     started: Instant,
 ) {
-    let (event_name, severity) = match execution.state {
-        AgentRunState::Completed => (
+    let (event_name, severity) = match execution.transport_disposition {
+        ProviderTransportDisposition::Completed => (
             "provider_transport_completed",
             crate::DiagnosticSeverity::Info,
         ),
-        AgentRunState::Failed => ("provider_turn_failed", crate::DiagnosticSeverity::Error),
-        AgentRunState::Interrupted => {
+        ProviderTransportDisposition::Failed => {
+            ("provider_turn_failed", crate::DiagnosticSeverity::Error)
+        }
+        ProviderTransportDisposition::Interrupted => {
             ("provider_turn_interrupted", crate::DiagnosticSeverity::Info)
         }
-        AgentRunState::Indeterminate => (
+        ProviderTransportDisposition::Indeterminate => (
             "provider_turn_indeterminate",
             crate::DiagnosticSeverity::Warning,
         ),
-        AgentRunState::Running => ("provider_turn_running", crate::DiagnosticSeverity::Info),
     };
     let error_code = execution
         .failure
@@ -3127,7 +3153,13 @@ fn record_provider_turn_diagnostic(
     fact.correlation.run_id = Some(prepared.run_id.clone());
     fact.correlation.task_id = Some(prepared.task.task_id.clone());
     fact.duration_ms = Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
-    fact.outcome = Some(execution.state.as_str().into());
+    let transport_outcome = match execution.transport_disposition {
+        ProviderTransportDisposition::Completed => "completed",
+        ProviderTransportDisposition::Failed => "failed",
+        ProviderTransportDisposition::Interrupted => "interrupted",
+        ProviderTransportDisposition::Indeterminate => "indeterminate",
+    };
+    fact.outcome = Some(transport_outcome.into());
     fact.error_code = error_code.clone();
     fact.success = None;
     host.diagnostics().record_tender(tender_id, fact);
@@ -3142,7 +3174,7 @@ fn record_provider_turn_diagnostic(
     deep.correlation.run_id = Some(prepared.run_id.clone());
     deep.correlation.task_id = Some(prepared.task.task_id.clone());
     deep.duration_ms = Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
-    deep.outcome = Some(execution.state.as_str().into());
+    deep.outcome = Some(transport_outcome.into());
     deep.error_code = error_code;
     deep.deep = true;
     deep.request_id = Some(format!("run-{}", prepared.run_id));
@@ -3171,13 +3203,11 @@ fn record_provider_turn_started(host: &QuantixHost, tender_id: &str, prepared: &
 fn failed_execution(failure: ProviderFailure, started: Instant) -> ProviderExecution {
     ProviderExecution {
         state: AgentRunState::Failed,
+        transport_disposition: ProviderTransportDisposition::Failed,
+        candidate_disposition: CandidateDisposition::NotEvaluated,
         provider_thread_ref: None,
         provider_turn_ref: None,
-        events: vec![PendingProviderEvent::new(
-            ProviderEventKind::Terminal,
-            "Agent Run failed before a Provider Turn completed",
-            None,
-        )],
+        events: Vec::new(),
         usage: ProviderUsage {
             elapsed_milliseconds: Some(
                 started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
@@ -3201,20 +3231,20 @@ fn chatgpt_failure_execution(
         ProviderFailureCategory::Interrupted => AgentRunState::Interrupted,
         _ => AgentRunState::Failed,
     };
-    let summary = match state {
-        AgentRunState::Indeterminate => "Provider Turn outcome is indeterminate",
-        AgentRunState::Interrupted => "Provider Turn interrupted",
-        _ => "Provider Turn failed",
-    };
     ProviderExecution {
         state,
+        transport_disposition: match state {
+            AgentRunState::Interrupted => ProviderTransportDisposition::Interrupted,
+            AgentRunState::Indeterminate => ProviderTransportDisposition::Indeterminate,
+            AgentRunState::Failed => ProviderTransportDisposition::Failed,
+            AgentRunState::Completed | AgentRunState::Running => {
+                ProviderTransportDisposition::Failed
+            }
+        },
+        candidate_disposition: CandidateDisposition::NotEvaluated,
         provider_thread_ref: thread_ref.clone(),
         provider_turn_ref: turn_ref.clone(),
-        events: vec![PendingProviderEvent::new(
-            ProviderEventKind::Terminal,
-            summary,
-            turn_ref.as_deref(),
-        )],
+        events: Vec::new(),
         usage: ProviderUsage {
             elapsed_milliseconds: Some(
                 started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
@@ -3709,28 +3739,29 @@ async fn chatgpt_provider_turn(
                     .min(PROVIDER_OUTPUT_LIMIT as u32),
             );
             match candidate {
-                Ok(candidate) => {
-                    let turn_ref = response_lifecycle.accepted_ref.clone();
-                    ProviderExecution {
-                        state: AgentRunState::Completed,
-                        provider_thread_ref: Some(thread_ref),
-                        provider_turn_ref: response_lifecycle.accepted_ref,
-                        events: vec![PendingProviderEvent::new(
-                            ProviderEventKind::Terminal,
-                            "Provider Turn completed",
-                            turn_ref.as_deref(),
-                        )],
-                        usage: result.usage,
-                        failure: None,
-                        candidate_payload_json: Some(candidate),
-                    }
+                Ok(candidate) => ProviderExecution {
+                    state: AgentRunState::Completed,
+                    transport_disposition: ProviderTransportDisposition::Completed,
+                    candidate_disposition: CandidateDisposition::NotEvaluated,
+                    provider_thread_ref: Some(thread_ref),
+                    provider_turn_ref: response_lifecycle.accepted_ref,
+                    events: Vec::new(),
+                    usage: result.usage,
+                    failure: None,
+                    candidate_payload_json: Some(candidate),
+                },
+                Err(failure) => {
+                    let mut execution = chatgpt_failure_execution(
+                        Some(thread_ref),
+                        response_lifecycle.accepted_ref,
+                        failure,
+                        started,
+                    );
+                    execution.transport_disposition = ProviderTransportDisposition::Completed;
+                    execution.candidate_disposition =
+                        CandidateDisposition::rejected(vec!["schema_rejection".into()]);
+                    execution
                 }
-                Err(failure) => chatgpt_failure_execution(
-                    Some(thread_ref),
-                    response_lifecycle.accepted_ref,
-                    failure,
-                    started,
-                ),
             }
         }
         Err(failure) => chatgpt_failure_execution(
@@ -3749,6 +3780,8 @@ fn deterministic_provider_execution(
     match outcome {
         DeterministicProviderOutcome::Completed => ProviderExecution {
             state: AgentRunState::Completed,
+            transport_disposition: ProviderTransportDisposition::Completed,
+            candidate_disposition: CandidateDisposition::NotEvaluated,
             provider_thread_ref: Some(
                 prepared
                     .provider_thread_ref
@@ -3756,11 +3789,7 @@ fn deterministic_provider_execution(
                     .unwrap_or_else(|| format!("acceptance-thread-{}", prepared.run_id)),
             ),
             provider_turn_ref: Some(format!("acceptance-turn-{}", prepared.run_id)),
-            events: vec![PendingProviderEvent::new(
-                ProviderEventKind::Terminal,
-                "Deterministic acceptance provider returned a schema-valid proposed result",
-                Some("quantix-deterministic-provider-v1"),
-            )],
+            events: Vec::new(),
             usage: ProviderUsage {
                 input_tokens: Some(1),
                 output_tokens: Some(1),
@@ -3778,7 +3807,7 @@ fn deterministic_provider_execution(
         },
         DeterministicProviderOutcome::Failed => failed_execution(
             ProviderFailure::new(
-                ProviderFailureCategory::OutputInvalid,
+                ProviderFailureCategory::ProcessFailed,
                 true,
                 "Retry only after the deterministic provider failure is reviewed.",
                 Some("The deterministic adapter injected an invalid provider outcome."),
@@ -3809,13 +3838,11 @@ fn indeterminate_execution(
 ) -> ProviderExecution {
     ProviderExecution {
         state: AgentRunState::Indeterminate,
+        transport_disposition: ProviderTransportDisposition::Indeterminate,
+        candidate_disposition: CandidateDisposition::NotEvaluated,
         provider_thread_ref: Some(thread_ref.to_owned()),
         provider_turn_ref: turn_ref,
-        events: vec![PendingProviderEvent::new(
-            ProviderEventKind::Terminal,
-            "Provider Turn acceptance or outcome is indeterminate",
-            None,
-        )],
+        events: Vec::new(),
         usage: ProviderUsage {
             elapsed_milliseconds: Some(
                 started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
@@ -3830,13 +3857,11 @@ fn indeterminate_execution(
 fn interrupted_execution(started: Instant) -> ProviderExecution {
     ProviderExecution {
         state: AgentRunState::Interrupted,
+        transport_disposition: ProviderTransportDisposition::Interrupted,
+        candidate_disposition: CandidateDisposition::NotEvaluated,
         provider_thread_ref: None,
         provider_turn_ref: None,
-        events: vec![PendingProviderEvent::new(
-            ProviderEventKind::Terminal,
-            "Agent Run interrupted before Provider Turn acceptance",
-            None,
-        )],
+        events: Vec::new(),
         usage: ProviderUsage {
             elapsed_milliseconds: Some(
                 started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
@@ -4482,7 +4507,19 @@ mod tests {
         assert_eq!(failed.provider_selection, expected_selection);
         assert_eq!(
             failed.failure.as_ref().map(|failure| failure.category),
-            Some(ProviderFailureCategory::OutputInvalid)
+            Some(ProviderFailureCategory::ProcessFailed)
+        );
+        assert_eq!(
+            failed
+                .events
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec![ProviderEventKind::RunStarted, ProviderEventKind::Terminal]
+        );
+        assert_eq!(
+            failed.events.last().map(|event| event.summary.as_str()),
+            Some("Provider transport failed")
         );
 
         let interrupted = host

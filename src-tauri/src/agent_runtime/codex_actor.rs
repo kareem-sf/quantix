@@ -22,9 +22,10 @@ use super::{
         ControlRequestLedger, NotificationOutcome,
     },
     failed_execution, interrupted_execution, permission_failure, provider_connection_readiness,
-    stream_provider_events, turn_acceptance_unknown, AgentRunState, CodexProviderProcess,
-    PendingProviderEvent, PreparedAgentRun, ProviderEventKind, ProviderExecution, ProviderFailure,
-    ProviderFailureCategory, ProviderUsage, RunCallbacks, PROVIDER_OUTPUT_LIMIT,
+    stream_provider_events, turn_acceptance_unknown, AgentRunState, CandidateDisposition,
+    CodexProviderProcess, PreparedAgentRun, ProviderExecution, ProviderFailure,
+    ProviderFailureCategory, ProviderTransportDisposition, ProviderUsage, RunCallbacks,
+    PROVIDER_OUTPUT_LIMIT,
 };
 use crate::application_settings::{
     AiProviderKind, ProviderConnectionStatus, ProviderConnectionView, ProviderReasoningSelection,
@@ -601,6 +602,8 @@ async fn start_run(
             deadline_expired: false,
             execution: ProviderExecution {
                 state: AgentRunState::Running,
+                transport_disposition: ProviderTransportDisposition::Indeterminate,
+                candidate_disposition: CandidateDisposition::NotEvaluated,
                 provider_thread_ref: None,
                 provider_turn_ref: None,
                 events: Vec::new(),
@@ -1289,6 +1292,14 @@ fn complete_run(runs: &mut HashMap<String, ActorRun>, run_id: &str) -> Result<()
         run.final_candidate = None;
     }
     let provider_terminal_state = run.execution.state;
+    run.execution.transport_disposition = match provider_terminal_state {
+        AgentRunState::Completed => ProviderTransportDisposition::Completed,
+        AgentRunState::Failed => ProviderTransportDisposition::Failed,
+        AgentRunState::Interrupted => ProviderTransportDisposition::Interrupted,
+        AgentRunState::Indeterminate | AgentRunState::Running => {
+            ProviderTransportDisposition::Indeterminate
+        }
+    };
     if run.execution.state == AgentRunState::Completed {
         match validate_candidate(
             run.final_candidate.as_deref(),
@@ -1299,21 +1310,11 @@ fn complete_run(runs: &mut HashMap<String, ActorRun>, run_id: &str) -> Result<()
             Err(failure) => {
                 run.execution.state = AgentRunState::Failed;
                 run.execution.failure = Some(failure);
+                run.execution.candidate_disposition =
+                    CandidateDisposition::rejected(vec!["schema_rejection".into()]);
             }
         }
     }
-    let turn_ref = run.turn_ref.as_deref();
-    run.execution.events.push(PendingProviderEvent::new(
-        ProviderEventKind::Terminal,
-        match provider_terminal_state {
-            AgentRunState::Completed => "Provider Turn completed",
-            AgentRunState::Interrupted => "Provider Turn interrupted",
-            AgentRunState::Failed => "Provider Turn failed",
-            AgentRunState::Indeterminate => "Provider Turn outcome is indeterminate",
-            AgentRunState::Running => "Provider Turn ended without a terminal outcome",
-        },
-        turn_ref,
-    ));
     if run.execution.state == AgentRunState::Running {
         run.execution.state = AgentRunState::Indeterminate;
         run.execution.failure = Some(outcome_unknown());

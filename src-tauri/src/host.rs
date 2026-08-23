@@ -262,6 +262,11 @@ impl QuantixHost {
         &self.inner.diagnostics
     }
 
+    #[cfg(feature = "runtime-fixture")]
+    pub fn drain_diagnostics_for_test(&self) -> std::io::Result<()> {
+        self.inner.diagnostics.drain_for_test()
+    }
+
     pub(crate) fn allow_renderer_diagnostic(&self) -> bool {
         const WINDOW_SECONDS: u64 = 60;
         const MAX_EVENTS_PER_WINDOW: u32 = 12;

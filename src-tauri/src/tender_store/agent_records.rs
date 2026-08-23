@@ -15,11 +15,12 @@ use crate::agent_runtime::{
     AgentProfileStatus, AgentProfileVersionView, AgentRepairFeedback, AgentRunActivity,
     AgentRunHistoryItem, AgentRunHistoryPage, AgentRunInspection, AgentRunRecoveryDecision,
     AgentRunRecoveryDisposition, AgentRunState, AgentRunSummary, ApproveAgentAccessCommand,
-    BootstrapAuthority, BootstrapRole, BootstrapTeamMember, DataClassification,
-    PendingProviderEvent, PermissionGrant, PreparedAgentRun, ProposedAgentResult, ProviderEvent,
-    ProviderEventKind, ProviderExecution, ProviderFailure, ProviderFailureCategory, ProviderUsage,
-    RejectedAgentOutput, RequestAgentAccessCommand, ResolveAgentAccessCommand,
-    ResolveIndeterminateAgentRunCommand, TenderTaskView, ThreadExposureSet, VerificationStatus,
+    BootstrapAuthority, BootstrapRole, BootstrapTeamMember, CandidateDisposition,
+    DataClassification, PendingProviderEvent, PermissionGrant, PreparedAgentRun,
+    ProposedAgentResult, ProviderEvent, ProviderEventKind, ProviderExecution, ProviderFailure,
+    ProviderFailureCategory, ProviderUsage, RejectedAgentOutput, RequestAgentAccessCommand,
+    ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand, TenderTaskView,
+    ThreadExposureSet, VerificationStatus,
 };
 use crate::application_settings::AiExecutionSelection;
 
@@ -150,9 +151,10 @@ fn terminal_event_summary(execution: &ProviderExecution) -> &'static str {
         AgentRunState::Interrupted => "Agent Run interrupted",
         AgentRunState::Indeterminate => "Agent Run outcome is indeterminate",
         AgentRunState::Failed
-            if execution.failure.as_ref().is_some_and(|failure| {
-                failure.category == ProviderFailureCategory::OutputInvalid
-            }) =>
+            if matches!(
+                &execution.candidate_disposition,
+                CandidateDisposition::Rejected(_)
+            ) =>
         {
             "Agent Run rejected after candidate validation"
         }
@@ -518,16 +520,22 @@ impl TenderStore {
         prepared: &PreparedAgentRun,
         mut execution: ProviderExecution,
     ) -> Result<(), TenderCommandError> {
-        // Provider callbacks may carry a terminal transport outcome internally,
-        // but completion owns the sole persisted terminal event.
-        execution
+        // Completion owns the sole persisted terminal event. A provider-side
+        // terminal marker would make the origin ambiguous and is rejected.
+        if execution
             .events
-            .retain(|event| event.kind != ProviderEventKind::Terminal);
+            .iter()
+            .any(|event| event.kind == ProviderEventKind::Terminal)
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
         let operation_budget = BidPackageOperationBudget::for_tender(tender_id);
         operation_budget.check()?;
         let pending_affected_run = self.pending_change_has_active_affected_run(&prepared.run_id)?;
         if pending_affected_run && execution.state == AgentRunState::Completed {
             execution.state = AgentRunState::Failed;
+            execution.candidate_disposition =
+                CandidateDisposition::rejected(vec!["pending_change".into()]);
             execution.failure = Some(ProviderFailure::new(
                 ProviderFailureCategory::OutputInvalid,
                 false,
@@ -537,16 +545,6 @@ impl TenderStore {
                 ),
             ));
             execution.candidate_payload_json = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary =
-                    "Provider outcome discarded after its exact inputs entered Change Assessment"
-                        .into();
-            }
         }
         let pending_affected_terminalization =
             execution.state != AgentRunState::Completed && pending_affected_run;
@@ -570,6 +568,15 @@ impl TenderStore {
             || (execution.state != AgentRunState::Completed && execution.failure.is_none())
         {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        // A normally completed provider turn produced a candidate which now
+        // needs a semantic decision. Validation changes this to Validated;
+        // rejection paths retain this explicit, stable disposition.
+        if execution.state == AgentRunState::Completed
+            && execution.candidate_disposition == CandidateDisposition::NotEvaluated
+        {
+            execution.candidate_disposition =
+                CandidateDisposition::rejected(vec!["semantic_rejection".into()]);
         }
         let mut tender_record_candidate: Option<TenderRecordCandidateBatch> = None;
         let mut tender_record_review: Option<TenderRecordReviewCandidate> = None;
@@ -615,19 +622,16 @@ impl TenderStore {
                         Some("The candidate Tender Records failed Quantix provenance validation."),
                     )
                     .with_validation_issues(validation_issues.clone()));
+                    execution.candidate_disposition = CandidateDisposition::rejected(
+                        validation_issues
+                            .iter()
+                            .map(|issue| issue.code.clone())
+                            .collect(),
+                    );
                     rejected_output = execution
                         .candidate_payload_json
                         .as_ref()
                         .map(|payload_json| (payload_json.clone(), validation_issues));
-                    if let Some(event) = execution
-                        .events
-                        .iter_mut()
-                        .rev()
-                        .find(|event| event.kind == ProviderEventKind::Terminal)
-                    {
-                        event.summary =
-                            "Candidate Tender Records failed provenance validation".into();
-                    }
                 }
             }
         }
@@ -656,15 +660,6 @@ impl TenderStore {
                         Some("The Manager intake result used an unsupported or inexact reference."),
                     ));
                     execution.candidate_payload_json = None;
-                    if let Some(event) = execution
-                        .events
-                        .iter_mut()
-                        .rev()
-                        .find(|event| event.kind == ProviderEventKind::Terminal)
-                    {
-                        event.summary =
-                            "Tendering Manager intake result failed exact validation".into();
-                    }
                 }
             }
         }
@@ -691,16 +686,6 @@ impl TenderStore {
                         ),
                     ));
                     execution.candidate_payload_json = None;
-                    if let Some(event) = execution
-                        .events
-                        .iter_mut()
-                        .rev()
-                        .find(|event| event.kind == ProviderEventKind::Terminal)
-                    {
-                        event.summary =
-                            "Independent Submission Package section review failed validation"
-                                .into();
-                    }
                 }
             }
         }
@@ -731,15 +716,6 @@ impl TenderStore {
                         ),
                     ));
                     execution.candidate_payload_json = None;
-                    if let Some(event) = execution
-                        .events
-                        .iter_mut()
-                        .rev()
-                        .find(|event| event.kind == ProviderEventKind::Terminal)
-                    {
-                        event.summary =
-                            "Independent Bid Decision Package review failed validation".into();
-                    }
                 }
             }
         }
@@ -764,14 +740,6 @@ impl TenderStore {
                         Some("The independent External RFI review failed Quantix validation."),
                     ));
                     execution.candidate_payload_json = None;
-                    if let Some(event) = execution
-                        .events
-                        .iter_mut()
-                        .rev()
-                        .find(|event| event.kind == ProviderEventKind::Terminal)
-                    {
-                        event.summary = "Independent External RFI review failed validation".into();
-                    }
                 }
             }
         }
@@ -796,15 +764,6 @@ impl TenderStore {
                         Some("The independent Calculation Rule review failed Quantix validation."),
                     ));
                     execution.candidate_payload_json = None;
-                    if let Some(event) = execution
-                        .events
-                        .iter_mut()
-                        .rev()
-                        .find(|event| event.kind == ProviderEventKind::Terminal)
-                    {
-                        event.summary =
-                            "Independent Calculation Rule review failed validation".into();
-                    }
                 }
             }
         }
@@ -829,14 +788,6 @@ impl TenderStore {
                         Some("The proposed BOQ inputs failed Quantix provenance validation."),
                     ));
                     execution.candidate_payload_json = None;
-                    if let Some(event) = execution
-                        .events
-                        .iter_mut()
-                        .rev()
-                        .find(|event| event.kind == ProviderEventKind::Terminal)
-                    {
-                        event.summary = "Cost Estimator BOQ inputs failed validation".into();
-                    }
                 }
             }
         }
@@ -865,15 +816,6 @@ impl TenderStore {
                         ),
                     ));
                     execution.candidate_payload_json = None;
-                    if let Some(event) = execution
-                        .events
-                        .iter_mut()
-                        .rev()
-                        .find(|event| event.kind == ProviderEventKind::Terminal)
-                    {
-                        event.summary =
-                            "Basis of Estimate candidate failed exact validation".into();
-                    }
                 }
             }
         }
@@ -898,15 +840,6 @@ impl TenderStore {
                         Some("The independent Basis of Estimate review failed exact validation."),
                     ));
                     execution.candidate_payload_json = None;
-                    if let Some(event) = execution
-                        .events
-                        .iter_mut()
-                        .rev()
-                        .find(|event| event.kind == ProviderEventKind::Terminal)
-                    {
-                        event.summary =
-                            "Independent Basis of Estimate review failed validation".into();
-                    }
                 }
             }
         }
@@ -933,15 +866,6 @@ impl TenderStore {
                         ),
                     ));
                     execution.candidate_payload_json = None;
-                    if let Some(event) = execution
-                        .events
-                        .iter_mut()
-                        .rev()
-                        .find(|event| event.kind == ProviderEventKind::Terminal)
-                    {
-                        event.summary =
-                            "Independent Priced Cost Baseline review failed validation".into();
-                    }
                 }
             }
         }
@@ -1000,14 +924,6 @@ impl TenderStore {
                         ),
                     ));
                     execution.candidate_payload_json = None;
-                    if let Some(event) = execution
-                        .events
-                        .iter_mut()
-                        .rev()
-                        .find(|event| event.kind == ProviderEventKind::Terminal)
-                    {
-                        event.summary = "Independent review failed provenance validation".into();
-                    }
                 }
             }
         }
@@ -1025,16 +941,6 @@ impl TenderStore {
             execution.candidate_payload_json = None;
             bid_package_review = None;
             submission_section_review = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary =
-                    "Independent package review rejected because its evidence inventory is stale"
-                        .into();
-            }
         }
         if execution.state == AgentRunState::Completed
             && external_rfi_review.is_some()
@@ -1051,16 +957,6 @@ impl TenderStore {
             ));
             execution.candidate_payload_json = None;
             external_rfi_review = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary =
-                    "Independent External RFI review rejected because its exact basis is stale"
-                        .into();
-            }
         }
         if execution.state == AgentRunState::Completed
             && calculation_rule_review.is_some()
@@ -1075,16 +971,6 @@ impl TenderStore {
             ));
             execution.candidate_payload_json = None;
             calculation_rule_review = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary =
-                    "Independent Calculation Rule review rejected because its basis is stale"
-                        .into();
-            }
         }
         if execution.state == AgentRunState::Completed
             && cost_estimator_calculation.is_some()
@@ -1099,15 +985,6 @@ impl TenderStore {
             ));
             execution.candidate_payload_json = None;
             cost_estimator_calculation = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary =
-                    "Cost Estimator calculation rejected because its basis is stale".into();
-            }
         }
         if execution.state == AgentRunState::Completed
             && cost_estimator_basis.is_some()
@@ -1124,15 +1001,6 @@ impl TenderStore {
             ));
             execution.candidate_payload_json = None;
             cost_estimator_basis = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary =
-                    "Basis of Estimate rejected because its exact target is no longer open".into();
-            }
         }
         if execution.state == AgentRunState::Completed
             && basis_review.is_some()
@@ -1150,15 +1018,6 @@ impl TenderStore {
             ));
             execution.candidate_payload_json = None;
             basis_review = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary =
-                    "Basis review rejected because its exact target is no longer open".into();
-            }
         }
         if execution.state == AgentRunState::Completed
             && priced_cost_baseline_review.is_some()
@@ -1177,15 +1036,6 @@ impl TenderStore {
             ));
             execution.candidate_payload_json = None;
             priced_cost_baseline_review = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary =
-                    "Priced Cost Baseline review rejected because its exact target is no longer open".into();
-            }
         }
         if execution.state == AgentRunState::Completed
             && pricing_adjustment_review.is_some()
@@ -1225,10 +1075,12 @@ impl TenderStore {
                 Some("The Engineer User interrupted the Agent Run."),
             ));
             execution.candidate_payload_json = None;
+            execution.candidate_disposition = CandidateDisposition::NotEvaluated;
             rejected_output = None;
             tender_record_candidate = None;
             tender_record_review = None;
             bid_package_review = None;
+            manager_intake_outcome = None;
             submission_section_review = None;
             external_rfi_review = None;
             calculation_rule_review = None;
@@ -1237,14 +1089,6 @@ impl TenderStore {
             basis_review = None;
             priced_cost_baseline_review = None;
             pricing_adjustment_review = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary = "Provider outcome discarded after Engineer interruption".into();
-            }
         }
         if execution.state == AgentRunState::Completed
             && tender_record_review.is_some()
@@ -1259,15 +1103,6 @@ impl TenderStore {
             ));
             execution.candidate_payload_json = None;
             tender_record_review = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary =
-                    "Independent review rejected because its exact target is no longer open".into();
-            }
         }
         if execution.state == AgentRunState::Completed
             && bid_package_review.is_some()
@@ -1282,15 +1117,6 @@ impl TenderStore {
             ));
             execution.candidate_payload_json = None;
             bid_package_review = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary =
-                    "Independent package review rejected because its exact target is no longer open".into();
-            }
         }
         if execution.state == AgentRunState::Completed
             && submission_section_review.is_some()
@@ -1307,16 +1133,6 @@ impl TenderStore {
             ));
             execution.candidate_payload_json = None;
             submission_section_review = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary =
-                    "Independent Submission Package review rejected because its exact target is no longer open"
-                        .into();
-            }
         }
         if execution.state == AgentRunState::Completed
             && external_rfi_review.is_some()
@@ -1333,14 +1149,6 @@ impl TenderStore {
             ));
             execution.candidate_payload_json = None;
             external_rfi_review = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary = "Independent External RFI review rejected because its exact target is no longer open".into();
-            }
         }
         if execution.state == AgentRunState::Completed
             && calculation_rule_review.is_some()
@@ -1357,14 +1165,6 @@ impl TenderStore {
             ));
             execution.candidate_payload_json = None;
             calculation_rule_review = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary = "Independent Calculation Rule review rejected because its target is no longer open".into();
-            }
         }
         if execution.state == AgentRunState::Completed
             && cost_estimator_calculation.is_some()
@@ -1383,16 +1183,6 @@ impl TenderStore {
             ));
             execution.candidate_payload_json = None;
             cost_estimator_calculation = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary =
-                    "Cost Estimator calculation rejected because its target is no longer open"
-                        .into();
-            }
         }
         if execution.state == AgentRunState::Completed
             && tender_record_candidate.is_some()
@@ -1416,17 +1206,9 @@ impl TenderStore {
                 ),
             ));
             execution.candidate_payload_json = None;
+            execution.candidate_disposition =
+                CandidateDisposition::rejected(vec!["decision_inventory_full".into()]);
             tender_record_candidate = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary =
-                    "Candidate Tender Records rejected because the decision inventory is full"
-                        .into();
-            }
         }
         let invalid_production_payload = if execution.state == AgentRunState::Completed {
             match execution.candidate_payload_json.as_deref() {
@@ -1451,15 +1233,6 @@ impl TenderStore {
                 ),
             ));
             execution.candidate_payload_json = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary =
-                    "Production output rejected by exact validation and Evidence guards".into();
-            }
         }
         dispose_workspace(
             &self.root,
@@ -1496,19 +1269,12 @@ impl TenderStore {
                 Some("The Agent Run output became stale before canonical publication."),
             ));
             execution.candidate_payload_json = None;
+            execution.candidate_disposition =
+                CandidateDisposition::rejected(vec!["stale_tender_revision".into()]);
             tender_record_candidate = None;
             tender_record_review = None;
             bid_package_review = None;
             submission_section_review = None;
-            if let Some(event) = execution
-                .events
-                .iter_mut()
-                .rev()
-                .find(|event| event.kind == ProviderEventKind::Terminal)
-            {
-                event.summary =
-                    "Agent Run output rejected because its Tender revision is stale".into();
-            }
         }
         let completed_at = sqlite_timestamp(&transaction)?;
         if let Some(candidate_count) = denied_record_publication_count {
@@ -1598,13 +1364,23 @@ impl TenderStore {
                 &completed_at,
             )?;
         }
-        let candidate_rejected = execution.state == AgentRunState::Failed
-            && execution
-                .failure
-                .as_ref()
-                .is_some_and(|failure| failure.category == ProviderFailureCategory::OutputInvalid);
-        let candidate_validated = execution.state == AgentRunState::Completed;
-        if candidate_validated || candidate_rejected {
+        if execution.state == AgentRunState::Completed {
+            execution.candidate_disposition = CandidateDisposition::Validated;
+        }
+        let candidate_event = match &execution.candidate_disposition {
+            CandidateDisposition::NotEvaluated => None,
+            CandidateDisposition::Validated => Some(PendingProviderEvent::new(
+                ProviderEventKind::CandidateValidated,
+                "candidate_validated",
+                None,
+            )),
+            CandidateDisposition::Rejected(codes) => Some(PendingProviderEvent::new(
+                ProviderEventKind::CandidateRejected,
+                &codes.join(","),
+                None,
+            )),
+        };
+        if let Some(candidate_event) = candidate_event {
             sequence = sequence
                 .checked_add(1)
                 .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
@@ -1612,19 +1388,7 @@ impl TenderStore {
                 &transaction,
                 &prepared.run_id,
                 sequence,
-                PendingProviderEvent::new(
-                    if candidate_validated {
-                        ProviderEventKind::CandidateValidated
-                    } else {
-                        ProviderEventKind::CandidateRejected
-                    },
-                    if candidate_validated {
-                        "Candidate passed domain validation"
-                    } else {
-                        "Candidate rejected by domain validation"
-                    },
-                    None,
-                ),
+                candidate_event,
                 &completed_at,
             )?;
         }
@@ -1896,14 +1660,11 @@ impl TenderStore {
                 &completed_at,
             )?;
         }
-        sequence = sequence
-            .checked_add(1)
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        insert_event(
+        append_final_terminal_event(
             &transaction,
             &prepared.run_id,
-            sequence,
-            PendingProviderEvent::new(ProviderEventKind::Terminal, terminal_summary, None),
+            terminal_summary.to_owned(),
+            None,
             &completed_at,
         )?;
         append_audit_event(
@@ -3503,6 +3264,12 @@ impl TenderStore {
         {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
+        validate_provider_event_history(
+            &events,
+            state,
+            failure.as_ref(),
+            proposed_result.is_some(),
+        )?;
         let access_requests =
             load_access_requests(&self.connection, run_id, state == AgentRunState::Running)?;
         let recovery_decision = self
@@ -3678,23 +3445,15 @@ impl TenderStore {
             {
                 return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
             }
-            let sequence = next_provider_event_sequence(&transaction, &run_id)?;
-            insert_event(
+            append_final_terminal_event(
                 &transaction,
                 &run_id,
-                sequence,
-                PendingProviderEvent {
-                    kind: ProviderEventKind::Terminal,
-                    summary: if outcome_uncertain {
-                        "Agent Run outcome became indeterminate after Host restart".into()
-                    } else {
-                        "Agent Run failed safely before Provider Turn acceptance".into()
-                    },
-                    correlation_id: None,
-                    request_fingerprint: None,
-                    denial_reason: None,
-                    opaque_reference: turn_ref,
+                if outcome_uncertain {
+                    "Agent Run outcome became indeterminate after Host restart".into()
+                } else {
+                    "Agent Run failed safely before Provider Turn acceptance".into()
                 },
+                turn_ref,
                 &completed_at,
             )?;
             append_audit_event(
@@ -4097,6 +3856,109 @@ fn load_events_with_check(
     Ok(events)
 }
 
+fn validate_provider_event_history(
+    events: &[ProviderEvent],
+    state: AgentRunState,
+    failure: Option<&ProviderFailure>,
+    has_result: bool,
+) -> Result<(), TenderCommandError> {
+    let invalid = || TenderCommandError::new(TenderErrorCode::IntegrityFailed);
+    if events.first().map(|event| event.kind) != Some(ProviderEventKind::RunStarted)
+        || events
+            .iter()
+            .skip(1)
+            .any(|event| event.kind == ProviderEventKind::RunStarted)
+    {
+        return Err(invalid());
+    }
+    let terminal_positions = events
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| (event.kind == ProviderEventKind::Terminal).then_some(index))
+        .collect::<Vec<_>>();
+    match state {
+        AgentRunState::Running if !terminal_positions.is_empty() => return Err(invalid()),
+        AgentRunState::Running => {}
+        _ if terminal_positions.as_slice() != [events.len().saturating_sub(1)] => {
+            return Err(invalid())
+        }
+        _ => {}
+    }
+    let nonterminal = if state == AgentRunState::Running {
+        events
+    } else {
+        &events[..events.len().saturating_sub(1)]
+    };
+    let suffix = if state == AgentRunState::Running {
+        &[][..]
+    } else {
+        &events[events.len().saturating_sub(1)..]
+    };
+    let expected_suffix = match (state, failure.map(|failure| failure.category), has_result) {
+        (AgentRunState::Completed, None, true) => [
+            ProviderEventKind::CandidateValidated,
+            ProviderEventKind::ResultCommitted,
+        ]
+        .as_slice(),
+        (AgentRunState::Failed, Some(ProviderFailureCategory::OutputInvalid), false) => {
+            [ProviderEventKind::CandidateRejected].as_slice()
+        }
+        (AgentRunState::Running, None, false)
+        | (AgentRunState::Failed, Some(_), false)
+        | (AgentRunState::Interrupted, Some(_), false)
+        | (AgentRunState::Indeterminate, Some(_), false) => [].as_slice(),
+        _ => return Err(invalid()),
+    };
+    if nonterminal.len() < expected_suffix.len()
+        || nonterminal[nonterminal.len().saturating_sub(expected_suffix.len())..]
+            .iter()
+            .map(|event| event.kind)
+            .ne(expected_suffix.iter().copied())
+        || suffix
+            .iter()
+            .any(|event| event.kind != ProviderEventKind::Terminal)
+    {
+        return Err(invalid());
+    }
+    let observational = &nonterminal[..nonterminal.len() - expected_suffix.len()];
+    let mut thread_seen = false;
+    let mut requested_seen = false;
+    let mut started_seen = false;
+    for event in observational.iter().skip(1) {
+        match event.kind {
+            ProviderEventKind::ThreadEstablished | ProviderEventKind::ThreadResumed => {
+                if thread_seen || requested_seen || started_seen {
+                    return Err(invalid());
+                }
+                thread_seen = true;
+            }
+            ProviderEventKind::TurnRequested => {
+                if !thread_seen || requested_seen || started_seen {
+                    return Err(invalid());
+                }
+                requested_seen = true;
+            }
+            ProviderEventKind::TurnStarted => {
+                if !requested_seen || started_seen {
+                    return Err(invalid());
+                }
+                started_seen = true;
+            }
+            ProviderEventKind::CandidateValidated
+            | ProviderEventKind::CandidateRejected
+            | ProviderEventKind::ResultCommitted
+            | ProviderEventKind::RunStarted
+            | ProviderEventKind::Terminal => return Err(invalid()),
+            ProviderEventKind::UsageObserved
+            | ProviderEventKind::RateLimitObserved
+            | ProviderEventKind::ControlRequestResolved
+            | ProviderEventKind::ControlRequestDenied
+            | ProviderEventKind::Warning => {}
+        }
+    }
+    Ok(())
+}
+
 fn load_access_requested_at(
     connection: &rusqlite::Connection,
     request_id: &str,
@@ -4341,13 +4203,35 @@ fn ensure_provider_event_capacity(
         .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
     let existing_bytes = u64::try_from(existing_bytes)
         .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-    if event_count
-        >= u64::try_from(MAX_PROVIDER_EVENTS_PER_RUN)
+    let completion_event = matches!(
+        event.kind,
+        ProviderEventKind::CandidateValidated
+            | ProviderEventKind::CandidateRejected
+            | ProviderEventKind::ResultCommitted
+            | ProviderEventKind::Terminal
+    );
+    // Leave room for candidate disposition, publication, and the final terminal
+    // fact before accepting any transport checkpoint. Completion events consume
+    // that reserved capacity themselves.
+    let reserve_count = if completion_event { 0 } else { 3 };
+    let reserve_bytes = if completion_event {
+        0
+    } else {
+        u64::try_from(MAX_PROVIDER_EVENT_FIELD_BYTES)
             .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
-        || existing_bytes
-            .checked_add(event_bytes)
-            .filter(|total| *total <= MAX_PROVIDER_EVENT_BYTES_PER_RUN)
-            .is_none()
+            .checked_mul(18)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
+    };
+    let max_count = u64::try_from(MAX_PROVIDER_EVENTS_PER_RUN)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let projected_count = event_count
+        .checked_add(1)
+        .and_then(|count| count.checked_add(reserve_count));
+    let projected_bytes = existing_bytes
+        .checked_add(event_bytes)
+        .and_then(|total| total.checked_add(reserve_bytes));
+    if projected_count.is_none_or(|count| count > max_count)
+        || projected_bytes.is_none_or(|bytes| bytes > MAX_PROVIDER_EVENT_BYTES_PER_RUN)
     {
         return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
     }
@@ -4382,6 +4266,40 @@ pub(super) fn insert_event(
         )
         .map_err(sql_error)?;
     Ok(())
+}
+
+fn append_final_terminal_event(
+    transaction: &rusqlite::Transaction<'_>,
+    run_id: &str,
+    summary: String,
+    opaque_reference: Option<String>,
+    created_at: &str,
+) -> Result<(), TenderCommandError> {
+    let terminal_count: i64 = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM provider_events WHERE run_id = ?1 AND kind = 'terminal'",
+            [run_id],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if terminal_count != 0 {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let sequence = next_provider_event_sequence(transaction, run_id)?;
+    insert_event(
+        transaction,
+        run_id,
+        sequence,
+        PendingProviderEvent {
+            kind: ProviderEventKind::Terminal,
+            summary,
+            correlation_id: None,
+            request_fingerprint: None,
+            denial_reason: None,
+            opaque_reference,
+        },
+        created_at,
+    )
 }
 
 fn dispose_workspace(

@@ -1,14 +1,15 @@
 use std::{fs, io, path::Path, sync::Arc, time::Duration};
 
 use quantix_lib::{
-    ensure_quantix_setup, AgentRunState, CreateTenderCommand, ImportTenderPackageCommand,
-    InspectAgentRunCommand, InspectTenderAiExecutionCommand, InterruptAgentRunCommand,
-    ParseSourceArtifactCommand, ProviderEventKind, ProviderFailureCategory, QuantixHost,
-    RunBootstrapAgentCommand, RunTenderRecordExtractionCommand, RuntimeLayout, SetupPlatform,
-    SetupState, StoragePermissions, TenderAiSelectionReadiness, TenderErrorCode,
-    TenderEvidenceReference, TenderIntegrityIssue, TenderIntegrityState,
-    UpdateTenderAiExecutionSelectionCommand, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    ensure_quantix_setup, AgentRunState, CreateTenderCommand, DiagnosticEvent,
+    ImportTenderPackageCommand, InspectAgentRunCommand, InspectTenderAiExecutionCommand,
+    InterruptAgentRunCommand, ParseSourceArtifactCommand, ProviderEventKind,
+    ProviderFailureCategory, QuantixHost, RunBootstrapAgentCommand,
+    RunTenderRecordExtractionCommand, RuntimeLayout, SetupPlatform, SetupState, StoragePermissions,
+    TenderAiSelectionReadiness, TenderErrorCode, TenderEvidenceReference, TenderIntegrityIssue,
+    TenderIntegrityState, UpdateTenderAiExecutionSelectionCommand, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
+use walkdir::WalkDir;
 
 struct ReadySetupPlatform;
 
@@ -29,6 +30,7 @@ impl SetupPlatform for ReadySetupPlatform {
 struct Harness {
     _root: tempfile::TempDir,
     application_home: std::path::PathBuf,
+    fixture_executable: std::path::PathBuf,
     host: QuantixHost,
     tender_id: String,
 }
@@ -38,7 +40,7 @@ impl Harness {
         let root = tempfile::tempdir().expect("temporary Agent Run harness");
         let application_home = root.path().join(".quantix");
         let resources = root.path().join("resources");
-        install_codex_fixture(&resources, agent_scenario);
+        let fixture_executable = install_codex_fixture(&resources, agent_scenario);
         let host = QuantixHost::with_setup_platform_and_runtime(
             &application_home,
             Arc::new(ReadySetupPlatform),
@@ -57,6 +59,7 @@ impl Harness {
         let harness = Self {
             _root: root,
             application_home,
+            fixture_executable,
             host,
             tender_id: tender.tender_id,
         };
@@ -137,6 +140,29 @@ impl Harness {
     }
 }
 
+fn diagnostic_facts_for_run(harness: &Harness, run_id: &str) -> Vec<DiagnosticEvent> {
+    harness
+        .host
+        .drain_diagnostics_for_test()
+        .expect("flush diagnostics");
+    let tender_log_root = harness
+        .application_home
+        .join("logs")
+        .join("tenders")
+        .join(&harness.tender_id);
+    let mut facts = WalkDir::new(tender_log_root)
+        .into_iter()
+        .map(|entry| entry.expect("diagnostic log entry"))
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| fs::read_to_string(entry.path()).expect("read diagnostic log"))
+        .flat_map(|contents| contents.lines().map(str::to_owned).collect::<Vec<_>>())
+        .map(|line| serde_json::from_str::<DiagnosticEvent>(&line).expect("diagnostic fact"))
+        .filter(|fact| fact.correlation.run_id.as_deref() == Some(run_id))
+        .collect::<Vec<_>>();
+    facts.sort_by_key(|fact| fact.session_sequence);
+    facts
+}
+
 #[tokio::test]
 async fn repaired_extraction_records_truthful_boundaries() {
     let harness = Harness::new("manager-intake-repair-invalid-then-valid");
@@ -191,6 +217,19 @@ async fn repaired_extraction_records_truthful_boundaries() {
         .iter()
         .map(|event| event.kind)
         .collect::<Vec<_>>();
+    assert_eq!(
+        initial_kinds,
+        vec![
+            ProviderEventKind::RunStarted,
+            ProviderEventKind::ThreadEstablished,
+            ProviderEventKind::TurnRequested,
+            ProviderEventKind::TurnStarted,
+            ProviderEventKind::UsageObserved,
+            ProviderEventKind::ControlRequestDenied,
+            ProviderEventKind::CandidateRejected,
+            ProviderEventKind::Terminal,
+        ]
+    );
     assert!(
         initial_kinds
             .iter()
@@ -207,6 +246,20 @@ async fn repaired_extraction_records_truthful_boundaries() {
         .iter()
         .map(|event| event.kind)
         .collect::<Vec<_>>();
+    assert_eq!(
+        repair_kinds,
+        vec![
+            ProviderEventKind::RunStarted,
+            ProviderEventKind::ThreadResumed,
+            ProviderEventKind::TurnRequested,
+            ProviderEventKind::TurnStarted,
+            ProviderEventKind::UsageObserved,
+            ProviderEventKind::ControlRequestDenied,
+            ProviderEventKind::CandidateValidated,
+            ProviderEventKind::ResultCommitted,
+            ProviderEventKind::Terminal,
+        ]
+    );
     assert!(
         repair_kinds
             .iter()
@@ -227,16 +280,25 @@ async fn repaired_extraction_records_truthful_boundaries() {
                 .position(|kind| *kind == ProviderEventKind::Terminal)
                 .expect("terminal")
     );
-    assert!(!std::fs::read_to_string(
-        harness
-            .application_home
-            .join("logs")
-            .join("tenders")
-            .join(&harness.tender_id)
-            .join("diagnostics.ndjson")
-    )
-    .unwrap_or_default()
-    .contains("provider_turn_completed"));
+    let initial_facts = diagnostic_facts_for_run(&harness, &initial.run_id);
+    let repair_facts = diagnostic_facts_for_run(&harness, &repaired.run.run_id);
+    for facts in [&initial_facts, &repair_facts] {
+        let transport_completed = facts
+            .iter()
+            .position(|fact| fact.event_name == "provider_transport_completed")
+            .expect("provider transport completed fact");
+        assert!(!facts
+            .iter()
+            .any(|fact| fact.event_name == "provider_turn_completed"));
+        assert_eq!(transport_completed, 1);
+        assert_eq!(
+            facts
+                .iter()
+                .map(|fact| fact.event_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["provider_turn_started", "provider_transport_completed"]
+        );
+    }
 }
 
 #[tokio::test]
@@ -283,6 +345,51 @@ async fn missing_chatgpt_connection_fails_before_a_backend_turn_is_established()
         .expect("inspect persisted Agent Run");
     assert_eq!(persisted.state, AgentRunState::Failed);
     assert_eq!(persisted.failure, run.failure);
+}
+
+#[tokio::test]
+async fn schema_invalid_provider_output_is_a_completed_transport_and_rejected_candidate() {
+    let harness = Harness::new("output-invalid");
+    let run = harness
+        .host
+        .run_bootstrap_agent(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("persist schema rejection");
+
+    assert_eq!(run.state, AgentRunState::Failed, "{run:#?}");
+    assert_eq!(run.proposed_result, None);
+    assert_eq!(
+        run.events
+            .iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            ProviderEventKind::RunStarted,
+            ProviderEventKind::ThreadEstablished,
+            ProviderEventKind::TurnRequested,
+            ProviderEventKind::TurnStarted,
+            ProviderEventKind::UsageObserved,
+            ProviderEventKind::ControlRequestDenied,
+            ProviderEventKind::CandidateRejected,
+            ProviderEventKind::Terminal,
+        ]
+    );
+    let rejected = run
+        .events
+        .iter()
+        .find(|event| event.kind == ProviderEventKind::CandidateRejected)
+        .expect("schema candidate rejection");
+    assert_eq!(rejected.summary, "schema_rejection");
+    let facts = diagnostic_facts_for_run(&harness, &run.run_id);
+    assert!(facts
+        .iter()
+        .any(|fact| fact.event_name == "provider_transport_completed"));
+    assert!(!facts
+        .iter()
+        .any(|fact| fact.event_name == "provider_turn_failed"));
 }
 
 #[tokio::test]
@@ -394,6 +501,107 @@ async fn engineer_interruption_persists_a_terminal_interrupted_run() {
 }
 
 #[tokio::test]
+async fn manager_intake_cancellation_discards_a_schema_valid_candidate() {
+    let harness = Harness::new("manager-intake");
+    harness.parsed_pdf_evidence().await;
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let intake =
+        tokio::spawn(async move { host.run_manager_intake_for_verification(&tender_id).await });
+
+    let run_id = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let connection = harness.database();
+            let run_id = connection
+                .query_row(
+                    "SELECT runs.run_id
+                     FROM agent_runs AS runs
+                     JOIN agent_profile_versions AS profiles
+                       ON profiles.profile_id = runs.profile_id
+                      AND profiles.version = runs.profile_version
+                     WHERE runs.status = 'running'
+                       AND profiles.capabilities_json LIKE '%present_manager_intake_outcome%'
+                     ORDER BY runs.run_sequence DESC LIMIT 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok();
+            drop(connection);
+            if let Some(run_id) = run_id {
+                break run_id;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("Manager Intake outcome is running");
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if harness
+                .fixture_executable
+                .with_extension("manager-output-waiting")
+                .is_file()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("schema-valid Manager Intake candidate reaches delayed output boundary");
+    let connection = harness.database();
+    connection
+        .execute(
+            "INSERT INTO agent_run_cancellations (run_id, requested_by, requested_at)
+             VALUES (?1, 'engineer_user', '2026-08-23T00:00:00Z')",
+            [&run_id],
+        )
+        .expect("commit cancellation before schema-valid candidate completion");
+    drop(connection);
+    fs::write(
+        harness
+            .fixture_executable
+            .with_extension("manager-output-release"),
+        b"release",
+    )
+    .expect("release schema-valid Manager Intake candidate");
+    let _ = intake.await.expect("Manager Intake task joins");
+
+    let run = harness
+        .host
+        .inspect_agent_run(InspectAgentRunCommand {
+            tender_id: harness.tender_id.clone(),
+            run_id: run_id.clone(),
+        })
+        .expect("inspect terminal Manager Intake run");
+    assert_eq!(run.state, AgentRunState::Interrupted, "{run:#?}");
+    assert!(run.proposed_result.is_none());
+    assert!(!run.events.iter().any(|event| {
+        matches!(
+            event.kind,
+            ProviderEventKind::CandidateValidated
+                | ProviderEventKind::CandidateRejected
+                | ProviderEventKind::ResultCommitted
+        )
+    }));
+    assert_eq!(
+        run.events
+            .iter()
+            .filter(|event| event.kind == ProviderEventKind::Terminal)
+            .count(),
+        1
+    );
+    let connection = harness.database();
+    let outcome_count: u32 = connection
+        .query_row("SELECT COUNT(*) FROM manager_intake_outcomes", [], |row| {
+            row.get(0)
+        })
+        .expect("inspect Manager Intake outcomes");
+    assert_eq!(outcome_count, 0);
+}
+
+#[tokio::test]
 async fn semantically_invalid_agent_manifest_requires_tender_recovery() {
     let harness = Harness::new("success");
     let run = harness
@@ -449,6 +657,233 @@ async fn semantically_invalid_agent_manifest_requires_tender_recovery() {
             .code,
         TenderErrorCode::RecoveryRequired
     );
+}
+
+#[tokio::test]
+async fn cold_open_rejects_invalid_terminal_event_grammar() {
+    for mutation in ["missing", "duplicate", "middle"] {
+        let harness = Harness::new("success");
+        let run = harness
+            .host
+            .run_bootstrap_agent(RunBootstrapAgentCommand {
+                tender_id: harness.tender_id.clone(),
+                retry_of_run_id: None,
+            })
+            .await
+            .expect("persist terminal Agent Run");
+        harness
+            .host
+            .close_tender(&harness.tender_id)
+            .expect("close Tender before mutation");
+        let connection = harness.database();
+        match mutation {
+            "missing" => {
+                let sql: String = connection
+                    .query_row(
+                        "SELECT sql FROM sqlite_schema
+                         WHERE type = 'trigger' AND name = 'provider_events_no_delete'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .expect("event delete trigger");
+                connection
+                    .execute_batch("DROP TRIGGER provider_events_no_delete")
+                    .expect("enable test mutation");
+                connection
+                    .execute(
+                        "DELETE FROM provider_events WHERE run_id = ?1 AND kind = 'terminal'",
+                        [&run.run_id],
+                    )
+                    .expect("remove terminal");
+                connection
+                    .execute_batch(&sql)
+                    .expect("restore delete trigger");
+            }
+            "duplicate" => {
+                connection
+                    .execute(
+                        "INSERT INTO provider_events (
+                             run_id, sequence, kind, summary, correlation_id,
+                             request_fingerprint, denial_reason, opaque_reference, created_at
+                         )
+                         SELECT run_id, sequence + 1, 'terminal', 'duplicate_terminal', NULL,
+                                NULL, NULL, NULL, created_at
+                         FROM provider_events
+                         WHERE run_id = ?1 AND kind = 'terminal'",
+                        [&run.run_id],
+                    )
+                    .expect("append duplicate terminal");
+            }
+            "middle" => {
+                let sql: String = connection
+                    .query_row(
+                        "SELECT sql FROM sqlite_schema
+                         WHERE type = 'trigger' AND name = 'provider_events_no_update'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .expect("event update trigger");
+                connection
+                    .execute_batch("DROP TRIGGER provider_events_no_update")
+                    .expect("enable test mutation");
+                connection
+                    .execute(
+                        "UPDATE provider_events SET kind = 'terminal'
+                         WHERE run_id = ?1 AND kind = 'usage_observed'",
+                        [&run.run_id],
+                    )
+                    .expect("move terminal into transport history");
+                connection
+                    .execute_batch(&sql)
+                    .expect("restore update trigger");
+            }
+            _ => unreachable!(),
+        }
+        drop(connection);
+        assert_eq!(
+            harness
+                .host
+                .inspect_tender_integrity(&harness.tender_id)
+                .expect("inspect terminal grammar")
+                .state,
+            TenderIntegrityState::RecoveryRequired,
+            "{mutation} terminal grammar"
+        );
+        assert_eq!(
+            harness
+                .host
+                .open_tender(&harness.tender_id)
+                .expect_err("cold open rejects malformed terminal grammar")
+                .code,
+            TenderErrorCode::RecoveryRequired,
+            "{mutation} terminal grammar"
+        );
+    }
+}
+
+#[tokio::test]
+async fn cold_open_rejects_candidate_and_result_suffix_mutations() {
+    for (scenario, mutation) in [
+        ("success", "duplicate_candidate_validated"),
+        ("success", "middle_result_committed"),
+        ("success", "reordered_candidate_result"),
+        ("success", "observational_after_candidate"),
+        ("output-invalid", "missing_candidate_rejected"),
+    ] {
+        let harness = Harness::new(scenario);
+        let run = harness
+            .host
+            .run_bootstrap_agent(RunBootstrapAgentCommand {
+                tender_id: harness.tender_id.clone(),
+                retry_of_run_id: None,
+            })
+            .await
+            .expect("persist terminal Agent Run");
+        harness
+            .host
+            .close_tender(&harness.tender_id)
+            .expect("close Tender before mutation");
+        let connection = harness.database();
+        let trigger_name = if mutation == "missing_candidate_rejected" {
+            "provider_events_no_delete"
+        } else {
+            "provider_events_no_update"
+        };
+        let trigger_sql: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?1",
+                [trigger_name],
+                |row| row.get(0),
+            )
+            .expect("event immutability trigger");
+        connection
+            .execute_batch(&format!("DROP TRIGGER {trigger_name}"))
+            .expect("enable test mutation");
+        match mutation {
+            "duplicate_candidate_validated" => {
+                connection
+                    .execute(
+                        "UPDATE provider_events SET kind = 'candidate_validated'
+                         WHERE run_id = ?1 AND kind = 'usage_observed'",
+                        [&run.run_id],
+                    )
+                    .expect("duplicate candidate stage");
+            }
+            "middle_result_committed" => {
+                connection
+                    .execute(
+                        "UPDATE provider_events SET kind = 'result_committed'
+                         WHERE run_id = ?1 AND kind = 'usage_observed'",
+                        [&run.run_id],
+                    )
+                    .expect("insert middle result stage");
+            }
+            "reordered_candidate_result" => {
+                connection
+                    .execute(
+                        "UPDATE provider_events SET kind = 'warning'
+                         WHERE run_id = ?1 AND kind = 'candidate_validated'",
+                        [&run.run_id],
+                    )
+                    .expect("temporarily move candidate stage");
+                connection
+                    .execute(
+                        "UPDATE provider_events SET kind = 'candidate_validated'
+                         WHERE run_id = ?1 AND kind = 'result_committed'",
+                        [&run.run_id],
+                    )
+                    .expect("move result before candidate");
+                connection
+                    .execute(
+                        "UPDATE provider_events SET kind = 'result_committed'
+                         WHERE run_id = ?1 AND kind = 'warning' AND summary = 'candidate_validated'",
+                        [&run.run_id],
+                    )
+                    .expect("finish reordered suffix");
+            }
+            "observational_after_candidate" => {
+                connection
+                    .execute(
+                        "UPDATE provider_events SET kind = 'usage_observed'
+                         WHERE run_id = ?1 AND kind = 'result_committed'",
+                        [&run.run_id],
+                    )
+                    .expect("append observational event after candidate");
+            }
+            "missing_candidate_rejected" => {
+                connection
+                    .execute(
+                        "DELETE FROM provider_events
+                         WHERE run_id = ?1 AND kind = 'candidate_rejected'",
+                        [&run.run_id],
+                    )
+                    .expect("remove candidate rejection");
+            }
+            _ => unreachable!(),
+        }
+        connection
+            .execute_batch(&trigger_sql)
+            .expect("restore event immutability trigger");
+        drop(connection);
+        assert_eq!(
+            harness
+                .host
+                .inspect_tender_integrity(&harness.tender_id)
+                .expect("inspect candidate/result suffix")
+                .state,
+            TenderIntegrityState::RecoveryRequired,
+            "{mutation}"
+        );
+        assert_eq!(
+            harness
+                .host
+                .open_tender(&harness.tender_id)
+                .expect_err("cold open rejects malformed candidate/result suffix")
+                .code,
+            TenderErrorCode::RecoveryRequired,
+            "{mutation}"
+        );
+    }
 }
 
 fn install_codex_fixture(resources: &Path, scenario: &str) -> std::path::PathBuf {
