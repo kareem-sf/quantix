@@ -70,6 +70,7 @@ mod tests {
             include_reasoning: true,
             reasoning_effort: None,
             session_id: "ses-fixture".to_string(),
+            expected_initial_body_bytes: None,
         }
     }
 

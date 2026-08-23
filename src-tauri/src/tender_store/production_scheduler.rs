@@ -2391,6 +2391,7 @@ impl TenderStore {
                 permission_grant,
                 provider_thread_ref,
                 provider_thread_to_archive,
+                expected_initial_request_body_bytes: None,
                 workspace: workspace.clone(),
             })
         })();

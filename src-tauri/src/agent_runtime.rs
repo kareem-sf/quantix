@@ -19,7 +19,8 @@ use ts_rs::TS;
 use crate::{
     agent_backend::{
         execute_provider_turn as execute_chatgpt_backend_turn, BackendRequest, ReasoningEffort,
-        ReqwestBackend, StreamEvent, ToolRejection, TurnContext, UsageSnapshot, BACKEND_URL,
+        RequestBudgetFailureKind, ReqwestBackend, StreamEvent, ToolRejection, TurnContext,
+        UsageSnapshot, BACKEND_URL,
     },
     application_settings::{
         project_approved_chatgpt_connection, refresh_approved_chatgpt_connection,
@@ -690,6 +691,9 @@ pub struct ProviderFailure {
     #[serde(skip)]
     #[ts(skip)]
     pub(crate) request_body_bytes: Option<u64>,
+    #[serde(skip)]
+    #[ts(skip)]
+    pub(crate) request_budget_failure_kind: Option<RequestBudgetFailureKind>,
 }
 
 impl ProviderFailure {
@@ -707,6 +711,7 @@ impl ProviderFailure {
             retry_after_milliseconds: None,
             validation_issues: Vec::new(),
             request_body_bytes: None,
+            request_budget_failure_kind: None,
         }
     }
 
@@ -718,6 +723,24 @@ impl ProviderFailure {
     pub(crate) fn with_request_body_bytes(mut self, value: u64) -> Self {
         self.request_body_bytes = Some(value);
         self
+    }
+
+    pub(crate) fn with_request_budget_failure_kind(
+        mut self,
+        value: RequestBudgetFailureKind,
+    ) -> Self {
+        self.request_budget_failure_kind = Some(value);
+        self
+    }
+
+    fn diagnostic_code(&self) -> String {
+        match self.request_budget_failure_kind {
+            Some(RequestBudgetFailureKind::HardCapExceeded) => "REQUEST_BUDGET_EXCEEDED".into(),
+            Some(RequestBudgetFailureKind::PreparedContextMismatch) => {
+                "REQUEST_BUDGET_PARITY_MISMATCH".into()
+            }
+            None => format!("{:?}", self.category),
+        }
     }
 
     pub(crate) fn with_validation_issues(
@@ -817,6 +840,7 @@ pub(crate) struct PreparedAgentRun {
     pub permission_grant: PermissionGrant,
     pub provider_thread_ref: Option<String>,
     pub provider_thread_to_archive: Option<String>,
+    pub expected_initial_request_body_bytes: Option<u64>,
     pub workspace: PathBuf,
 }
 
@@ -876,6 +900,7 @@ pub(crate) struct ProviderExecution {
 pub(crate) enum ProviderTransportDisposition {
     Completed,
     Failed,
+    LocalRejected,
     Interrupted,
     Indeterminate,
 }
@@ -3466,6 +3491,7 @@ async fn execute_provider_turn_from(
                     cancellation,
                     callbacks,
                     started,
+                    None,
                 )
                 .await
             }
@@ -3531,31 +3557,42 @@ fn record_provider_turn_diagnostic(
     execution: &ProviderExecution,
     started: Instant,
 ) {
-    let (event_name, severity) = match execution.transport_disposition {
+    let (event_name, severity, summary) = match execution.transport_disposition {
         ProviderTransportDisposition::Completed => (
             "provider_transport_completed",
             crate::DiagnosticSeverity::Info,
+            "Provider transport reached a terminal outcome",
         ),
-        ProviderTransportDisposition::Failed => {
-            ("provider_turn_failed", crate::DiagnosticSeverity::Error)
-        }
-        ProviderTransportDisposition::Interrupted => {
-            ("provider_turn_interrupted", crate::DiagnosticSeverity::Info)
-        }
+        ProviderTransportDisposition::Failed => (
+            "provider_turn_failed",
+            crate::DiagnosticSeverity::Error,
+            "Provider transport reached a terminal outcome",
+        ),
+        ProviderTransportDisposition::LocalRejected => (
+            "provider_request_rejected",
+            crate::DiagnosticSeverity::Error,
+            "Local provider request rejected before network transport",
+        ),
+        ProviderTransportDisposition::Interrupted => (
+            "provider_turn_interrupted",
+            crate::DiagnosticSeverity::Info,
+            "Provider transport reached a terminal outcome",
+        ),
         ProviderTransportDisposition::Indeterminate => (
             "provider_turn_indeterminate",
             crate::DiagnosticSeverity::Warning,
+            "Provider transport reached a terminal outcome",
         ),
     };
     let error_code = execution
         .failure
         .as_ref()
-        .map(|failure| format!("{:?}", failure.category));
+        .map(ProviderFailure::diagnostic_code);
     let mut fact = crate::RecordDiagnosticFact::new(
         severity,
         crate::DiagnosticComponent::Provider,
         event_name,
-        "Provider transport reached a terminal outcome",
+        summary,
     );
     fact.correlation.operation_id = Some(format!("provider-turn-{}", prepared.run_id));
     fact.correlation.run_id = Some(prepared.run_id.clone());
@@ -3564,6 +3601,7 @@ fn record_provider_turn_diagnostic(
     let transport_outcome = match execution.transport_disposition {
         ProviderTransportDisposition::Completed => "completed",
         ProviderTransportDisposition::Failed => "failed",
+        ProviderTransportDisposition::LocalRejected => "locally_rejected",
         ProviderTransportDisposition::Interrupted => "interrupted",
         ProviderTransportDisposition::Indeterminate => "indeterminate",
     };
@@ -3619,9 +3657,15 @@ fn record_provider_turn_started(host: &QuantixHost, tender_id: &str, prepared: &
 }
 
 fn failed_execution(failure: ProviderFailure, started: Instant) -> ProviderExecution {
+    let transport_disposition =
+        if failure.category == ProviderFailureCategory::RequestBudgetExceeded {
+            ProviderTransportDisposition::LocalRejected
+        } else {
+            ProviderTransportDisposition::Failed
+        };
     ProviderExecution {
         state: AgentRunState::Failed,
-        transport_disposition: ProviderTransportDisposition::Failed,
+        transport_disposition,
         candidate_disposition: CandidateDisposition::NotEvaluated,
         provider_thread_ref: None,
         provider_turn_ref: None,
@@ -3651,12 +3695,17 @@ fn chatgpt_failure_execution(
     };
     ProviderExecution {
         state,
-        transport_disposition: match state {
-            AgentRunState::Interrupted => ProviderTransportDisposition::Interrupted,
-            AgentRunState::Indeterminate => ProviderTransportDisposition::Indeterminate,
-            AgentRunState::Failed => ProviderTransportDisposition::Failed,
-            AgentRunState::Completed | AgentRunState::Running => {
-                ProviderTransportDisposition::Failed
+        transport_disposition: if failure.category == ProviderFailureCategory::RequestBudgetExceeded
+        {
+            ProviderTransportDisposition::LocalRejected
+        } else {
+            match state {
+                AgentRunState::Interrupted => ProviderTransportDisposition::Interrupted,
+                AgentRunState::Indeterminate => ProviderTransportDisposition::Indeterminate,
+                AgentRunState::Failed => ProviderTransportDisposition::Failed,
+                AgentRunState::Completed | AgentRunState::Running => {
+                    ProviderTransportDisposition::Failed
+                }
             }
         },
         candidate_disposition: CandidateDisposition::NotEvaluated,
@@ -3770,6 +3819,7 @@ pub(crate) fn build_direct_backend_request(
         include_reasoning: true,
         reasoning_effort: chatgpt_reasoning_effort(&prepared.provider_selection.reasoning)?,
         session_id: String::new(),
+        expected_initial_body_bytes: prepared.expected_initial_request_body_bytes,
     })
 }
 
@@ -3924,6 +3974,7 @@ async fn chatgpt_provider_turn(
     cancellation: CancellationToken,
     callbacks: RunCallbacks,
     started: Instant,
+    connection_override: Option<(crate::chatgpt_oauth::StoredConnection, String)>,
 ) -> ProviderExecution {
     let RunCallbacks {
         on_thread_archived,
@@ -3935,21 +3986,27 @@ async fn chatgpt_provider_turn(
         ..
     } = callbacks;
     let mut on_accepted = Some(on_accepted);
-    let home = host.application_home().to_path_buf();
-    let approved_selection = prepared.provider_selection.clone();
-    let readiness = tokio::task::spawn_blocking(move || {
-        project_approved_chatgpt_connection(
-            &home,
-            PRODUCTION_ISSUER,
-            epoch_milliseconds(),
-            &approved_selection,
-        )
-    })
-    .await;
-    let connection = match readiness {
-        Ok(Ok(connection)) => connection,
-        Ok(Err(failure)) => return failed_execution(failure, started),
-        Err(_) => return failed_execution(process_failure(false), started),
+    let (connection, backend_endpoint) = match connection_override {
+        Some(override_values) => override_values,
+        None => {
+            let home = host.application_home().to_path_buf();
+            let approved_selection = prepared.provider_selection.clone();
+            let readiness = tokio::task::spawn_blocking(move || {
+                project_approved_chatgpt_connection(
+                    &home,
+                    PRODUCTION_ISSUER,
+                    epoch_milliseconds(),
+                    &approved_selection,
+                )
+            })
+            .await;
+            let connection = match readiness {
+                Ok(Ok(connection)) => connection,
+                Ok(Err(failure)) => return failed_execution(failure, started),
+                Err(_) => return failed_execution(process_failure(false), started),
+            };
+            (connection, BACKEND_URL.to_owned())
+        }
     };
     if let Some(archived) = prepared.provider_thread_to_archive.as_deref() {
         if let Err(failure) = on_thread_archived(archived) {
@@ -3986,7 +4043,7 @@ async fn chatgpt_provider_turn(
             )
         }
     };
-    let backend = match ReqwestBackend::new(BACKEND_URL) {
+    let backend = match ReqwestBackend::new(&backend_endpoint) {
         Ok(backend) => backend,
         Err(_) => {
             return chatgpt_failure_execution(
@@ -4253,9 +4310,10 @@ fn deterministic_provider_execution(
             .with_retry_after_milliseconds(Some(60_000)),
             Instant::now(),
         ),
-        DeterministicProviderOutcome::RequestBudgetExceeded(request_bytes) => {
-            failed_execution(request_budget_failure(request_bytes), Instant::now())
-        }
+        DeterministicProviderOutcome::RequestBudgetExceeded(request_bytes) => failed_execution(
+            request_budget_failure(request_bytes, RequestBudgetFailureKind::HardCapExceeded),
+            Instant::now(),
+        ),
         DeterministicProviderOutcome::Interrupted => interrupted_execution(Instant::now()),
     }
 }
@@ -4369,7 +4427,10 @@ fn permission_failure() -> ProviderFailure {
     )
 }
 
-pub(crate) fn request_budget_failure(request_bytes: u64) -> ProviderFailure {
+pub(crate) fn request_budget_failure(
+    request_bytes: u64,
+    kind: RequestBudgetFailureKind,
+) -> ProviderFailure {
     ProviderFailure::new(
         ProviderFailureCategory::RequestBudgetExceeded,
         false,
@@ -4377,6 +4438,7 @@ pub(crate) fn request_budget_failure(request_bytes: u64) -> ProviderFailure {
         Some("The prepared request exceeded the local provider request budget."),
     )
     .with_request_body_bytes(request_bytes)
+    .with_request_budget_failure_kind(kind)
 }
 
 #[cfg(feature = "runtime-fixture")]
@@ -4903,10 +4965,197 @@ mod tests {
     use super::*;
     use crate::tender_store::CreateTenderCommand;
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn direct_request_budget_mismatch_is_a_truthful_local_rejection() {
+        let root = tempfile::tempdir().expect("temporary direct request home");
+        let application_home = root.path().join(".quantix");
+        let resources = root.path().join("resources");
+        let host = QuantixHost::new(&application_home, &resources);
+        assert!(matches!(
+            crate::ensure_quantix_setup(&host).state,
+            crate::SetupState::Ready | crate::SetupState::Warning
+        ));
+        let tender = host
+            .create_tender(CreateTenderCommand {
+                name: "Direct request budget Tender".into(),
+            })
+            .expect("create Tender");
+        let tender_id = TenderId::parse(&tender.tender_id).expect("Tender id");
+        let _deep_session = host
+            .diagnostics()
+            .start_deep(tender_id.as_str())
+            .expect("start deep diagnostics");
+        let store = host.tender_store(&tender_id).expect("Tender Store");
+        let mut prepared = store
+            .lock()
+            .expect("Tender Store lock")
+            .prepare_bootstrap_agent_run(
+                &tender_id,
+                &deterministic_provider_selection(),
+                None,
+                false,
+            )
+            .expect("prepare Agent Run");
+        prepared.expected_initial_request_body_bytes = Some(1);
+
+        let thread_store = Arc::clone(&store);
+        let thread_prepared = prepared.clone();
+        let requested_store = Arc::clone(&store);
+        let requested_run_id = prepared.run_id.clone();
+        let accepted_store = Arc::clone(&store);
+        let accepted_run_id = prepared.run_id.clone();
+        let event_store = Arc::clone(&store);
+        let event_run_id = prepared.run_id.clone();
+        let callbacks = RunCallbacks {
+            on_thread_archived: Box::new(|_| Ok(())),
+            on_thread_established: Box::new(move |thread_ref, resumed| {
+                thread_store
+                    .lock()
+                    .map_err(|_| process_failure(false))?
+                    .checkpoint_agent_thread(&thread_prepared, thread_ref, resumed)
+                    .map_err(|_| process_failure(false))
+            }),
+            on_requested: Box::new(move || {
+                requested_store
+                    .lock()
+                    .map_err(|_| process_failure(false))?
+                    .checkpoint_agent_turn_requested(&requested_run_id)
+                    .map_err(|_| process_failure(false))
+            }),
+            on_accepted: Box::new(move |turn_ref| {
+                accepted_store
+                    .lock()
+                    .map_err(|_| outcome_unknown())?
+                    .checkpoint_agent_turn(&accepted_run_id, turn_ref)
+                    .map_err(|_| outcome_unknown())
+            }),
+            on_event: Box::new(move |event, usage| {
+                event_store
+                    .lock()
+                    .map_err(|_| outcome_unknown())?
+                    .checkpoint_agent_provider_event(&event_run_id, event, usage)
+                    .map_err(|_| outcome_unknown())
+            }),
+            on_denied: Box::new(|_| Ok(())),
+            #[cfg(feature = "runtime-fixture")]
+            on_tool_call: Box::new(|_, _, _| Ok(None)),
+        };
+        let connection = crate::chatgpt_oauth::StoredConnection {
+            access_token: "test-access".into(),
+            refresh_token: "test-refresh".into(),
+            id_token: "test-id".into(),
+            expires_at_ms: u64::MAX,
+            account_id: "test-account".into(),
+            plan_type: Some("plus".into()),
+            compute_residency: None,
+        };
+        let started = Instant::now();
+        record_provider_turn_started(&host, tender_id.as_str(), &prepared);
+        let execution = chatgpt_provider_turn(
+            &host,
+            &store,
+            prepared.clone(),
+            Duration::from_secs(5),
+            CancellationToken::new(),
+            callbacks,
+            started,
+            Some((connection, "http://127.0.0.1:9/never-called".into())),
+        )
+        .await;
+
+        assert_eq!(
+            execution.transport_disposition,
+            ProviderTransportDisposition::LocalRejected
+        );
+        assert_eq!(
+            execution
+                .failure
+                .as_ref()
+                .map(ProviderFailure::diagnostic_code),
+            Some("REQUEST_BUDGET_PARITY_MISMATCH".into())
+        );
+        let actual_request_bytes = execution
+            .failure
+            .as_ref()
+            .and_then(|failure| failure.request_body_bytes)
+            .expect("actual request byte count");
+        record_provider_turn_diagnostic(&host, tender_id.as_str(), &prepared, &execution, started);
+        store
+            .lock()
+            .expect("Tender Store lock")
+            .complete_agent_run(&tender_id, &prepared, execution)
+            .expect("complete local rejection");
+        let run = store
+            .lock()
+            .expect("Tender Store lock")
+            .inspect_agent_run(&prepared.run_id)
+            .expect("inspect Agent Run");
+        assert_eq!(
+            run.events
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                ProviderEventKind::RunStarted,
+                ProviderEventKind::ThreadEstablished,
+                ProviderEventKind::TurnRequested,
+                ProviderEventKind::Terminal,
+            ]
+        );
+        assert_eq!(
+            run.events.last().map(|event| event.summary.as_str()),
+            Some("Prepared request rejected by local request budget")
+        );
+        host.diagnostics()
+            .drain_for_test()
+            .expect("flush direct request diagnostics");
+        let facts = walkdir::WalkDir::new(
+            application_home
+                .join("logs")
+                .join("tenders")
+                .join(tender_id.as_str()),
+        )
+        .into_iter()
+        .map(|entry| entry.expect("diagnostic entry"))
+        .filter(|entry| entry.file_type().is_file())
+        .flat_map(|entry| {
+            std::fs::read_to_string(entry.path())
+                .expect("read diagnostics")
+                .lines()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .map(|line| serde_json::from_str::<crate::DiagnosticEvent>(&line).expect("diagnostic fact"))
+        .filter(|fact| fact.correlation.run_id.as_deref() == Some(prepared.run_id.as_str()))
+        .collect::<Vec<_>>();
+        let rejection = facts
+            .iter()
+            .find(|fact| fact.event_name == "provider_request_rejected")
+            .expect("local rejection diagnostic");
+        assert_eq!(
+            rejection.error_code.as_deref(),
+            Some("REQUEST_BUDGET_PARITY_MISMATCH")
+        );
+        assert!(!facts
+            .iter()
+            .any(|fact| fact.event_name == "provider_turn_failed"));
+        assert!(!facts
+            .iter()
+            .any(|fact| fact.event_name == "provider_transport_completed"));
+        let deep = facts
+            .iter()
+            .find(|fact| fact.event_name == "provider_turn_protocol_boundary" && fact.deep)
+            .expect("deep request boundary diagnostic");
+        assert_eq!(deep.size_bytes, Some(actual_request_bytes));
+    }
+
     #[test]
     fn request_budget_diagnostics_record_only_the_exact_byte_count() {
         let request_bytes = crate::agent_backend::DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES + 1;
-        let execution = failed_execution(request_budget_failure(request_bytes), Instant::now());
+        let execution = failed_execution(
+            request_budget_failure(request_bytes, RequestBudgetFailureKind::HardCapExceeded),
+            Instant::now(),
+        );
 
         assert_eq!(
             provider_protocol_size_bytes(&execution),

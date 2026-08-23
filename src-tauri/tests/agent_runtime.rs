@@ -684,12 +684,22 @@ async fn local_request_budget_failure_is_nonretryable_and_stably_diagnosed() {
             .collect::<Vec<_>>(),
         vec![ProviderEventKind::RunStarted, ProviderEventKind::Terminal]
     );
+    assert_eq!(
+        run.events.last().map(|event| event.summary.as_str()),
+        Some("Prepared request rejected by local request budget")
+    );
     let facts = diagnostic_facts_for_run(&harness, &run.run_id);
     let failed = facts
         .iter()
-        .find(|fact| fact.event_name == "provider_turn_failed")
-        .expect("provider failure diagnostic");
-    assert_eq!(failed.error_code.as_deref(), Some("REQUESTBUDGETEXCEEDED"));
+        .find(|fact| fact.event_name == "provider_request_rejected")
+        .expect("local request rejection diagnostic");
+    assert_eq!(
+        failed.error_code.as_deref(),
+        Some("REQUEST_BUDGET_EXCEEDED")
+    );
+    assert!(!facts
+        .iter()
+        .any(|fact| fact.event_name == "provider_turn_failed"));
     assert!(!failed.summary.contains(&harness.tender_id));
     assert!(!failed.summary.contains(&run.task.task_id));
 }

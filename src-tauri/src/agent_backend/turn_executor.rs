@@ -174,6 +174,7 @@ pub(crate) async fn execute_provider_turn(
         items.extend(response.output_items.iter().cloned());
         items.extend(outputs);
         request.input_items = items.clone();
+        request.expected_initial_body_bytes = None;
     }
 }
 
@@ -393,9 +394,10 @@ fn backend_failure(error: BackendError, turn_advanced: bool) -> ProviderFailure 
     match error {
         BackendError::AuthenticationRequired => authentication_failure(),
         BackendError::RateLimited { retry_after_ms } => rate_limit_failure(retry_after_ms),
-        BackendError::RequestBudgetExceeded { request_bytes } => {
-            request_budget_failure(request_bytes)
-        }
+        BackendError::RequestBudgetExceeded {
+            request_bytes,
+            kind,
+        } => request_budget_failure(request_bytes, kind),
         BackendError::Protocol(_) => protocol_failure(turn_advanced),
         BackendError::Transport(_) => transport_failure(turn_advanced),
         BackendError::Interrupted => interruption_failure(turn_advanced),
@@ -415,7 +417,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::super::client::{build_request_body, parse_stream_bytes};
+    use super::super::client::{build_request_body, parse_stream_bytes, RequestBudgetFailureKind};
     use super::*;
     use crate::chatgpt_oauth::{
         force_refresh_connection_unlocked, load, needs_refresh, save, with_connection_mutation,
@@ -468,6 +470,7 @@ mod tests {
     struct ScriptedBackend {
         responses: Mutex<VecDeque<Result<Vec<u8>, BackendError>>>,
         requests: Mutex<Vec<serde_json::Value>>,
+        expected_initial_body_bytes: Mutex<Vec<Option<u64>>>,
         access_tokens: Mutex<Vec<String>>,
     }
 
@@ -476,6 +479,7 @@ mod tests {
             Self {
                 responses: Mutex::new(responses.into()),
                 requests: Mutex::new(Vec::new()),
+                expected_initial_body_bytes: Mutex::new(Vec::new()),
                 access_tokens: Mutex::new(Vec::new()),
             }
         }
@@ -500,6 +504,10 @@ mod tests {
                     return Err(BackendError::Interrupted);
                 }
                 self.requests.lock().unwrap().push(build_request_body(req));
+                self.expected_initial_body_bytes
+                    .lock()
+                    .unwrap()
+                    .push(req.expected_initial_body_bytes);
                 self.access_tokens
                     .lock()
                     .unwrap()
@@ -553,6 +561,7 @@ mod tests {
             include_reasoning: true,
             reasoning_effort: None,
             session_id: "ses-stale".to_owned(),
+            expected_initial_body_bytes: None,
         }
     }
 
@@ -696,6 +705,27 @@ mod tests {
         is_cancelled: &'a (dyn Fn() -> bool + Sync),
         on_event: &'a mut (dyn FnMut(BackendEvent) + Send),
     ) -> Result<ProviderTurnResult, ProviderFailure> {
+        run_turn_with_request_and_refresh(
+            backend,
+            auth,
+            refresh_auth,
+            sample_request(),
+            authorize_tool,
+            is_cancelled,
+            on_event,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_turn_with_request_and_refresh<'a>(
+        backend: &'a dyn ChatGptBackend,
+        auth: &'a StoredConnection,
+        refresh_auth: &'a RefreshAuthCallback<'a>,
+        request: BackendRequest,
+        authorize_tool: &'a (dyn Fn(&str, &str) -> Result<Value, ToolRejection> + Sync),
+        is_cancelled: &'a (dyn Fn() -> bool + Sync),
+        on_event: &'a mut (dyn FnMut(BackendEvent) + Send),
+    ) -> Result<ProviderTurnResult, ProviderFailure> {
         let mut fallible_event = |event| {
             on_event(event);
             Ok(())
@@ -705,7 +735,7 @@ mod tests {
             backend,
             auth,
             refresh_auth,
-            request: sample_request(),
+            request,
             session_id: "ses-turn-1".to_owned(),
             authorize_tool,
             is_cancelled,
@@ -1255,6 +1285,69 @@ mod tests {
     }
 
     #[test]
+    fn auth_retry_preserves_initial_prepared_context_size() {
+        let backend = ScriptedBackend::new(vec![
+            Err(BackendError::AuthenticationRequired),
+            Ok(sse(TEXT_COMPLETION)),
+        ]);
+        let auth = stored_connection("at-stale");
+        let refresh_auth = |_expected_account_id: &str| Ok(stored_connection("at-fresh"));
+        let mut request = sample_request();
+        request.expected_initial_body_bytes = Some(777);
+        let no_tools = |_name: &str, _arguments: &str| -> Result<Value, ToolRejection> {
+            panic!("no tool call expected")
+        };
+        let mut sink = |_: BackendEvent| {};
+
+        run_turn_with_request_and_refresh(
+            &backend,
+            &auth,
+            &refresh_auth,
+            request,
+            &no_tools,
+            &|| false,
+            &mut sink,
+        )
+        .expect("authentication retry succeeds");
+
+        assert_eq!(
+            *backend.expected_initial_body_bytes.lock().unwrap(),
+            vec![Some(777), Some(777)]
+        );
+    }
+
+    #[test]
+    fn tool_output_follow_up_clears_initial_prepared_context_size() {
+        let backend =
+            ScriptedBackend::new(vec![Ok(sse(TOOL_RESPONSE_ONE)), Ok(sse(TOOL_RESPONSE_TWO))]);
+        let auth = stored_connection("at-1");
+        let refresh_auth =
+            |_expected_account_id: &str| panic!("tool follow-up must not refresh authentication");
+        let mut request = sample_request();
+        request.expected_initial_body_bytes = Some(777);
+        let approve = |_name: &str, _arguments: &str| -> Result<Value, ToolRejection> {
+            Ok(json!({"content": "tool result"}))
+        };
+        let mut sink = |_: BackendEvent| {};
+
+        run_turn_with_request_and_refresh(
+            &backend,
+            &auth,
+            &refresh_auth,
+            request,
+            &approve,
+            &|| false,
+            &mut sink,
+        )
+        .expect("tool follow-up succeeds");
+
+        assert_eq!(
+            *backend.expected_initial_body_bytes.lock().unwrap(),
+            vec![Some(777), None]
+        );
+    }
+
+    #[test]
     fn account_replacement_between_401_and_retry_never_receives_tender_content() {
         let backend = ScriptedBackend::new(vec![
             Err(BackendError::AuthenticationRequired),
@@ -1367,7 +1460,13 @@ mod tests {
     fn request_budget_failure_is_distinct_nonretryable_and_redacted() {
         let request_bytes = super::super::client::DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES + 1;
 
-        let failure = backend_failure(BackendError::RequestBudgetExceeded { request_bytes }, false);
+        let failure = backend_failure(
+            BackendError::RequestBudgetExceeded {
+                request_bytes,
+                kind: RequestBudgetFailureKind::HardCapExceeded,
+            },
+            false,
+        );
 
         assert_eq!(
             failure.category,

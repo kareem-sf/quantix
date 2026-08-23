@@ -158,6 +158,13 @@ fn terminal_event_summary(execution: &ProviderExecution) -> &'static str {
         {
             "Agent Run rejected after candidate validation"
         }
+        AgentRunState::Failed
+            if execution.failure.as_ref().is_some_and(|failure| {
+                failure.category == ProviderFailureCategory::RequestBudgetExceeded
+            }) =>
+        {
+            "Prepared request rejected by local request budget"
+        }
         AgentRunState::Failed => "Provider transport failed",
         AgentRunState::Running => "Agent Run state is invalid",
     }
@@ -505,6 +512,7 @@ impl TenderStore {
                 permission_grant,
                 provider_thread_ref,
                 provider_thread_to_archive,
+                expected_initial_request_body_bytes: None,
                 workspace: workspace.clone(),
             })
         })();

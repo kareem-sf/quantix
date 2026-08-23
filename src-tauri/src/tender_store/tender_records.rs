@@ -1287,6 +1287,22 @@ impl TenderStore {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
         let run = self.inspect_agent_run(run_id)?;
+        let expected_initial_request_body_bytes = self
+            .connection
+            .query_row(
+                "SELECT json_extract(run_request_context_json, '$.request_body_bytes')
+                 FROM manager_intake_extraction_plan_run_bindings
+                 WHERE extraction_run_id = ?1",
+                [run_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(sql_error)
+            .and_then(|bytes| {
+                u64::try_from(bytes)
+                    .ok()
+                    .filter(|bytes| *bytes > 0)
+                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
+            })?;
         let application_home = self
             .root
             .parent()
@@ -1328,6 +1344,7 @@ impl TenderStore {
             permission_grant: run.permission_grant,
             provider_thread_ref,
             provider_thread_to_archive,
+            expected_initial_request_body_bytes: Some(expected_initial_request_body_bytes),
             workspace,
         })
     }
@@ -1549,7 +1566,7 @@ impl TenderStore {
                 &required_selection,
                 &created_at,
             )?;
-            bind_manager_intake_extraction_plan(
+            let expected_initial_request_body_bytes = bind_manager_intake_extraction_plan(
                 &transaction,
                 &PreparedAgentRun {
                     run_id: run_id.clone(),
@@ -1559,6 +1576,7 @@ impl TenderStore {
                     permission_grant: permission_grant.clone(),
                     provider_thread_ref: None,
                     provider_thread_to_archive: None,
+                    expected_initial_request_body_bytes: None,
                     workspace: workspace.clone(),
                 },
                 Some(prior_run_id),
@@ -1601,6 +1619,7 @@ impl TenderStore {
                 permission_grant,
                 provider_thread_ref,
                 provider_thread_to_archive,
+                expected_initial_request_body_bytes,
                 workspace: workspace.clone(),
             }))
         })();
@@ -1879,7 +1898,7 @@ impl TenderStore {
                 &provider_selection,
                 &created_at,
             )?;
-            bind_manager_intake_extraction_plan(
+            let expected_initial_request_body_bytes = bind_manager_intake_extraction_plan(
                 &transaction,
                 &PreparedAgentRun {
                     run_id: run_id.clone(),
@@ -1889,6 +1908,7 @@ impl TenderStore {
                     permission_grant: permission_grant.clone(),
                     provider_thread_ref: None,
                     provider_thread_to_archive: None,
+                    expected_initial_request_body_bytes: None,
                     workspace: workspace.clone(),
                 },
                 None,
@@ -1931,6 +1951,7 @@ impl TenderStore {
                 permission_grant,
                 provider_thread_ref,
                 provider_thread_to_archive,
+                expected_initial_request_body_bytes,
                 workspace: workspace.clone(),
             })
         })();
@@ -2187,7 +2208,7 @@ impl TenderStore {
                 &required_selection,
                 &created_at,
             )?;
-            bind_manager_intake_extraction_plan(
+            let expected_initial_request_body_bytes = bind_manager_intake_extraction_plan(
                 &transaction,
                 &PreparedAgentRun {
                     run_id: run_id.clone(),
@@ -2197,6 +2218,7 @@ impl TenderStore {
                     permission_grant: permission_grant.clone(),
                     provider_thread_ref: None,
                     provider_thread_to_archive: None,
+                    expected_initial_request_body_bytes: None,
                     workspace: workspace.clone(),
                 },
                 Some(rejected_run_id),
@@ -2239,6 +2261,7 @@ impl TenderStore {
                 permission_grant,
                 provider_thread_ref,
                 provider_thread_to_archive,
+                expected_initial_request_body_bytes,
                 workspace: workspace.clone(),
             }))
         })();
@@ -2530,6 +2553,7 @@ impl TenderStore {
                 permission_grant,
                 provider_thread_ref,
                 provider_thread_to_archive,
+                expected_initial_request_body_bytes: None,
                 workspace: workspace.clone(),
             })
         })();
@@ -4706,6 +4730,7 @@ pub(crate) fn estimate_record_extraction_request_bytes(
         permission_grant: prepared_grant.grant,
         provider_thread_ref: None,
         provider_thread_to_archive: None,
+        expected_initial_request_body_bytes: None,
         workspace: prepared_grant.workspace,
     };
     let output_contract: Value = serde_json::from_str(&prepared.task.output_contract_json)

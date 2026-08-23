@@ -24,6 +24,7 @@ pub(crate) struct BackendRequest {
     pub include_reasoning: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub session_id: String,
+    pub expected_initial_body_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,12 +114,23 @@ pub(crate) enum TurnDisposition {
 #[derive(Debug)]
 pub(crate) enum BackendError {
     AuthenticationRequired,
-    RateLimited { retry_after_ms: Option<u64> },
-    RequestBudgetExceeded { request_bytes: u64 },
+    RateLimited {
+        retry_after_ms: Option<u64>,
+    },
+    RequestBudgetExceeded {
+        request_bytes: u64,
+        kind: RequestBudgetFailureKind,
+    },
     Protocol(String),
     Transport(String),
     Interrupted,
     EventDelivery,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequestBudgetFailureKind {
+    HardCapExceeded,
+    PreparedContextMismatch,
 }
 
 impl std::fmt::Display for BackendError {
@@ -129,7 +141,7 @@ impl std::fmt::Display for BackendError {
                 Some(ms) => write!(f, "chatgpt rate limited (retry after {ms} ms)"),
                 None => write!(f, "chatgpt rate limited"),
             },
-            BackendError::RequestBudgetExceeded { request_bytes } => {
+            BackendError::RequestBudgetExceeded { request_bytes, .. } => {
                 write!(f, "chatgpt request budget exceeded ({request_bytes} bytes)")
             }
             BackendError::Protocol(detail) => write!(f, "chatgpt protocol error: {detail}"),
@@ -580,10 +592,23 @@ impl ChatGptBackend for ReqwestBackend {
             let request_bytes = u64::try_from(request_body.len()).map_err(|_| {
                 BackendError::RequestBudgetExceeded {
                     request_bytes: u64::MAX,
+                    kind: RequestBudgetFailureKind::HardCapExceeded,
                 }
             })?;
             if request_bytes > DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES {
-                return Err(BackendError::RequestBudgetExceeded { request_bytes });
+                return Err(BackendError::RequestBudgetExceeded {
+                    request_bytes,
+                    kind: RequestBudgetFailureKind::HardCapExceeded,
+                });
+            }
+            if req
+                .expected_initial_body_bytes
+                .is_some_and(|expected| expected != request_bytes)
+            {
+                return Err(BackendError::RequestBudgetExceeded {
+                    request_bytes,
+                    kind: RequestBudgetFailureKind::PreparedContextMismatch,
+                });
             }
             let mut request = self
                 .http
@@ -671,6 +696,7 @@ mod tests {
             include_reasoning: true,
             reasoning_effort: Some(ReasoningEffort::High),
             session_id: "ses-1234".to_string(),
+            expected_initial_body_bytes: None,
         }
     }
 
@@ -1230,8 +1256,9 @@ mod tests {
         let exact_server = MockServer::start(move |_| (200, Vec::new(), stream_body.clone()));
         let exact_backend = ReqwestBackend::new(&exact_server.base_url).unwrap();
         let auth = sample_auth();
-        let exact_request =
+        let mut exact_request =
             request_with_serialized_size(DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES, false);
+        exact_request.expected_initial_body_bytes = Some(DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES);
         let exact_bytes = serde_json::to_vec(&build_request_body(&exact_request)).unwrap();
 
         let disposition = exact_backend
@@ -1264,13 +1291,45 @@ mod tests {
 
         assert!(matches!(
             error,
-            BackendError::RequestBudgetExceeded { request_bytes }
-                if request_bytes == DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES + 1
+            BackendError::RequestBudgetExceeded {
+                request_bytes,
+                kind: RequestBudgetFailureKind::HardCapExceeded,
+            } if request_bytes == DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES + 1
         ));
         assert!(
             over_server.captured.lock().unwrap().is_none(),
             "an over-cap follow-up must make zero HTTP calls"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn prepared_context_size_mismatch_fails_before_http() {
+        let stream_body = script_bytes("happy-text");
+        let server = MockServer::start(move |_| (200, Vec::new(), stream_body.clone()));
+        let backend = ReqwestBackend::new(&server.base_url).unwrap();
+        let auth = sample_auth();
+        let mut request = sample_request();
+        let actual_bytes = u64::try_from(
+            serde_json::to_vec(&build_request_body(&request))
+                .expect("serialize prepared request")
+                .len(),
+        )
+        .unwrap();
+        request.expected_initial_body_bytes = Some(actual_bytes + 1);
+
+        let error = backend
+            .create_response(&auth, &request, &|| false, &mut |_| Ok(()))
+            .await
+            .expect_err("prepared-context mismatch must fail locally");
+
+        assert!(matches!(
+            error,
+            BackendError::RequestBudgetExceeded {
+                request_bytes,
+                kind: RequestBudgetFailureKind::PreparedContextMismatch,
+            } if request_bytes == actual_bytes
+        ));
+        assert!(server.captured.lock().unwrap().is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]
