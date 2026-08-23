@@ -477,6 +477,132 @@ async fn rate_limited_manager_wait_is_persisted_atomically() {
     }
 }
 
+#[tokio::test]
+async fn engineer_retry_preserves_partial_provider_retry_consumption() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let resources = user_home.path().join("resources");
+    install_codex_fixture(&resources, "rate-limited");
+    let host = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(resources.clone()),
+    );
+    host.accept_runtime_fixture();
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    approve_fixture_ai_selection(&host).await;
+    install_ocr_fixture(&application_home);
+    let tender = host
+        .create_tender(CreateTenderCommand {
+            name: "Partial cooldown retry Tender".into(),
+        })
+        .expect("create Tender");
+    let package = user_home.path().join("partial-cooldown-source");
+    fs::create_dir_all(&package).expect("create source package");
+    fs::write(
+        package.join("ITT.pdf"),
+        b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
+    )
+    .expect("write source package");
+    host.import_tender_package(ImportTenderPackageCommand {
+        tender_id: tender.tender_id.clone(),
+        source_path: package.to_string_lossy().into_owned(),
+    })
+    .expect("register source package");
+    host.run_manager_intake_for_verification(&tender.tender_id)
+        .await
+        .expect("prepare Manager intake");
+    let first = host
+        .run_rate_limited_bootstrap_agent_for_verification(RunBootstrapAgentCommand {
+            tender_id: tender.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("create first rate-limited run");
+    host.persist_manager_rate_limit_for_verification(&tender.tender_id, &first.run_id)
+        .expect("persist first cooldown consumption");
+    let database = application_home
+        .join("tenders")
+        .join(&tender.tender_id)
+        .join("tender.sqlite");
+    Connection::open(&database)
+        .expect("open Manager intake store")
+        .execute(
+            "UPDATE manager_intake_runs
+             SET stage = 'failed', blocking_agent_run_id = NULL,
+                 retry_not_before_epoch_seconds = NULL,
+                 failure_summary = 'A non-rate local failure interrupted intake.',
+                 completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+            [],
+        )
+        .expect("persist non-rate Manager failure after partial cooldown");
+    host.set_document_tools_verified_for_verification(false);
+    host.retry_manager_intake_for_verification(&tender.tender_id)
+        .expect("Engineer retries failed intake");
+    for _ in 0..100 {
+        let stage: String = Connection::open(&database)
+            .expect("open retrying Manager intake")
+            .query_row(
+                "SELECT stage FROM manager_intake_runs
+                 ORDER BY intake_run_sequence DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read retrying Manager stage");
+        if stage == "waiting_for_local_tools" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let preserved: (String, u32, u32) = Connection::open(&database)
+        .expect("open queued Manager retry")
+        .query_row(
+            "SELECT stage, provider_retry_attempt_count,
+                    (SELECT COUNT(*)
+                     FROM manager_intake_provider_rate_limit_consumptions)
+             FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+    .expect("inspect preserved partial retry count");
+    assert_eq!(preserved, ("waiting_for_local_tools".into(), 1, 1));
+    drop(host);
+
+    let reopened = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(resources),
+    );
+    reopened.accept_runtime_fixture();
+    assert_eq!(ensure_quantix_setup(&reopened).state, SetupState::Ready);
+    reopened
+        .open_tender(&tender.tender_id)
+        .expect("cold reopen accepts preserved partial retry count");
+    let second = reopened
+        .run_rate_limited_bootstrap_agent_for_verification(RunBootstrapAgentCommand {
+            tender_id: tender.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("create next rate-limited run");
+    reopened
+        .persist_manager_rate_limit_for_verification(&tender.tender_id, &second.run_id)
+        .expect("advance the preserved retry count");
+    let advanced: (u32, u32) = Connection::open(database)
+        .expect("open advanced Manager cooldown")
+        .query_row(
+            "SELECT provider_retry_attempt_count,
+                    (SELECT COUNT(*)
+                     FROM manager_intake_provider_rate_limit_consumptions)
+             FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("inspect advanced partial retry count");
+    assert_eq!(advanced, (2, 2));
+}
+
 fn inspect_all_records(host: &QuantixHost, tender_id: &str) -> Vec<TenderRecordInspection> {
     let mut cursor = None;
     let mut records = Vec::new();

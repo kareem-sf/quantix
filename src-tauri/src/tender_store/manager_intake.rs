@@ -945,7 +945,10 @@ impl TenderStore {
                                   ELSE 'waiting_for_provider' END,
                      blocking_agent_run_id = NULL,
                      retry_not_before_epoch_seconds = NULL,
-                     provider_retry_attempt_count = 0,
+                     provider_retry_attempt_count = CASE
+                       WHEN provider_retry_attempt_count = 4 THEN 0
+                       ELSE provider_retry_attempt_count
+                     END,
                      failure_summary = NULL,
                      completed_at = NULL, updated_at = ?1
                  WHERE intake_run_id = (

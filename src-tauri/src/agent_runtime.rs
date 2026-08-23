@@ -1274,6 +1274,14 @@ impl QuantixHost {
     }
 
     #[cfg(any(test, feature = "runtime-fixture"))]
+    pub fn retry_manager_intake_for_verification(
+        &self,
+        tender_id: &str,
+    ) -> Result<(), TenderCommandError> {
+        self.retry_manager_intake(tender_id)
+    }
+
+    #[cfg(any(test, feature = "runtime-fixture"))]
     pub fn begin_manager_intake_processing_for_verification(
         &self,
         tender_id: &str,
