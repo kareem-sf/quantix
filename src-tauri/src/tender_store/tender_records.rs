@@ -1039,21 +1039,15 @@ impl TenderStore {
                 });
             }
             insert_task(&transaction, &task, &created_at)?;
-            let mut payload = record_extraction_data_view(
+            let payload = record_extraction_task_data_view(
                 &transaction,
                 tender_id,
                 tender_revision,
+                &task,
                 evidence,
                 &authorities,
-            )?;
-            if let Some(change_recovery) = &change_recovery {
-                payload["change_assessment"] = json!({
-                    "assessment_id": change_recovery.assessment_id,
-                    "allowed_stable_keys": change_recovery.allowed_stable_keys,
-                    "prior_records": change_recovery.prior_records,
-                    "instruction": "Publish successors only for these exact impacted stable keys using the supplied replacement Evidence.",
-                });
-            }
+            )?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
             let (permission_grant, materialized_workspace) =
                 derive_pre_bid_data_grant(PreBidDataGrantRequest {
                     run_id: &run_id,
@@ -1201,9 +1195,9 @@ impl TenderStore {
         &mut self,
         tender_id: &TenderId,
         rejected_run_id: &str,
-    ) -> Result<PreparedAgentRun, TenderCommandError> {
+    ) -> Result<Option<PreparedAgentRun>, TenderCommandError> {
         if !valid_identifier(rejected_run_id) {
-            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            return Ok(None);
         }
         let rejected_run = self.inspect_agent_run(rejected_run_id)?;
         let failure = rejected_run
@@ -1214,22 +1208,30 @@ impl TenderStore {
                     && rejected_run.state == AgentRunState::Failed
                     && failure.category == ProviderFailureCategory::OutputInvalid
             })
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+            .ok_or(());
+        let Ok(failure) = failure else {
+            return Ok(None);
+        };
         if rejected_run.task.repair_feedback.is_some()
             || rejected_run.profile.capabilities.as_slice() != [RECORD_EXTRACTION_CAPABILITY]
             || rejected_run.task.profile_id != rejected_run.profile.profile_id
             || rejected_run.task.profile_version != rejected_run.profile.version
         {
-            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            return Ok(None);
+        }
+        if failure.validation_issues.is_empty() {
+            return Ok(None);
         }
         let required_selection = self.required_tender_ai_execution_selection()?;
         if required_selection != rejected_run.provider_selection {
-            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            return Ok(None);
         }
-        let rejected = self.rejected_agent_output(rejected_run_id)?;
-        if rejected.validation_issues.is_empty()
-            || rejected.validation_issues != failure.validation_issues
-        {
+        let rejected = match self.rejected_agent_output(rejected_run_id) {
+            Ok(rejected) => rejected,
+            Err(error) if error.code == TenderErrorCode::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if rejected.validation_issues != failure.validation_issues {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
         let tender_revision = rejected_run
@@ -1303,7 +1305,7 @@ impl TenderStore {
                 )
                 .map_err(sql_error)?;
             if current_revision != tender_revision {
-                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+                return Ok(None);
             }
             let child_exists: bool = transaction
                 .query_row(
@@ -1313,7 +1315,7 @@ impl TenderStore {
                 )
                 .map_err(sql_error)?;
             if child_exists {
-                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+                return Ok(None);
             }
             let created_at = sqlite_timestamp(&transaction)?;
             let authorities =
@@ -1326,13 +1328,17 @@ impl TenderStore {
                 validation_issues: rejected.validation_issues.clone(),
             });
             insert_task(&transaction, &task, &created_at)?;
-            let payload = record_extraction_data_view(
+            let Some(payload) = record_extraction_task_data_view(
                 &transaction,
                 tender_id,
                 tender_revision,
+                &task,
                 &evidence,
                 &authorities,
-            )?;
+            )?
+            else {
+                return Ok(None);
+            };
             let rejected_payload: Value = serde_json::from_str(&rejected.payload_json)
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
             let repair_payload = json!({
@@ -1462,7 +1468,7 @@ impl TenderStore {
                 &created_at,
             )?;
             transaction.commit().map_err(sql_error)?;
-            Ok(PreparedAgentRun {
+            Ok(Some(PreparedAgentRun {
                 run_id,
                 provider_selection: required_selection.clone(),
                 profile: rejected_run.profile.clone(),
@@ -1471,7 +1477,7 @@ impl TenderStore {
                 provider_thread_ref,
                 provider_thread_to_archive,
                 workspace: workspace.clone(),
-            })
+            }))
         })();
         if prepared.is_err() {
             let _ = fs::remove_dir_all(&workspace);
@@ -3804,6 +3810,47 @@ fn record_extraction_data_view(
             "revision": tender_revision,
         }
     }))
+}
+
+fn record_extraction_task_data_view(
+    transaction: &Transaction<'_>,
+    tender_id: &TenderId,
+    tender_revision: u32,
+    task: &TenderTaskView,
+    evidence: &[TenderEvidenceReference],
+    authorities: &[TenderRecordAuthority],
+) -> Result<Option<Value>, TenderCommandError> {
+    let mut payload = record_extraction_data_view(
+        transaction,
+        tender_id,
+        tender_revision,
+        evidence,
+        authorities,
+    )?;
+    let change_inputs = task
+        .exact_inputs
+        .iter()
+        .filter(|input| input.kind == "change_assessment")
+        .collect::<Vec<_>>();
+    let change_input = match change_inputs.as_slice() {
+        [] => None,
+        [input] if valid_identifier(&input.reference) && input.version == 1 => Some(*input),
+        _ => return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+    };
+    let change_recovery = TenderStore::active_change_record_recovery_context(transaction)?;
+    match (change_input, change_recovery) {
+        (None, None) => Ok(Some(payload)),
+        (Some(input), Some(context)) if input.reference == context.assessment_id => {
+            payload["change_assessment"] = json!({
+                "assessment_id": context.assessment_id,
+                "allowed_stable_keys": context.allowed_stable_keys,
+                "prior_records": context.prior_records,
+                "instruction": "Publish successors only for these exact impacted stable keys using the supplied replacement Evidence.",
+            });
+            Ok(Some(payload))
+        }
+        _ => Ok(None),
+    }
 }
 
 fn record_review_data_view(

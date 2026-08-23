@@ -1612,7 +1612,7 @@ impl QuantixHost {
                     failure.category == ProviderFailureCategory::OutputInvalid
                 })
             {
-                Some(tender_store.prepare_tender_record_repair_run(&tender_id, &prepared.run_id)?)
+                tender_store.prepare_tender_record_repair_run(&tender_id, &prepared.run_id)?
             } else {
                 None
             }

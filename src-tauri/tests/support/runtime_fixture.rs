@@ -827,8 +827,8 @@ fn run_agent_turn(
     let provider_data_view = provider_input
         .pointer("/provider_data_views/0/payload")
         .ok_or("provider-visible Data View payload")?;
-    if scenario.starts_with("manager-intake-repair-")
-        && inputs.join("repair-feedback-v1.json").is_file()
+    let has_repair_feedback = inputs.join("repair-feedback-v1.json").is_file();
+    if has_repair_feedback
         && (provider_input
             .pointer("/repair_feedback/rejected_run_id")
             .and_then(serde_json::Value::as_str)
@@ -839,6 +839,12 @@ fn run_agent_turn(
                 .is_none())
     {
         return Err("repair turn lacks its bounded provider instruction bundle".into());
+    }
+    if has_repair_feedback {
+        fs::write(
+            executable.with_extension("repair-feedback-observed"),
+            fs::read(inputs.join("repair-feedback-v1.json"))?,
+        )?;
     }
     if provider_input
         .pointer("/quantix_invariants")
@@ -916,6 +922,16 @@ fn run_agent_turn(
     *turn_count = turn_count
         .checked_add(1)
         .ok_or("fixture turn count overflow")?;
+    if provider_data_view.get("evidence").is_some() && provider_data_view.get("record").is_none() {
+        let count_path = executable.with_extension("record-extraction-turn-count");
+        let count = fs::read_to_string(&count_path)
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or("fixture record extraction turn count overflow")?;
+        fs::write(count_path, count.to_string())?;
+    }
     let turn_id = format!("turn_fixture_{turn_count}");
     let turn_request_id = turn_request.get("id").cloned().ok_or("turn request id")?;
     let running_turn = serde_json::json!({
@@ -1162,6 +1178,7 @@ fn run_agent_turn(
             | "record-extraction-delayed"
             | "record-extraction-parity-duplicate-stable-key-delayed"
             | "record-extraction-change-assessment"
+            | "record-extraction-change-recovery-invalid-then-valid"
             | "record-extraction-duplicate-citation"
             | "record-extraction-invalid"
             | "record-extraction-parity-duplicate-stable-key"
@@ -1834,7 +1851,11 @@ fn run_agent_turn(
         added["title"] = serde_json::json!("Late discovered submission obligation");
         candidate["records"] = serde_json::json!([added]);
         candidate
-    } else if scenario == "record-extraction-change-assessment" {
+    } else if matches!(
+        scenario,
+        "record-extraction-change-assessment"
+            | "record-extraction-change-recovery-invalid-then-valid"
+    ) {
         let authoritative = provider_data_view
             .pointer("/evidence/0/handle")
             .cloned()
@@ -1877,6 +1898,23 @@ fn run_agent_turn(
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|stable_key| allowed.contains(stable_key))
         });
+        if scenario == "record-extraction-change-recovery-invalid-then-valid"
+            && !has_repair_feedback
+        {
+            let duplicate_field = records
+                .first()
+                .and_then(|record| record.get("fields"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|fields| fields.first())
+                .cloned()
+                .ok_or("change recovery candidate field")?;
+            records
+                .first_mut()
+                .and_then(|record| record.get_mut("fields"))
+                .and_then(serde_json::Value::as_array_mut)
+                .ok_or("change recovery candidate fields")?
+                .push(duplicate_field);
+        }
         serde_json::json!({"records": records})
     } else if matches!(
         scenario,

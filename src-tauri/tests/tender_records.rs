@@ -2,11 +2,12 @@ use std::{fs, io, path::Path, sync::Arc};
 
 use quantix_lib::{
     ensure_quantix_setup, AgentRunRecoveryDisposition, AgentRunState, BootstrapAuthority,
-    BootstrapRole, ChangeAssessmentClassification, ChangeAssessmentStatus,
-    ConfirmSourceRelationshipCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
-    DecideChangeAssessmentCommand, DecideTenderRecordCommand, ImportTenderPackageCommand,
-    InspectChangeAssessmentsCommand, OutputValidationIssue, ParseSourceArtifactCommand,
-    ProviderFailureCategory, QuantixHost, ResolveIndeterminateAgentRunCommand, ReviseTenderCommand,
+    BootstrapRole, ChangeAssessmentClassification, ChangeAssessmentImpactKind,
+    ChangeAssessmentStatus, ConfirmSourceRelationshipCommand, CreateBidDecisionPackageCommand,
+    CreateTenderCommand, CreateTenderEngineerEntryCommand, DecideChangeAssessmentCommand,
+    DecideTenderRecordCommand, ImportTenderPackageCommand, InspectChangeAssessmentsCommand,
+    OutputValidationIssue, ParseSourceArtifactCommand, ProviderEventKind, ProviderFailureCategory,
+    QuantixHost, ResolveIndeterminateAgentRunCommand, ReviseTenderCommand,
     RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, RuntimeLayout, SetupPlatform,
     SetupState, SourceRelationshipKind, StoragePermissions, TenderErrorCode,
     TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase,
@@ -205,6 +206,84 @@ fn tender_record_extraction_runs(
     runs
 }
 
+fn fixture_record_extraction_turn_count(codex: &Path) -> u32 {
+    fs::read_to_string(codex.with_extension("record-extraction-turn-count"))
+        .expect("read fixture extraction turn count")
+        .trim()
+        .parse()
+        .expect("parse fixture extraction turn count")
+}
+
+fn extraction_run_inspections(
+    host: &QuantixHost,
+    tender_id: &str,
+    extraction_runs: &[(String, Option<String>, String)],
+) -> Vec<quantix_lib::AgentRunInspection> {
+    let all_runs = host
+        .inspect_agent_runs(tender_id)
+        .expect("inspect extraction Agent Runs");
+    extraction_runs
+        .iter()
+        .map(|(run_id, _, _)| {
+            all_runs
+                .iter()
+                .find(|run| run.run_id == *run_id)
+                .cloned()
+                .expect("inspect exact extraction Agent Run")
+        })
+        .collect()
+}
+
+fn assert_independent_provider_turn_ownership(inspections: &[quantix_lib::AgentRunInspection]) {
+    assert_eq!(inspections.len(), 2);
+    let source_turn = inspections[0]
+        .provider_turn_ref
+        .as_deref()
+        .expect("source Provider Turn ref");
+    let repair_turn = inspections[1]
+        .provider_turn_ref
+        .as_deref()
+        .expect("repair Provider Turn ref");
+    assert_ne!(
+        source_turn, repair_turn,
+        "each Agent Run owns one Provider Turn"
+    );
+    for run in inspections {
+        assert_eq!(run.usage.total_tokens, Some(155), "{run:#?}");
+        assert!(
+            run.events
+                .iter()
+                .any(|event| event.kind == ProviderEventKind::TurnStarted),
+            "{run:#?}"
+        );
+        assert_eq!(
+            run.events.last().map(|event| event.kind),
+            Some(ProviderEventKind::Terminal),
+            "{run:#?}"
+        );
+    }
+}
+
+fn rejected_output(
+    connection: &rusqlite::Connection,
+    run_id: &str,
+) -> (serde_json::Value, String, serde_json::Value) {
+    let (payload_json, payload_sha256, validation_issues_json): (String, String, String) =
+        connection
+            .query_row(
+                "SELECT payload_json, payload_sha256, validation_issues_json
+                 FROM agent_run_rejected_outputs WHERE run_id = ?1",
+                [run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("load rejected Agent Run output");
+    (
+        serde_json::from_str(&payload_json).expect("parse canonical rejected proposal"),
+        payload_sha256,
+        serde_json::from_str(&validation_issues_json).expect("parse canonical validation issues"),
+    )
+}
+
 #[tokio::test]
 async fn manager_intake_automatically_repairs_one_invalid_extraction() {
     let harness = RuntimeHarness::new("manager-intake-repair-invalid-then-valid");
@@ -228,6 +307,9 @@ async fn manager_intake_automatically_repairs_one_invalid_extraction() {
     assert_eq!(runs[0].2, "failed");
     assert_eq!(runs[1].1.as_deref(), Some(runs[0].0.as_str()));
     assert_eq!(runs[1].2, "completed");
+    assert_eq!(fixture_record_extraction_turn_count(&harness.codex), 2);
+    let inspections = extraction_run_inspections(&harness.host, &harness.tender_id, &runs);
+    assert_independent_provider_turn_ownership(&inspections);
     assert!(
         records_for_run(&harness.host, &harness.tender_id, &runs[0].0).is_empty(),
         "the rejected attempt must never publish records"
@@ -264,12 +346,88 @@ async fn manager_intake_automatically_repairs_one_invalid_extraction() {
     assert_eq!(source_inputs, repair_inputs);
     assert!(source_feedback.is_none());
     let repair_feedback = repair_feedback.expect("repair feedback is immutable task data");
+    let repair_feedback: serde_json::Value =
+        serde_json::from_str(&repair_feedback).expect("canonical repair feedback");
+    assert_eq!(repair_feedback["rejected_run_id"], runs[0].0);
+    let (source_rejected_payload, source_rejected_hash, source_rejected_issues) =
+        rejected_output(&connection, &runs[0].0);
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&repair_feedback)
-            .expect("canonical repair feedback")
-            .pointer("/rejected_run_id")
-            .and_then(serde_json::Value::as_str),
-        Some(runs[0].0.as_str())
+        source_rejected_issues,
+        serde_json::to_value(
+            inspections[0]
+                .failure
+                .as_ref()
+                .expect("source OutputInvalid failure")
+                .validation_issues
+                .clone()
+        )
+        .expect("serialize source validation issues")
+    );
+    assert_eq!(
+        repair_feedback["rejected_payload_sha256"],
+        source_rejected_hash
+    );
+    assert_eq!(repair_feedback["validation_issues"], source_rejected_issues);
+    let materialized_feedback: serde_json::Value = serde_json::from_slice(
+        &fs::read(harness.codex.with_extension("repair-feedback-observed"))
+            .expect("read materialized repair feedback observed by fixture"),
+    )
+    .expect("parse materialized repair feedback");
+    assert_eq!(
+        materialized_feedback["rejected_proposal"],
+        source_rejected_payload
+    );
+    assert_eq!(
+        materialized_feedback["rejected_payload_sha256"],
+        repair_feedback["rejected_payload_sha256"]
+    );
+    assert_eq!(
+        materialized_feedback["validation_issues"],
+        repair_feedback["validation_issues"]
+    );
+    assert!(inspections[0].task.repair_feedback.is_none());
+    assert_eq!(
+        inspections[1]
+            .task
+            .repair_feedback
+            .as_ref()
+            .expect("repair feedback on repair task")
+            .rejected_payload_sha256,
+        source_rejected_hash
+    );
+    let direct_child_count: u32 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM agent_runs WHERE retry_of_run_id = ?1",
+            [&runs[0].0],
+            |row| row.get(0),
+        )
+        .expect("count direct repair children");
+    assert_eq!(direct_child_count, 1);
+    let retry_index_sql: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'agent_runs_one_direct_retry'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read direct repair uniqueness index");
+    assert!(
+        retry_index_sql.contains("WHERE retry_of_run_id IS NOT NULL"),
+        "{retry_index_sql}"
+    );
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO agent_runs (
+                   run_id, task_id, profile_id, profile_version, retry_of_run_id,
+                   permission_grant_json, status, started_at
+                 )
+                 SELECT ?1, task_id, profile_id, profile_version, retry_of_run_id,
+                        permission_grant_json, 'running', started_at
+                 FROM agent_runs WHERE run_id = ?2",
+                rusqlite::params!["0".repeat(32), runs[1].0],
+            )
+            .is_err(),
+        "the partial index must reject a second direct repair child"
     );
     let extraction_run_count: u32 = connection
         .query_row(
@@ -300,6 +458,9 @@ async fn manager_intake_stops_after_one_failed_repair() {
     assert_eq!(runs[0].2, "failed");
     assert_eq!(runs[1].1.as_deref(), Some(runs[0].0.as_str()));
     assert_eq!(runs[1].2, "failed");
+    assert_eq!(fixture_record_extraction_turn_count(&harness.codex), 2);
+    let inspections = extraction_run_inspections(&harness.host, &harness.tender_id, &runs);
+    assert_independent_provider_turn_ownership(&inspections);
     assert!(records_for_run(&harness.host, &harness.tender_id, &runs[0].0).is_empty());
     assert!(records_for_run(&harness.host, &harness.tender_id, &runs[1].0).is_empty());
 
@@ -317,6 +478,38 @@ async fn manager_intake_stops_after_one_failed_repair() {
         )
         .expect("count rejected provider outputs");
     assert_eq!(rejected_count, 2);
+    for (index, run) in inspections.iter().enumerate() {
+        let (_, rejected_hash, rejected_issues) = rejected_output(&connection, &run.run_id);
+        assert_eq!(
+            rejected_issues,
+            serde_json::to_value(
+                run.failure
+                    .as_ref()
+                    .expect("invalid repair attempt failure")
+                    .validation_issues
+                    .clone()
+            )
+            .expect("serialize invalid repair validation issues")
+        );
+        assert_eq!(rejected_hash.len(), 64);
+        if index == 0 {
+            assert!(run.task.repair_feedback.is_none());
+        } else {
+            let feedback = run
+                .task
+                .repair_feedback
+                .as_ref()
+                .expect("repair task feedback");
+            let (_, source_hash, source_issues) = rejected_output(&connection, &runs[0].0);
+            assert_eq!(feedback.rejected_run_id, runs[0].0);
+            assert_eq!(feedback.rejected_payload_sha256, source_hash);
+            assert_eq!(
+                serde_json::to_value(&feedback.validation_issues)
+                    .expect("serialize immutable repair issues"),
+                source_issues
+            );
+        }
+    }
     let extraction_run_count: u32 = connection
         .query_row(
             "SELECT extraction_run_count FROM manager_intake_runs",
@@ -1056,6 +1249,53 @@ async fn duplicate_citations_cannot_manufacture_a_contradiction() {
 }
 
 #[tokio::test]
+async fn schema_output_invalid_without_rejected_proposal_returns_the_source_run() {
+    let harness = RuntimeHarness::new("record-extraction-parity-evidence-metadata");
+    let evidence = harness
+        .parsed_pdf_evidence("schema-output-invalid", b"TENDER_RECORD_GOLDEN")
+        .await;
+
+    let extraction = harness
+        .host
+        .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id: harness.tender_id.clone(),
+            evidence: evidence.references,
+            authorities: Vec::new(),
+        })
+        .await
+        .expect("return the schema-invalid source run without creating a repair");
+
+    assert_eq!(extraction.run.state, AgentRunState::Failed);
+    assert_eq!(
+        extraction.run.failure.map(|failure| failure.category),
+        Some(ProviderFailureCategory::OutputInvalid)
+    );
+    assert_eq!(
+        tender_record_extraction_runs(&harness.application_home, &harness.tender_id).len(),
+        1
+    );
+    assert_eq!(
+        fixture_record_extraction_turn_count(&harness.codex),
+        1,
+        "a schema-invalid outcome without a retained proposal must not dispatch a repair turn"
+    );
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open Tender Store database");
+    let rejected_count: u32 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM agent_run_rejected_outputs",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count retained semantic rejections");
+    assert_eq!(rejected_count, 0);
+}
+
+#[tokio::test]
 async fn extraction_output_cannot_publish_after_the_tender_revision_changes() {
     let harness = RuntimeHarness::new("record-extraction-delayed");
     let evidence = harness
@@ -1106,6 +1346,15 @@ async fn extraction_output_cannot_publish_after_the_tender_revision_changes() {
     );
     assert_eq!(extraction.published_record_count, 0);
     assert!(inspect_all_records(&harness.host, &harness.tender_id).is_empty());
+    assert_eq!(
+        tender_record_extraction_runs(&harness.application_home, &harness.tender_id).len(),
+        1
+    );
+    assert_eq!(
+        fixture_record_extraction_turn_count(&harness.codex),
+        1,
+        "a stale OutputInvalid outcome must not dispatch a repair turn"
+    );
 }
 
 #[tokio::test]
@@ -1319,6 +1568,159 @@ async fn later_addenda_make_affected_verified_records_visibly_stale() {
         .expect("affected record after addendum");
     assert_eq!(stale.verification_status, VerificationStatus::Stale);
     assert_eq!(stale.trust_class, TenderRecordTrustClass::PriorDecision);
+}
+
+#[tokio::test]
+async fn semantic_repair_preserves_active_change_recovery_context() {
+    let harness = RuntimeHarness::new("manager-intake");
+    let prior = harness
+        .parsed_pdf_evidence("repair-change-original", b"TENDER_RECORD_GOLDEN")
+        .await;
+    fs::write(
+        harness.codex.with_extension("manager-output-release"),
+        b"release",
+    )
+    .expect("release initial Manager outcome");
+    harness
+        .host
+        .run_manager_intake_for_verification(&harness.tender_id)
+        .await
+        .expect("complete initial Manager Intake");
+    harness
+        .host
+        .create_bid_decision_package(CreateBidDecisionPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            base_version: None,
+            disposition_updates: Vec::new(),
+            manager_capability_demands: Vec::new(),
+        })
+        .expect("move the verified Tender into Bid Decision before recovery");
+    let records_before_change = inspect_all_records(&harness.host, &harness.tender_id);
+    let addendum = harness
+        .parsed_pdf_evidence("repair-change-addendum", b"TENDER_RECORD_GOLDEN")
+        .await;
+    harness
+        .host
+        .confirm_source_relationship(ConfirmSourceRelationshipCommand {
+            tender_id: harness.tender_id.clone(),
+            prior_artifact_id: prior.artifact_id,
+            prior_version: prior.version,
+            replacement_artifact_id: addendum.artifact_id,
+            replacement_version: addendum.version,
+            relationship_kind: SourceRelationshipKind::Addendum,
+        })
+        .expect("confirm addendum relationship");
+    let assessment = harness
+        .host
+        .inspect_change_assessments(InspectChangeAssessmentsCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 4,
+        })
+        .expect("inspect active change assessment")
+        .active
+        .expect("active change assessment");
+    let allowed_stable_keys = assessment
+        .impacts
+        .iter()
+        .filter(|impact| impact.kind == ChangeAssessmentImpactKind::TenderRecord)
+        .filter_map(|impact| {
+            records_before_change
+                .iter()
+                .find(|record| record.record_id == impact.object_id)
+                .map(|record| record.stable_key.clone())
+        })
+        .collect::<std::collections::HashSet<_>>();
+    assert!(!allowed_stable_keys.is_empty());
+    let decided = harness
+        .host
+        .decide_change_assessment(DecideChangeAssessmentCommand {
+            tender_id: harness.tender_id.clone(),
+            assessment_id: assessment.assessment_id.clone(),
+            assessment_manifest_sha256: assessment.manifest_sha256,
+            classification: ChangeAssessmentClassification::Material,
+            rationale: "The replacement evidence requires bounded record successors.".into(),
+        })
+        .expect("classify material change");
+    assert_eq!(decided.status, ChangeAssessmentStatus::ReworkRequired);
+    let extraction_turns_before = fixture_record_extraction_turn_count(&harness.codex);
+    harness.set_agent_scenario("record-extraction-change-recovery-invalid-then-valid");
+
+    let extraction = harness
+        .host
+        .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id: harness.tender_id.clone(),
+            evidence: addendum.references,
+            authorities: Vec::new(),
+        })
+        .await
+        .expect("repair the bounded material-change extraction");
+    assert_eq!(extraction.run.state, AgentRunState::Completed);
+    assert_eq!(
+        fixture_record_extraction_turn_count(&harness.codex),
+        extraction_turns_before + 2
+    );
+    let all_extraction_runs =
+        tender_record_extraction_runs(&harness.application_home, &harness.tender_id);
+    let repair_runs = all_extraction_runs[all_extraction_runs.len() - 2..].to_vec();
+    assert_eq!(repair_runs[0].2, "failed");
+    assert_eq!(repair_runs[1].1.as_deref(), Some(repair_runs[0].0.as_str()));
+    assert_eq!(repair_runs[1].2, "completed");
+    let inspections = extraction_run_inspections(&harness.host, &harness.tender_id, &repair_runs);
+    assert_independent_provider_turn_ownership(&inspections);
+    assert_eq!(
+        inspections[0].task.exact_inputs,
+        inspections[1].task.exact_inputs
+    );
+    assert!(inspections[1]
+        .task
+        .exact_inputs
+        .iter()
+        .any(|input| input.kind == "change_assessment"
+            && input.reference == assessment.assessment_id));
+
+    let observed: serde_json::Value = serde_json::from_slice(
+        &fs::read(harness.codex.with_extension("agent-workspace"))
+            .expect("read repair provider workspace observation"),
+    )
+    .expect("parse repair provider workspace observation");
+    let repair_view = observed
+        .pointer("/provider_data_view/change_assessment")
+        .expect("repair provider data preserves change recovery context");
+    assert_eq!(
+        repair_view["assessment_id"].as_str(),
+        Some(assessment.assessment_id.as_str())
+    );
+    let repair_allowed_keys = repair_view["allowed_stable_keys"]
+        .as_array()
+        .expect("repair allowed stable keys")
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        repair_allowed_keys,
+        allowed_stable_keys
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::HashSet<_>>()
+    );
+    assert!(
+        repair_view["prior_records"]
+            .as_array()
+            .is_some_and(|records| !records.is_empty()),
+        "repair Data View retains immutable prior-record context"
+    );
+    let published_keys = records_for_run(&harness.host, &harness.tender_id, &repair_runs[1].0)
+        .into_iter()
+        .map(|record| record.stable_key)
+        .collect::<std::collections::HashSet<_>>();
+    assert!(!published_keys.is_empty());
+    assert!(
+        published_keys
+            .iter()
+            .all(|stable_key| allowed_stable_keys.contains(stable_key)),
+        "only exact impacted stable keys may publish as repaired successors"
+    );
 }
 
 #[tokio::test]
