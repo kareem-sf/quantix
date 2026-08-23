@@ -114,8 +114,8 @@ fn application_only_update() -> UpdateCandidate {
             signature_sha256: "b".repeat(64),
         },
         compatibility: UpdateCompatibilityManifest {
-            installation_schema_version: 24,
-            tender_schema_version: 35,
+            installation_schema_version: 25,
+            tender_schema_version: 36,
             ocr_version: "3.9.2".into(),
             runtime_manifest_schema_version: 3,
         },

@@ -172,8 +172,8 @@ const applicationFacts = {
   },
   diagnostics: {
     quantix_version: "0.1.0",
-    installation_schema_version: 25,
-    tender_schema_version: 36,
+    installation_schema_version: 25n,
+    tender_schema_version: 36n,
   },
 };
 
@@ -698,10 +698,12 @@ describe("ManagerWorkspace", () => {
     const context = screen.getByRole("complementary", {
       name: "Tender workspace",
     });
-    expect(within(context).getByText("Current action")).toBeTruthy();
     expect(within(context).getByText("Team activity")).toBeTruthy();
     expect(within(context).getByText("Tender records")).toBeTruthy();
-    expect(within(context).getByText("Capabilities")).toBeTruthy();
+    expect(within(context).queryByText("Current action")).toBeNull();
+    expect(within(context).queryByText("Capabilities")).toBeNull();
+    expect(within(context).queryByText("Document tools")).toBeNull();
+    expect(within(context).queryByText("Approved AI")).toBeNull();
     expect(
       within(context).getByRole("button", { name: "Manager" }),
     ).toBeTruthy();
@@ -1388,7 +1390,7 @@ describe("ManagerWorkspace", () => {
     expect(
       context.closest(".manager-workspace__context-motion")?.parentElement,
     ).toBe(workspace);
-    expect(within(context).getByText("Current action")).toBeTruthy();
+    expect(within(context).queryByText("Current action")).toBeNull();
     expect(within(context).getByText("Tender records")).toBeTruthy();
   });
 
@@ -1763,7 +1765,7 @@ describe("ManagerWorkspace", () => {
     expect(screen.queryByRole("button", { name: "Manager" })).toBeNull();
   }, 10_000);
 
-  it("shows the persisted Tender AI selection before the live catalogue hydrates", async () => {
+  it("keeps a persisted Tender AI selection out of the conversation workspace", async () => {
     host.inspectManagerWorkspace.mockResolvedValue({
       ...projection,
       ai_execution: {
@@ -1790,125 +1792,35 @@ describe("ManagerWorkspace", () => {
 
     render(<ManagerWorkspace />);
 
-    const controls = await screen.findByRole("group", {
-      name: "Tender AI selection",
-    });
     expect(
-      within(controls).getByRole("button", { name: /Tender AI provider/ }),
+      await screen.findByRole("log", { name: "Tender conversation" }),
     ).toBeTruthy();
-    const savedModel = within(controls).getByRole("button", {
-      name: /Tender AI model/,
-    });
-    expect(savedModel.hasAttribute("disabled")).toBe(true);
-    const savedReasoning = within(controls).getByRole("button", {
-      name: /Tender AI reasoning/,
-    });
-    expect(savedReasoning.hasAttribute("disabled")).toBe(true);
-    expect(controls.textContent).toContain(
-      "Saved selection · gpt-5.3-codex-spark",
-    );
-    expect(controls.textContent).toContain(
-      'Saved selection · {"kind":"codex_effort","value":"low"}',
-    );
     expect(
-      screen.queryByRole("dialog", { name: "Tender AI selection" }),
+      screen.queryByRole("group", { name: "Tender AI selection" }),
     ).toBeNull();
+    expect(screen.queryByText("gpt-5.3-codex-spark")).toBeNull();
   });
 
-  it("shows inline Tender AI controls and persists exact provider, model, and reasoning changes", async () => {
+  it("keeps provider, model, and reasoning changes in Settings", async () => {
     host.inspectManagerWorkspace.mockResolvedValue(projection);
     host.inspectApplicationSettings.mockResolvedValue({
       ...applicationFacts,
       ai_execution_selection: null,
       provider_connections: [tenderAiProviderConnection],
     });
-    host.updateTenderAiExecution.mockImplementation(
-      async ({ expected_revision, selection }) => ({
-        revision: expected_revision + 1n,
-        selection,
-        readiness: selection ? "ready" : "local_only",
-        status_summary: selection
-          ? "The selected AI provider, model, and reasoning capability are ready."
-          : "Local-only execution is available for this fixture.",
-      }),
-    );
 
     render(<ManagerWorkspace />);
 
-    const controls = await screen.findByRole("group", {
-      name: "Tender AI selection",
-    });
     expect(
-      within(controls).getByRole("button", { name: /Tender AI provider/ }),
+      await screen.findByRole("log", { name: "Tender conversation" }),
     ).toBeTruthy();
     expect(
-      within(controls).getByRole("button", { name: /Tender AI model/ }),
-    ).toBeTruthy();
-    expect(
-      within(controls).getByRole("button", { name: /Tender AI reasoning/ }),
-    ).toBeTruthy();
-    expect(
-      screen.queryByRole("dialog", { name: "Tender AI selection" }),
+      screen.queryByRole("group", { name: "Tender AI selection" }),
     ).toBeNull();
-
-    const selects = Array.from(controls.querySelectorAll("select"));
-    expect(selects).toHaveLength(3);
-    fireEvent.change(selects[0]!, {
-      target: { value: "codex_chatgpt" },
-    });
-    await waitFor(() => {
-      expect(host.updateTenderAiExecution).toHaveBeenLastCalledWith({
-        tender_id: tenderId,
-        expected_revision: 1n,
-        selection: {
-          connection_id: "codex_chatgpt",
-          provider: "codex",
-          model_id: "gpt-live-a",
-          reasoning: { kind: "codex_effort", value: "medium" },
-          catalogue_fetched_at: "2026-08-21T08:00:00Z",
-          adapter_version: "codex-v1",
-        },
-      });
-    });
-
-    fireEvent.change(selects[1]!, { target: { value: "gpt-live-b" } });
-    await waitFor(() => {
-      expect(host.updateTenderAiExecution).toHaveBeenLastCalledWith({
-        tender_id: tenderId,
-        expected_revision: 2n,
-        selection: {
-          connection_id: "codex_chatgpt",
-          provider: "codex",
-          model_id: "gpt-live-b",
-          reasoning: { kind: "codex_effort", value: "high" },
-          catalogue_fetched_at: "2026-08-21T08:00:00Z",
-          adapter_version: "codex-v1",
-        },
-      });
-    });
-
-    fireEvent.change(selects[2]!, {
-      target: {
-        value: JSON.stringify({ kind: "codex_effort", value: "xhigh" }),
-      },
-    });
-    await waitFor(() => {
-      expect(host.updateTenderAiExecution).toHaveBeenLastCalledWith({
-        tender_id: tenderId,
-        expected_revision: 3n,
-        selection: {
-          connection_id: "codex_chatgpt",
-          provider: "codex",
-          model_id: "gpt-live-b",
-          reasoning: { kind: "codex_effort", value: "xhigh" },
-          catalogue_fetched_at: "2026-08-21T08:00:00Z",
-          adapter_version: "codex-v1",
-        },
-      });
-    });
+    expect(host.updateTenderAiExecution).not.toHaveBeenCalled();
   });
 
-  it("refreshes inline Tender AI choices from Settings after returning to the workspace", async () => {
+  it("refreshes Settings without adding AI tooling to the workspace", async () => {
     const selectedProjection: ManagerWorkspaceProjection = {
       ...projection,
       ai_execution: {
@@ -1967,31 +1879,73 @@ describe("ManagerWorkspace", () => {
 
     render(<ManagerWorkspace />);
 
-    const initialControls = await screen.findByRole("group", {
-      name: "Tender AI selection",
-    });
-    expect(initialControls.textContent).toContain("OpenAI account via Codex");
+    await screen.findByRole("log", { name: "Tender conversation" });
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(
       await screen.findByRole("button", { name: "Back to workspace" }),
     );
 
-    const refreshedControls = await screen.findByRole("group", {
-      name: "Tender AI selection",
-    });
-    fireEvent.click(
-      within(refreshedControls).getByRole("button", {
-        name: /Tender AI model/,
-      }),
-    );
     expect(
-      await screen.findByRole("option", { name: /New live model/ }),
+      await screen.findByRole("log", { name: "Tender conversation" }),
     ).toBeTruthy();
-    expect(refreshedControls.textContent).toContain("OpenAI account via Codex");
+    expect(
+      screen.queryByRole("group", { name: "Tender AI selection" }),
+    ).toBeNull();
     expect(host.updateTenderAiExecution).not.toHaveBeenCalled();
   });
 
-  it("uses null for Local only and keeps the saved draft when Shift+Enter is used", async () => {
+  it("keeps the connected ChatGPT state after leaving Settings through a Tender", async () => {
+    const readySettings = readyApplicationSettings();
+    const disconnectedSettings: ApplicationSettingsView = {
+      ...readySettings,
+      ai_execution_selection: null,
+      ai_execution_approval: null,
+      provider_connections: [
+        {
+          ...readySettings.provider_connections[0]!,
+          status: "authentication_required",
+          account_label: null,
+          account_plan: null,
+          models: [],
+          catalogue_fetched_at: null,
+          status_summary:
+            "Connect your ChatGPT subscription in Settings before retrying.",
+        },
+      ],
+      chatgpt: {
+        state: "absent",
+        account_id: null,
+        plan_type: null,
+        expires_at_ms: null,
+        login_phase: "idle",
+      },
+    };
+    host.inspectManagerWorkspace.mockResolvedValue(projection);
+    host.selectManagerWorkspaceTender.mockResolvedValue(projection);
+    host.inspectApplicationSettings
+      .mockResolvedValueOnce(disconnectedSettings)
+      .mockResolvedValue(readySettings);
+    host.refreshApplicationSettings.mockResolvedValue(readySettings);
+
+    render(<ManagerWorkspace />);
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "ChatGPT & Models" }),
+    );
+    expect(
+      await screen.findByText("ChatGPT is ready for new Tenders."),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^West Campus MEP/ }));
+
+    expect(
+      await screen.findByRole("log", { name: "Tender conversation" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("group", { name: "Tender AI selection" }),
+    ).toBeNull();
+  });
+
+  it("keeps the saved draft when Shift+Enter is used", async () => {
     const selectedProjection: ManagerWorkspaceProjection = {
       ...projection,
       ai_execution: {
@@ -2014,32 +1968,11 @@ describe("ManagerWorkspace", () => {
       ai_execution_selection: null,
       provider_connections: [tenderAiProviderConnection],
     });
-    host.updateTenderAiExecution.mockResolvedValue({
-      ...selectedProjection.ai_execution,
-      revision: 5n,
-      selection: null,
-      readiness: "local_only",
-      status_summary: "Local-only execution is available for this fixture.",
-    });
     host.recordEngineerWorkspaceMessage.mockResolvedValue(selectedProjection);
 
     render(<ManagerWorkspace />);
 
-    const controls = await screen.findByRole("group", {
-      name: "Tender AI selection",
-    });
-    const selects = Array.from(controls.querySelectorAll("select"));
-    expect(selects).toHaveLength(3);
-    fireEvent.change(selects[0]!, { target: { value: "local_only" } });
-    await waitFor(() => {
-      expect(host.updateTenderAiExecution).toHaveBeenCalledWith({
-        tender_id: tenderId,
-        expected_revision: 4n,
-        selection: null,
-      });
-    });
-
-    const composer = screen.getByRole("textbox", {
+    const composer = await screen.findByRole("textbox", {
       name: "Message your Tendering Manager",
     });
     fireEvent.change(composer, { target: { value: "First line" } });
@@ -2096,6 +2029,39 @@ describe("ManagerWorkspace", () => {
     expect(
       screen.queryByRole("heading", { name: "Checking document tools" }),
     ).toBeNull();
+  });
+
+  it("explains the application-home free-space requirement when document-tool preparation cannot start", async () => {
+    const documentProjection = {
+      ...projection,
+      files: { ...projection.files, tender_document_count: 1 },
+    };
+    host.inspectManagerWorkspace.mockResolvedValue(documentProjection);
+    host.inspectRuntimeReadiness.mockResolvedValue({
+      state: "missing_executable",
+      issues: ["ocr_executable_missing"],
+      uv_version: "0.12.2",
+      ocr_version: null,
+      repair_available: true,
+    });
+    host.repairRuntimeReadiness.mockResolvedValue({
+      state: "repair_required",
+      issues: ["insufficient_disk_space"],
+      uv_version: null,
+      ocr_version: null,
+      repair_available: true,
+    });
+
+    render(<ManagerWorkspace initialProjection={documentProjection} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Prepare document tools" }),
+    );
+
+    expect(
+      await screen.findByText(
+        /Quantix needs at least 2 GB of free space in the Application Home/i,
+      ),
+    ).toBeTruthy();
   });
 
   it("keeps a transient runtime probe failure checking until a retry is ready", async () => {
@@ -3123,12 +3089,24 @@ describe("ManagerWorkspace", () => {
     expect(
       await screen.findByText("Paused — AI office unavailable"),
     ).toBeTruthy();
+    const conversation = container.querySelector<HTMLElement>(
+      ".manager-view__conversation",
+    );
+    if (!conversation) throw new Error("Tender conversation is not rendered");
     expect(
-      screen.getByRole("heading", { name: "Tender intake paused" }),
+      within(conversation).getByText("Reading Tender documents"),
     ).toBeTruthy();
     expect(
-      screen.queryByText("Quantix is deriving exact source evidence."),
-    ).toBeNull();
+      within(conversation).getByText(
+        "Quantix is deriving exact source evidence from the registered documents.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(conversation).getAllByText(
+        "Quantix is deriving exact source evidence from the registered documents.",
+      ),
+    ).toHaveLength(1);
+    expect(screen.queryByText("Current focus", { exact: true })).toBeNull();
     expect(
       container.querySelector(".manager-view__status .is-working"),
     ).toBeNull();
@@ -3146,5 +3124,117 @@ describe("ManagerWorkspace", () => {
         [],
       );
     });
+  });
+
+  it("keeps the active Tender stage visible while an unrelated document-tool probe settles", async () => {
+    const extractingProjection: ManagerWorkspaceProjection = {
+      ...projection,
+      ai_execution: {
+        revision: 1n,
+        selection: null,
+        readiness: "ready",
+        status_summary: "Ready to continue Tender work.",
+      },
+      files: {
+        ...projection.files,
+        tender_document_count: 123,
+      },
+      current_action: {
+        kind: "observe_intake",
+        title: "Deriving Tender facts",
+        summary:
+          "The Tender Analyst is extracting requirements, risks, deadlines, and gaps.",
+        action_label: "Intake in progress",
+        requires_engineer: false,
+      },
+      intake: {
+        intake_run_id: "4".repeat(32),
+        stage: "extracting_tender_facts",
+        status: "working",
+        label: "Deriving Tender facts",
+        summary:
+          "The Tender Analyst is extracting requirements, risks, deadlines, and gaps.",
+        parseable_document_count: 123,
+        parsed_document_count: 123,
+        extraction_run_count: 0,
+      },
+    };
+    host.inspectManagerWorkspace.mockResolvedValue(extractingProjection);
+    host.inspectRuntimeReadiness.mockReturnValue(new Promise(() => {}));
+
+    render(<ManagerWorkspace />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Deriving Tender facts" }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Checking document tools")).toBeNull();
+    expect(await screen.findByText("Working")).toBeTruthy();
+  });
+
+  it("keeps the main workspace focused on the conversation instead of AI tooling chrome", async () => {
+    const settings = readyApplicationSettings();
+    host.inspectApplicationSettings.mockResolvedValue(settings);
+    host.inspectManagerWorkspace.mockResolvedValue({
+      ...projection,
+      ai_execution: {
+        ...projection.ai_execution,
+        selection: settings.ai_execution_selection,
+        readiness: "ready",
+        status_summary: "Ready to run Tender work.",
+      },
+    });
+
+    render(<ManagerWorkspace />);
+
+    const composer = await screen.findByRole("textbox", {
+      name: "Message your Tendering Manager",
+    });
+    expect(composer).toBeTruthy();
+    expect(screen.queryByText("Tools & Context", { exact: true })).toBeNull();
+    expect(screen.queryByText("Provider", { exact: true })).toBeNull();
+    expect(screen.queryByText("Model", { exact: true })).toBeNull();
+    expect(screen.queryByText("Reasoning", { exact: true })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /OpenAI account via Codex/i }),
+    ).toBeNull();
+  });
+
+  it("renders the next-step suggestion in the chat and routes it through the existing action", async () => {
+    const retryProjection: ManagerWorkspaceProjection = {
+      ...projection,
+      current_action: {
+        kind: "retry_intake",
+        title: "Retry Tender intake",
+        summary: "The previous intake attempt can be run again.",
+        action_label: "Retry intake",
+        requires_engineer: true,
+      },
+      intake: {
+        intake_run_id: "3".repeat(32),
+        stage: "reading_documents",
+        status: "failed",
+        label: "Tender intake failed",
+        summary: "The previous intake attempt can be run again.",
+        parseable_document_count: 1,
+        parsed_document_count: 0,
+        extraction_run_count: 0,
+      },
+    };
+    host.inspectManagerWorkspace.mockResolvedValue(retryProjection);
+    host.retryManagerIntake.mockResolvedValue(undefined);
+
+    render(<ManagerWorkspace />);
+
+    const suggestion = await screen.findByRole("button", {
+      name: "Retry intake",
+    });
+    expect(suggestion.closest(".current-action")).toBeNull();
+    fireEvent.click(suggestion);
+    await waitFor(() => {
+      expect(host.retryManagerIntake).toHaveBeenCalledWith(tenderId);
+    });
+    expect(
+      screen.getByRole("textbox", { name: "Message your Tendering Manager" }),
+    ).toBeTruthy();
   });
 });

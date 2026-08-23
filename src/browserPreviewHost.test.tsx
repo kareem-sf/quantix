@@ -309,27 +309,23 @@ describe("browser preview Host", () => {
     );
   });
 
-  it("shows the Tender AI Settings choices inline without a modal", async () => {
+  it("keeps Tender AI Settings choices out of the conversation workspace", async () => {
     window.history.replaceState(null, "", "/?workspace-preview=1");
     await installBrowserPreviewHost();
     const { default: App } = await import("./App");
     render(<App />);
 
-    const aiControls = await screen.findByRole("group", {
-      name: "Tender AI selection",
-    });
     expect(
-      within(aiControls).getByRole("button", { name: /Tender AI provider/ }),
+      await screen.findByRole("textbox", {
+        name: "Message your Tendering Manager",
+      }),
     ).toBeTruthy();
     expect(
-      within(aiControls).getByRole("button", { name: /Tender AI model/ }),
-    ).toBeTruthy();
-    expect(
-      within(aiControls).getByRole("button", { name: /Tender AI reasoning/ }),
-    ).toBeTruthy();
-    expect(
-      screen.queryByRole("dialog", { name: "Tender AI selection" }),
+      screen.queryByRole("group", { name: "Tender AI selection" }),
     ).toBeNull();
+    expect(screen.queryByText("Provider", { exact: true })).toBeNull();
+    expect(screen.queryByText("Model", { exact: true })).toBeNull();
+    expect(screen.queryByText("Reasoning", { exact: true })).toBeNull();
   });
 
   it("keeps the empty Start Tender surface mounted while the sidebar toggles", async () => {
@@ -380,7 +376,8 @@ describe("browser preview Host", () => {
     const dialog = await screen.findByRole("dialog", {
       name: "Tender workspace",
     });
-    expect(within(dialog).getByText("Current action")).toBeTruthy();
+    expect(within(dialog).queryByText("Current action")).toBeNull();
+    expect(within(dialog).getByText("Tender records")).toBeTruthy();
     expect(
       screen.getByRole("heading", { name: "North District Civic Centre" }),
     ).toBeTruthy();
@@ -405,7 +402,8 @@ describe("browser preview Host", () => {
     const context = await screen.findByRole("complementary", {
       name: "Tender workspace",
     });
-    expect(within(context).getByText("Current action")).toBeTruthy();
+    expect(within(context).queryByText("Current action")).toBeNull();
+    expect(within(context).getByText("Tender records")).toBeTruthy();
 
     fireEvent.click(
       within(context).getByRole("button", {

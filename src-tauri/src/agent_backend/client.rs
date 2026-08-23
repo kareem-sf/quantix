@@ -16,6 +16,7 @@ pub(crate) struct BackendRequest {
     pub instructions: String,
     pub input_items: Vec<serde_json::Value>,
     pub tools: Vec<serde_json::Value>,
+    pub output_schema: serde_json::Value,
     pub store: bool,
     pub include_reasoning: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -154,6 +155,17 @@ pub(crate) fn build_request_body(req: &BackendRequest) -> serde_json::Value {
     body.insert("instructions".into(), req.instructions.clone().into());
     body.insert("input".into(), req.input_items.clone().into());
     body.insert("tools".into(), req.tools.clone().into());
+    body.insert(
+        "text".into(),
+        serde_json::json!({
+            "format": {
+                "type": "json_schema",
+                "name": "quantix_tender_output",
+                "strict": true,
+                "schema": req.output_schema.clone(),
+            }
+        }),
+    );
     body.insert("store".into(), req.store.into());
     body.insert("stream".into(), true.into());
     if req.include_reasoning {
@@ -625,6 +637,12 @@ mod tests {
                 "parameters": {"type": "object", "properties": {}},
                 "strict": true
             })],
+            output_schema: serde_json::json!({
+                "additionalProperties": false,
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+                "type": "object"
+            }),
             store: false,
             include_reasoning: true,
             reasoning_effort: Some(ReasoningEffort::High),
@@ -899,6 +917,15 @@ mod tests {
         assert_eq!(body["tools"][0]["name"], "read_file");
         assert_eq!(body["store"], false);
         assert_eq!(body["stream"], true);
+        assert_eq!(
+            body["text"]["format"],
+            serde_json::json!({
+                "type": "json_schema",
+                "name": "quantix_tender_output",
+                "strict": true,
+                "schema": request.output_schema,
+            })
+        );
         assert!(
             body.get("previous_response_id").is_none(),
             "the REST backend must receive stateless full-replay input"

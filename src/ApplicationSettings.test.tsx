@@ -57,8 +57,8 @@ const applicationFacts = {
   },
   diagnostics: {
     quantix_version: "0.1.0",
-    installation_schema_version: 25,
-    tender_schema_version: 36,
+    installation_schema_version: 25n,
+    tender_schema_version: 36n,
   },
 };
 
@@ -285,10 +285,13 @@ describe("ApplicationSettings ChatGPT connection", () => {
     expect(
       screen.getByRole("button", { name: "Connect ChatGPT" }),
     ).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: "Sign in on another device" }),
-    ).toBeNull();
-    expect(screen.getByText("Having trouble signing in?")).toBeTruthy();
+    const troubleshooting = screen
+      .getByText("Having trouble signing in?")
+      .closest("details");
+    expect(troubleshooting?.open).toBe(false);
+    expect(troubleshooting?.querySelector("button")?.textContent).toBe(
+      "Sign in on another device",
+    );
   });
 
   it("shows the exact automatic browser waiting state and supports cancellation", async () => {
@@ -1165,7 +1168,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
       screen.getByText(/Model changes become the default for future Tenders/),
     ).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /^Model/ }));
+    fireEvent.click(screen.getByLabelText("Model"));
     fireEvent.click(screen.getByRole("option", { name: /^Deep review/ }));
     await waitFor(() => {
       expect(host.updateAiExecutionSelection).toHaveBeenCalledWith({

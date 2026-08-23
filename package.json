@@ -21,7 +21,7 @@
     "acceptance:native": "cargo run --manifest-path src-tauri/Cargo.toml --bin quantix-product-acceptance -- native",
     "acceptance:release": "cargo run --manifest-path src-tauri/Cargo.toml --bin quantix-product-acceptance -- release",
     "release:preflight": "cargo run --manifest-path src-tauri/Cargo.toml --bin quantix-product-acceptance -- release-check",
-    "test": "npm run test:renderer && cargo test --manifest-path src-tauri/Cargo.toml --target-dir src-tauri/target/tests --features runtime-fixture",
+    "test": "npm run test:renderer && cargo test --manifest-path src-tauri/Cargo.toml --target-dir src-tauri/target/tests --features runtime-fixture -- --test-threads=4",
     "test:renderer": "vitest run",
     "verify:identity": "node scripts/validate-identity-assets.mjs",
     "verify": "npm run verify:identity && npm run format:check && npm run check && npm test",

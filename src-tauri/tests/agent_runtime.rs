@@ -1,4 +1,4 @@
-use std::{io, path::Path, sync::Arc, time::Duration};
+use std::{fs, io, path::Path, sync::Arc, time::Duration};
 
 use quantix_lib::{
     ensure_quantix_setup, AgentRunState, CreateTenderCommand, InspectAgentRunCommand,
@@ -33,10 +33,11 @@ struct Harness {
 }
 
 impl Harness {
-    fn new() -> Self {
+    fn new(agent_scenario: &str) -> Self {
         let root = tempfile::tempdir().expect("temporary Agent Run harness");
         let application_home = root.path().join(".quantix");
         let resources = root.path().join("resources");
+        install_codex_fixture(&resources, agent_scenario);
         let host = QuantixHost::with_setup_platform_and_runtime(
             &application_home,
             Arc::new(ReadySetupPlatform),
@@ -44,6 +45,8 @@ impl Harness {
         );
         host.accept_runtime_fixture();
         assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+        host.approve_runtime_fixture_ai_selection()
+            .expect("approve fixture AI selection");
         let tender = host
             .create_tender(CreateTenderCommand {
                 name: "Cairo Metro Systems Tender".into(),
@@ -93,7 +96,7 @@ impl Harness {
 
 #[tokio::test]
 async fn missing_chatgpt_connection_fails_before_a_backend_turn_is_established() {
-    let harness = Harness::new();
+    let harness = Harness::new("signed-out");
 
     let run = harness
         .host
@@ -139,7 +142,7 @@ async fn missing_chatgpt_connection_fails_before_a_backend_turn_is_established()
 
 #[tokio::test]
 async fn agent_run_preserves_its_tender_scoped_provider_selection_after_unbinding() {
-    let harness = Harness::new();
+    let harness = Harness::new("success");
     let expected_selection = harness
         .host
         .inspect_tender_ai_execution(InspectTenderAiExecutionCommand {
@@ -187,7 +190,7 @@ async fn agent_run_preserves_its_tender_scoped_provider_selection_after_unbindin
 
 #[tokio::test]
 async fn engineer_interruption_persists_a_terminal_interrupted_run() {
-    let harness = Harness::new();
+    let harness = Harness::new("hang-before-thread");
     let host = harness.host.clone();
     let tender_id = harness.tender_id.clone();
     let running = tokio::spawn(async move {
@@ -247,7 +250,7 @@ async fn engineer_interruption_persists_a_terminal_interrupted_run() {
 
 #[tokio::test]
 async fn semantically_invalid_agent_manifest_requires_tender_recovery() {
-    let harness = Harness::new();
+    let harness = Harness::new("success");
     let run = harness
         .host
         .run_bootstrap_agent(RunBootstrapAgentCommand {
@@ -301,4 +304,25 @@ async fn semantically_invalid_agent_manifest_requires_tender_recovery() {
             .code,
         TenderErrorCode::RecoveryRequired
     );
+}
+
+fn install_codex_fixture(resources: &Path, scenario: &str) {
+    let runtime_bin = resources.join("runtime").join("bin");
+    fs::create_dir_all(&runtime_bin).expect("fake runtime bin");
+    let codex = runtime_bin.join(executable_name("codex"));
+    fs::copy(
+        Path::new(env!("CARGO_BIN_EXE_quantix-runtime-fixture")),
+        &codex,
+    )
+    .expect("copy fake app-server");
+    fs::write(codex.with_extension("agent-scenario"), scenario)
+        .expect("write fake app-server scenario");
+}
+
+fn executable_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    }
 }

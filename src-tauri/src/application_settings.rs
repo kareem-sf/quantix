@@ -1,8 +1,7 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{fs, path::Path, time::Duration};
+
+#[cfg(any(not(feature = "runtime-fixture"), test))]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use garde::Validate;
 use jiff::Timestamp;
@@ -308,17 +307,26 @@ impl QuantixHost {
     pub async fn refresh_application_settings(
         &self,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        let application_home = self.application_home().to_path_buf();
-        tokio::task::spawn_blocking(move || {
-            refresh_application_settings_projection(
-                &application_home,
-                crate::chatgpt_login::PRODUCTION_ISSUER,
-                current_time_ms(),
-            )
-        })
-        .await
-        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))??;
-        self.application_settings_with_chatgpt_phase()
+        #[cfg(all(feature = "runtime-fixture", not(test)))]
+        {
+            self.inspect_codex_subscription(tokio_util::sync::CancellationToken::new())
+                .await;
+            return self.application_settings_with_chatgpt_phase();
+        }
+        #[cfg(any(not(feature = "runtime-fixture"), test))]
+        {
+            let application_home = self.application_home().to_path_buf();
+            tokio::task::spawn_blocking(move || {
+                refresh_application_settings_projection(
+                    &application_home,
+                    crate::chatgpt_login::PRODUCTION_ISSUER,
+                    current_time_ms(),
+                )
+            })
+            .await
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))??;
+            self.application_settings_with_chatgpt_phase()
+        }
     }
 
     pub(crate) async fn refresh_exact_ai_execution_selection(
@@ -328,6 +336,12 @@ impl QuantixHost {
         let application_home = self.application_home().to_path_buf();
         let preferred = preferred.cloned();
         tokio::task::spawn_blocking(move || {
+            #[cfg(all(feature = "runtime-fixture", not(test)))]
+            return refresh_fixture_ai_execution_selection_projection(
+                &application_home,
+                preferred.as_ref(),
+            );
+            #[cfg(any(not(feature = "runtime-fixture"), test))]
             refresh_exact_ai_execution_selection_projection(&application_home, preferred.as_ref())
         })
         .await
@@ -410,6 +424,13 @@ impl QuantixHost {
         }
         let application_home = self.application_home().to_path_buf();
         tokio::task::spawn_blocking(move || {
+            #[cfg(all(feature = "runtime-fixture", not(test)))]
+            return mutate_fixture_ai_execution_selection_projection(
+                &application_home,
+                &command,
+                false,
+            );
+            #[cfg(any(not(feature = "runtime-fixture"), test))]
             update_ai_execution_selection_projection(&application_home, &command)
         })
         .await
@@ -429,6 +450,13 @@ impl QuantixHost {
         let application_home = self.application_home().to_path_buf();
         let update_command = command.into();
         let view = tokio::task::spawn_blocking(move || {
+            #[cfg(all(feature = "runtime-fixture", not(test)))]
+            return mutate_fixture_ai_execution_selection_projection(
+                &application_home,
+                &update_command,
+                true,
+            );
+            #[cfg(any(not(feature = "runtime-fixture"), test))]
             confirm_ai_execution_selection_projection(&application_home, &update_command)
         })
         .await
@@ -437,6 +465,11 @@ impl QuantixHost {
             self.refresh_matching_tender_ai_bindings(&view, &selection)?;
         }
         load_application_settings(self.application_home())
+    }
+
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    pub fn approve_runtime_fixture_ai_selection(&self) -> Result<(), TenderCommandError> {
+        approve_runtime_fixture_ai_selection_projection(self.application_home())
     }
 
     fn refresh_matching_tender_ai_bindings(
@@ -586,6 +619,7 @@ fn chatgpt_connection_readiness_unlocked(
     Ok(connection)
 }
 
+#[cfg(any(not(feature = "runtime-fixture"), test))]
 fn refresh_application_settings_projection(
     application_home: &Path,
     issuer: &str,
@@ -597,6 +631,7 @@ fn refresh_application_settings_projection(
     .map(|_| ())
 }
 
+#[cfg(not(feature = "runtime-fixture"))]
 pub(crate) fn project_chatgpt_connection_readiness(
     application_home: &Path,
     issuer: &str,
@@ -608,6 +643,7 @@ pub(crate) fn project_chatgpt_connection_readiness(
     .map_err(|_| connection_task_error())?
 }
 
+#[cfg(any(not(feature = "runtime-fixture"), test))]
 fn project_chatgpt_connection_readiness_with(
     application_home: &Path,
     inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
@@ -630,6 +666,7 @@ fn project_chatgpt_connection_readiness_unlocked_with(
     Ok(readiness)
 }
 
+#[cfg(any(not(feature = "runtime-fixture"), test))]
 fn refresh_exact_ai_execution_selection_projection(
     application_home: &Path,
     preferred: Option<&AiExecutionSelection>,
@@ -892,6 +929,7 @@ fn chatgpt_direct_models() -> Vec<ProviderModelOption> {
     .collect()
 }
 
+#[cfg(any(not(feature = "runtime-fixture"), test))]
 fn current_time_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1040,6 +1078,7 @@ fn selection_from_command(
     })
 }
 
+#[cfg(any(not(feature = "runtime-fixture"), test))]
 fn update_ai_execution_selection_projection(
     application_home: &Path,
     command: &UpdateAiExecutionSelectionCommand,
@@ -1053,6 +1092,7 @@ fn update_ai_execution_selection_projection(
     })
 }
 
+#[cfg(any(not(feature = "runtime-fixture"), test))]
 fn update_ai_execution_selection_projection_with(
     application_home: &Path,
     command: &UpdateAiExecutionSelectionCommand,
@@ -1061,6 +1101,7 @@ fn update_ai_execution_selection_projection_with(
     mutate_ai_execution_selection_projection_with(application_home, command, false, inspect)
 }
 
+#[cfg(any(not(feature = "runtime-fixture"), test))]
 fn confirm_ai_execution_selection_projection(
     application_home: &Path,
     command: &UpdateAiExecutionSelectionCommand,
@@ -1074,6 +1115,7 @@ fn confirm_ai_execution_selection_projection(
     })
 }
 
+#[cfg(any(not(feature = "runtime-fixture"), test))]
 fn confirm_ai_execution_selection_projection_with(
     application_home: &Path,
     command: &UpdateAiExecutionSelectionCommand,
@@ -1082,6 +1124,7 @@ fn confirm_ai_execution_selection_projection_with(
     mutate_ai_execution_selection_projection_with(application_home, command, true, inspect)
 }
 
+#[cfg(any(not(feature = "runtime-fixture"), test))]
 fn mutate_ai_execution_selection_projection_with(
     application_home: &Path,
     command: &UpdateAiExecutionSelectionCommand,
@@ -1126,6 +1169,59 @@ fn mutate_ai_execution_selection_projection_with(
     })
 }
 
+#[cfg(all(feature = "runtime-fixture", not(test)))]
+fn refresh_fixture_ai_execution_selection_projection(
+    application_home: &Path,
+    preferred: Option<&AiExecutionSelection>,
+) -> Result<Option<AiExecutionSelection>, TenderCommandError> {
+    with_connection_mutation(|| {
+        let view = load_application_settings(application_home)?;
+        let Some(selection) = preferred.or(view.ai_execution_selection.as_ref()) else {
+            return Ok(None);
+        };
+        let Some(connection) = view
+            .provider_connections
+            .iter()
+            .find(|connection| connection.connection_id == selection.connection_id)
+        else {
+            return Ok(None);
+        };
+        exact_approved_selection_unlocked(application_home, connection, Some(selection))
+    })
+}
+
+#[cfg(all(feature = "runtime-fixture", not(test)))]
+fn mutate_fixture_ai_execution_selection_projection(
+    application_home: &Path,
+    command: &UpdateAiExecutionSelectionCommand,
+    confirm: bool,
+) -> Result<ApplicationSettingsView, TenderCommandError> {
+    with_connection_mutation(|| {
+        let view = load_application_settings(application_home)?;
+        let connection = view
+            .provider_connections
+            .iter()
+            .find(|connection| {
+                connection.connection_id == command.connection_id
+                    && connection.status == ProviderConnectionStatus::Ready
+            })
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
+        let selection = selection_from_command(connection, command)?;
+        let approval = confirm.then(|| AiExecutionApproval {
+            connection_id: selection.connection_id.clone(),
+            provider: selection.provider,
+            account_fingerprint: account_fingerprint(connection),
+            model_id: selection.model_id.clone(),
+            reasoning: selection.reasoning.clone(),
+            data_destination: data_destination(connection.provider).to_owned(),
+            approved_at: Timestamp::now().to_string(),
+        });
+        save_connection_and_selection_unlocked(application_home, connection, &selection, approval)?;
+        load_application_settings(application_home)
+    })
+}
+
+#[cfg(any(test, feature = "runtime-fixture"))]
 pub(crate) fn save_live_connection(
     application_home: &Path,
     connection: &ProviderConnectionView,
@@ -1367,6 +1463,25 @@ fn store_application_settings(
 pub(crate) fn seed_runtime_fixture_ai_selection(
     application_home: &Path,
 ) -> Result<(), TenderCommandError> {
+    let (connection, selection) = runtime_fixture_connection_and_selection();
+    let mut database = settings_connection(application_home)?;
+    let transaction = database
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(settings_store_error)?;
+    let stored = load_stored_settings(&transaction)?;
+    if stored.ai_execution_selection.is_some() {
+        drop(transaction);
+        return Ok(());
+    }
+    upsert_connection(&transaction, &connection)?;
+    let mut stored = stored;
+    stored.ai_execution_selection = Some(selection);
+    store_application_settings(&transaction, &stored)?;
+    transaction.commit().map_err(settings_store_error)
+}
+
+#[cfg(any(test, feature = "runtime-fixture"))]
+fn runtime_fixture_connection_and_selection() -> (ProviderConnectionView, AiExecutionSelection) {
     let connection = ProviderConnectionView {
         connection_id: CODEX_CONNECTION_ID.to_owned(),
         provider: AiProviderKind::Codex,
@@ -1399,20 +1514,31 @@ pub(crate) fn seed_runtime_fixture_ai_selection(
         catalogue_fetched_at: "fixture-catalogue".to_owned(),
         adapter_version: connection.adapter_version.clone(),
     };
-    let mut database = settings_connection(application_home)?;
-    let transaction = database
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(settings_store_error)?;
-    let stored = load_stored_settings(&transaction)?;
-    if stored.ai_execution_selection.is_some() {
-        drop(transaction);
-        return Ok(());
-    }
-    upsert_connection(&transaction, &connection)?;
-    let mut stored = stored;
-    stored.ai_execution_selection = Some(selection);
-    store_application_settings(&transaction, &stored)?;
-    transaction.commit().map_err(settings_store_error)
+    (connection, selection)
+}
+
+#[cfg(any(test, feature = "runtime-fixture"))]
+fn approve_runtime_fixture_ai_selection_projection(
+    application_home: &Path,
+) -> Result<(), TenderCommandError> {
+    let (connection, selection) = runtime_fixture_connection_and_selection();
+    let approval = AiExecutionApproval {
+        connection_id: selection.connection_id.clone(),
+        provider: selection.provider,
+        account_fingerprint: account_fingerprint(&connection),
+        model_id: selection.model_id.clone(),
+        reasoning: selection.reasoning.clone(),
+        data_destination: data_destination(connection.provider).to_owned(),
+        approved_at: Timestamp::now().to_string(),
+    };
+    with_connection_mutation(|| {
+        save_connection_and_selection_unlocked(
+            application_home,
+            &connection,
+            &selection,
+            Some(approval),
+        )
+    })
 }
 
 pub(crate) fn load_application_settings(
@@ -2057,7 +2183,7 @@ mod tests {
 
         assert!(project_chatgpt_connection_readiness_with(&home, || {
             crate::chatgpt_oauth::save_unlocked(&home, &rotated).unwrap();
-            Ok(rotated.clone())
+            Ok(rotated)
         })
         .is_err());
         match load(&home) {

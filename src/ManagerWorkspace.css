@@ -1314,12 +1314,6 @@ button {
   }
 }
 
-.current-action__eyebrow {
-  color: var(--qx-text-muted);
-  font-size: 0.75rem;
-  font-weight: 630;
-}
-
 .manager-workspace__tender-menu {
   position: relative;
 }
@@ -1510,15 +1504,12 @@ button {
 }
 
 .manager-view__status,
-.manager-view__stage-detail,
-.manager-view__conversation,
-.current-action {
+.manager-view__conversation {
   width: min(100%, var(--conversation-width));
 }
 
 .manager-view__status,
-.manager-view__conversation,
-.current-action {
+.manager-view__conversation {
   margin-inline: auto;
 }
 
@@ -1555,28 +1546,6 @@ button {
 .manager-view__status small {
   color: var(--qx-text-muted);
   font-size: 0.75rem;
-}
-
-.manager-view__stage-summary {
-  margin: 0;
-  color: var(--qx-text-muted);
-  font-size: 0.75rem;
-  line-height: 1.5;
-}
-
-.manager-view__stage-detail {
-  display: grid;
-  max-width: 650px;
-  gap: 4px;
-  margin: -9px auto 24px;
-  padding-left: 19px;
-}
-
-.manager-view__stage-progress {
-  margin: 0;
-  color: var(--qx-text-muted);
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
 }
 
 .manager-view__conversation {
@@ -1704,90 +1673,11 @@ button {
   font-size: 0.75rem;
 }
 
-.current-action {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: 10px;
-  margin-top: 20px;
-  padding: 16px;
-  border: 1px solid var(--qx-border);
-  border-left: 2px solid var(--qx-brand-blue);
-  border-radius: 8px;
-  background: var(--qx-surface);
-}
-
-.current-action__icon {
-  grid-column: 1;
-  grid-row: 1;
-  margin-top: 2px;
-  color: var(--qx-warning);
-}
-
-.current-action__body {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 18px;
-}
-
-.current-action__body > .current-action__eyebrow {
-  grid-column: 1 / -1;
-  grid-row: 1;
-}
-
-.current-action__body > h2 {
-  grid-column: 1;
-  grid-row: 2;
-}
-
-.current-action__body > p,
-.current-action__body > .document-tools-progress {
-  grid-column: 1;
-}
-
-.current-action__eyebrow {
-  grid-column: 1 / -1;
-  color: var(--qx-warning);
-}
-
-.current-action h2 {
-  margin: 5px 0 4px;
-  font-size: 1.0625rem;
-  line-height: 1.35;
-  font-weight: 680;
-  letter-spacing: -0.03em;
-}
-
-.current-action > p {
-  max-width: 650px;
-  margin: 0;
-  color: var(--qx-text-muted);
-  font-size: 0.875rem;
-  line-height: 1.55;
-}
-
-.current-action__body > p {
-  max-width: 650px;
-  margin: 0;
-  color: var(--qx-text-muted);
-  font-size: 0.875rem;
-  line-height: 1.55;
-}
-
-.current-action__footer,
 .workspace-files__actions {
   display: flex;
   gap: 14px;
   align-items: center;
   margin-top: 10px;
-}
-
-.current-action__footer {
-  grid-column: 2;
-  grid-row: 2 / span 5;
-  align-self: center;
-  justify-self: end;
-  margin-top: 0;
 }
 
 .manager-workspace__primary,
@@ -2385,7 +2275,6 @@ button {
     margin-left: 0;
   }
 
-  .current-action__footer,
   .workspace-files__actions {
     align-items: stretch;
     flex-direction: column;
@@ -2560,7 +2449,6 @@ html.quantix-reduced-motion *::after {
   );
 }
 
-.manager-view__stage-detail,
 .manager-message__references li {
   border-left: 2px solid var(--qx-border) !important;
   background: transparent;
@@ -2653,16 +2541,6 @@ html.quantix-reduced-motion *::after {
 .manager-workspace__secondary,
 .manager-workspace__text-button {
   background: var(--workspace-control-wash);
-}
-
-.current-action .manager-workspace__primary {
-  border: 1px solid var(--qx-border) !important;
-  color: var(--qx-text);
-  background: var(--qx-surface-raised);
-}
-
-.current-action .manager-workspace__primary:hover:not(:disabled) {
-  background: var(--qx-hover);
 }
 
 .application-settings select,
@@ -2820,93 +2698,313 @@ html.quantix-reduced-motion *::after {
   box-shadow: 0 20px 50px rgb(63 70 77 / 15%);
 }
 
-/* Tender Manager controls and operational views ------------------------- */
-.manager-composer {
-  background: var(--qx-surface-popover);
-}
-
-.manager-composer__toolbar {
+/* Tender Manager conversation ------------------------------------------- */
+.manager-view {
   display: flex;
-  flex: 0 0 auto;
-  gap: 6px;
-  align-items: center;
-  min-height: 34px;
   width: 100%;
-  padding-top: 6px;
-  border-top: 1px solid var(--qx-border);
-  flex-wrap: wrap;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--qx-surface);
 }
 
-.manager-composer .qx-ui-menu__trigger {
-  width: auto;
-  min-width: 0;
-  min-height: 36px;
-  padding: 0 11px;
-  border: 1px solid var(--qx-border);
-  border-radius: 8px;
+.manager-view__status {
+  width: min(calc(100% - 40px), var(--conversation-width));
+  flex: 0 0 auto;
+  margin: 0 auto;
+  padding: 24px 0 15px;
+  border-bottom: 1px solid var(--qx-border);
+}
+
+.manager-view__conversation {
+  display: block;
+  width: min(calc(100% - 40px), var(--conversation-width));
+  min-height: 0;
+  flex: 1 1 auto;
+  margin: 0 auto;
+  padding: 4px 0 30px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.manager-view__earlier {
+  display: flex;
+  margin: 14px auto 2px;
+}
+
+.manager-message {
+  width: min(100%, var(--manager-message-width));
+  padding: 18px 0;
+  border-bottom: 1px solid var(--qx-border);
+}
+
+.manager-message--engineer {
+  justify-self: auto;
+  width: min(100%, var(--manager-message-width));
+}
+
+.manager-message__identity {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.manager-message__avatar {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--qx-success);
+  background: var(--qx-success-soft);
+  font-size: 0.75rem;
+  font-weight: 720;
+}
+
+.manager-message--engineer .manager-message__avatar {
   color: var(--qx-text-muted);
   background: var(--qx-surface-subtle);
-  font-size: 0.8125rem;
-  font-weight: 650;
 }
 
-.manager-composer .qx-ui-menu__trigger:hover:not(:disabled) {
+.manager-message__identity > div {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.manager-message__identity strong {
+  font-size: 0.8125rem;
+  font-weight: 660;
+}
+
+.manager-message__identity time {
+  color: var(--qx-text-disabled);
+  font-size: 0.75rem;
+}
+
+.manager-message__body {
+  max-width: var(--manager-message-width);
+}
+
+.manager-message p {
+  margin: 8px 0 0 38px;
+  color: var(--qx-text);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.manager-message__references {
+  margin: 10px 0 0 38px;
+}
+
+.manager-message--activity {
+  padding-top: 22px;
+  padding-bottom: 26px;
+  border-bottom: 0;
+}
+
+.manager-activity__state {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+  font-weight: 610;
+}
+
+.manager-activity__state::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--qx-text-disabled);
+  content: "";
+}
+
+.manager-activity__state.is-working::before,
+.manager-activity__state.is-ready::before {
+  background: var(--qx-success);
+}
+
+.manager-activity__state.is-needs-you::before,
+.manager-activity__state.is-paused::before {
+  background: var(--qx-warning);
+}
+
+.manager-activity__body h2 {
+  margin: 9px 0 0 38px;
+  font-size: 1.0625rem;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+}
+
+.manager-activity__body > p {
+  color: var(--qx-text-muted);
+}
+
+.manager-activity__progress {
+  display: grid;
+  gap: 7px;
+  margin: 14px 0 0 38px;
+}
+
+.manager-activity__progress progress {
+  width: min(100%, 420px);
+  height: 4px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  color: var(--qx-success);
+  background: var(--qx-border);
+  appearance: none;
+}
+
+.manager-activity__progress progress::-webkit-progress-bar {
+  border-radius: 999px;
+  background: var(--qx-border);
+}
+
+.manager-activity__progress progress::-webkit-progress-value {
+  border-radius: 999px;
+  background: var(--qx-success);
+}
+
+.manager-activity__progress small,
+.manager-activity__progress-label {
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.manager-activity__progress-label {
+  display: block;
+  margin: 12px 0 0 38px;
+}
+
+.manager-activity__notice {
+  color: var(--qx-warning) !important;
+}
+
+.manager-activity__suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 16px 0 0 38px;
+}
+
+.manager-activity__suggestions button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--qx-border);
+  border-radius: 999px;
+  color: var(--qx-text-muted);
+  background: transparent;
+  font-size: 0.75rem;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.manager-activity__suggestions button:hover:not(:disabled) {
+  border-color: var(--qx-border-strong);
   color: var(--qx-text);
   background: var(--qx-hover);
 }
 
-.manager-composer__tools-label {
-  display: inline-flex;
-  gap: 7px;
-  align-items: center;
-  white-space: nowrap;
+.manager-activity__suggestions button.is-primary {
+  border-color: color-mix(in srgb, var(--qx-success) 32%, var(--qx-border));
+  color: var(--qx-success);
+  background: var(--qx-success-soft);
 }
 
-.manager-composer__tools-label svg {
-  color: var(--qx-brand-blue);
+.manager-activity__suggestions button:disabled {
+  opacity: 0.48;
+  cursor: wait;
+}
+
+.manager-composer {
+  position: relative;
+  bottom: auto;
+  display: grid;
+  width: 100%;
+  flex: 0 0 auto;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 20px 16px;
+  border: 0 !important;
+  border-top: 1px solid var(--qx-border) !important;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--qx-surface) 96%, transparent);
+  box-shadow: none;
+}
+
+.manager-composer:focus-within {
+  border-color: var(--qx-border) !important;
+  box-shadow: none;
+}
+
+.manager-composer__surface,
+.manager-composer__context {
+  width: min(100%, var(--conversation-width));
+  margin-inline: auto;
+}
+
+.manager-composer__surface {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  min-height: 50px;
+  padding: 6px;
+  border: 1px solid var(--qx-border-strong);
+  border-radius: 12px;
+  background: var(--qx-surface);
+}
+
+.manager-composer__surface:focus-within {
+  border-color: var(--qx-focus);
+  box-shadow: 0 0 0 3px rgb(var(--qx-focus-rgb) / 12%);
+}
+
+.manager-composer textarea {
+  min-height: 36px;
+  max-height: 120px;
+  flex: 1 1 auto;
+  padding: 8px 2px 7px;
+  resize: none;
+  line-height: 1.5;
+}
+
+.manager-composer__attach,
+.manager-composer__send {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border-radius: 9px;
+}
+
+.manager-composer .manager-composer__attach {
+  color: var(--qx-text-muted);
+  background: transparent;
+}
+
+.manager-composer .manager-composer__attach:hover:not(:disabled) {
+  color: var(--qx-text);
+  background: var(--qx-hover);
 }
 
 .manager-composer__send {
-  flex: 0 0 36px;
   border: 1px solid var(--qx-action) !important;
   background: var(--qx-action);
 }
 
 .manager-composer__send:hover:not(:disabled) {
   background: var(--qx-action-hover);
-}
-
-.manager-composer__ai-controls {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 430px;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: end;
-  margin-left: auto;
-}
-
-.manager-composer__ai-controls .qx-ui-select {
-  min-width: 112px;
-  flex: 1 1 112px;
-}
-
-.manager-composer__ai-controls .qx-ui-select > label {
-  color: var(--qx-text-muted);
-  font-size: 0.6875rem;
-  font-weight: 650;
-}
-
-.manager-composer__ai-controls .qx-ui-select__trigger {
-  width: 100%;
-  min-height: 36px;
-  padding: 0 9px;
-  border-radius: 8px;
-  font-size: 0.8125rem;
-}
-
-.manager-composer__ai-controls .qx-ui-select__description {
-  display: none;
 }
 
 .manager-composer__context {
@@ -2918,14 +3016,16 @@ html.quantix-reduced-motion *::after {
 
 .manager-composer .manager-composer__context button {
   width: auto;
-  min-height: 32px;
-  padding: 0 8px;
+  min-height: 28px;
+  padding: 0 9px;
   border: 1px solid var(--qx-border);
-  border-radius: 8px;
+  border-radius: 999px;
   color: var(--qx-text);
   background: var(--qx-selected);
   font-size: 0.75rem;
 }
+
+/* Operational views ----------------------------------------------------- */
 
 .tender-search {
   display: grid;
@@ -3412,7 +3512,6 @@ html.quantix-reduced-motion *::after {
     width: min(100% - 28px, 820px);
   }
 
-  .manager-view,
   .workspace-summary {
     width: min(100% - 28px, 880px);
   }
@@ -3424,39 +3523,36 @@ html.quantix-reduced-motion *::after {
 
 @media (max-width: 520px) {
   .manager-composer {
-    padding: 12px;
+    padding: 10px 12px 12px;
   }
 
-  html.quantix-larger-text .manager-composer {
-    position: static;
+  .manager-view__status,
+  .manager-view__conversation {
+    width: calc(100% - 28px);
   }
 
   .manager-view__status {
-    margin-bottom: 8px;
+    padding-top: 18px;
   }
 
   .manager-message {
-    padding-block: 10px;
+    padding-block: 15px;
   }
 
-  .manager-composer__toolbar {
-    align-items: stretch;
+  .manager-message p,
+  .manager-message__references,
+  .manager-activity__body h2,
+  .manager-activity__progress,
+  .manager-activity__progress-label,
+  .manager-activity__suggestions {
+    margin-left: 0;
   }
 
-  .manager-composer .qx-ui-menu__trigger,
-  .manager-composer__ai-controls .qx-ui-select__trigger {
-    height: 40px;
-    min-height: 40px;
-  }
-
+  .manager-composer__attach,
   .manager-composer .manager-composer__send {
     width: 40px;
     height: 40px;
     flex-basis: 40px;
-  }
-
-  .manager-composer__tools-label {
-    gap: 7px;
   }
 
   .tender-search > form {
@@ -3470,28 +3566,6 @@ html.quantix-reduced-motion *::after {
 
   .tender-search > form button {
     width: 100%;
-  }
-
-  .current-action {
-    grid-template-columns: 20px minmax(0, 1fr);
-    margin-top: 16px;
-    padding: 14px;
-  }
-
-  .current-action__body {
-    grid-template-columns: minmax(0, 1fr);
-    column-gap: 0;
-  }
-
-  .current-action__footer {
-    grid-column: 1;
-    grid-row: auto;
-    justify-self: stretch;
-    margin-top: 10px;
-  }
-
-  .current-action .manager-workspace__primary {
-    min-height: 40px;
   }
 
   .workspace-work-groups li dl {
@@ -3626,7 +3700,6 @@ html.quantix-reduced-motion *::after {
   .application-settings__navigation,
   .application-settings__content,
   .manager-workspace__archived,
-  .current-action,
   .workspace-summary__grid > div,
   .workspace-files article,
   .workspace-documents > ul,
@@ -3654,6 +3727,7 @@ html.quantix-reduced-motion *::after {
   }
 
   .manager-composer,
+  .manager-composer__surface,
   .tender-search > form,
   .tender-search__results li > button,
   .workspace-work-groups li,
@@ -3665,10 +3739,9 @@ html.quantix-reduced-motion *::after {
     box-shadow: none;
   }
 
-  .manager-composer .qx-ui-menu__trigger,
-  .manager-composer__ai-controls .qx-ui-select__trigger,
+  .manager-composer__attach,
   .manager-composer__send,
-  .current-action .manager-workspace__primary,
+  .manager-activity__suggestions button,
   .tender-search > form button,
   .workspace-team__runs li button,
   .agent-workroom__heading button,

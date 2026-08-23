@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use super::{extract_identity, ChatGptIdentity, IssuedTokens, TokenClient};
 use serde::{Deserialize, Serialize};
 
-const STORE_FILE: &str = "auth.json";
+use crate::setup::CHATGPT_AUTH_STORE;
+
 const STORE_VERSION: u64 = 2;
 const REFRESH_MARGIN_MS: u64 = 120_000;
 
@@ -142,7 +143,7 @@ impl StoredConnection {
 }
 
 pub(crate) fn load(home: &Path) -> LoadState {
-    let raw = match std::fs::read_to_string(home.join(STORE_FILE)) {
+    let raw = match std::fs::read_to_string(home.join(CHATGPT_AUTH_STORE)) {
         Ok(raw) => raw,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return LoadState::Absent,
         Err(_) => return LoadState::Unusable,
@@ -164,7 +165,7 @@ pub(crate) fn save_unlocked(home: &Path, conn: &StoredConnection) -> io::Result<
     let payload =
         serde_json::to_string(&StoreRecord::from_connection(conn)).map_err(io::Error::other)?;
     let tmp_path = unique_temporary_path(home);
-    let target_path = home.join(STORE_FILE);
+    let target_path = home.join(CHATGPT_AUTH_STORE);
     let result = (|| {
         let mut file = std::fs::OpenOptions::new()
             .create_new(true)
@@ -188,7 +189,7 @@ pub(crate) fn clear(home: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn clear_unlocked(home: &Path) -> io::Result<()> {
-    match std::fs::remove_file(home.join(STORE_FILE)) {
+    match std::fs::remove_file(home.join(CHATGPT_AUTH_STORE)) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
@@ -269,7 +270,7 @@ pub(crate) fn force_refresh_connection_unlocked(
 
 fn unique_temporary_path(home: &Path) -> PathBuf {
     home.join(format!(
-        ".auth.json.{}.{}.tmp",
+        ".{CHATGPT_AUTH_STORE}.{}.{}.tmp",
         std::process::id(),
         TEMPORARY_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
     ))
@@ -327,7 +328,9 @@ pub(crate) fn needs_refresh(conn: &StoredConnection, now_ms: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{clear, load, needs_refresh, save, LoadState, StoredConnection};
+    use super::{
+        clear, load, needs_refresh, save, with_connection_mutation, LoadState, StoredConnection,
+    };
     use crate::chatgpt_oauth::{refresh_connection, ChatGptIdentity, IssuedTokens, TokenClient};
     use std::fs;
     use std::io::{Read, Write};

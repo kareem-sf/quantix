@@ -1,10 +1,4 @@
-import {
-  Bot,
-  FileStack,
-  ListChecks,
-  PanelRightClose,
-  Users,
-} from "lucide-react";
+import { FileStack, PanelRightClose, Users } from "lucide-react";
 import type { ReactNode } from "react";
 import {
   Dialog as AriaDialog,
@@ -13,28 +7,17 @@ import {
 } from "react-aria-components";
 
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
-import type { RuntimeReadiness } from "./bindings/RuntimeReadiness";
 import "./WorkspaceContextPanel.css";
 
 export type WorkspaceContextPresentation = "rail" | "drawer";
-
-type CapabilityStatus = "checking" | "ready" | "unavailable";
 
 export interface WorkspaceContextPanelProps {
   projection: ManagerWorkspaceProjection;
   phase: string;
   tools: ReactNode;
-  documentToolsStatus: CapabilityStatus;
-  documentToolsReadiness: RuntimeReadiness | null;
-  aiStatus: CapabilityStatus;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
   presentation: WorkspaceContextPresentation;
-}
-
-function capabilityLabel(status: CapabilityStatus) {
-  if (status === "checking") return "Checking";
-  return status === "ready" ? "Ready" : "Action needed";
 }
 
 interface WorkspaceContextContentProps extends Omit<
@@ -48,19 +31,11 @@ function WorkspaceContextContent({
   projection,
   phase,
   tools,
-  documentToolsStatus,
-  documentToolsReadiness,
-  aiStatus,
   onOpenChange,
   titleId,
 }: WorkspaceContextContentProps) {
   const selected = projection.selected_tender;
   if (!selected) return null;
-
-  const documentToolsLabel =
-    documentToolsReadiness?.state === "ready"
-      ? "Ready"
-      : capabilityLabel(documentToolsStatus);
 
   return (
     <>
@@ -81,29 +56,6 @@ function WorkspaceContextContent({
 
       <div className="workspace-context__body">
         <section className="workspace-context__tools">{tools}</section>
-        <section
-          className="workspace-context__action"
-          aria-labelledby="context-current-action"
-        >
-          <div className="workspace-context__section-heading">
-            <ListChecks size={16} aria-hidden="true" />
-            <h3 id="context-current-action">Current action</h3>
-          </div>
-          <strong>{projection.current_action.title}</strong>
-          <p>{projection.current_action.summary}</p>
-          <span
-            className={
-              projection.current_action.requires_engineer
-                ? "workspace-context__status is-attention"
-                : "workspace-context__status"
-            }
-          >
-            {projection.current_action.requires_engineer
-              ? "Engineer action required"
-              : "Quantix is progressing this Tender"}
-          </span>
-        </section>
-
         <section aria-labelledby="context-team">
           <div className="workspace-context__section-heading">
             <Users size={16} aria-hidden="true" />
@@ -149,23 +101,6 @@ function WorkspaceContextContent({
             </div>
           </dl>
         </section>
-
-        <section aria-labelledby="context-capabilities">
-          <div className="workspace-context__section-heading">
-            <Bot size={16} aria-hidden="true" />
-            <h3 id="context-capabilities">Capabilities</h3>
-          </div>
-          <dl className="workspace-context__rows">
-            <div>
-              <dt>Document tools</dt>
-              <dd data-state={documentToolsStatus}>{documentToolsLabel}</dd>
-            </div>
-            <div>
-              <dt>Approved AI</dt>
-              <dd data-state={aiStatus}>{capabilityLabel(aiStatus)}</dd>
-            </div>
-          </dl>
-        </section>
       </div>
     </>
   );
@@ -195,9 +130,6 @@ export function WorkspaceContextPanel({
   projection,
   phase,
   tools,
-  documentToolsStatus,
-  documentToolsReadiness,
-  aiStatus,
   isOpen,
   onOpenChange,
   presentation,
@@ -213,9 +145,6 @@ export function WorkspaceContextPanel({
       projection={projection}
       phase={phase}
       tools={tools}
-      documentToolsStatus={documentToolsStatus}
-      documentToolsReadiness={documentToolsReadiness}
-      aiStatus={aiStatus}
       onOpenChange={onOpenChange}
       titleId={titleId}
     />

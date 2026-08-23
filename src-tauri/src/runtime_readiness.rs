@@ -102,6 +102,7 @@ pub enum RuntimeReadinessIssue {
     RuntimePreparationActive,
     RuntimePreparationInterrupted,
     RuntimePreparationCancelled,
+    InsufficientDiskSpace,
     RuntimePreparationFailed,
     RuntimeProbeFailed,
 }
@@ -460,6 +461,41 @@ enum RuntimeError {
     PersistenceFailed,
 }
 
+fn runtime_preparation_failure(error: RuntimeError) -> RuntimeReadiness {
+    let issue = match error {
+        RuntimeError::InsufficientDisk => RuntimeReadinessIssue::InsufficientDiskSpace,
+        _ => RuntimeReadinessIssue::RuntimePreparationFailed,
+    };
+    let mut readiness = RuntimeReadiness::state(RuntimeReadinessState::RepairRequired, issue);
+    readiness.repair_available = true;
+    readiness
+}
+
+fn classify_runtime_preparation_space(available: std::io::Result<u64>) -> Result<(), RuntimeError> {
+    match available {
+        Ok(bytes) if bytes < MINIMUM_SETUP_FREE_SPACE_BYTES => Err(RuntimeError::InsufficientDisk),
+        Ok(_) => Ok(()),
+        Err(_) => Err(RuntimeError::PersistenceFailed),
+    }
+}
+
+fn persisted_preparation_failure_issue(application_home: &Path) -> RuntimeReadinessIssue {
+    persisted_preparation_failure_issue_from_space(fs4::available_space(application_home))
+}
+
+fn persisted_preparation_failure_issue_from_space(
+    available: std::io::Result<u64>,
+) -> RuntimeReadinessIssue {
+    if matches!(
+        classify_runtime_preparation_space(available),
+        Err(RuntimeError::InsufficientDisk)
+    ) {
+        RuntimeReadinessIssue::InsufficientDiskSpace
+    } else {
+        RuntimeReadinessIssue::RuntimePreparationFailed
+    }
+}
+
 struct RuntimePreparationGuard {
     host: QuantixHost,
     cancellation: CancellationToken,
@@ -701,7 +737,7 @@ impl QuantixHost {
         if persisted.state == PersistedPreparationState::Failed {
             let mut readiness = RuntimeReadiness::state(
                 RuntimeReadinessState::RepairRequired,
-                RuntimeReadinessIssue::RuntimePreparationFailed,
+                persisted_preparation_failure_issue(self.application_home()),
             );
             readiness.repair_available = true;
             return readiness;
@@ -768,7 +804,7 @@ impl QuantixHost {
                 if write_preparation(self.application_home(), preparation_state, &versions).is_err()
                     || cancellation.is_cancelled()
                 {
-                    return self.fail_runtime_preparation();
+                    return self.fail_runtime_preparation(RuntimeError::PersistenceFailed);
                 }
                 self.set_document_tools_verified(readiness.state == RuntimeReadinessState::Ready);
                 self.finish_runtime_preparation_progress(
@@ -777,7 +813,7 @@ impl QuantixHost {
                 readiness
             }
             Err(RuntimeError::Cancelled) => self.cancelled_runtime_preparation(),
-            Err(_) => self.fail_runtime_preparation(),
+            Err(error) => self.fail_runtime_preparation(error),
         }
     }
 
@@ -785,7 +821,7 @@ impl QuantixHost {
         self.cancel_active_runtime_preparation()
     }
 
-    fn fail_runtime_preparation(&self) -> RuntimeReadiness {
+    fn fail_runtime_preparation(&self, error: RuntimeError) -> RuntimeReadiness {
         self.set_document_tools_verified(false);
         self.finish_runtime_preparation_progress(false);
         let _ = write_preparation(
@@ -793,12 +829,7 @@ impl QuantixHost {
             PersistedPreparationState::Failed,
             &RuntimeVersions::default(),
         );
-        let mut readiness = RuntimeReadiness::state(
-            RuntimeReadinessState::RepairRequired,
-            RuntimeReadinessIssue::RuntimePreparationFailed,
-        );
-        readiness.repair_available = true;
-        readiness
+        runtime_preparation_failure(error)
     }
 
     fn cancelled_runtime_preparation(&self) -> RuntimeReadiness {
@@ -922,11 +953,7 @@ impl QuantixHost {
         &self,
         cancellation: CancellationToken,
     ) -> Result<RuntimeVersions, RuntimeError> {
-        if fs4::available_space(self.application_home())
-            .map_or(true, |available| available < MINIMUM_SETUP_FREE_SPACE_BYTES)
-        {
-            return Err(RuntimeError::InsufficientDisk);
-        }
+        classify_runtime_preparation_space(fs4::available_space(self.application_home()))?;
         self.activate_runtime_preparation_step(RuntimePreparationStep::ValidateResources);
         let layout = self.runtime_layout();
         let uv = layout.uv_executable();
@@ -1948,6 +1975,44 @@ fn write_preparation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn insufficient_disk_preparation_failure_is_specific_and_repairable() {
+        let readiness = runtime_preparation_failure(RuntimeError::InsufficientDisk);
+
+        assert_eq!(readiness.state, RuntimeReadinessState::RepairRequired);
+        assert!(readiness.repair_available);
+        assert_eq!(
+            serde_json::to_value(readiness.issues).expect("serialize readiness issues"),
+            serde_json::json!(["insufficient_disk_space"])
+        );
+    }
+
+    #[test]
+    fn disk_space_probe_failure_is_not_reported_as_insufficient_disk() {
+        assert!(matches!(
+            classify_runtime_preparation_space(Err(std::io::Error::other("probe failed"))),
+            Err(RuntimeError::PersistenceFailed)
+        ));
+        assert_eq!(
+            persisted_preparation_failure_issue_from_space(Err(std::io::Error::other(
+                "probe failed"
+            ))),
+            RuntimeReadinessIssue::RuntimePreparationFailed
+        );
+    }
+
+    #[test]
+    fn persisted_failed_preparation_keeps_the_current_low_disk_diagnosis() {
+        assert_eq!(
+            persisted_preparation_failure_issue_from_space(Ok(MINIMUM_SETUP_FREE_SPACE_BYTES - 1)),
+            RuntimeReadinessIssue::InsufficientDiskSpace
+        );
+        assert_eq!(
+            persisted_preparation_failure_issue_from_space(Ok(MINIMUM_SETUP_FREE_SPACE_BYTES)),
+            RuntimeReadinessIssue::RuntimePreparationFailed
+        );
+    }
 
     #[test]
     fn smoke_output_requires_the_expected_ocr_text_and_locations() {

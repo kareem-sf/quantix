@@ -52,6 +52,7 @@ import {
 
 interface ApplicationSettingsProps {
   onAiAvailabilityChange: (available: boolean) => void;
+  onSettingsChange?: (settings: ApplicationSettingsView) => void;
   onPreferencesChange?: (preferences: GeneralApplicationPreferences) => void;
   initialSection?: "general" | "ai" | "about";
   selectedTenderId?: string | null;
@@ -148,6 +149,7 @@ function catalogueProvenance(connection: ProviderConnectionView): string {
 
 export function ApplicationSettings({
   onAiAvailabilityChange,
+  onSettingsChange,
   onPreferencesChange,
   initialSection = "general",
   selectedTenderId = null,
@@ -386,8 +388,10 @@ export function ApplicationSettings({
   }, [settings]);
 
   useEffect(() => {
-    if (settings) onAiAvailabilityChange(selectionIsReady);
-  }, [onAiAvailabilityChange, selectionIsReady, settings]);
+    if (!settings) return;
+    onAiAvailabilityChange(selectionIsReady);
+    onSettingsChange?.(settings);
+  }, [onAiAvailabilityChange, onSettingsChange, selectionIsReady, settings]);
 
   const savePreferences = useCallback(
     async (preferences: GeneralApplicationPreferences) => {

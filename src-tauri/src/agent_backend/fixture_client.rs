@@ -65,6 +65,7 @@ mod tests {
             instructions: "system prompt".to_string(),
             input_items: Vec::new(),
             tools: Vec::new(),
+            output_schema: serde_json::json!({"type": "object"}),
             store: false,
             include_reasoning: true,
             reasoning_effort: None,

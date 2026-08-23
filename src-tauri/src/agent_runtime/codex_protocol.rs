@@ -25,6 +25,7 @@ use super::{
     PROVIDER_OUTPUT_LIMIT,
 };
 
+#[cfg(feature = "runtime-fixture")]
 pub(super) fn dynamic_tool_specs(grant: &PermissionGrant) -> Result<Vec<Value>, ProviderFailure> {
     tool_specs(&grant.access_ceiling.allowed_tools, "inputSchema")
 }

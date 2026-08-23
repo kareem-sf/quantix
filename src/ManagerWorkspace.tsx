@@ -3,7 +3,6 @@ import {
   Bot,
   ChevronRight,
   CircleAlert,
-  Download,
   FileText,
   Folder,
   ListChecks,
@@ -12,6 +11,7 @@ import {
   MoreHorizontal,
   Pencil,
   PanelRightOpen,
+  Paperclip,
   Plus,
   Search,
   Send,
@@ -51,7 +51,6 @@ import type { WorkspaceSearchHit } from "./bindings/WorkspaceSearchHit";
 import type { WorkspaceMessageReference } from "./bindings/WorkspaceMessageReference";
 import type { AgentRunInspection } from "./bindings/AgentRunInspection";
 import type { WorkspaceTaskRow } from "./bindings/WorkspaceTaskRow";
-import type { AiExecutionSelection } from "./bindings/AiExecutionSelection";
 import { ApplicationSettings } from "./ApplicationSettings";
 import { exactApplicationAiSelectionIsReady } from "./applicationAiSelectionReadiness";
 import { notifyAttentionRequired } from "./applicationNotifications";
@@ -65,7 +64,6 @@ import {
   type WorkspaceContextPresentation,
 } from "./WorkspaceContextPanel";
 import { WorkspaceRecoveryCenter } from "./WorkspaceRecoveryCenter";
-import { TenderAiSelectionControl } from "./TenderAiSelectionControl";
 import { QuantixDialog, QuantixMenu } from "./ui";
 import {
   applyGeneralApplicationPreferences,
@@ -98,7 +96,6 @@ import {
   startManagerTender,
   trashRecoveryRequiredTender,
   trashTender,
-  updateTenderAiExecution,
   purgeRecoveryRequiredTender,
   purgeTrashedTender,
 } from "./quantixHost";
@@ -657,13 +654,7 @@ function Message({
     >
       <div className="manager-message__identity">
         <span className="manager-message__avatar" aria-hidden="true">
-          {isEngineer ? (
-            "You"
-          ) : isSystem ? (
-            <Bot size={17} />
-          ) : (
-            <Bot size={17} />
-          )}
+          {isEngineer ? "You" : "Q"}
         </span>
         <div>
           <strong>
@@ -732,8 +723,6 @@ function ManagerView({
   onOpenSearch,
   contextRefs,
   onRemoveContext,
-  settings,
-  onUpdateAiSelection,
   readOnly,
 }: {
   projection: ManagerWorkspaceProjection;
@@ -759,14 +748,11 @@ function ManagerView({
   onOpenSearch: () => void;
   contextRefs: WorkspaceMessageReference[];
   onRemoveContext: (reference: string) => void;
-  settings: ApplicationSettingsView | null;
-  onUpdateAiSelection: (
-    selection: AiExecutionSelection | null,
-  ) => Promise<void>;
   readOnly: boolean;
 }) {
   const [showEarlier, setShowEarlier] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
   const messages = projection.conversation?.messages ?? [];
   const visibleMessages = useMemo(() => {
     if (showEarlier) return messages;
@@ -791,6 +777,16 @@ function ManagerView({
     showEarlier,
   ]);
 
+  useEffect(() => {
+    const conversation = conversationRef.current;
+    if (!conversation || showEarlier) return;
+    conversation.scrollTop = conversation.scrollHeight;
+  }, [
+    messages[messages.length - 1]?.sequence,
+    projection.current_action.kind,
+    showEarlier,
+  ]);
+
   const send = async () => {
     const body = composer.trim();
     if (!body || busy) return;
@@ -805,8 +801,17 @@ function ManagerView({
   };
 
   const hasRegisteredDocuments = projection.files.tender_document_count > 0;
+  const intakeNeedsDocumentTools =
+    !projection.intake ||
+    [
+      "waiting_for_local_tools",
+      "package_registered",
+      "reading_documents",
+    ].includes(projection.intake.stage);
   const documentToolsRequired =
-    hasRegisteredDocuments && runtimeStatus !== "ready";
+    hasRegisteredDocuments &&
+    intakeNeedsDocumentTools &&
+    runtimeStatus !== "ready";
   const preparationActive =
     runtimePreparing || runtimeReadiness?.state === "preparing";
   const providerCheckPending =
@@ -814,120 +819,6 @@ function ManagerView({
     aiStatus === "checking" &&
     projection.current_action.kind === "configure_ai_provider";
   const aiAvailable = projection.ai_execution?.readiness === "ready";
-  const tenderSelection = projection.ai_execution?.selection ?? null;
-  const providerConnections = settings?.provider_connections ?? [];
-  const tenderConnection = tenderSelection
-    ? providerConnections.find(
-        (connection) =>
-          connection.connection_id === tenderSelection.connection_id,
-      )
-    : null;
-  const tenderModel = tenderSelection
-    ? tenderConnection?.models.find(
-        (model) => model.model_id === tenderSelection.model_id,
-      )
-    : null;
-  const persistedProviderOption = tenderSelection
-    ? {
-        value: tenderSelection.connection_id,
-        label: `Saved selection · ${tenderSelection.connection_id}`,
-        description:
-          "The persisted Tender selection is visible while the live catalogue loads.",
-        disabled: true,
-      }
-    : null;
-  const providerOptions = [
-    ...providerConnections.map((connection) => ({
-      value: connection.connection_id,
-      label: connection.display_name,
-      description: connection.status_summary,
-      disabled: connection.status !== "ready",
-    })),
-    ...(persistedProviderOption &&
-    !providerConnections.some(
-      (connection) =>
-        connection.connection_id === persistedProviderOption.value,
-    )
-      ? [persistedProviderOption]
-      : []),
-  ];
-  const modelOptions = [
-    ...(tenderConnection?.models.map((model) => ({
-      value: model.model_id,
-      label: model.display_name,
-      description: model.description,
-    })) ?? []),
-    ...(tenderSelection && !tenderModel
-      ? [
-          {
-            value: tenderSelection.model_id,
-            label: `Saved selection · ${tenderSelection.model_id}`,
-            description:
-              "The persisted Tender model is visible while the live catalogue loads.",
-            disabled: true,
-          },
-        ]
-      : []),
-  ];
-  const reasoningOptions = [
-    ...(tenderModel?.reasoning_options.map((reasoning) => ({
-      value: JSON.stringify(reasoning.selection),
-      label: reasoning.label,
-      description: reasoning.description,
-    })) ?? []),
-    ...(tenderSelection &&
-    !tenderModel?.reasoning_options.some(
-      (reasoning) =>
-        JSON.stringify(reasoning.selection) ===
-        JSON.stringify(tenderSelection.reasoning),
-    )
-      ? [
-          {
-            value: JSON.stringify(tenderSelection.reasoning),
-            label: `Saved selection · ${JSON.stringify(tenderSelection.reasoning)}`,
-            description:
-              "The persisted Tender reasoning setting is visible while the live catalogue loads.",
-            disabled: true,
-          },
-        ]
-      : []),
-  ];
-  const selectFor = (
-    connectionId: string,
-    modelId?: string,
-    reasoningKey?: string,
-  ): AiExecutionSelection | null => {
-    if (connectionId === "local_only") return null;
-    const connection = providerConnections.find(
-      (candidate) => candidate.connection_id === connectionId,
-    );
-    const model =
-      connection?.models.find((candidate) => candidate.model_id === modelId) ??
-      connection?.models.find((candidate) => candidate.is_default) ??
-      connection?.models[0];
-    const reasoning =
-      model?.reasoning_options.find(
-        (candidate) => JSON.stringify(candidate.selection) === reasoningKey,
-      ) ??
-      model?.reasoning_options.find((candidate) => candidate.is_default) ??
-      model?.reasoning_options[0];
-    if (
-      !connection ||
-      !model ||
-      !reasoning ||
-      !connection.catalogue_fetched_at
-    ) {
-      return null;
-    }
-    return {
-      connection_id: connection.connection_id,
-      provider: connection.provider,
-      model_id: model.model_id,
-      reasoning: reasoning.selection,
-      catalogue_fetched_at: connection.catalogue_fetched_at,
-      adapter_version: connection.adapter_version,
-    };
-  };
 
   const openCurrentAction = () => {
     if (documentToolsRequired) {
@@ -976,11 +867,11 @@ function ManagerView({
     "review_work",
   ].includes(projection.current_action.kind);
   const intakeWorking =
-    runtimeStatus === "ready" &&
+    !documentToolsRequired &&
     aiAvailable &&
     projection.intake?.status === "working";
   const intakePaused =
-    (runtimeStatus !== "ready" || !aiAvailable) &&
+    (documentToolsRequired || !aiAvailable) &&
     projection.intake?.status === "working";
   const activeRuntimeActivity = runtimeProgress?.activities.find(
     (activity) => activity.status === "active",
@@ -993,9 +884,7 @@ function ManagerView({
         : "Prepare document tools"
     : providerCheckPending
       ? "Checking your AI connection"
-      : intakePaused
-        ? "Tender intake paused"
-        : projection.current_action.title;
+      : projection.current_action.title;
   const currentActionSummary = documentToolsRequired
     ? preparationActive
       ? (activeRuntimeActivity?.detail ??
@@ -1005,8 +894,8 @@ function ManagerView({
         : "Prepare the managed Python environment and about 500 MB of approved document models under Application Home. This needs an internet connection and roughly 2 GB of free space; your registered Tender remains safe if you do this later."
     : providerCheckPending
       ? "The Tender Package is registered safely while Quantix checks the exact provider, model, and reasoning selection for future work."
-      : intakePaused
-        ? "Your registered Tender and completed work are safe. Restore the required document tools or exact AI selection to continue this stage."
+      : projection.intake && !projection.current_action.requires_engineer
+        ? projection.intake.summary
         : projection.current_action.summary;
   const showActionButton =
     (documentToolsRequired &&
@@ -1022,6 +911,21 @@ function ManagerView({
         ? `${projection.intake.extraction_run_count.toLocaleString()} evidence batches completed`
         : null
     : null;
+  const activityState = projection.current_action.requires_engineer
+    ? "Needs you"
+    : intakeWorking
+      ? "Working"
+      : intakePaused
+        ? "Paused"
+        : "Ready";
+  const currentActionLabel = documentToolsRequired
+    ? "Prepare document tools"
+    : projection.current_action.kind === "configure_ai_provider" && !aiAvailable
+      ? "Open Settings"
+      : projection.current_action.action_label;
+  const sendSuggestion = (body: string) => {
+    if (!busy) void onSend(body);
+  };
 
   return (
     <div className="manager-view">
@@ -1056,22 +960,13 @@ function ManagerView({
           </small>
         </div>
       </div>
-      {projection.intake ? (
-        <div className="manager-view__stage-detail">
-          <p className="manager-view__stage-summary">
-            {documentToolsRequired
-              ? "The Tender Package is registered safely. Intake will continue only after the local document environment is ready."
-              : intakePaused
-                ? "Your registered Tender and completed work are safe. Quantix will resume this stage after the local AI runtime is restored."
-                : projection.intake.summary}
-          </p>
-          {!intakePaused && intakeProgress ? (
-            <p className="manager-view__stage-progress">{intakeProgress}</p>
-          ) : null}
-        </div>
-      ) : null}
-
-      <div className="manager-view__conversation" aria-live="polite">
+      <div
+        ref={conversationRef}
+        className="manager-view__conversation"
+        role="log"
+        aria-label="Tender conversation"
+        aria-live="polite"
+      >
         {!showEarlier && messages.length > visibleMessages.length ? (
           <button
             className="manager-workspace__text-button manager-view__earlier"
@@ -1091,27 +986,45 @@ function ManagerView({
             }
           />
         ))}
-      </div>
-
-      {!readOnly ? (
-        <>
-          <section
-            className="current-action"
-            aria-labelledby="current-action-title"
+        {!readOnly ? (
+          <article
+            className="manager-message manager-message--activity"
+            aria-label="Current Tender activity"
           >
-            <CircleAlert
-              className="current-action__icon"
-              size={20}
-              aria-hidden="true"
-            />
-            <div className="current-action__body">
-              <span className="current-action__eyebrow">
-                {projection.current_action.requires_engineer
-                  ? "Your next step"
-                  : "Current focus"}
+            <div className="manager-message__identity">
+              <span className="manager-message__avatar" aria-hidden="true">
+                Q
               </span>
-              <h2 id="current-action-title">{currentActionTitle}</h2>
+              <div>
+                <strong>Tendering Manager</strong>
+                <span
+                  className={
+                    "manager-activity__state is-" +
+                    activityState.toLowerCase().replace(" ", "-")
+                  }
+                >
+                  {activityState}
+                </span>
+              </div>
+            </div>
+            <div className="manager-message__body manager-activity__body">
+              <h2>{currentActionTitle}</h2>
               <p>{currentActionSummary}</p>
+              {projection.intake?.stage === "reading_documents" &&
+              projection.intake.parseable_document_count > 0 ? (
+                <div className="manager-activity__progress">
+                  <progress
+                    aria-label="Tender documents read"
+                    max={projection.intake.parseable_document_count}
+                    value={projection.intake.parsed_document_count}
+                  />
+                  <small>{intakeProgress}</small>
+                </div>
+              ) : intakeProgress ? (
+                <small className="manager-activity__progress-label">
+                  {intakeProgress}
+                </small>
+              ) : null}
               {documentToolsRequired && preparationActive ? (
                 <div className="document-tools-progress" role="status">
                   <span>
@@ -1130,180 +1043,141 @@ function ManagerView({
                 </div>
               ) : null}
               {runtimeNotice && documentToolsRequired ? (
-                <p className="current-action__notice" role="status">
+                <p className="manager-activity__notice" role="status">
                   {runtimeNotice}
                 </p>
               ) : null}
-              {showActionButton ||
-              (documentToolsRequired && preparationActive) ? (
-                <div className="current-action__footer">
-                  {showActionButton ? (
-                    <>
-                      <button
-                        className="manager-workspace__primary"
-                        type="button"
-                        disabled={busy}
-                        onClick={openCurrentAction}
-                      >
-                        {documentToolsRequired ? (
-                          <>
-                            <Download size={16} aria-hidden="true" /> Prepare
-                            document tools
-                          </>
-                        ) : projection.current_action.kind ===
-                            "configure_ai_provider" && !aiAvailable ? (
-                          "Open Settings"
-                        ) : (
-                          projection.current_action.action_label
-                        )}
-                      </button>
-                      {documentToolsRequired ? (
-                        <button
-                          className="manager-workspace__text-button"
-                          type="button"
-                          disabled={busy}
-                          onClick={onDeferRuntime}
-                        >
-                          Not now
-                        </button>
-                      ) : null}
-                    </>
-                  ) : null}
-                  {documentToolsRequired && preparationActive ? (
+              <div
+                className="manager-activity__suggestions"
+                aria-label="Suggested next steps"
+              >
+                {showActionButton ? (
+                  <button
+                    className="is-primary"
+                    type="button"
+                    disabled={busy}
+                    onClick={openCurrentAction}
+                  >
+                    {currentActionLabel}
+                  </button>
+                ) : null}
+                {documentToolsRequired && showActionButton ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={onDeferRuntime}
+                  >
+                    Not now
+                  </button>
+                ) : null}
+                {documentToolsRequired && preparationActive ? (
+                  <button type="button" onClick={() => void onCancelRuntime()}>
+                    Cancel preparation
+                  </button>
+                ) : null}
+                {intakePaused && !documentToolsRequired && !showActionButton ? (
+                  <button type="button" onClick={onOpenSettings}>
+                    Restore AI connection
+                  </button>
+                ) : null}
+                {intakeWorking ? (
+                  <>
                     <button
-                      className="manager-workspace__secondary"
                       type="button"
-                      onClick={() => void onCancelRuntime()}
+                      disabled={busy}
+                      onClick={() =>
+                        sendSuggestion(
+                          "What have you found so far in this Tender?",
+                        )
+                      }
                     >
-                      Cancel preparation
+                      What have you found so far?
                     </button>
-                  ) : null}
-                </div>
-              ) : null}
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() =>
+                        sendSuggestion("Show me the files that need attention.")
+                      }
+                    >
+                      Show files needing attention
+                    </button>
+                  </>
+                ) : !showActionButton && !providerCheckPending ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      sendSuggestion(
+                        "Explain what happens next for this Tender.",
+                      )
+                    }
+                  >
+                    Explain what happens next
+                  </button>
+                ) : null}
+              </div>
             </div>
-          </section>
+          </article>
+        ) : null}
+      </div>
 
-          <div className="manager-composer">
+      {!readOnly ? (
+        <div className="manager-composer">
+          {contextRefs.length ? (
+            <div
+              className="manager-composer__context"
+              aria-label="Attached context"
+            >
+              {contextRefs.map((reference) => (
+                <button
+                  key={[
+                    reference.kind,
+                    reference.reference,
+                    reference.version,
+                    reference.evidence_ordinal ?? 0,
+                  ].join("-")}
+                  type="button"
+                  title="Remove attached context"
+                  onClick={() => onRemoveContext(reference.reference)}
+                >
+                  {reference.label} ×
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <div className="manager-composer__surface">
+            <button
+              className="manager-composer__attach"
+              type="button"
+              aria-label="Add Tender context"
+              title="Add Tender context"
+              disabled={busy}
+              onClick={onOpenSearch}
+            >
+              <Paperclip size={18} aria-hidden="true" />
+            </button>
             <textarea
               ref={composerRef}
               rows={1}
               value={composer}
               aria-label="Message your Tendering Manager"
-              placeholder="Message your Tendering Manager…"
+              placeholder="Ask your Tendering Manager…"
               disabled={busy}
               onChange={(event) => onComposerChange(event.target.value)}
               onKeyDown={onKeyDown}
             />
-            <div className="manager-composer__toolbar">
-              <QuantixMenu
-                label="Tools and context"
-                items={[
-                  {
-                    id: "add-files",
-                    label: "Add files",
-                    icon: <Plus size={16} aria-hidden="true" />,
-                    description: "Register and classify Tender source files.",
-                  },
-                  {
-                    id: "document-tools",
-                    label:
-                      runtimeStatus === "ready"
-                        ? "Repair document tools"
-                        : "Prepare document tools",
-                    icon: <Wrench size={16} aria-hidden="true" />,
-                    description: "Use the governed local document runtime.",
-                  },
-                  {
-                    id: "search",
-                    label: "Search this Tender",
-                    icon: <Search size={16} aria-hidden="true" />,
-                    description: "Find stable records to return to or attach.",
-                  },
-                  {
-                    id: "attach-context",
-                    label: "Attach allowed context",
-                    icon: <FileText size={16} aria-hidden="true" />,
-                    description: contextRefs.length
-                      ? `${contextRefs.length} allowed record${contextRefs.length === 1 ? "" : "s"} attached.`
-                      : "Choose an allowed Evidence record from Tender search.",
-                  },
-                ]}
-                onAction={(action) => {
-                  if (action === "add-files") onImport("directory");
-                  if (action === "document-tools") void onPrepareRuntime();
-                  if (action === "search" || action === "attach-context")
-                    onOpenSearch();
-                }}
-              >
-                <span className="manager-composer__tools-label">
-                  <Plus size={16} aria-hidden="true" /> Tools &amp; Context
-                </span>
-              </QuantixMenu>
-              {contextRefs.length ? (
-                <div
-                  className="manager-composer__context"
-                  aria-label="Attached context"
-                >
-                  {contextRefs.map((reference) => (
-                    <button
-                      key={`${reference.kind}-${reference.reference}-${reference.version}-${reference.evidence_ordinal ?? 0}`}
-                      type="button"
-                      title="Remove attached context"
-                      onClick={() => onRemoveContext(reference.reference)}
-                    >
-                      {reference.label} ×
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-              <TenderAiSelectionControl
-                selection={tenderSelection}
-                providerOptions={[
-                  {
-                    value: "local_only",
-                    label: "Local only",
-                    description: "AI-required work waits without fallback.",
-                  },
-                  ...providerOptions,
-                ]}
-                modelOptions={modelOptions}
-                reasoningOptions={reasoningOptions}
-                modelDisabled={busy || !tenderConnection}
-                reasoningDisabled={busy || !tenderModel}
-                busy={busy}
-                onProviderChange={(connectionId) =>
-                  void onUpdateAiSelection(selectFor(connectionId))
-                }
-                onModelChange={(modelId) =>
-                  void onUpdateAiSelection(
-                    selectFor(
-                      tenderConnection?.connection_id ?? "local_only",
-                      modelId,
-                    ),
-                  )
-                }
-                onReasoningChange={(reasoning) =>
-                  void onUpdateAiSelection(
-                    selectFor(
-                      tenderConnection?.connection_id ?? "local_only",
-                      tenderModel?.model_id,
-                      reasoning,
-                    ),
-                  )
-                }
-              />
-              <button
-                className="manager-composer__send"
-                type="button"
-                aria-label="Send message"
-                disabled={busy || !composer.trim()}
-                onClick={() => void send()}
-              >
-                <Send size={18} aria-hidden="true" />
-              </button>
-            </div>
+            <button
+              className="manager-composer__send"
+              type="button"
+              aria-label="Send message"
+              disabled={busy || !composer.trim()}
+              onClick={() => void send()}
+            >
+              <Send size={18} aria-hidden="true" />
+            </button>
           </div>
-        </>
+        </div>
       ) : null}
     </div>
   );
@@ -2381,6 +2255,10 @@ export function ManagerWorkspace({
     },
     [pendingTenderStart],
   );
+  const handleSettingsChange = useCallback(
+    (settings: ApplicationSettingsView) => setSettingsSnapshot(settings),
+    [],
+  );
 
   const loadTrash = useCallback(async () => {
     try {
@@ -2824,7 +2702,9 @@ export function ManagerWorkspace({
       setRuntimeNotice(
         readiness.state === "ready"
           ? "Document tools are ready. Quantix can continue this Tender when the exact AI selection is ready."
-          : "Document-tool preparation did not complete. Your Tender remains safe; review Diagnostics or try again.",
+          : readiness.issues.includes("insufficient_disk_space")
+            ? "Quantix needs at least 2 GB of free space in the Application Home, but that amount is not currently available. Free some space, then try again. Your Tender remains safe."
+            : "Document-tool preparation did not complete. Your Tender remains safe; review Diagnostics or try again.",
       );
     } catch {
       setRuntimeStatus("unavailable");
@@ -3076,30 +2956,6 @@ export function ManagerWorkspace({
       return true;
     },
     [contextRefsByTender, projection?.selected_tender?.tender_id, run],
-  );
-
-  const updateTenderSelection = useCallback(
-    async (selection: AiExecutionSelection | null) => {
-      const tenderId = projection?.selected_tender?.tender_id;
-      const binding = projection?.ai_execution;
-      if (!tenderId || !binding) return;
-      const updated = await run(
-        () =>
-          updateTenderAiExecution({
-            tender_id: tenderId,
-            expected_revision: binding.revision,
-            selection,
-          }),
-        { kind: "rebind_intake", label: "Updating Tender AI selection" },
-      );
-      if (!updated) return;
-      setProjection((current) =>
-        current?.selected_tender?.tender_id === tenderId
-          ? { ...current, ai_execution: updated }
-          : current,
-      );
-    },
-    [projection?.ai_execution, projection?.selected_tender?.tender_id, run],
   );
 
   const retryIntake = useCallback(async () => {
@@ -3881,6 +3737,7 @@ export function ManagerWorkspace({
               ) : settingsOpen ? (
                 <ApplicationSettings
                   onAiAvailabilityChange={handleAiAvailabilityChange}
+                  onSettingsChange={handleSettingsChange}
                   onPreferencesChange={handlePreferencesChange}
                   initialSection={settingsSection}
                   selectedTenderId={
@@ -3999,8 +3856,6 @@ export function ManagerWorkspace({
                               ),
                             }))
                           }
-                          settings={settingsSnapshot}
-                          onUpdateAiSelection={updateTenderSelection}
                           onOpenAction={() =>
                             navigateToView(
                               projection.current_action.kind.includes(
@@ -4065,9 +3920,6 @@ export function ManagerWorkspace({
                   projection={projection}
                   phase={phaseLabel[selected.phase]}
                   tools={workspaceTools}
-                  documentToolsStatus={runtimeStatus}
-                  documentToolsReadiness={runtimeReadiness}
-                  aiStatus={aiStatus}
                   isOpen={contextOpen}
                   onOpenChange={handleContextOpenChange}
                   presentation="rail"
@@ -4086,9 +3938,6 @@ export function ManagerWorkspace({
               projection={projection}
               phase={phaseLabel[selected.phase]}
               tools={workspaceTools}
-              documentToolsStatus={runtimeStatus}
-              documentToolsReadiness={runtimeReadiness}
-              aiStatus={aiStatus}
               isOpen={contextOpen}
               onOpenChange={handleContextOpenChange}
               presentation="drawer"

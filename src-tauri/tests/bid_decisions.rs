@@ -2166,6 +2166,8 @@ impl Harness {
         );
         host.accept_runtime_fixture();
         assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+        host.approve_runtime_fixture_ai_selection()
+            .expect("approve fixture AI selection");
         install_ocr_fixture(&application_home);
         let tender = host
             .create_tender(CreateTenderCommand {
@@ -2185,6 +2187,9 @@ impl Harness {
     fn set_agent_scenario(&self, scenario: &str) {
         fs::write(self.codex.with_extension("agent-scenario"), scenario)
             .expect("update fake app-server scenario");
+        self.host
+            .approve_runtime_fixture_ai_selection()
+            .expect("restore approved fixture provider readiness");
     }
 
     async fn validated_package_with_manual_checks(
@@ -8858,6 +8863,10 @@ async fn indeterminate_production_requires_an_engineer_disposition_before_linked
         })
         .expect_err("unknown production outcome blocks a superseding amendment");
     assert_eq!(blocked_amendment.code, TenderErrorCode::InvalidCommand);
+    harness
+        .host
+        .approve_runtime_fixture_ai_selection()
+        .expect("restore provider readiness before checking the domain retry gate");
     let blocked_retry = harness
         .host
         .run_production_task(RunProductionTaskCommand {
@@ -9162,6 +9171,10 @@ async fn each_multiplexed_indeterminate_run_can_receive_its_own_disposition() {
         })
         .await
         .expect("record the first unknown outcome");
+    harness
+        .host
+        .approve_runtime_fixture_ai_selection()
+        .expect("restore provider readiness for the independent second run");
     let second = harness
         .host
         .run_production_task(RunProductionTaskCommand {

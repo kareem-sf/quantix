@@ -537,6 +537,12 @@ mod tests {
                 "parameters": {"type": "object", "properties": {}},
                 "strict": true
             })],
+            output_schema: serde_json::json!({
+                "additionalProperties": false,
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+                "type": "object"
+            }),
             store: false,
             include_reasoning: true,
             reasoning_effort: None,

@@ -246,7 +246,7 @@ fn run_chatgpt_login_flow_for_active(
             LoginOutcome::Failed => AuthorizationCompletion::Failed,
         }
     }) {
-        crate::chatgpt_oauth::CallbackOutcome::Authorized(_) => LoginOutcome::Completed,
+        crate::chatgpt_oauth::CallbackOutcome::Authorized => LoginOutcome::Completed,
         crate::chatgpt_oauth::CallbackOutcome::Cancelled => LoginOutcome::Cancelled,
         crate::chatgpt_oauth::CallbackOutcome::Failed(
             crate::chatgpt_oauth::CallbackFailure::PortBlocked

@@ -18,7 +18,7 @@ const LOOPBACK_REDIRECT_HOST: &str = "localhost";
 
 #[derive(Debug)]
 pub(crate) enum CallbackOutcome {
-    Authorized(IssuedTokens),
+    Authorized,
     Cancelled,
     Failed(CallbackFailure),
 }
@@ -305,7 +305,7 @@ where
                         "text/html; charset=utf-8",
                         &success_page(),
                     );
-                    Some(CallbackOutcome::Authorized(tokens))
+                    Some(CallbackOutcome::Authorized)
                 }
                 AuthorizationCompletion::Cancelled => {
                     write_response(
@@ -612,7 +612,17 @@ mod tests {
     #[test]
     fn happy_path_opens_browser_exchanges_code_and_shows_success_page() {
         let (issuer_base, forms) = start_mock_issuer();
-        let harness = spawn_login(&[0], &issuer_base);
+        let issued_tokens = Arc::new(Mutex::new(None));
+        let captured_tokens = Arc::clone(&issued_tokens);
+        let harness = spawn_login_with_completion(&[0], &issuer_base, move |tokens| {
+            *captured_tokens.lock().unwrap() = Some((
+                tokens.access_token.clone(),
+                tokens.refresh_token.clone(),
+                tokens.id_token.clone(),
+                tokens.expires_in_secs,
+            ));
+            AuthorizationCompletion::Connected
+        });
         let (port, url) = next_authorize_url(&harness);
 
         assert!(
@@ -632,19 +642,22 @@ mod tests {
         );
         assert!(response.contains("You can close this window."));
 
-        match harness
-            .outcomes
-            .recv_timeout(WAIT)
-            .expect("terminal outcome")
-        {
-            CallbackOutcome::Authorized(tokens) => {
-                assert_eq!(tokens.access_token, "at-1");
-                assert_eq!(tokens.refresh_token, "rt-1");
-                assert_eq!(tokens.id_token, "idt-1");
-                assert_eq!(tokens.expires_in_secs, 3600);
-            }
-            other => panic!("expected Authorized, got {other:?}"),
-        }
+        assert!(matches!(
+            harness
+                .outcomes
+                .recv_timeout(WAIT)
+                .expect("terminal outcome"),
+            CallbackOutcome::Authorized
+        ));
+        assert_eq!(
+            *issued_tokens.lock().unwrap(),
+            Some((
+                "at-1".to_owned(),
+                "rt-1".to_owned(),
+                "idt-1".to_owned(),
+                3600,
+            ))
+        );
 
         let forms = forms.lock().unwrap();
         assert_eq!(forms.len(), 1);
@@ -740,7 +753,7 @@ mod tests {
             .recv_timeout(WAIT)
             .expect("terminal outcome")
         {
-            CallbackOutcome::Authorized(_) => {}
+            CallbackOutcome::Authorized => {}
             other => panic!("expected Authorized, got {other:?}"),
         }
 
@@ -910,7 +923,7 @@ mod tests {
             });
 
         assert!(started.elapsed() >= Duration::from_millis(150));
-        assert!(matches!(outcome, CallbackOutcome::Authorized(_)));
+        assert!(matches!(outcome, CallbackOutcome::Authorized));
         assert!(callback
             .join()
             .unwrap()

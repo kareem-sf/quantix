@@ -113,34 +113,6 @@
   font-weight: 680;
 }
 
-.workspace-context__action > strong {
-  display: block;
-  font-size: 0.8125rem;
-  line-height: 1.4;
-}
-
-.workspace-context__action > p {
-  margin: 6px 0 12px;
-  color: var(--qx-text-muted);
-  font-size: 0.75rem;
-  line-height: 1.5;
-}
-
-.workspace-context__status {
-  display: inline-flex;
-  padding: 4px 7px;
-  border-radius: 999px;
-  color: var(--qx-success);
-  background: var(--qx-success-soft);
-  font-size: 0.75rem;
-  font-weight: 680;
-}
-
-.workspace-context__status.is-attention {
-  color: var(--qx-brand-blue);
-  background: var(--qx-accent-soft);
-}
-
 .workspace-context__metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

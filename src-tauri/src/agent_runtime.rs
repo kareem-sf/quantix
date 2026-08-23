@@ -22,9 +22,8 @@ use crate::{
         ReqwestBackend, StreamEvent, ToolRejection, TurnContext, UsageSnapshot, BACKEND_URL,
     },
     application_settings::{
-        project_approved_chatgpt_connection, project_chatgpt_connection_readiness,
-        refresh_approved_chatgpt_connection, AiExecutionSelection, AiProviderKind,
-        ProviderReasoningSelection,
+        project_approved_chatgpt_connection, refresh_approved_chatgpt_connection,
+        AiExecutionSelection, AiProviderKind, ProviderReasoningSelection,
     },
     chatgpt_login::PRODUCTION_ISSUER,
     chatgpt_oauth::TokenClient,
@@ -52,6 +51,9 @@ use crate::{
     },
     QuantixHost,
 };
+
+#[cfg(not(feature = "runtime-fixture"))]
+use crate::application_settings::project_chatgpt_connection_readiness;
 
 #[cfg(feature = "runtime-fixture")]
 use crate::{
@@ -821,6 +823,7 @@ type TurnRequestedCallback = dyn FnOnce() -> Result<(), ProviderFailure> + Send;
 type TurnEventCallback =
     dyn FnMut(&PendingProviderEvent, &ProviderUsage) -> Result<(), ProviderFailure> + Send;
 type TurnDeniedCallback = dyn FnMut(&PendingProviderEvent) -> Result<(), ProviderFailure> + Send;
+#[cfg(feature = "runtime-fixture")]
 type TurnToolCallCallback =
     dyn FnMut(&str, &str, &Value) -> Result<Option<String>, ProviderFailure> + Send;
 type ThreadArchivedCallback = dyn FnOnce(&str) -> Result<(), ProviderFailure> + Send;
@@ -833,6 +836,7 @@ struct RunCallbacks {
     on_accepted: Box<TurnAcceptedCallback>,
     on_event: Box<TurnEventCallback>,
     on_denied: Box<TurnDeniedCallback>,
+    #[cfg(feature = "runtime-fixture")]
     on_tool_call: Box<TurnToolCallCallback>,
 }
 
@@ -2819,12 +2823,15 @@ async fn execute_provider_turn_from(
     let event_store = Arc::clone(store);
     let event_host = host.clone();
     let denial_store = Arc::clone(store);
+    #[cfg(feature = "runtime-fixture")]
     let tool_store = Arc::clone(store);
     let requested_run_id = prepared.run_id.clone();
     let run_id = prepared.run_id.clone();
     let event_run_id = prepared.run_id.clone();
     let denial_run_id = prepared.run_id.clone();
+    #[cfg(feature = "runtime-fixture")]
     let tool_run_id = prepared.run_id.clone();
+    #[cfg(feature = "runtime-fixture")]
     let tool_prepared = prepared.clone();
     let callbacks = RunCallbacks {
         on_thread_archived: Box::new(move |thread_ref| {
@@ -2870,6 +2877,7 @@ async fn execute_provider_turn_from(
                 .checkpoint_agent_control_denial(&denial_run_id, event)
                 .map_err(|_| outcome_unknown())
         }),
+        #[cfg(feature = "runtime-fixture")]
         on_tool_call: Box::new(move |correlation_id, tool_name, arguments| {
             if !typed_tool_is_known(tool_name) {
                 return Ok(None);
@@ -3184,6 +3192,14 @@ fn chatgpt_reasoning_effort(
     Ok(effort)
 }
 
+#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
+fn with_production_token_client<T>(
+    operation: impl FnOnce(&TokenClient) -> Result<T, ProviderFailure>,
+) -> Result<T, ProviderFailure> {
+    let token_client = TokenClient::new(PRODUCTION_ISSUER).map_err(|_| process_failure(false))?;
+    operation(&token_client)
+}
+
 #[cfg(test)]
 mod direct_backend_mapping_tests {
     use std::sync::{Arc, Mutex};
@@ -3223,6 +3239,23 @@ mod direct_backend_mapping_tests {
             ))
             .is_err()
         );
+    }
+
+    #[test]
+    fn production_token_client_is_scoped_to_blocking_refresh_work() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("multi-thread runtime");
+
+        runtime.block_on(async {
+            tokio::task::block_in_place(|| {
+                with_production_token_client(|_| Ok::<_, ProviderFailure>(()))
+            })
+            .expect("the production token client must be created and dropped while blocking");
+            tokio::task::yield_now().await;
+        });
     }
 
     #[test]
@@ -3298,9 +3331,9 @@ mod direct_backend_mapping_tests {
 /// becomes `instructions`, Typed Tool specs become `tools`, and the Tender
 /// Task objective becomes the single user input item. Unlike the Codex
 /// app-server path, Data View payloads are not inlined into the request text
-/// (they remain materialized workspace inputs referenced by the bundle), the
-/// output contract is enforced by candidate validation instead of a wire
-/// `outputSchema` field, and the run id doubles as the session identity.
+/// (they remain materialized workspace inputs referenced by the bundle). The
+/// task output contract is sent as the Responses structured-output format and
+/// validated again locally, while the run id doubles as the session identity.
 #[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
 async fn chatgpt_provider_turn(
     host: &QuantixHost,
@@ -3318,7 +3351,7 @@ async fn chatgpt_provider_turn(
         on_accepted,
         mut on_event,
         mut on_denied,
-        on_tool_call: _,
+        ..
     } = callbacks;
     let mut on_accepted = Some(on_accepted);
     let home = host.application_home().to_path_buf();
@@ -3383,17 +3416,6 @@ async fn chatgpt_provider_turn(
             )
         }
     };
-    let token_client = match TokenClient::new(PRODUCTION_ISSUER) {
-        Ok(client) => client,
-        Err(_) => {
-            return chatgpt_failure_execution(
-                Some(thread_ref),
-                None,
-                process_failure(false),
-                started,
-            )
-        }
-    };
     let reasoning_effort = match chatgpt_reasoning_effort(&prepared.provider_selection.reasoning) {
         Ok(effort) => effort,
         Err(failure) => return chatgpt_failure_execution(Some(thread_ref), None, failure, started),
@@ -3407,6 +3429,7 @@ async fn chatgpt_provider_turn(
             "content": [{"type": "input_text", "text": prepared.task.objective.clone()}],
         })],
         tools,
+        output_schema: output_schema.clone(),
         store: false,
         include_reasoning: true,
         reasoning_effort,
@@ -3541,13 +3564,15 @@ async fn chatgpt_provider_turn(
         on_denied(&event)
     };
     let refresh_auth = |expected_account_id: &str| {
-        refresh_approved_chatgpt_connection(
-            host.application_home(),
-            &token_client,
-            epoch_milliseconds(),
-            expected_account_id,
-            &prepared.provider_selection,
-        )
+        with_production_token_client(|token_client| {
+            refresh_approved_chatgpt_connection(
+                host.application_home(),
+                token_client,
+                epoch_milliseconds(),
+                expected_account_id,
+                &prepared.provider_selection,
+            )
+        })
     };
 
     let turn_context = TurnContext {
@@ -3772,8 +3797,8 @@ fn authentication_failure() -> ProviderFailure {
     ProviderFailure::new(
         ProviderFailureCategory::AuthenticationRequired,
         true,
-        "Connect the Engineer User's Codex-managed ChatGPT subscription, then retry.",
-        Some("Codex-managed ChatGPT authentication is required."),
+        "Connect your ChatGPT subscription in Settings before retrying.",
+        Some("No usable ChatGPT connection is available."),
     )
 }
 

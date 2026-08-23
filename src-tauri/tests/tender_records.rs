@@ -58,6 +58,8 @@ impl RuntimeHarness {
         );
         host.accept_runtime_fixture();
         assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+        host.approve_runtime_fixture_ai_selection()
+            .expect("approve fixture AI selection");
         install_ocr_fixture(&application_home);
         let tender = host
             .create_tender(CreateTenderCommand {
@@ -76,6 +78,9 @@ impl RuntimeHarness {
     fn set_agent_scenario(&self, scenario: &str) {
         fs::write(self.codex.with_extension("agent-scenario"), scenario)
             .expect("update fake app-server scenario");
+        self.host
+            .approve_runtime_fixture_ai_selection()
+            .expect("restore approved fixture provider readiness");
     }
 
     async fn parsed_pdf_evidence(&self, name: &str, marker: &[u8]) -> ParsedEvidence {
