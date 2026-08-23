@@ -3,21 +3,18 @@ pub(crate) fn candidate(
     scenario: &str,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let evidence = data_view
-        .pointer("/evidence/0/reference")
+        .pointer("/evidence/0/handle")
         .cloned()
-        .ok_or("Submission Generation Evidence")?;
+        .ok_or("Submission Generation Evidence handle")?;
     let field = |name: &str, value: &str| {
         serde_json::json!({
             "name": name,
             "value": value,
-            "basis_kind": "evidence",
-            "basis_reference": null,
-            "basis_description": null,
+            "basis": {"kind": "evidence", "evidence": [evidence.clone()]},
             "original_expression": null,
             "normalized_value": null,
             "timezone": null,
-            "uncertainty": null,
-            "evidence": [evidence.clone()]
+            "uncertainty": null
         })
     };
     let definitions = [
@@ -153,7 +150,7 @@ pub(crate) fn candidate(
             .and_then(serde_json::Value::as_array)
             .ok_or("Submission Generation Evidence inventory")?
             .iter()
-            .filter_map(|entry| entry.get("reference").cloned())
+            .filter_map(|entry| entry.get("handle").cloned())
             .collect::<Vec<_>>();
         records[6]["generation_instruction"]["evidence"] = serde_json::Value::Array(exact_sources);
     }

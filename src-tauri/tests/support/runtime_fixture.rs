@@ -1654,21 +1654,18 @@ fn run_agent_turn(
                 })
             })
             .ok_or("fixture risk record")?;
-        let evidence = risk["fields"][0]["evidence"].clone();
+        let evidence = risk["fields"][0]["basis"]["evidence"].clone();
         risk["fields"]
             .as_array_mut()
             .ok_or("fixture risk fields")?
             .push(serde_json::json!({
                 "name": "bid_recommendation",
                 "value": "decline",
-                "basis_kind": "evidence",
-                "basis_reference": null,
-                "basis_description": null,
+                "basis": {"kind": "evidence", "evidence": evidence},
                 "original_expression": null,
                 "normalized_value": null,
                 "timezone": null,
-                "uncertainty": null,
-                "evidence": evidence
+                "uncertainty": null
             }));
         candidate
     } else if scenario == "record-extraction-extra-characteristic" {
@@ -1780,9 +1777,9 @@ fn run_agent_turn(
         candidate
     } else if scenario == "record-extraction-change-assessment" {
         let authoritative = provider_data_view
-            .pointer("/evidence/0/reference")
+            .pointer("/evidence/0/handle")
             .cloned()
-            .ok_or("change assessment replacement Evidence")?;
+            .ok_or("change assessment replacement Evidence handle")?;
         let allowed = provider_data_view
             .pointer("/change_assessment/allowed_stable_keys")
             .and_then(serde_json::Value::as_array)
@@ -1790,11 +1787,10 @@ fn run_agent_turn(
             .iter()
             .filter_map(serde_json::Value::as_str)
             .collect::<std::collections::HashSet<_>>();
-        let mut records = provider_data_view
-            .pointer("/change_assessment/prior_records")
-            .and_then(serde_json::Value::as_array)
-            .ok_or("change assessment prior records")?
-            .clone();
+        let mut records = record_extraction_candidate(provider_data_view)?["records"]
+            .as_array()
+            .cloned()
+            .ok_or("record extraction candidates")?;
         records
             .iter_mut()
             .flat_map(|record| {
@@ -1804,7 +1800,15 @@ fn run_agent_turn(
                     .into_iter()
                     .flatten()
             })
-            .for_each(|field| field["evidence"] = serde_json::json!([authoritative.clone()]));
+            .filter(|field| {
+                field
+                    .pointer("/basis/kind")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("evidence")
+            })
+            .for_each(|field| {
+                field["basis"]["evidence"] = serde_json::json!([authoritative.clone()])
+            });
         for record in &mut records {
             record["contradictions"] = serde_json::json!([]);
         }
@@ -1836,7 +1840,7 @@ fn run_agent_turn(
         record_extraction_candidate(provider_data_view)?
     } else if scenario == "record-extraction-invalid" {
         let mut candidate = record_extraction_candidate(provider_data_view)?;
-        candidate["records"][0]["fields"][0]["evidence"][0]["ordinal"] = serde_json::json!(999_999);
+        candidate["records"][0]["fields"][0]["basis"]["evidence"][0] = serde_json::json!("e9999");
         candidate
     } else if scenario == "record-extraction-duplicate-citation" {
         let mut candidate = record_extraction_candidate(provider_data_view)?;
@@ -3268,42 +3272,23 @@ fn coordinated_record_extraction_candidate(
             .get("evidence")
             .and_then(serde_json::Value::as_array)
             .ok_or("Tender Evidence Data View")?;
-        let mut artifact_ids = Vec::new();
-        for item in evidence {
-            let artifact_id = item
-                .pointer("/reference/artifact_id")
-                .and_then(serde_json::Value::as_str)
-                .ok_or("split-source Evidence artifact")?;
-            if !artifact_ids
-                .iter()
-                .any(|candidate| candidate == artifact_id)
-            {
-                artifact_ids.push(artifact_id.to_owned());
-            }
+        if evidence.len() < 2 {
+            return Err("split-source fixture requires Evidence from both Source Artifacts".into());
         }
-        if artifact_ids.len() != 2 {
-            return Err("split-source fixture requires exactly two Source Artifacts".into());
-        }
-        let reference_for = |artifact_id: &str| {
-            evidence.iter().find(|item| {
-                item.pointer("/reference/artifact_id")
-                    .and_then(serde_json::Value::as_str)
-                    == Some(artifact_id)
-            })
-        };
         (
-            reference_for(&artifact_ids[0])
-                .and_then(|item| item.get("reference"))
+            evidence[0]
+                .get("handle")
                 .cloned()
-                .ok_or("general split-source Evidence")?,
-            reference_for(&artifact_ids[1])
-                .and_then(|item| item.get("reference"))
+                .ok_or("general split-source Evidence handle")?,
+            evidence
+                .last()
+                .and_then(|item| item.get("handle"))
                 .cloned()
-                .ok_or("changed split-source Evidence")?,
+                .ok_or("changed split-source Evidence handle")?,
         )
     } else {
         let exact = candidate
-            .pointer("/records/0/fields/0/evidence/0")
+            .pointer("/records/0/fields/0/basis/evidence/0")
             .cloned()
             .ok_or("coordinated record evidence")?;
         (exact.clone(), exact)
@@ -3322,11 +3307,11 @@ fn coordinated_record_extraction_candidate(
                 .flatten()
             {
                 if field
-                    .get("evidence")
+                    .pointer("/basis/evidence")
                     .and_then(serde_json::Value::as_array)
                     .is_some_and(|evidence| !evidence.is_empty())
                 {
-                    field["evidence"] = serde_json::json!([if is_changed_branch {
+                    field["basis"]["evidence"] = serde_json::json!([if is_changed_branch {
                         changed_branch_evidence.clone()
                     } else {
                         general_evidence.clone()
@@ -3345,17 +3330,15 @@ fn coordinated_record_extraction_candidate(
         "stable_key": "clarification_cutoff",
         "kind": "deadline",
         "title": "Clarification cutoff",
+        "generation_instruction": null,
         "fields": [{
             "name": "deadline",
             "value": "8 May 2026 at 14:00 Cairo time",
-            "basis_kind": "evidence",
-            "basis_reference": null,
-            "basis_description": null,
+            "basis": {"kind": "evidence", "evidence": [general_evidence.clone()]},
             "original_expression": "8 May 2026 at 14:00 Cairo time",
             "normalized_value": "2026-05-08T14:00:00+03:00",
             "timezone": "Africa/Cairo",
-            "uncertainty": null,
-            "evidence": [general_evidence.clone()]
+            "uncertainty": null
         }],
         "contradictions": []
     }));
@@ -3369,14 +3352,11 @@ fn coordinated_record_extraction_candidate(
             .push(serde_json::json!({
                 "name": "responsible_party",
                 "value": "tender_coordinator",
-                "basis_kind": "evidence",
-                "basis_reference": null,
-                "basis_description": null,
+                "basis": {"kind": "evidence", "evidence": [general_evidence]},
                 "original_expression": null,
                 "normalized_value": null,
                 "timezone": null,
-                "uncertainty": null,
-                "evidence": [general_evidence]
+                "uncertainty": null
             }));
     }
     Ok(candidate)
@@ -3403,9 +3383,9 @@ fn record_extraction_candidate(
         .or_else(|| evidence.first())
         .ok_or("authoritative record evidence")?;
     let authoritative = authoritative_item
-        .get("reference")
+        .get("handle")
         .cloned()
-        .ok_or("authoritative record reference")?;
+        .ok_or("authoritative record handle")?;
     let authoritative_text = authoritative_item
         .pointer("/location/original_text")
         .and_then(serde_json::Value::as_str)
@@ -3417,7 +3397,7 @@ fn record_extraction_candidate(
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|text| text.contains("Submission deadline"))
         })
-        .filter_map(|item| item.get("reference").cloned())
+        .filter_map(|item| item.get("handle").cloned())
         .collect::<Vec<_>>();
     let deadline = deadline_evidence
         .first()
@@ -3427,60 +3407,47 @@ fn record_extraction_candidate(
         .last()
         .cloned()
         .unwrap_or_else(|| authoritative.clone());
+    let evidence_field = |name: &str,
+                          value: serde_json::Value,
+                          evidence: serde_json::Value,
+                          original_expression: serde_json::Value,
+                          normalized_value: serde_json::Value,
+                          timezone: serde_json::Value,
+                          uncertainty: serde_json::Value| {
+        serde_json::json!({
+            "name": name,
+            "value": value,
+            "basis": {"kind": "evidence", "evidence": [evidence]},
+            "original_expression": original_expression,
+            "normalized_value": normalized_value,
+            "timezone": timezone,
+            "uncertainty": uncertainty
+        })
+    };
     let mut candidate = serde_json::json!({
         "records": [
             {
                 "stable_key": "authoritative_notice",
                 "kind": "clause",
                 "title": "Exact authoritative notice",
-                "fields": [{
-                    "name": "text",
-                    "value": authoritative_text,
-                    "basis_kind": "evidence",
-                    "basis_reference": null,
-                    "basis_description": null,
-                    "original_expression": null,
-                    "normalized_value": null,
-                    "timezone": null,
-                    "uncertainty": null,
-                    "evidence": [authoritative.clone()]
-                }],
+                "generation_instruction": null,
+                "fields": [evidence_field("text", serde_json::json!(authoritative_text), authoritative.clone(), serde_json::Value::Null, serde_json::Value::Null, serde_json::Value::Null, serde_json::Value::Null)],
                 "contradictions": []
             },
             {
                 "stable_key": "bid_security_required",
                 "kind": "requirement",
                 "title": "Bid security requirement",
-                "fields": [{
-                    "name": "requirement",
-                    "value": "Bid security is required.",
-                    "basis_kind": "evidence",
-                    "basis_reference": null,
-                    "basis_description": null,
-                    "original_expression": null,
-                    "normalized_value": null,
-                    "timezone": null,
-                    "uncertainty": null,
-                    "evidence": [authoritative.clone()]
-                }],
+                "generation_instruction": null,
+                "fields": [evidence_field("requirement", serde_json::json!("Bid security is required."), authoritative.clone(), serde_json::Value::Null, serde_json::Value::Null, serde_json::Value::Null, serde_json::Value::Null)],
                 "contradictions": []
             },
             {
                 "stable_key": "submission_deadline",
                 "kind": "deadline",
                 "title": "Submission deadline",
-                "fields": [{
-                    "name": "deadline",
-                    "value": "15 May 2026 at 14:00 Cairo time",
-                    "basis_kind": "evidence",
-                    "basis_reference": null,
-                    "basis_description": null,
-                    "original_expression": "15 May 2026 at 14:00 Cairo time",
-                    "normalized_value": "2026-05-15T14:00:00+03:00",
-                    "timezone": "Africa/Cairo",
-                    "uncertainty": "A conflicting supplied expression requires resolution.",
-                    "evidence": [deadline]
-                }],
+                "generation_instruction": null,
+                "fields": [evidence_field("deadline", serde_json::json!("15 May 2026 at 14:00 Cairo time"), deadline.clone(), serde_json::json!("15 May 2026 at 14:00 Cairo time"), serde_json::json!("2026-05-15T14:00:00+03:00"), serde_json::json!("Africa/Cairo"), serde_json::json!("A conflicting supplied expression requires resolution."))],
                 "contradictions": [{
                     "field_name": "deadline",
                     "summary": "The supplied Evidence contains conflicting submission dates.",
@@ -3491,63 +3458,49 @@ fn record_extraction_candidate(
                 "stable_key": "project_delivery_context",
                 "kind": "project_characteristic",
                 "title": "Verified project delivery context",
-                "fields": [{
-                    "name": "required_capability",
-                    "value": "document_control",
-                    "basis_kind": "evidence",
-                    "basis_reference": null,
-                    "basis_description": null,
-                    "original_expression": null,
-                    "normalized_value": null,
-                    "timezone": null,
-                    "uncertainty": null,
-                    "evidence": [authoritative.clone()]
-                }],
+                "generation_instruction": null,
+                "fields": [evidence_field("required_capability", serde_json::json!("document_control"), authoritative.clone(), serde_json::Value::Null, serde_json::Value::Null, serde_json::Value::Null, serde_json::Value::Null)],
                 "contradictions": []
             },
             {
                 "stable_key": "programme_pressure",
                 "kind": "risk",
                 "title": "Tender programme pressure",
-                "fields": [{
-                    "name": "recommended_capability",
-                    "value": "tender_analysis",
-                    "basis_kind": "evidence",
-                    "basis_reference": null,
-                    "basis_description": null,
-                    "original_expression": null,
-                    "normalized_value": null,
-                    "timezone": null,
-                    "uncertainty": null,
-                    "evidence": [authoritative.clone()]
-                }],
+                "generation_instruction": null,
+                "fields": [evidence_field("recommended_capability", serde_json::json!("tender_analysis"), authoritative.clone(), serde_json::Value::Null, serde_json::Value::Null, serde_json::Value::Null, serde_json::Value::Null)],
                 "contradictions": []
             },
             {
                 "stable_key": "crane_capacity",
                 "kind": "assumption",
                 "title": "Crane capacity remains unknown",
+                "generation_instruction": null,
                 "fields": [{
                     "name": "capacity",
                     "value": null,
-                    "basis_kind": "assumption",
-                    "basis_reference": "crane_capacity",
-                    "basis_description": "No supplied Evidence states the required crane capacity.",
+                    "basis": {"kind": "assumption", "stable_key": "crane_capacity", "description": "No supplied Evidence states the required crane capacity."},
                     "original_expression": null,
                     "normalized_value": null,
                     "timezone": null,
-                    "uncertainty": "Unresolved evidence gap",
-                    "evidence": []
+                    "uncertainty": "Unresolved evidence gap"
                 }],
                 "contradictions": []
             }
         ]
     });
-    if let Some(authority) = data_view
+    if let Some(authority_entry) = data_view
         .get("authorities")
         .and_then(serde_json::Value::as_array)
         .and_then(|authorities| authorities.first())
     {
+        let authority = authority_entry
+            .get("authority")
+            .ok_or("authority payload")?;
+        let authority_handle = authority_entry
+            .get("handle")
+            .cloned()
+            .ok_or("authority handle")?;
+        let basis_kind = authority.get("kind").cloned().ok_or("authority kind")?;
         candidate["records"]
             .as_array_mut()
             .ok_or("Tender Record candidate records")?
@@ -3555,17 +3508,15 @@ fn record_extraction_candidate(
                 "stable_key": "engineer_entry_basis",
                 "kind": "project_characteristic",
                 "title": "Attributable Engineer entry",
+                "generation_instruction": null,
                 "fields": [{
                     "name": "engineer_value",
                     "value": authority.get("value").cloned().ok_or("authority value")?,
-                    "basis_kind": authority.get("kind").cloned().ok_or("authority kind")?,
-                    "basis_reference": authority.get("authority_id").cloned().ok_or("authority id")?,
-                    "basis_description": authority.get("description").cloned().ok_or("authority description")?,
+                    "basis": {"kind": basis_kind, "authority": authority_handle},
                     "original_expression": null,
                     "normalized_value": null,
                     "timezone": null,
-                    "uncertainty": null,
-                    "evidence": []
+                    "uncertainty": null
                 }],
                 "contradictions": []
             }));

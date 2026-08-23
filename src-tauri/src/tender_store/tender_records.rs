@@ -1480,7 +1480,18 @@ impl TenderStore {
         task: &TenderTaskView,
         payload_json: &str,
     ) -> Result<ResolvedTenderRecordProposal, TenderCommandError> {
-        let context = TenderRecordProposalContext::from_task(task)
+        let authorities = task
+            .exact_inputs
+            .iter()
+            .filter(|input| {
+                matches!(
+                    input.kind.as_str(),
+                    "engineer_entry" | "approved_calculation_run"
+                )
+            })
+            .map(|input| load_record_authority(&self.connection, &input.reference))
+            .collect::<Result<Vec<_>, _>>()?;
+        let context = TenderRecordProposalContext::from_task(task, &authorities)
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         let resolved = context
             .resolve(payload_json)
@@ -3191,7 +3202,7 @@ fn record_extraction_data_view(
         )
         .map_err(sql_error)?;
     let mut resolved = Vec::with_capacity(evidence.len());
-    for (index, reference) in evidence.iter().enumerate() {
+    for (handle, reference) in proposal_context.provider_evidence() {
         let (package_path, location): (String, RawEvidenceLocation) = connection
             .query_row(
                 "SELECT source_artifacts.package_path,
@@ -3214,7 +3225,7 @@ fn record_extraction_data_view(
             .map_err(sql_error)?
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         resolved.push(json!({
-            "handle": format!("e{:04}", index + 1),
+            "handle": handle,
             "location": location.into_domain()?,
             "package_path": package_path,
             "reference": reference,

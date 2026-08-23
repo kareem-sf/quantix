@@ -39,6 +39,16 @@ mod tests {
         assert_eq!(context.evidence_reference("e0001"), Some(&evidence[0]));
         assert_eq!(context.evidence_reference("e0002"), Some(&evidence[1]));
         assert_eq!(context.evidence_reference("e0003"), None);
+        assert_eq!(
+            context
+                .provider_evidence()
+                .map(|(handle, reference)| (handle, reference.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("e0001", evidence[0].clone()),
+                ("e0002", evidence[1].clone())
+            ]
+        );
 
         let schema: Value = serde_json::from_str(&context.output_contract_json().unwrap()).unwrap();
         assert_eq!(
@@ -406,9 +416,11 @@ impl TenderRecordProposalContext {
         })
     }
 
-    pub(crate) fn from_task(task: &TenderTaskView) -> Result<Self, TenderRecordValidationReport> {
+    pub(crate) fn from_task(
+        task: &TenderTaskView,
+        authorities: &[TenderRecordAuthority],
+    ) -> Result<Self, TenderRecordValidationReport> {
         let mut evidence = Vec::new();
-        let mut authorities = Vec::new();
         for input in &task.exact_inputs {
             if input.kind == "source_evidence" {
                 let Some((artifact_id, ordinal)) = input.reference.split_once('#') else {
@@ -429,29 +441,20 @@ impl TenderRecordProposalContext {
                     ordinal,
                 });
             }
-            let kind = match input.kind.as_str() {
-                "engineer_entry" => Some(TenderRecordAuthorityKind::EngineerEntry),
-                "approved_calculation_run" => Some(TenderRecordAuthorityKind::CalculationRun),
-                _ => None,
-            };
-            if let Some(kind) = kind {
-                authorities.push(TenderRecordAuthority {
-                    authority_id: input.reference.clone(),
-                    kind,
-                    value: String::new(),
-                    description: String::new(),
-                    manifest_sha256: None,
-                    tender_revision: input.version,
-                    created_by: String::new(),
-                    created_at: String::new(),
-                });
-            }
         }
-        Self::new(&evidence, &authorities)
+        Self::new(&evidence, authorities)
     }
 
     pub(crate) fn evidence_reference(&self, handle: &str) -> Option<&TenderEvidenceReference> {
         self.evidence_by_handle.get(handle)
+    }
+
+    pub(crate) fn provider_evidence(
+        &self,
+    ) -> impl Iterator<Item = (&str, &TenderEvidenceReference)> {
+        self.evidence_by_handle
+            .iter()
+            .map(|(handle, reference)| (handle.as_str(), reference))
     }
 
     pub(crate) fn authority_reference(&self, handle: &str) -> Option<&TenderRecordAuthority> {
@@ -606,28 +609,34 @@ impl TenderRecordProposalContext {
                 Some(description),
                 Vec::new(),
             ),
-            TenderRecordFieldBasisProposal::CalculationRun { authority } => (
-                super::TenderRecordBasisKind::CalculationRun,
-                self.resolve_authority(
+            TenderRecordFieldBasisProposal::CalculationRun { authority } => {
+                let authority = self.resolve_authority(
                     &authority,
                     TenderRecordAuthorityKind::CalculationRun,
                     &format!("{pointer}/basis/authority"),
                     report,
-                ),
-                None,
-                Vec::new(),
-            ),
-            TenderRecordFieldBasisProposal::EngineerEntry { authority } => (
-                super::TenderRecordBasisKind::EngineerEntry,
-                self.resolve_authority(
+                );
+                (
+                    super::TenderRecordBasisKind::CalculationRun,
+                    authority.map(|authority| authority.authority_id.clone()),
+                    authority.map(|authority| authority.description.clone()),
+                    Vec::new(),
+                )
+            }
+            TenderRecordFieldBasisProposal::EngineerEntry { authority } => {
+                let authority = self.resolve_authority(
                     &authority,
                     TenderRecordAuthorityKind::EngineerEntry,
                     &format!("{pointer}/basis/authority"),
                     report,
-                ),
-                None,
-                Vec::new(),
-            ),
+                );
+                (
+                    super::TenderRecordBasisKind::EngineerEntry,
+                    authority.map(|authority| authority.authority_id.clone()),
+                    authority.map(|authority| authority.description.clone()),
+                    Vec::new(),
+                )
+            }
         };
         TenderRecordFieldCandidate {
             name: field.name,
@@ -668,9 +677,9 @@ impl TenderRecordProposalContext {
         kind: TenderRecordAuthorityKind,
         pointer: &str,
         report: &mut TenderRecordValidationReport,
-    ) -> Option<String> {
+    ) -> Option<&TenderRecordAuthority> {
         match self.authority_reference(handle) {
-            Some(authority) if authority.kind == kind => Some(authority.authority_id.clone()),
+            Some(authority) if authority.kind == kind => Some(authority),
             _ => {
                 report.push("unknown_authority_handle", pointer);
                 None
