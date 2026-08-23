@@ -544,13 +544,30 @@ async fn rejected_output_is_persisted_with_failure_atomically() {
     assert_eq!(failure.validation_issues[0].code, "duplicate_stable_key");
     assert_eq!(failure.validation_issues[0].path, "/records/1/stable_key");
     assert!(extraction.run.proposed_result.is_none());
+    assert_eq!(extraction.published_record_count, 0);
     let runs = harness
         .host
         .inspect_agent_runs(&harness.tender_id)
-        .expect("inspect rejected extraction run");
-    assert_eq!(runs.len(), 1);
+        .expect("inspect rejected extraction attempts");
+    assert_eq!(
+        runs.len(),
+        2,
+        "one semantic repair and no third extraction call"
+    );
+    assert_eq!(fixture_record_extraction_turn_count(&harness.codex), 2);
     assert_eq!(runs[0].state, AgentRunState::Failed);
-    assert!(records_for_run(&harness.host, &harness.tender_id, &extraction.run.run_id).is_empty());
+    assert!(runs[0].retry_of_run_id.is_none());
+    assert_eq!(runs[1].state, AgentRunState::Failed);
+    assert_eq!(
+        runs[1].retry_of_run_id.as_deref(),
+        Some(runs[0].run_id.as_str())
+    );
+    assert_eq!(runs[1].run_id, extraction.run.run_id);
+    for run in &runs {
+        assert!(run.proposed_result.is_none());
+        assert!(records_for_run(&harness.host, &harness.tender_id, &run.run_id).is_empty());
+    }
+    assert!(inspect_all_records(&harness.host, &harness.tender_id).is_empty());
 
     let database = harness
         .application_home
@@ -560,58 +577,71 @@ async fn rejected_output_is_persisted_with_failure_atomically() {
     let connection = rusqlite::Connection::open(database).expect("open Tender Store database");
     let rejected_count: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM agent_run_rejected_outputs WHERE run_id = ?1",
-            [&extraction.run.run_id],
+            "SELECT COUNT(*) FROM agent_run_rejected_outputs",
+            [],
             |row| row.get(0),
         )
         .expect("count rejected output rows");
-    assert_eq!(rejected_count, 1);
-    let (payload_json, payload_sha256, validation_issues_json): (String, String, String) =
-        connection
-            .query_row(
-                "SELECT payload_json, payload_sha256, validation_issues_json
+    assert_eq!(rejected_count, 2);
+    for run in &runs {
+        let run_failure = run.failure.as_ref().expect("OutputInvalid failure");
+        assert_eq!(run_failure.category, ProviderFailureCategory::OutputInvalid);
+        assert_eq!(run_failure.validation_issues.len(), 1);
+        assert_eq!(
+            run_failure.validation_issues[0].code,
+            "duplicate_stable_key"
+        );
+        assert_eq!(
+            run_failure.validation_issues[0].path,
+            "/records/1/stable_key"
+        );
+        let (payload_json, payload_sha256, validation_issues_json): (String, String, String) =
+            connection
+                .query_row(
+                    "SELECT payload_json, payload_sha256, validation_issues_json
              FROM agent_run_rejected_outputs WHERE run_id = ?1",
-                [&extraction.run.run_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    [&run.run_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .expect("load rejected output");
+        assert_eq!(
+            payload_json,
+            serde_json_canonicalizer::to_string(
+                &serde_json::from_str::<serde_json::Value>(&payload_json)
+                    .expect("stored rejected payload is JSON"),
             )
-            .expect("load rejected output");
-    assert_eq!(
-        payload_json,
-        serde_json_canonicalizer::to_string(
-            &serde_json::from_str::<serde_json::Value>(&payload_json)
-                .expect("stored rejected payload is JSON"),
-        )
-        .expect("canonicalize stored rejected payload")
-    );
-    assert_eq!(
-        payload_sha256,
-        Sha256::digest(payload_json.as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    );
-    assert_eq!(
-        serde_json::from_str::<Vec<OutputValidationIssue>>(&validation_issues_json)
-            .expect("stored validation issues"),
-        failure.validation_issues
-    );
-    let rejected = harness
-        .host
-        .rejected_agent_output(&harness.tender_id, &extraction.run.run_id)
-        .expect("inspect rejected provider output");
-    assert_eq!(rejected.payload_json, payload_json);
-    assert_eq!(rejected.payload_sha256, payload_sha256);
-    assert_eq!(rejected.validation_issues, failure.validation_issues);
+            .expect("canonicalize stored rejected payload")
+        );
+        assert_eq!(
+            payload_sha256,
+            Sha256::digest(payload_json.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
+        assert_eq!(
+            serde_json::from_str::<Vec<OutputValidationIssue>>(&validation_issues_json)
+                .expect("stored validation issues"),
+            run_failure.validation_issues
+        );
+        let rejected = harness
+            .host
+            .rejected_agent_output(&harness.tender_id, &run.run_id)
+            .expect("inspect rejected provider output");
+        assert_eq!(rejected.payload_json, payload_json);
+        assert_eq!(rejected.payload_sha256, payload_sha256);
+        assert_eq!(rejected.validation_issues, run_failure.validation_issues);
+    }
     assert!(connection
         .execute(
             "UPDATE agent_run_rejected_outputs SET payload_sha256 = ?1 WHERE run_id = ?2",
-            ["0".repeat(64), extraction.run.run_id.clone()],
+            ["0".repeat(64), runs[0].run_id.clone()],
         )
         .is_err());
     assert!(connection
         .execute(
             "DELETE FROM agent_run_rejected_outputs WHERE run_id = ?1",
-            [&extraction.run.run_id],
+            [&runs[0].run_id],
         )
         .is_err());
 }
