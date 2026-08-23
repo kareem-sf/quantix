@@ -262,6 +262,232 @@ async fn rejected_output_is_persisted_with_failure_atomically() {
     assert_eq!(rejected.payload_json, payload_json);
     assert_eq!(rejected.payload_sha256, payload_sha256);
     assert_eq!(rejected.validation_issues, failure.validation_issues);
+    assert!(connection
+        .execute(
+            "UPDATE agent_run_rejected_outputs SET payload_sha256 = ?1 WHERE run_id = ?2",
+            ["0".repeat(64), extraction.run.run_id.clone()],
+        )
+        .is_err());
+    assert!(connection
+        .execute(
+            "DELETE FROM agent_run_rejected_outputs WHERE run_id = ?1",
+            [&extraction.run.run_id],
+        )
+        .is_err());
+}
+
+#[tokio::test]
+async fn cancellation_before_completion_discards_invalid_provider_output() {
+    let harness = RuntimeHarness::new("record-extraction-parity-duplicate-stable-key-delayed");
+    let evidence = harness
+        .parsed_pdf_evidence("rejected-output-cancel", b"TENDER_RECORD_GOLDEN")
+        .await;
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let extraction_task = tokio::spawn(async move {
+        host.run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id,
+            evidence: evidence.references,
+            authorities: Vec::new(),
+        })
+        .await
+    });
+    let waiting = harness.codex.with_extension("record-output-waiting");
+    for _ in 0..1_000 {
+        if waiting.is_file() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(
+        waiting.is_file(),
+        "provider did not reach delayed output boundary"
+    );
+    let run_id = harness
+        .host
+        .inspect_agent_runs(&harness.tender_id)
+        .expect("inspect active extraction run")
+        .into_iter()
+        .find(|run| run.state == AgentRunState::Running)
+        .expect("running extraction run")
+        .run_id;
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open Tender Store database");
+    connection
+        .execute(
+            "INSERT INTO agent_run_cancellations (run_id, requested_by, requested_at)
+             VALUES (?1, 'engineer_user', '2026-08-23T00:00:00Z')",
+            [&run_id],
+        )
+        .expect("record cancellation before completion");
+    fs::write(
+        harness.codex.with_extension("record-output-release"),
+        b"release",
+    )
+    .expect("release invalid provider output");
+
+    let extraction = extraction_task
+        .await
+        .expect("join cancelled extraction")
+        .expect("terminalize cancelled extraction");
+    assert_eq!(extraction.run.state, AgentRunState::Interrupted);
+    assert_eq!(
+        extraction.run.failure.map(|failure| failure.category),
+        Some(ProviderFailureCategory::Interrupted)
+    );
+    assert!(extraction.run.proposed_result.is_none());
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM agent_run_rejected_outputs WHERE run_id = ?1",
+                [&run_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count rejected outputs"),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM proposed_agent_results WHERE run_id = ?1",
+                [&run_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count proposed outputs"),
+        0
+    );
+    assert!(records_for_run(&harness.host, &harness.tender_id, &run_id).is_empty());
+}
+
+#[tokio::test]
+async fn rejected_output_insert_failure_rolls_back_agent_completion() {
+    let harness = RuntimeHarness::new("record-extraction-parity-duplicate-stable-key-delayed");
+    let evidence = harness
+        .parsed_pdf_evidence("rejected-output-rollback", b"TENDER_RECORD_GOLDEN")
+        .await;
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let extraction_task = tokio::spawn(async move {
+        host.run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id,
+            evidence: evidence.references,
+            authorities: Vec::new(),
+        })
+        .await
+    });
+    let waiting = harness.codex.with_extension("record-output-waiting");
+    for _ in 0..1_000 {
+        if waiting.is_file() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(
+        waiting.is_file(),
+        "provider did not reach delayed output boundary"
+    );
+    let run_id = harness
+        .host
+        .inspect_agent_runs(&harness.tender_id)
+        .expect("inspect active extraction run")
+        .into_iter()
+        .find(|run| run.state == AgentRunState::Running)
+        .expect("running extraction run")
+        .run_id;
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open Tender Store database");
+    let state_before: String = connection
+        .query_row(
+            "SELECT status FROM agent_runs WHERE run_id = ?1",
+            [&run_id],
+            |row| row.get(0),
+        )
+        .expect("inspect running state");
+    let event_count_before: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM provider_events WHERE run_id = ?1",
+            [&run_id],
+            |row| row.get(0),
+        )
+        .expect("count provider events before completion");
+    let audit_count_before: i64 = connection
+        .query_row("SELECT COUNT(*) FROM audit_events", [], |row| row.get(0))
+        .expect("count audit events before completion");
+    connection
+        .execute_batch(
+            "CREATE TRIGGER rejected_output_insert_abort
+             BEFORE INSERT ON agent_run_rejected_outputs
+             BEGIN
+               SELECT RAISE(ABORT, 'test rejected output insert failure');
+             END;",
+        )
+        .expect("install rejected-output insert abort trigger");
+    fs::write(
+        harness.codex.with_extension("record-output-release"),
+        b"release",
+    )
+    .expect("release invalid provider output");
+
+    extraction_task
+        .await
+        .expect("join failed extraction")
+        .expect_err("rejected-output insertion aborts completion");
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT status FROM agent_runs WHERE run_id = ?1",
+                [&run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("inspect rolled-back run state"),
+        state_before
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM provider_events WHERE run_id = ?1",
+                [&run_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count rolled-back provider events"),
+        event_count_before
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM audit_events", [], |row| row
+                .get::<_, i64>(0))
+            .expect("count rolled-back audit events"),
+        audit_count_before
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM agent_run_rejected_outputs WHERE run_id = ?1",
+                [&run_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count rolled-back rejected outputs"),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM proposed_agent_results WHERE run_id = ?1",
+                [&run_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count rolled-back proposed outputs"),
+        0
+    );
+    assert!(records_for_run(&harness.host, &harness.tender_id, &run_id).is_empty());
 }
 
 #[tokio::test]

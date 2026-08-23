@@ -1203,6 +1203,7 @@ impl TenderStore {
                 Some("The Engineer User interrupted the Agent Run."),
             ));
             execution.candidate_payload_json = None;
+            rejected_output = None;
             tender_record_candidate = None;
             tender_record_review = None;
             bid_package_review = None;
@@ -1576,22 +1577,31 @@ impl TenderStore {
             )?;
         }
         if let Some((payload_json, validation_issues)) = rejected_output {
-            ensure_canonical_value(&payload_json)?;
-            let payload_sha256 = sha256_hex(payload_json.as_bytes());
-            transaction
-                .execute(
-                    "INSERT INTO agent_run_rejected_outputs (
-                       run_id, payload_json, payload_sha256, validation_issues_json, created_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![
-                        prepared.run_id,
-                        payload_json,
-                        payload_sha256,
-                        canonical_json(&validation_issues)?,
-                        completed_at,
-                    ],
-                )
-                .map_err(sql_error)?;
+            let persist_rejected_output = execution.state == AgentRunState::Failed
+                && execution.failure.as_ref().is_some_and(|failure| {
+                    failure.category == ProviderFailureCategory::OutputInvalid
+                        && !failure.validation_issues.is_empty()
+                        && failure.validation_issues == validation_issues
+                })
+                && execution.candidate_payload_json.as_deref() == Some(payload_json.as_str());
+            if persist_rejected_output {
+                ensure_canonical_value(&payload_json)?;
+                let payload_sha256 = sha256_hex(payload_json.as_bytes());
+                transaction
+                    .execute(
+                        "INSERT INTO agent_run_rejected_outputs (
+                           run_id, payload_json, payload_sha256, validation_issues_json, created_at
+                         ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![
+                            prepared.run_id,
+                            payload_json,
+                            payload_sha256,
+                            canonical_json(&validation_issues)?,
+                            completed_at,
+                        ],
+                    )
+                    .map_err(sql_error)?;
+            }
             execution.candidate_payload_json = None;
         }
         let production_payload = execution.candidate_payload_json.clone();

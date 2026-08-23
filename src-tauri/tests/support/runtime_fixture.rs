@@ -1147,6 +1147,7 @@ fn run_agent_turn(
             | "record-extraction-inventory-fill"
             | "record-extraction-inventory-overflow"
             | "record-extraction-delayed"
+            | "record-extraction-parity-duplicate-stable-key-delayed"
             | "record-extraction-change-assessment"
             | "record-extraction-duplicate-citation"
             | "record-extraction-invalid"
@@ -1639,7 +1640,10 @@ fn run_agent_turn(
         }
     } else if scenario == "output-invalid" {
         serde_json::json!({ "summary": "Missing the required next action." })
-    } else if scenario == "record-extraction-delayed" {
+    } else if matches!(
+        scenario,
+        "record-extraction-delayed" | "record-extraction-parity-duplicate-stable-key-delayed"
+    ) {
         fs::write(
             executable.with_extension("record-output-waiting"),
             b"waiting",
@@ -1653,7 +1657,11 @@ fn run_agent_turn(
         if !executable.with_extension("record-output-release").is_file() {
             return Err("timed out waiting to release Tender Record output".into());
         }
-        record_extraction_candidate(provider_data_view)?
+        let mut candidate = record_extraction_candidate(provider_data_view)?;
+        if scenario == "record-extraction-parity-duplicate-stable-key-delayed" {
+            candidate["records"][1]["stable_key"] = candidate["records"][0]["stable_key"].clone();
+        }
+        candidate
     } else if scenario == "record-extraction-decline-risk" {
         let mut candidate = record_extraction_candidate(provider_data_view)?;
         let risk = candidate["records"]
