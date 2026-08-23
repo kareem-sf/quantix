@@ -647,6 +647,15 @@ pub struct OutputValidationIssue {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RejectedAgentOutput {
+    pub run_id: String,
+    pub payload_json: String,
+    pub payload_sha256: String,
+    pub validation_issues: Vec<OutputValidationIssue>,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ProviderFailure {
@@ -2443,6 +2452,21 @@ impl QuantixHost {
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .inspect_agent_run(&command.run_id)?;
         Ok(run)
+    }
+
+    pub fn rejected_agent_output(
+        &self,
+        tender_id: &str,
+        run_id: &str,
+    ) -> Result<RejectedAgentOutput, TenderCommandError> {
+        require_setup(self)?;
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let rejected_output = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .rejected_agent_output(run_id);
+        rejected_output
     }
 
     pub fn inspect_agent_run_activity(

@@ -17,9 +17,9 @@ use crate::agent_runtime::{
     AgentRunState, AgentRunSummary, ApproveAgentAccessCommand, BootstrapAuthority, BootstrapRole,
     BootstrapTeamMember, DataClassification, PendingProviderEvent, PermissionGrant,
     PreparedAgentRun, ProposedAgentResult, ProviderEvent, ProviderEventKind, ProviderExecution,
-    ProviderFailure, ProviderFailureCategory, ProviderUsage, RequestAgentAccessCommand,
-    ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand, TenderTaskView,
-    ThreadExposureSet, VerificationStatus,
+    ProviderFailure, ProviderFailureCategory, ProviderUsage, RejectedAgentOutput,
+    RequestAgentAccessCommand, ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand,
+    TenderTaskView, ThreadExposureSet, VerificationStatus,
 };
 use crate::application_settings::AiExecutionSelection;
 
@@ -65,7 +65,7 @@ use super::tender_records::{
     RECORD_REVIEW_CAPABILITY,
 };
 use super::{
-    append_audit_event, metadata_is_unsafe_storage_link, random_identifier, sql_error,
+    append_audit_event, metadata_is_unsafe_storage_link, random_identifier, sha256_hex, sql_error,
     sqlite_timestamp, store_unavailable, BidPackageOperationBudget, TenderCommandError,
     TenderErrorCode, TenderId, TenderStore,
 };
@@ -562,6 +562,7 @@ impl TenderStore {
         let mut priced_cost_baseline_review: Option<PricedCostBaselineReviewCandidate> = None;
         let mut pricing_adjustment_review: Option<PricedCostBaselineReviewCandidate> = None;
         let mut denied_record_publication_count = None;
+        let mut rejected_output: Option<(String, Vec<crate::OutputValidationIssue>)> = None;
         if execution.state == AgentRunState::Completed
             && prepared
                 .profile
@@ -581,14 +582,21 @@ impl TenderStore {
                 }
                 Err(report) => {
                     execution.state = AgentRunState::Failed;
+                    let validation_issues = report.issues;
+                    if validation_issues.is_empty() {
+                        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+                    }
                     execution.failure = Some(ProviderFailure::new(
                         ProviderFailureCategory::OutputInvalid,
                         true,
                         "Run the Tender Record extraction again with complete exact provenance.",
                         Some("The candidate Tender Records failed Quantix provenance validation."),
                     )
-                    .with_validation_issues(report.issues));
-                    execution.candidate_payload_json = None;
+                    .with_validation_issues(validation_issues.clone()));
+                    rejected_output = execution
+                        .candidate_payload_json
+                        .as_ref()
+                        .map(|payload_json| (payload_json.clone(), validation_issues));
                     if let Some(event) = execution
                         .events
                         .iter_mut()
@@ -1566,6 +1574,25 @@ impl TenderStore {
                 event,
                 &completed_at,
             )?;
+        }
+        if let Some((payload_json, validation_issues)) = rejected_output {
+            ensure_canonical_value(&payload_json)?;
+            let payload_sha256 = sha256_hex(payload_json.as_bytes());
+            transaction
+                .execute(
+                    "INSERT INTO agent_run_rejected_outputs (
+                       run_id, payload_json, payload_sha256, validation_issues_json, created_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        prepared.run_id,
+                        payload_json,
+                        payload_sha256,
+                        canonical_json(&validation_issues)?,
+                        completed_at,
+                    ],
+                )
+                .map_err(sql_error)?;
+            execution.candidate_payload_json = None;
         }
         let production_payload = execution.candidate_payload_json.clone();
         let result_id = if let Some(payload_json) = execution.candidate_payload_json {
@@ -3257,6 +3284,35 @@ impl TenderStore {
         run_id: &str,
     ) -> Result<AgentRunInspection, TenderCommandError> {
         self.inspect_agent_run_with_check(run_id, &mut || Ok(()))
+    }
+
+    pub(crate) fn rejected_agent_output(
+        &self,
+        run_id: &str,
+    ) -> Result<RejectedAgentOutput, TenderCommandError> {
+        let row: Option<(String, String, String, String)> = self
+            .connection
+            .query_row(
+                "SELECT payload_json, payload_sha256, validation_issues_json, created_at
+                 FROM agent_run_rejected_outputs WHERE run_id = ?1",
+                [run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let (payload_json, payload_sha256, validation_issues_json, created_at) =
+            row.ok_or_else(|| TenderCommandError::new(TenderErrorCode::NotFound))?;
+        ensure_canonical_value(&payload_json)?;
+        if sha256_hex(payload_json.as_bytes()) != payload_sha256 {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        Ok(RejectedAgentOutput {
+            run_id: run_id.to_owned(),
+            payload_json,
+            payload_sha256,
+            validation_issues: parse_canonical_json(&validation_issues_json)?,
+            created_at,
+        })
     }
 
     pub(crate) fn inspect_agent_run_with_check(

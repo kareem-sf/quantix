@@ -42,7 +42,7 @@ pub use agent_runtime::{
     OutputValidationIssue, PermissionCeiling, PermissionDenialReason, PermissionGrant,
     ProposedAgentResult, ProviderEvent, ProviderEventKind, ProviderFailure,
     ProviderFailureCategory, ProviderRateLimit, ProviderRateLimitState, ProviderRateLimitWindow,
-    ProviderUsage, RequestAgentAccessCommand, ResolveAgentAccessCommand,
+    ProviderUsage, RejectedAgentOutput, RequestAgentAccessCommand, ResolveAgentAccessCommand,
     ResolveIndeterminateAgentRunCommand, RunBootstrapAgentCommand, TenderTaskView,
     ThreadExposureSet, ToolIdempotency, ToolSideEffectClass, TypedToolDefinition, TypedToolQuota,
     VerificationStatus,

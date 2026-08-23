@@ -14,6 +14,7 @@ use quantix_lib::{
     TenderRecordKind, TenderRecordReviewOutcome, TenderRecordTrustClass, VerificationStatus,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
+use sha2::{Digest, Sha256};
 
 struct ReadySetupPlatform;
 
@@ -177,6 +178,90 @@ fn records_for_run(
         .into_iter()
         .filter(|record| record.author_run_id == run_id)
         .collect()
+}
+
+#[tokio::test]
+async fn rejected_output_is_persisted_with_failure_atomically() {
+    let harness = RuntimeHarness::new("record-extraction-parity-duplicate-stable-key");
+    let evidence = harness
+        .parsed_pdf_evidence("rejected-output", b"TENDER_RECORD_GOLDEN")
+        .await;
+
+    let extraction = harness
+        .host
+        .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id: harness.tender_id.clone(),
+            evidence: evidence.references,
+            authorities: Vec::new(),
+        })
+        .await
+        .expect("terminalize domain-invalid provider output");
+
+    assert_eq!(extraction.run.state, AgentRunState::Failed);
+    let failure = extraction.run.failure.expect("OutputInvalid failure");
+    assert_eq!(failure.category, ProviderFailureCategory::OutputInvalid);
+    assert_eq!(failure.validation_issues.len(), 1);
+    assert_eq!(failure.validation_issues[0].code, "duplicate_stable_key");
+    assert_eq!(failure.validation_issues[0].path, "/records/1/stable_key");
+    assert!(extraction.run.proposed_result.is_none());
+    let runs = harness
+        .host
+        .inspect_agent_runs(&harness.tender_id)
+        .expect("inspect rejected extraction run");
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].state, AgentRunState::Failed);
+    assert!(records_for_run(&harness.host, &harness.tender_id, &extraction.run.run_id).is_empty());
+
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open Tender Store database");
+    let rejected_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM agent_run_rejected_outputs WHERE run_id = ?1",
+            [&extraction.run.run_id],
+            |row| row.get(0),
+        )
+        .expect("count rejected output rows");
+    assert_eq!(rejected_count, 1);
+    let (payload_json, payload_sha256, validation_issues_json): (String, String, String) =
+        connection
+            .query_row(
+                "SELECT payload_json, payload_sha256, validation_issues_json
+             FROM agent_run_rejected_outputs WHERE run_id = ?1",
+                [&extraction.run.run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("load rejected output");
+    assert_eq!(
+        payload_json,
+        serde_json_canonicalizer::to_string(
+            &serde_json::from_str::<serde_json::Value>(&payload_json)
+                .expect("stored rejected payload is JSON"),
+        )
+        .expect("canonicalize stored rejected payload")
+    );
+    assert_eq!(
+        payload_sha256,
+        Sha256::digest(payload_json.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    assert_eq!(
+        serde_json::from_str::<Vec<OutputValidationIssue>>(&validation_issues_json)
+            .expect("stored validation issues"),
+        failure.validation_issues
+    );
+    let rejected = harness
+        .host
+        .rejected_agent_output(&harness.tender_id, &extraction.run.run_id)
+        .expect("inspect rejected provider output");
+    assert_eq!(rejected.payload_json, payload_json);
+    assert_eq!(rejected.payload_sha256, payload_sha256);
+    assert_eq!(rejected.validation_issues, failure.validation_issues);
 }
 
 #[tokio::test]

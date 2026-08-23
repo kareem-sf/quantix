@@ -257,7 +257,7 @@ static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static CONTENT_VERIFY_PASS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 36;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 37;
 
 pub(crate) fn record_agent_run_provider_binding(
     transaction: &Transaction<'_>,
@@ -1748,6 +1748,14 @@ CREATE TABLE proposed_agent_results (
   payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
   data_scopes_json TEXT NOT NULL CHECK (json_valid(data_scopes_json)),
   data_classification TEXT NOT NULL CHECK (data_classification IN ('tender_internal', 'sensitive')),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
+);
+CREATE TABLE agent_run_rejected_outputs (
+  run_id TEXT PRIMARY KEY,
+  payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+  payload_sha256 TEXT NOT NULL CHECK (length(payload_sha256) = 64),
+  validation_issues_json TEXT NOT NULL CHECK (json_valid(validation_issues_json)),
   created_at TEXT NOT NULL,
   FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
 );
@@ -3541,6 +3549,16 @@ CREATE TRIGGER proposed_agent_results_no_delete
 BEFORE DELETE ON proposed_agent_results
 BEGIN
   SELECT RAISE(ABORT, 'Proposed Agent Results are immutable');
+END;
+CREATE TRIGGER agent_run_rejected_outputs_no_update
+BEFORE UPDATE ON agent_run_rejected_outputs
+BEGIN
+  SELECT RAISE(ABORT, 'Rejected Agent Outputs are immutable');
+END;
+CREATE TRIGGER agent_run_rejected_outputs_no_delete
+BEFORE DELETE ON agent_run_rejected_outputs
+BEGIN
+  SELECT RAISE(ABORT, 'Rejected Agent Outputs are immutable');
 END;
 CREATE TRIGGER tender_records_no_update
 BEFORE UPDATE ON tender_records
