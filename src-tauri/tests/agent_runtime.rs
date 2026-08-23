@@ -139,7 +139,7 @@ impl Harness {
 
 #[tokio::test]
 async fn repaired_extraction_records_truthful_boundaries() {
-    let harness = Harness::new("record-extraction-invalid-then-valid");
+    let harness = Harness::new("manager-intake-repair-invalid-then-valid");
     let evidence = harness.parsed_pdf_evidence().await;
     let repaired = harness
         .host
