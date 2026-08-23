@@ -224,11 +224,41 @@ mod tests {
             payload
         );
         assert_eq!(
-            serde_json::from_str::<Value>(&resolved.canonical_payload_json)
+            serde_json::to_value(&resolved.candidate)
                 .unwrap()
                 .pointer("/records/0/fields/0/evidence/0/artifact_id"),
             Some(&json!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
         );
+    }
+
+    #[test]
+    fn validation_report_sorts_deduplicates_and_caps_issues() {
+        let mut report = TenderRecordValidationReport { issues: Vec::new() };
+        report.push("unknown_authority_handle", "/z");
+        report.push("unknown_evidence_handle", "/a");
+        report.push("unknown_evidence_handle", "/a");
+        for index in 0..80 {
+            report.push("invalid_record", format!("/records/{index:03}"));
+        }
+
+        assert_eq!(report.issues.len(), 64);
+        assert_eq!(
+            report.issues[0],
+            OutputValidationIssue {
+                code: "unknown_evidence_handle".into(),
+                path: "/a".into(),
+                message: "Evidence handle is not available to this Tender task.".into(),
+            }
+        );
+        assert_eq!(
+            report
+                .issues
+                .iter()
+                .filter(|issue| issue.path == "/a" && issue.code == "unknown_evidence_handle")
+                .count(),
+            1
+        );
+        assert!(report.issues.iter().all(|issue| issue.path != "/z"));
     }
 }
 use std::collections::{BTreeMap, HashSet};
@@ -334,9 +364,17 @@ impl TenderRecordValidationReport {
     }
 
     pub(crate) fn push(&mut self, code: &str, path: impl Into<String>) {
+        let path = path.into();
+        if self
+            .issues
+            .iter()
+            .any(|issue| issue.code == code && issue.path == path)
+        {
+            return;
+        }
         self.issues.push(OutputValidationIssue {
             code: code.into(),
-            path: path.into(),
+            path,
             message: validation_message(code).into(),
         });
         self.issues
@@ -362,18 +400,43 @@ fn validation_message(code: &str) -> &'static str {
         "unknown_evidence_handle" => "Evidence handle is not available to this Tender task.",
         "unknown_authority_handle" => "Authority handle is not available to this Tender task.",
         "duplicate_stable_key" => "Record stable keys must be unique.",
+        "invalid_stable_key" => "Record stable keys must use the required identifier format.",
         "blank_title" => "Record titles cannot be blank.",
         "title_too_long" => "Record titles must not exceed 500 bytes.",
+        "invalid_fields" => "Records must contain between one and 64 fields.",
+        "too_many_contradictions" => "Records cannot contain more than 32 contradictions.",
+        "blank_instruction_metadata" => "Generation instruction metadata cannot be blank.",
+        "instruction_metadata_too_long" => {
+            "Generation instruction metadata exceeds its byte limit."
+        }
+        "invalid_instruction_evidence" => {
+            "Generation instructions require between one and 32 evidence references."
+        }
+        "invalid_field_name" => "Record field names must use the required identifier format.",
         "duplicate_field_name" => "Record field names must be unique.",
         "duplicate_evidence" => "Evidence references must be unique.",
+        "invalid_field_evidence" => "Fields cannot contain more than 32 evidence references.",
+        "field_value_too_long" => "Field content exceeds its byte limit.",
         "evidence_basis_metadata_forbidden" => {
             "Evidence-backed fields cannot contain authority metadata."
+        }
+        "invalid_field_basis" => "Field basis is not valid for this Tender Record.",
+        "authority_field_mismatch" => {
+            "Authority-backed fields must exactly match the selected authority."
+        }
+        "generated_evidence_field_incomplete" => {
+            "Generated evidence-backed fields require a value or normalized value."
         }
         "invalid_authoring_format" => "Generation instruction authoring format is invalid.",
         "invalid_deadline" => "Deadline fields require a valid parsed deadline.",
         "invalid_contradiction_evidence" => {
             "Contradictions require at least two distinct evidence references."
         }
+        "unknown_contradiction_field" => {
+            "Contradictions must reference a field in the same record."
+        }
+        "blank_contradiction_summary" => "Contradiction summaries cannot be blank.",
+        "contradiction_summary_too_long" => "Contradiction summaries must not exceed 2000 bytes.",
         "foreign_authority" => "Authority is not available to this Tender task.",
         "invalid_record" => "Tender Record violates a domain validation rule.",
         "expanded_record_too_large" => "Tender Record exceeds the expanded size limit.",
@@ -389,7 +452,6 @@ pub(crate) struct TenderRecordProposalContext {
 #[derive(Debug)]
 pub(crate) struct ResolvedTenderRecordProposal {
     pub provider_payload_json: String,
-    pub canonical_payload_json: String,
     pub candidate: TenderRecordCandidateBatch,
 }
 
@@ -544,11 +606,8 @@ impl TenderRecordProposalContext {
         if !report.is_empty() {
             return Err(report);
         }
-        let canonical_payload_json = serde_json_canonicalizer::to_string(&candidate)
-            .map_err(|_| TenderRecordValidationReport::one("canonicalization_failed", ""))?;
         Ok(ResolvedTenderRecordProposal {
             provider_payload_json,
-            canonical_payload_json,
             candidate,
         })
     }

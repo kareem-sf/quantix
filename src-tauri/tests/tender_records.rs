@@ -201,6 +201,12 @@ async fn schema_domain_parity_reports_stable_paths() {
             "Record titles must not exceed 500 bytes.",
         ),
         (
+            "record-extraction-parity-utf8-field-value",
+            "field_value_too_long",
+            "/records/0/fields/0/value",
+            "Field content exceeds its byte limit.",
+        ),
+        (
             "record-extraction-parity-duplicate-field",
             "duplicate_field_name",
             "/records/0/fields/1/name",

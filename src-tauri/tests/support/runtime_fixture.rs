@@ -1153,6 +1153,7 @@ fn run_agent_turn(
             | "record-extraction-parity-duplicate-stable-key"
             | "record-extraction-parity-whitespace-title"
             | "record-extraction-parity-utf8-title"
+            | "record-extraction-parity-utf8-field-value"
             | "record-extraction-parity-duplicate-field"
             | "record-extraction-parity-duplicate-evidence"
             | "record-extraction-parity-evidence-metadata"
@@ -1869,6 +1870,10 @@ fn run_agent_turn(
             }
             "record-extraction-parity-utf8-title" => {
                 candidate["records"][0]["title"] = serde_json::json!("😀".repeat(126))
+            }
+            "record-extraction-parity-utf8-field-value" => {
+                candidate["records"][0]["fields"][0]["value"] =
+                    serde_json::json!("😀".repeat(1_001))
             }
             "record-extraction-parity-duplicate-field" => {
                 let field = candidate["records"][0]["fields"][0].clone();
