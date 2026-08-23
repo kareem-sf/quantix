@@ -1,4 +1,4 @@
-use std::{fs, io, path::Path, sync::Arc};
+use std::{collections::HashSet, fs, io, path::Path, sync::Arc};
 
 use quantix_lib::{
     ensure_quantix_setup, AgentRunRecoveryDisposition, AgentRunState, BootstrapAuthority,
@@ -284,6 +284,74 @@ fn rejected_output(
     )
 }
 
+fn reopen_runtime_host(application_home: &Path, resources: &Path) -> QuantixHost {
+    let host = QuantixHost::with_setup_platform_and_runtime(
+        application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(resources.to_path_buf()),
+    );
+    host.accept_runtime_fixture();
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    host.approve_runtime_fixture_ai_selection()
+        .expect("approve fixture AI selection after restart");
+    host
+}
+
+fn provider_handle_strings(value: &serde_json::Value, found: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(value)
+            if value.len() == 5
+                && matches!(value.as_bytes().first(), Some(b'e' | b'a'))
+                && value.as_bytes()[1..].iter().all(u8::is_ascii_digit) =>
+        {
+            found.push(value.clone());
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                provider_handle_strings(value, found);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values() {
+                provider_handle_strings(value, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn canonical_evidence_references(
+    value: &serde_json::Value,
+    found: &mut HashSet<(String, u32, u32)>,
+) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                canonical_evidence_references(value, found);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            if let (Some(artifact_id), Some(version), Some(ordinal)) = (
+                values
+                    .get("artifact_id")
+                    .and_then(serde_json::Value::as_str),
+                values.get("version").and_then(serde_json::Value::as_u64),
+                values.get("ordinal").and_then(serde_json::Value::as_u64),
+            ) {
+                found.insert((
+                    artifact_id.to_owned(),
+                    u32::try_from(version).expect("canonical Evidence version"),
+                    u32::try_from(ordinal).expect("canonical Evidence ordinal"),
+                ));
+            }
+            for value in values.values() {
+                canonical_evidence_references(value, found);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[tokio::test]
 async fn manager_intake_automatically_repairs_one_invalid_extraction() {
     let harness = RuntimeHarness::new("manager-intake-repair-invalid-then-valid");
@@ -521,6 +589,146 @@ async fn manager_intake_stops_after_one_failed_repair() {
 }
 
 #[tokio::test]
+async fn manager_intake_restart_recovers_the_failed_source_before_creating_a_repair() {
+    let harness = RuntimeHarness::new("manager-intake-repair-invalid-then-valid");
+    harness
+        .parsed_pdf_evidence("repair-restart-before-child", b"TENDER_RECORD_GOLDEN")
+        .await;
+    fs::write(
+        harness.codex.with_extension("manager-output-release"),
+        b"release",
+    )
+    .expect("release Manager outcome");
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(&database).expect("open Tender Store database");
+    connection
+        .execute_batch(
+            "CREATE TRIGGER fail_first_repair_prepare
+             BEFORE INSERT ON agent_runs
+             WHEN NEW.retry_of_run_id IS NOT NULL
+             BEGIN
+               SELECT RAISE(ABORT, 'simulate process loss before repair preparation');
+             END;",
+        )
+        .expect("install repair preparation crash boundary");
+
+    harness
+        .host
+        .run_manager_intake_for_verification(&harness.tender_id)
+        .await
+        .expect_err("simulated process loss stops before the repair child is committed");
+    connection
+        .execute_batch("DROP TRIGGER fail_first_repair_prepare;")
+        .expect("remove repair preparation crash boundary");
+    let runs_before_restart =
+        tender_record_extraction_runs(&harness.application_home, &harness.tender_id);
+    assert_eq!(runs_before_restart.len(), 1);
+    assert_eq!(runs_before_restart[0].2, "failed");
+    drop(connection);
+
+    let RuntimeHarness {
+        _root,
+        application_home,
+        codex,
+        host,
+        tender_id,
+    } = harness;
+    drop(host);
+    let restarted = reopen_runtime_host(&application_home, &_root.path().join("resources"));
+    restarted
+        .run_manager_intake_for_verification(&tender_id)
+        .await
+        .expect("restart resumes the persisted semantic lineage");
+
+    let runs = tender_record_extraction_runs(&application_home, &tender_id);
+    assert_eq!(runs.len(), 2, "restart must not create a second source run");
+    assert_eq!(runs[0].0, runs_before_restart[0].0);
+    assert_eq!(runs[1].1.as_deref(), Some(runs[0].0.as_str()));
+    assert_eq!(runs[1].2, "completed");
+    assert_eq!(fixture_record_extraction_turn_count(&codex), 2);
+    assert!(
+        !records_for_run(&restarted, &tender_id, &runs[1].0).is_empty(),
+        "the recovered repair publishes the batch"
+    );
+}
+
+#[tokio::test]
+async fn manager_intake_restart_resumes_the_same_persisted_repair_before_provider_dispatch() {
+    let harness = RuntimeHarness::new("manager-intake-repair-invalid-then-valid");
+    harness
+        .parsed_pdf_evidence("repair-restart-running-child", b"TENDER_RECORD_GOLDEN")
+        .await;
+    fs::write(
+        harness.codex.with_extension("repair-before-turn-pause"),
+        b"pause",
+    )
+    .expect("pause persisted repair before Provider dispatch");
+    fs::write(
+        harness.codex.with_extension("manager-output-release"),
+        b"release",
+    )
+    .expect("release Manager outcome");
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let intake =
+        tokio::spawn(async move { host.run_manager_intake_for_verification(&tender_id).await });
+    let waiting = harness.codex.with_extension("repair-before-turn-waiting");
+    for _ in 0..1_000 {
+        if waiting.is_file() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(
+        waiting.is_file(),
+        "repair did not reach the persisted pre-dispatch boundary"
+    );
+    let runs_before_restart =
+        tender_record_extraction_runs(&harness.application_home, &harness.tender_id);
+    assert_eq!(runs_before_restart.len(), 2);
+    assert_eq!(runs_before_restart[0].2, "failed");
+    assert_eq!(runs_before_restart[1].2, "running");
+    assert_eq!(
+        runs_before_restart[1].1.as_deref(),
+        Some(runs_before_restart[0].0.as_str())
+    );
+    intake.abort();
+    let _ = intake.await;
+
+    let RuntimeHarness {
+        _root,
+        application_home,
+        codex,
+        host,
+        tender_id,
+    } = harness;
+    drop(host);
+    fs::remove_file(codex.with_extension("repair-before-turn-pause"))
+        .expect("clear repair pause before restart");
+    let restarted = reopen_runtime_host(&application_home, &_root.path().join("resources"));
+    restarted
+        .run_manager_intake_for_verification(&tender_id)
+        .await
+        .expect("restart resumes the safely restartable persisted repair");
+
+    let runs = tender_record_extraction_runs(&application_home, &tender_id);
+    assert_eq!(
+        runs.len(),
+        2,
+        "restart must preserve the bounded attempt pair"
+    );
+    assert_eq!(runs[0].0, runs_before_restart[0].0);
+    assert_eq!(runs[1].0, runs_before_restart[1].0);
+    assert_eq!(runs[1].1, runs_before_restart[1].1);
+    assert_eq!(runs[1].2, "completed");
+    assert_eq!(fixture_record_extraction_turn_count(&codex), 2);
+}
+
+#[tokio::test]
 async fn rejected_output_is_persisted_with_failure_atomically() {
     let harness = RuntimeHarness::new("record-extraction-parity-duplicate-stable-key");
     let evidence = harness
@@ -604,6 +812,14 @@ async fn rejected_output_is_persisted_with_failure_atomically() {
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .expect("load rejected output");
+        let rejected_value: serde_json::Value =
+            serde_json::from_str(&payload_json).expect("provider-shaped rejected payload");
+        let mut rejected_handles = Vec::new();
+        provider_handle_strings(&rejected_value, &mut rejected_handles);
+        assert!(
+            !rejected_handles.is_empty(),
+            "rejected evidence must retain the provider-shaped candidate"
+        );
         assert_eq!(
             payload_json,
             serde_json_canonicalizer::to_string(
@@ -1036,6 +1252,66 @@ async fn agent_record_proposals_preserve_exact_original_evidence_and_explicit_ga
     );
     let records = records_for_run(&harness.host, &harness.tender_id, &extraction.run.run_id);
     assert_eq!(extraction.published_record_count as usize, records.len());
+    let proposed = extraction
+        .run
+        .proposed_result
+        .as_ref()
+        .expect("successful extraction proposed result");
+    let proposed_value: serde_json::Value =
+        serde_json::from_str(&proposed.payload_json).expect("canonical successful proposal");
+    assert_eq!(
+        proposed.payload_json,
+        serde_json_canonicalizer::to_string(&proposed_value)
+            .expect("canonicalize successful proposal")
+    );
+    let mut leaked_handles = Vec::new();
+    provider_handle_strings(&proposed_value, &mut leaked_handles);
+    assert!(
+        leaked_handles.is_empty(),
+        "successful proposed results must not retain provider handles: {leaked_handles:?}"
+    );
+    let proposed_stable_keys = proposed_value["records"]
+        .as_array()
+        .expect("canonical proposed records")
+        .iter()
+        .map(|record| {
+            record["stable_key"]
+                .as_str()
+                .expect("canonical proposed stable key")
+                .to_owned()
+        })
+        .collect::<HashSet<_>>();
+    let published_stable_keys = records
+        .iter()
+        .map(|record| record.stable_key.clone())
+        .collect::<HashSet<_>>();
+    assert_eq!(proposed_stable_keys, published_stable_keys);
+    let mut proposed_evidence = HashSet::new();
+    canonical_evidence_references(&proposed_value, &mut proposed_evidence);
+    let published_evidence = records
+        .iter()
+        .flat_map(|record| {
+            record
+                .fields
+                .iter()
+                .flat_map(|field| field.evidence.iter())
+                .chain(
+                    record
+                        .contradictions
+                        .iter()
+                        .flat_map(|contradiction| contradiction.evidence.iter()),
+                )
+                .map(|evidence| {
+                    (
+                        evidence.reference.artifact_id.clone(),
+                        evidence.reference.version,
+                        evidence.reference.ordinal,
+                    )
+                })
+        })
+        .collect::<HashSet<_>>();
+    assert!(!proposed_evidence.is_empty());
+    assert_eq!(proposed_evidence, published_evidence);
     assert!(
         records.iter().any(|record| {
             record.kind == TenderRecordKind::Requirement

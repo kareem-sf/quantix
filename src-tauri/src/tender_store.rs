@@ -224,6 +224,7 @@ pub use tender_queries::{
     TenderQueryResponse, TenderQueryStatus, TenderQueryTreatment, TenderQueryTreatmentProposal,
     TenderQueryTreatmentProposalInput, TenderQueryType,
 };
+pub(crate) use tender_records::ManagerIntakeExtractionRecovery;
 pub use tender_records::{
     CreateTenderEngineerEntryCommand, DecideTenderRecordCommand, GenerationAuthoringMode,
     GenerationRequirementKind, InspectTenderRecordsCommand, RunTenderRecordExtractionCommand,

@@ -220,11 +220,7 @@ mod tests {
             vec![evidence("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1, 4)]
         );
         assert_eq!(
-            serde_json::from_str::<Value>(&resolved.provider_payload_json).unwrap(),
-            payload
-        );
-        assert_eq!(
-            serde_json::to_value(&resolved.candidate)
+            serde_json::from_str::<Value>(&resolved.canonical_payload_json)
                 .unwrap()
                 .pointer("/records/0/fields/0/evidence/0/artifact_id"),
             Some(&json!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
@@ -451,7 +447,7 @@ pub(crate) struct TenderRecordProposalContext {
 
 #[derive(Debug)]
 pub(crate) struct ResolvedTenderRecordProposal {
-    pub provider_payload_json: String,
+    pub canonical_payload_json: String,
     pub candidate: TenderRecordCandidateBatch,
 }
 
@@ -590,8 +586,6 @@ impl TenderRecordProposalContext {
     ) -> Result<ResolvedTenderRecordProposal, TenderRecordValidationReport> {
         let proposal: TenderRecordProposalBatch = serde_json::from_str(payload_json)
             .map_err(|_| TenderRecordValidationReport::one("invalid_provider_payload", ""))?;
-        let provider_payload_json = serde_json_canonicalizer::to_string(&proposal)
-            .map_err(|_| TenderRecordValidationReport::one("invalid_provider_payload", ""))?;
         let mut report = TenderRecordValidationReport { issues: Vec::new() };
         let candidate = TenderRecordCandidateBatch {
             records: proposal
@@ -606,8 +600,10 @@ impl TenderRecordProposalContext {
         if !report.is_empty() {
             return Err(report);
         }
+        let canonical_payload_json = serde_json_canonicalizer::to_string(&candidate)
+            .map_err(|_| TenderRecordValidationReport::one("invalid_provider_payload", ""))?;
         Ok(ResolvedTenderRecordProposal {
-            provider_payload_json,
+            canonical_payload_json,
             candidate,
         })
     }

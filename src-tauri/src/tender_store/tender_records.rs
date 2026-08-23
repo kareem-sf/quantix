@@ -30,8 +30,9 @@ use super::{
         ensure_agent_run_capacity, insert_event, insert_profile_version, insert_task, load_profile,
         load_task, load_thread_exposure, update_profile_head,
     },
-    append_audit_event, random_identifier, sql_error, sqlite_timestamp, valid_identifier,
-    RawEvidenceLocation, TenderCommandError, TenderErrorCode, TenderId, TenderStore,
+    append_audit_event, metadata_is_unsafe_storage_link, random_identifier, sql_error,
+    sqlite_timestamp, valid_identifier, RawEvidenceLocation, TenderCommandError, TenderErrorCode,
+    TenderId, TenderStore,
 };
 
 pub(crate) const MAX_RECORD_EVIDENCE_INPUTS: usize = 256;
@@ -55,6 +56,12 @@ const MAX_RECORD_AUTHORITIES: usize = 256;
 
 pub(crate) type TenderRecordProposalValidationResult =
     Result<ResolvedTenderRecordProposal, TenderRecordValidationReport>;
+
+pub(crate) enum ManagerIntakeExtractionRecovery {
+    StartNew,
+    Execute(PreparedAgentRun),
+    Terminal(String),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS, Validate)]
 #[serde(deny_unknown_fields)]
@@ -874,7 +881,281 @@ pub(super) fn insert_engineer_entry(
     Ok(authority)
 }
 
+fn manager_intake_extraction_task_matches(
+    task: &TenderTaskView,
+    intake_run_id: &str,
+    evidence: &[TenderEvidenceReference],
+    authority_references: &[TenderRecordAuthorityReference],
+) -> Result<bool, TenderCommandError> {
+    if task
+        .exact_inputs
+        .iter()
+        .filter(|input| input.kind == "manager_intake_run")
+        .count()
+        != 1
+        || !task.exact_inputs.iter().any(|input| {
+            input.kind == "manager_intake_run"
+                && input.reference == intake_run_id
+                && input.version == 1
+        })
+    {
+        return Ok(false);
+    }
+    let task_evidence = task
+        .exact_inputs
+        .iter()
+        .filter(|input| input.kind == "source_evidence")
+        .map(|input| {
+            let (artifact_id, ordinal) = input
+                .reference
+                .split_once('#')
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            Ok(TenderEvidenceReference {
+                artifact_id: artifact_id.to_owned(),
+                version: input.version,
+                ordinal: ordinal
+                    .parse()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            })
+        })
+        .collect::<Result<Vec<_>, TenderCommandError>>()?;
+    let task_authorities = task
+        .exact_inputs
+        .iter()
+        .filter(|input| {
+            matches!(
+                input.kind.as_str(),
+                "engineer_entry" | "approved_calculation_run"
+            )
+        })
+        .map(|input| input.reference.as_str())
+        .collect::<HashSet<_>>();
+    let expected_authorities = authority_references
+        .iter()
+        .map(|reference| reference.authority_id.as_str())
+        .collect::<HashSet<_>>();
+    Ok(task_evidence == evidence && task_authorities == expected_authorities)
+}
+
 impl TenderStore {
+    pub(crate) fn recover_manager_intake_extraction_run(
+        &mut self,
+        tender_id: &TenderId,
+        intake_run_id: &str,
+        evidence: &[TenderEvidenceReference],
+        authority_references: &[TenderRecordAuthorityReference],
+    ) -> Result<ManagerIntakeExtractionRecovery, TenderCommandError> {
+        let source_run_ids = {
+            let mut statement = self
+                .connection
+                .prepare(
+                    "SELECT agent_runs.run_id
+                     FROM agent_runs
+                     JOIN tender_tasks USING (task_id)
+                     WHERE agent_runs.retry_of_run_id IS NULL
+                       AND EXISTS (
+                         SELECT 1 FROM json_each(tender_tasks.exact_inputs_json)
+                         WHERE json_extract(value, '$.kind') = 'manager_intake_run'
+                           AND json_extract(value, '$.reference') = ?1
+                           AND json_extract(value, '$.version') = 1
+                       )
+                     ORDER BY agent_runs.run_sequence",
+                )
+                .map_err(sql_error)?;
+            let run_ids = statement
+                .query_map([intake_run_id], |row| row.get::<_, String>(0))
+                .map_err(sql_error)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(sql_error)?;
+            run_ids
+        };
+        let mut matching_sources = Vec::new();
+        for run_id in source_run_ids {
+            let run = self.inspect_agent_run(&run_id)?;
+            if run.profile.capabilities.as_slice() == [RECORD_EXTRACTION_CAPABILITY]
+                && run.task.repair_feedback.is_none()
+                && manager_intake_extraction_task_matches(
+                    &run.task,
+                    intake_run_id,
+                    evidence,
+                    authority_references,
+                )?
+            {
+                matching_sources.push(run);
+            }
+        }
+        let Some(source) = matching_sources.pop() else {
+            return Ok(ManagerIntakeExtractionRecovery::StartNew);
+        };
+        if !matching_sources.is_empty() {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        if source.state == AgentRunState::Failed
+            && source.failure.as_ref().is_some_and(|failure| {
+                failure.category == ProviderFailureCategory::OutputInvalid
+                    && !failure.validation_issues.is_empty()
+            })
+        {
+            let child_run_id = self
+                .connection
+                .query_row(
+                    "SELECT run_id FROM agent_runs WHERE retry_of_run_id = ?1",
+                    [&source.run_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(sql_error)?;
+            if let Some(child_run_id) = child_run_id {
+                if self.manager_intake_repair_is_safely_restartable(&child_run_id)? {
+                    return self
+                        .load_restartable_manager_intake_repair(tender_id, &child_run_id)
+                        .map(ManagerIntakeExtractionRecovery::Execute);
+                }
+                return Ok(ManagerIntakeExtractionRecovery::Terminal(child_run_id));
+            }
+            if let Some(repair) =
+                self.prepare_tender_record_repair_run(tender_id, &source.run_id)?
+            {
+                return Ok(ManagerIntakeExtractionRecovery::Execute(repair));
+            }
+        }
+        Ok(ManagerIntakeExtractionRecovery::Terminal(source.run_id))
+    }
+
+    pub(super) fn manager_intake_repair_is_safely_restartable(
+        &self,
+        run_id: &str,
+    ) -> Result<bool, TenderCommandError> {
+        let run = self.inspect_agent_run(run_id)?;
+        if run.state != AgentRunState::Running
+            || run.retry_of_run_id.is_none()
+            || run.provider_turn_ref.is_some()
+            || run.task.repair_feedback.is_none()
+            || run.profile.capabilities.as_slice() != [RECORD_EXTRACTION_CAPABILITY]
+            || permission_duration(&run.permission_grant, Timestamp::now())
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
+                .is_zero()
+            || run
+                .events
+                .iter()
+                .any(|event| event.kind == ProviderEventKind::TurnRequested)
+            || self.required_tender_ai_execution_selection()? != run.provider_selection
+        {
+            return Ok(false);
+        }
+        let parent = self.inspect_agent_run(
+            run.retry_of_run_id
+                .as_deref()
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+        )?;
+        if parent.state != AgentRunState::Failed
+            || parent.retry_of_run_id.is_some()
+            || parent.task.exact_inputs != run.task.exact_inputs
+            || parent.failure.as_ref().is_none_or(|failure| {
+                failure.category != ProviderFailureCategory::OutputInvalid
+                    || failure.validation_issues.is_empty()
+            })
+        {
+            return Ok(false);
+        }
+        match self.rejected_agent_output(&parent.run_id) {
+            Ok(_) => {}
+            Err(error) if error.code == TenderErrorCode::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        }
+        let current_intake = run
+            .task
+            .exact_inputs
+            .iter()
+            .find(|input| input.kind == "manager_intake_run" && input.version == 1)
+            .map(|input| input.reference.as_str());
+        let Some(current_intake) = current_intake else {
+            return Ok(false);
+        };
+        let stage_is_current: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM manager_intake_runs
+                   WHERE intake_run_id = ?1 AND stage = 'extracting_tender_facts'
+                 )",
+                [current_intake],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if !stage_is_current {
+            return Ok(false);
+        }
+        let application_home = self
+            .root
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let workspace = application_home.join("staging").join(format!(
+            "agent-{}-{run_id}",
+            self.root
+                .file_name()
+                .and_then(|id| id.to_str())
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
+        ));
+        Ok(fs::symlink_metadata(workspace)
+            .is_ok_and(|metadata| metadata.is_dir() && !metadata_is_unsafe_storage_link(&metadata)))
+    }
+
+    fn load_restartable_manager_intake_repair(
+        &self,
+        tender_id: &TenderId,
+        run_id: &str,
+    ) -> Result<PreparedAgentRun, TenderCommandError> {
+        if !self.manager_intake_repair_is_safely_restartable(run_id)? {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let run = self.inspect_agent_run(run_id)?;
+        let application_home = self
+            .root
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let workspace = application_home
+            .join("staging")
+            .join(format!("agent-{}-{run_id}", tender_id.as_str()));
+        let existing_provider_thread: Option<(String, String)> = self
+            .connection
+            .query_row(
+                "SELECT thread_ref, status FROM provider_threads
+                 WHERE profile_id = ?1 AND profile_version = ?2
+                   AND status IN ('active', 'archive_pending')",
+                params![run.profile.profile_id, run.profile.version],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let (provider_thread_ref, provider_thread_to_archive) = match existing_provider_thread {
+            Some((thread_ref, status)) if status == "archive_pending" => (None, Some(thread_ref)),
+            Some((thread_ref, status)) if status == "active" => {
+                if load_thread_exposure(&self.connection, &thread_ref)?
+                    .is_compatible_with(&run.permission_grant)
+                {
+                    (Some(thread_ref), None)
+                } else {
+                    return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+                }
+            }
+            Some(_) => return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+            None => (None, None),
+        };
+        Ok(PreparedAgentRun {
+            run_id: run.run_id,
+            provider_selection: run.provider_selection,
+            profile: run.profile,
+            task: run.task,
+            permission_grant: run.permission_grant,
+            provider_thread_ref,
+            provider_thread_to_archive,
+            workspace,
+        })
+    }
+
     pub(crate) fn prepare_tender_record_extraction_run(
         &mut self,
         tender_id: &TenderId,

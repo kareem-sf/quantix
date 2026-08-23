@@ -606,7 +606,7 @@ impl TenderStore {
             let validation = self.validate_tender_record_proposal(&prepared.task, payload)?;
             match validation {
                 Ok(resolved) => {
-                    execution.candidate_payload_json = Some(resolved.provider_payload_json);
+                    execution.candidate_payload_json = Some(resolved.canonical_payload_json);
                     tender_record_candidate = Some(resolved.candidate);
                 }
                 Err(report) => {
@@ -3364,6 +3364,13 @@ impl TenderStore {
                 .map_err(sql_error)?;
             runs
         };
+        let mut interrupted_runs = Vec::with_capacity(runs.len());
+        for run in runs {
+            if !self.manager_intake_repair_is_safely_restartable(&run.0)? {
+                interrupted_runs.push(run);
+            }
+        }
+        let runs = interrupted_runs;
         if runs.is_empty() {
             return Ok(());
         }

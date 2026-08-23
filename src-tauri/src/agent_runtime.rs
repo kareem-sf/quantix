@@ -37,17 +37,17 @@ use crate::{
         CreateBidDecisionPackageCommand, CreateTenderEngineerEntryCommand,
         DecideBidDecisionPackageCommand, DecideTenderRecordCommand, ExternalRfiReviewResult,
         InspectBidDecisionApprovalHistoryCommand, InvalidateBidDecisionApprovalCommand,
-        PricedCostBaselineReviewResult, PricingAdjustmentReviewResult, ProductionTaskRunResult,
-        ProductionTaskState, ResolveBidDecisionReturnReworkCommand,
-        RunBasisOfEstimateReviewCommand, RunBidDecisionPackageReviewCommand,
-        RunCalculationRuleReviewCommand, RunCostEstimatorBasisCommand,
-        RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand,
-        RunPricedCostBaselineReviewCommand, RunPricingAdjustmentReviewCommand,
-        RunProductionTaskCommand, RunSubmissionSectionReviewCommand,
-        RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand,
-        SubmissionSectionReviewRunResult, TenderCommandError, TenderErrorCode, TenderId,
-        TenderRecordAuthority, TenderRecordDecisionResult, TenderRecordExtractionResult,
-        TenderRecordPage, TenderRecordReviewResult, TenderStore,
+        ManagerIntakeExtractionRecovery, PricedCostBaselineReviewResult,
+        PricingAdjustmentReviewResult, ProductionTaskRunResult, ProductionTaskState,
+        ResolveBidDecisionReturnReworkCommand, RunBasisOfEstimateReviewCommand,
+        RunBidDecisionPackageReviewCommand, RunCalculationRuleReviewCommand,
+        RunCostEstimatorBasisCommand, RunCostEstimatorCalculationCommand,
+        RunExternalRfiReviewCommand, RunPricedCostBaselineReviewCommand,
+        RunPricingAdjustmentReviewCommand, RunProductionTaskCommand,
+        RunSubmissionSectionReviewCommand, RunTenderRecordExtractionCommand,
+        RunTenderRecordReviewCommand, SubmissionSectionReviewRunResult, TenderCommandError,
+        TenderErrorCode, TenderId, TenderRecordAuthority, TenderRecordDecisionResult,
+        TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult, TenderStore,
     },
     QuantixHost,
 };
@@ -1181,16 +1181,42 @@ impl QuantixHost {
             (batches, authorities)
         };
         for evidence in batches {
-            let result = self
-                .run_tender_record_extraction_inner(
-                    RunTenderRecordExtractionCommand {
-                        tender_id: tender_id.as_str().into(),
-                        evidence,
-                        authorities: authorities.clone(),
-                    },
-                    Some(&intake_run_id),
-                )
-                .await?;
+            let recovery = store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                .recover_manager_intake_extraction_run(
+                    &tender_id,
+                    &intake_run_id,
+                    &evidence,
+                    &authorities,
+                )?;
+            let result = match recovery {
+                ManagerIntakeExtractionRecovery::StartNew => {
+                    self.run_tender_record_extraction_inner(
+                        RunTenderRecordExtractionCommand {
+                            tender_id: tender_id.as_str().into(),
+                            evidence,
+                            authorities: authorities.clone(),
+                        },
+                        Some(&intake_run_id),
+                    )
+                    .await?
+                }
+                ManagerIntakeExtractionRecovery::Execute(prepared) => {
+                    self.execute_recovered_manager_intake_repair(&tender_id, &store, prepared)
+                        .await?
+                }
+                ManagerIntakeExtractionRecovery::Terminal(run_id) => {
+                    let tender_store = store
+                        .lock()
+                        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+                    TenderRecordExtractionResult {
+                        run: tender_store.inspect_agent_run(&run_id)?,
+                        published_record_count: tender_store
+                            .count_tender_records_by_run(&run_id)?,
+                    }
+                }
+            };
             if agent_run_waits_for_provider(&result.run) {
                 store
                     .lock()
@@ -1656,6 +1682,8 @@ impl QuantixHost {
             }
         };
         if let Some(repair) = repair {
+            #[cfg(feature = "runtime-fixture")]
+            pause_repair_before_provider_turn(self, &repair).await;
             self.identify_active_agent_run(&lease_id, &repair.run_id)?;
             let repair_execution = execute_tender_provider_turn(
                 self,
@@ -1677,6 +1705,31 @@ impl QuantixHost {
         let tender_store = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        Ok(TenderRecordExtractionResult {
+            run: tender_store.inspect_agent_run(&prepared.run_id)?,
+            published_record_count: tender_store.count_tender_records_by_run(&prepared.run_id)?,
+        })
+    }
+
+    async fn execute_recovered_manager_intake_repair(
+        &self,
+        tender_id: &TenderId,
+        store: &Arc<Mutex<TenderStore>>,
+        prepared: PreparedAgentRun,
+    ) -> Result<TenderRecordExtractionResult, TenderCommandError> {
+        let (lease_id, cancellation) = self.begin_active_agent_run(tender_id.as_str()).await?;
+        let _active = ActiveAgentRunGuard {
+            host: self.clone(),
+            lease_id: lease_id.clone(),
+        };
+        self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
+        let execution =
+            execute_tender_provider_turn(self, tender_id.as_str(), store, &prepared, cancellation)
+                .await;
+        let mut tender_store = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        tender_store.complete_agent_run(tender_id, &prepared, execution)?;
         Ok(TenderRecordExtractionResult {
             run: tender_store.inspect_agent_run(&prepared.run_id)?,
             published_record_count: tender_store.count_tender_records_by_run(&prepared.run_id)?,
@@ -3114,6 +3167,27 @@ async fn execute_provider_turn_from(
         }
     }
     execution
+}
+
+#[cfg(feature = "runtime-fixture")]
+async fn pause_repair_before_provider_turn(host: &QuantixHost, prepared: &PreparedAgentRun) {
+    if prepared.task.repair_feedback.is_none() {
+        return;
+    }
+    let executable = host.runtime_layout().codex_executable();
+    let pause = executable.with_extension("repair-before-turn-pause");
+    if !pause.is_file() {
+        return;
+    }
+    let waiting = executable.with_extension("repair-before-turn-waiting");
+    let release = executable.with_extension("repair-before-turn-release");
+    let _ = fs::write(waiting, b"waiting");
+    for _ in 0..2_000 {
+        if release.is_file() || !pause.is_file() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
 
 fn record_provider_turn_diagnostic(
