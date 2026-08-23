@@ -1370,7 +1370,7 @@ impl QuantixHost {
                     .await?
                 }
                 ManagerIntakeExtractionRecovery::Execute(prepared) => {
-                    self.execute_recovered_manager_intake_repair(&tender_id, &store, prepared)
+                    self.execute_recovered_manager_intake_extraction(&tender_id, &store, prepared)
                         .await?
                 }
                 ManagerIntakeExtractionRecovery::Terminal(run_id) => {
@@ -1977,7 +1977,7 @@ impl QuantixHost {
         })
     }
 
-    async fn execute_recovered_manager_intake_repair(
+    async fn execute_recovered_manager_intake_extraction(
         &self,
         tender_id: &TenderId,
         store: &Arc<Mutex<TenderStore>>,
@@ -1991,13 +1991,55 @@ impl QuantixHost {
         #[cfg(feature = "runtime-fixture")]
         pause_repair_before_provider_turn(self, &prepared).await;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
-        let execution =
-            execute_tender_provider_turn(self, tender_id.as_str(), store, &prepared, cancellation)
-                .await;
-        let mut tender_store = store
+        let execution = execute_tender_provider_turn(
+            self,
+            tender_id.as_str(),
+            store,
+            &prepared,
+            cancellation.clone(),
+        )
+        .await;
+        let repair = {
+            let mut tender_store = store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            tender_store.complete_agent_run(tender_id, &prepared, execution)?;
+            let completed = tender_store.inspect_agent_run(&prepared.run_id)?;
+            if completed.task.repair_feedback.is_none()
+                && completed.state == AgentRunState::Failed
+                && completed.failure.as_ref().is_some_and(|failure| {
+                    failure.category == ProviderFailureCategory::OutputInvalid
+                })
+            {
+                tender_store.prepare_tender_record_repair_run(tender_id, &prepared.run_id)?
+            } else {
+                None
+            }
+        };
+        if let Some(repair) = repair {
+            #[cfg(feature = "runtime-fixture")]
+            pause_repair_before_provider_turn(self, &repair).await;
+            self.identify_active_agent_run(&lease_id, &repair.run_id)?;
+            let repair_execution = execute_tender_provider_turn(
+                self,
+                tender_id.as_str(),
+                store,
+                &repair,
+                cancellation,
+            )
+            .await;
+            let mut tender_store = store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            tender_store.complete_agent_run(tender_id, &repair, repair_execution)?;
+            return Ok(TenderRecordExtractionResult {
+                run: tender_store.inspect_agent_run(&repair.run_id)?,
+                published_record_count: tender_store.count_tender_records_by_run(&repair.run_id)?,
+            });
+        }
+        let tender_store = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
-        tender_store.complete_agent_run(tender_id, &prepared, execution)?;
         Ok(TenderRecordExtractionResult {
             run: tender_store.inspect_agent_run(&prepared.run_id)?,
             published_record_count: tender_store.count_tender_records_by_run(&prepared.run_id)?,

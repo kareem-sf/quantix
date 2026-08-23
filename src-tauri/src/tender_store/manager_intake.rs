@@ -1855,11 +1855,12 @@ impl TenderStore {
             {
                 return Ok(false);
             }
-            let persisted_run: Option<(String, String, u32, String, String)> = self
+            let persisted_run: Option<(String, Option<String>, String, u32, String, String)> = self
                 .connection
                 .query_row(
-                    "SELECT agent_runs.task_id, agent_runs.profile_id,
-                            agent_runs.profile_version, agent_runs.permission_grant_json,
+                    "SELECT agent_runs.task_id, agent_runs.retry_of_run_id,
+                            agent_runs.profile_id, agent_runs.profile_version,
+                            agent_runs.permission_grant_json,
                             agent_run_provider_bindings.binding_json
                      FROM agent_runs JOIN agent_run_provider_bindings USING (run_id)
                      WHERE agent_runs.run_id = ?1",
@@ -1871,17 +1872,27 @@ impl TenderStore {
                             run.get(2)?,
                             run.get(3)?,
                             run.get(4)?,
+                            run.get(5)?,
                         ))
                     },
                 )
                 .optional()
                 .map_err(sql_error)?;
-            let Some((persisted_task_id, profile_id, profile_version, grant_json, binding_json)) =
-                persisted_run
+            let Some((
+                persisted_task_id,
+                persisted_source_run_id,
+                profile_id,
+                profile_version,
+                grant_json,
+                binding_json,
+            )) = persisted_run
             else {
                 return Ok(false);
             };
-            if persisted_task_id != task_id || binding_json != provider_selection_json {
+            if persisted_task_id != task_id
+                || persisted_source_run_id != source_run_id
+                || binding_json != provider_selection_json
+            {
                 return Ok(false);
             }
             let task = load_task(&self.connection, &task_id)?;
@@ -1926,7 +1937,8 @@ impl TenderStore {
                             "SELECT task_id
                              FROM manager_intake_extraction_plan_run_bindings
                              WHERE extraction_run_id = ?1 AND intake_run_id = ?2
-                               AND batch_fingerprint = ?3 AND lineage_kind = 'initial'
+                               AND batch_fingerprint = ?3
+                               AND lineage_kind IN ('initial', 'transport_retry')
                                AND plan_request_context_sha256 = ?4",
                             params![source_run_id, intake_run_id, fingerprint, plan_context_sha,],
                             |source| source.get(0),
@@ -2423,6 +2435,17 @@ pub(super) fn bind_manager_intake_extraction_plan(
         return Ok(());
     };
     let provider_selection_json = canonical_json(&prepared.provider_selection)?;
+    let persisted_source_run_id: Option<Option<String>> = transaction
+        .query_row(
+            "SELECT retry_of_run_id FROM agent_runs WHERE run_id = ?1",
+            [&prepared.run_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    if persisted_source_run_id != Some(source_run_id.map(str::to_owned)) {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
     let run_estimate = estimate_prepared_record_extraction_request_bytes(prepared)?;
     if run_estimate.estimated_request_bytes > record_extraction_request_hard_cap_bytes() {
         return Err(TenderCommandError::new(
@@ -2471,7 +2494,7 @@ pub(super) fn bind_manager_intake_extraction_plan(
                 return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
             }
             let source_task = load_task(transaction, &source_task_id)?;
-            let lineage_kind = if source_lineage == "initial"
+            let lineage_kind = if matches!(source_lineage.as_str(), "initial" | "transport_retry")
                 && semantic_repair_lineage_is_valid(
                     transaction,
                     prepared,
@@ -2684,18 +2707,25 @@ fn require_manager_intake_extraction_plan(
     if task_id != prepared.task.task_id || stored_selection != provider_selection_json {
         return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
     }
-    let persisted_binding: Option<(String, String)> = transaction
+    let persisted_binding: Option<(String, Option<String>, String)> = transaction
         .query_row(
-            "SELECT agent_runs.task_id, agent_run_provider_bindings.binding_json
+            "SELECT agent_runs.task_id, agent_runs.retry_of_run_id,
+                    agent_run_provider_bindings.binding_json
              FROM agent_runs
              JOIN agent_run_provider_bindings USING (run_id)
              WHERE agent_runs.run_id = ?1",
             [&prepared.run_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
         .map_err(sql_error)?;
-    if persisted_binding.as_ref() != Some(&(task_id.clone(), stored_selection.clone())) {
+    if persisted_binding.as_ref()
+        != Some(&(
+            task_id.clone(),
+            source_run_id.clone(),
+            stored_selection.clone(),
+        ))
+    {
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
     let run_context: RecordExtractionRequestPlanContext = parse_canonical(&run_context_json)?;
@@ -2749,7 +2779,8 @@ fn require_manager_intake_extraction_plan(
                 .query_row(
                     "SELECT task_id FROM manager_intake_extraction_plan_run_bindings
                      WHERE extraction_run_id = ?1 AND intake_run_id = ?2
-                       AND batch_fingerprint = ?3 AND lineage_kind = 'initial'
+                       AND batch_fingerprint = ?3
+                       AND lineage_kind IN ('initial', 'transport_retry')
                        AND plan_request_context_sha256 = ?4",
                     params![source_run_id, intake_run_id, fingerprint, plan_context_sha],
                     |row| row.get(0),

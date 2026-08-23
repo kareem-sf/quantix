@@ -1524,7 +1524,7 @@ async fn manager_intake_same_host_blocks_a_repair_after_a_thread_checkpoint() {
 }
 
 #[tokio::test]
-async fn manager_intake_retries_a_terminal_noncandidate_source_without_spending_repair() {
+async fn manager_intake_links_a_pre_repair_transport_retry_without_spending_repair() {
     let harness = RuntimeHarness::new("process-failure-before-turn");
     harness
         .parsed_pdf_evidence("retry-noncandidate-source", b"TENDER_RECORD_GOLDEN")
@@ -1545,19 +1545,128 @@ async fn manager_intake_retries_a_terminal_noncandidate_source_without_spending_
     )
     .expect("release Manager outcome");
 
-    harness
+    let second_cycle = harness
         .host
         .run_manager_intake_for_verification(&harness.tender_id)
-        .await
-        .expect("later intake cycle starts a fresh transport attempt");
+        .await;
+    assert!(
+        second_cycle.is_ok(),
+        "later intake cycle starts a linked transport attempt: error={second_cycle:?}, runs={:?}",
+        tender_record_extraction_runs(&harness.application_home, &harness.tender_id)
+    );
     let runs = tender_record_extraction_runs(&harness.application_home, &harness.tender_id);
     assert_eq!(runs.len(), 3);
     assert!(runs[0].1.is_none());
-    assert!(runs[1].1.is_none());
+    assert_eq!(runs[1].1.as_deref(), Some(runs[0].0.as_str()));
     assert_eq!(runs[1].2, "failed");
     assert_eq!(runs[2].1.as_deref(), Some(runs[1].0.as_str()));
     assert_eq!(runs[2].2, "completed");
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open Tender Store database");
+    let bindings = connection
+        .prepare(
+            "SELECT extraction_run_id, source_run_id, lineage_kind,
+                    plan_request_context_sha256, run_request_context_json
+             FROM manager_intake_extraction_plan_run_bindings
+             ORDER BY created_at, extraction_run_id",
+        )
+        .expect("prepare pre-repair transport bindings")
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .expect("query pre-repair transport bindings")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("collect pre-repair transport bindings");
+    assert_eq!(bindings.len(), 3);
+    let initial = bindings
+        .iter()
+        .find(|binding| binding.0 == runs[0].0)
+        .expect("initial binding");
+    let transport = bindings
+        .iter()
+        .find(|binding| binding.0 == runs[1].0)
+        .expect("pre-repair transport binding");
+    let semantic = bindings
+        .iter()
+        .find(|binding| binding.0 == runs[2].0)
+        .expect("semantic repair binding");
+    assert_eq!(initial.1, None);
+    assert_eq!(initial.2, "initial");
+    assert_eq!(transport.1.as_deref(), Some(runs[0].0.as_str()));
+    assert_eq!(transport.2, "transport_retry");
+    assert_eq!(transport.3, initial.3);
+    assert_eq!(transport.4, initial.4);
+    assert_eq!(semantic.1.as_deref(), Some(runs[1].0.as_str()));
+    assert_eq!(semantic.2, "semantic_repair");
+    assert_eq!(semantic.3, initial.3);
+    assert_ne!(semantic.4, initial.4);
+    let unrelated_initials: u32 = connection
+        .query_row(
+            "SELECT COUNT(*)
+             FROM manager_intake_extraction_plan_run_bindings
+             WHERE lineage_kind = 'initial'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count true initial bindings");
+    assert_eq!(unrelated_initials, 1);
     assert_eq!(fixture_record_extraction_turn_count(&harness.codex), 2);
+    drop(connection);
+    let cold_host =
+        QuantixHost::with_setup_platform(&harness.application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&cold_host).state, SetupState::Ready);
+    assert_eq!(
+        cold_host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold-open linked transport integrity")
+            .state,
+        TenderIntegrityState::Ready
+    );
+    drop(cold_host);
+
+    let connection = rusqlite::Connection::open(
+        harness
+            .application_home
+            .join("tenders")
+            .join(&harness.tender_id)
+            .join("tender.sqlite"),
+    )
+    .expect("reopen Tender Store database");
+    connection
+        .execute_batch("DROP TRIGGER manager_intake_extraction_plan_run_bindings_no_update;")
+        .expect("allow mismatch corruption fixture");
+    connection
+        .execute(
+            "UPDATE manager_intake_extraction_plan_run_bindings
+             SET source_run_id = extraction_run_id
+             WHERE extraction_run_id = ?1",
+            [&runs[1].0],
+        )
+        .expect("corrupt binding source independently from agent run lineage");
+    drop(connection);
+    let corrupted_host =
+        QuantixHost::with_setup_platform(&harness.application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(
+        ensure_quantix_setup(&corrupted_host).state,
+        SetupState::Ready
+    );
+    assert_eq!(
+        corrupted_host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("inspect mismatched transport lineage")
+            .state,
+        TenderIntegrityState::RecoveryRequired
+    );
 }
 
 #[tokio::test]

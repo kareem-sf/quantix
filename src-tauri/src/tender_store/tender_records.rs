@@ -1012,7 +1012,8 @@ impl TenderStore {
                     authority_references,
                 )?
             {
-                matching_sources.push(run);
+                let latest_run_id = self.latest_pre_repair_transport_run(&run.run_id)?;
+                matching_sources.push(self.inspect_agent_run(&latest_run_id)?);
             }
         }
         let Some(latest_source) = matching_sources.last() else {
@@ -1063,10 +1064,9 @@ impl TenderStore {
                     latest_repair = self.inspect_agent_run(&latest_repair_run_id)?;
                 }
                 if terminal_noncandidate_retry_is_allowed(&latest_repair) {
-                    if let Some(retry) = self.prepare_tender_record_repair_transport_retry(
-                        tender_id,
-                        &latest_repair_run_id,
-                    )? {
+                    if let Some(retry) = self
+                        .prepare_tender_record_transport_retry(tender_id, &latest_repair_run_id)?
+                    {
                         return Ok(ManagerIntakeExtractionRecovery::Execute(retry));
                     }
                 }
@@ -1084,11 +1084,56 @@ impl TenderStore {
             ));
         }
         if terminal_noncandidate_retry_is_allowed(latest_source) {
-            return Ok(ManagerIntakeExtractionRecovery::StartNew);
+            if let Some(retry) =
+                self.prepare_tender_record_transport_retry(tender_id, &latest_source.run_id)?
+            {
+                return Ok(ManagerIntakeExtractionRecovery::Execute(retry));
+            }
         }
         Ok(ManagerIntakeExtractionRecovery::Terminal(
             latest_source.run_id.clone(),
         ))
+    }
+
+    fn latest_pre_repair_transport_run(
+        &self,
+        initial_run_id: &str,
+    ) -> Result<String, TenderCommandError> {
+        let initial = self.inspect_agent_run(initial_run_id)?;
+        if initial.retry_of_run_id.is_some() || initial.task.repair_feedback.is_some() {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let mut latest_run_id = initial.run_id.clone();
+        let mut visited = HashSet::from([latest_run_id.clone()]);
+        loop {
+            let child_run_id = self
+                .connection
+                .query_row(
+                    "SELECT run_id FROM agent_runs WHERE retry_of_run_id = ?1",
+                    [&latest_run_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(sql_error)?;
+            let Some(child_run_id) = child_run_id else {
+                return Ok(latest_run_id);
+            };
+            if !visited.insert(child_run_id.clone()) {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            let child = self.inspect_agent_run(&child_run_id)?;
+            if child.task.repair_feedback.is_some() {
+                return Ok(latest_run_id);
+            }
+            if child.task != initial.task
+                || child.profile != initial.profile
+                || child.provider_selection != initial.provider_selection
+                || child.profile.capabilities.as_slice() != [RECORD_EXTRACTION_CAPABILITY]
+            {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            latest_run_id = child.run_id;
+        }
     }
 
     fn latest_repair_transport_run(
@@ -1179,7 +1224,7 @@ impl TenderStore {
         }
         let rejected_run = self.inspect_agent_run(&feedback.rejected_run_id)?;
         if rejected_run.state != AgentRunState::Failed
-            || rejected_run.retry_of_run_id.is_some()
+            || rejected_run.task.repair_feedback.is_some()
             || rejected_run.task.exact_inputs != run.task.exact_inputs
             || rejected_run.failure.as_ref().is_none_or(|failure| {
                 failure.category != ProviderFailureCategory::OutputInvalid
@@ -1287,7 +1332,7 @@ impl TenderStore {
         })
     }
 
-    fn prepare_tender_record_repair_transport_retry(
+    fn prepare_tender_record_transport_retry(
         &mut self,
         tender_id: &TenderId,
         prior_run_id: &str,
@@ -1301,17 +1346,26 @@ impl TenderStore {
         {
             return Ok(None);
         }
-        let feedback = prior
-            .task
-            .repair_feedback
-            .as_ref()
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let rejected = self.rejected_agent_output(&feedback.rejected_run_id)?;
-        if feedback.rejected_payload_sha256 != rejected.payload_sha256
-            || feedback.validation_issues != rejected.validation_issues
-        {
-            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-        }
+        let repair_payload = if let Some(feedback) = prior.task.repair_feedback.as_ref() {
+            let rejected = self.rejected_agent_output(&feedback.rejected_run_id)?;
+            if feedback.rejected_payload_sha256 != rejected.payload_sha256
+                || feedback.validation_issues != rejected.validation_issues
+            {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            let rejected_payload: Value = serde_json::from_str(&rejected.payload_json)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            Some(json!({
+                "data_classification": DataClassification::TenderInternal,
+                "data_scope": RECORD_EXTRACTION_SCOPE,
+                "rejected_payload_sha256": rejected.payload_sha256,
+                "rejected_proposal": rejected_payload,
+                "schema_version": 1,
+                "validation_issues": rejected.validation_issues,
+            }))
+        } else {
+            None
+        };
         let tender_revision = prior
             .task
             .exact_inputs
@@ -1403,21 +1457,16 @@ impl TenderStore {
                 &authorities,
             )?
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-            let rejected_payload: Value = serde_json::from_str(&rejected.payload_json)
-                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-            let repair_payload = json!({
-                "data_classification": DataClassification::TenderInternal,
-                "data_scope": RECORD_EXTRACTION_SCOPE,
-                "rejected_payload_sha256": rejected.payload_sha256,
-                "rejected_proposal": rejected_payload,
-                "schema_version": 1,
-                "validation_issues": rejected.validation_issues,
-            });
-            let feedback_view = [PreBidAdditionalDataView {
-                relative_path: "repair-feedback-v1.json",
-                view_id: "repair-feedback-v1",
-                payload: &repair_payload,
-            }];
+            let feedback_views = repair_payload
+                .as_ref()
+                .map(|payload| {
+                    vec![PreBidAdditionalDataView {
+                        relative_path: "repair-feedback-v1.json",
+                        view_id: "repair-feedback-v1",
+                        payload,
+                    }]
+                })
+                .unwrap_or_default();
             let (permission_grant, materialized_workspace) =
                 derive_pre_bid_data_grant(PreBidDataGrantRequest {
                     run_id: &run_id,
@@ -1432,7 +1481,7 @@ impl TenderStore {
                     relative_path: "tender-evidence-v1.json",
                     view_id: "tender-evidence-v1",
                     payload: &payload,
-                    additional_data_views: &feedback_view,
+                    additional_data_views: &feedback_views,
                 })?;
             if materialized_workspace != workspace
                 || permission_duration(&permission_grant, Timestamp::now())
@@ -1904,8 +1953,7 @@ impl TenderStore {
             .failure
             .as_ref()
             .filter(|failure| {
-                rejected_run.retry_of_run_id.is_none()
-                    && rejected_run.state == AgentRunState::Failed
+                rejected_run.state == AgentRunState::Failed
                     && failure.category == ProviderFailureCategory::OutputInvalid
             })
             .ok_or(());
