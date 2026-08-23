@@ -1,12 +1,13 @@
 use std::{fs, io, path::Path, sync::Arc, time::Duration};
 
 use quantix_lib::{
-    ensure_quantix_setup, AgentRunState, CreateTenderCommand, InspectAgentRunCommand,
-    InspectTenderAiExecutionCommand, InterruptAgentRunCommand, ProviderEventKind,
-    ProviderFailureCategory, QuantixHost, RunBootstrapAgentCommand, RuntimeLayout, SetupPlatform,
+    ensure_quantix_setup, AgentRunState, CreateTenderCommand, ImportTenderPackageCommand,
+    InspectAgentRunCommand, InspectTenderAiExecutionCommand, InterruptAgentRunCommand,
+    ParseSourceArtifactCommand, ProviderEventKind, ProviderFailureCategory, QuantixHost,
+    RunBootstrapAgentCommand, RunTenderRecordExtractionCommand, RuntimeLayout, SetupPlatform,
     SetupState, StoragePermissions, TenderAiSelectionReadiness, TenderErrorCode,
-    TenderIntegrityIssue, TenderIntegrityState, UpdateTenderAiExecutionSelectionCommand,
-    MINIMUM_SETUP_FREE_SPACE_BYTES,
+    TenderEvidenceReference, TenderIntegrityIssue, TenderIntegrityState,
+    UpdateTenderAiExecutionSelectionCommand, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 struct ReadySetupPlatform;
@@ -47,6 +48,7 @@ impl Harness {
         assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
         host.approve_runtime_fixture_ai_selection()
             .expect("approve fixture AI selection");
+        install_ocr_fixture(&application_home);
         let tender = host
             .create_tender(CreateTenderCommand {
                 name: "Cairo Metro Systems Tender".into(),
@@ -92,6 +94,149 @@ impl Harness {
         )
         .expect("open Tender Store database")
     }
+
+    async fn parsed_pdf_evidence(&self) -> Vec<TenderEvidenceReference> {
+        let source = self._root.path().join("records-source");
+        fs::create_dir(&source).expect("source directory");
+        fs::write(
+            source.join("records.pdf"),
+            b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
+        )
+        .expect("PDF fixture");
+        let imported = self
+            .host
+            .import_tender_package(ImportTenderPackageCommand {
+                tender_id: self.tender_id.clone(),
+                source_path: source.to_string_lossy().into_owned(),
+            })
+            .expect("import evidence");
+        let document = imported.documents.first().expect("registered PDF");
+        self.host
+            .parse_source_artifact(ParseSourceArtifactCommand {
+                tender_id: self.tender_id.clone(),
+                artifact_id: document.artifact_id.clone(),
+                version: document.version,
+            })
+            .await
+            .expect("parse evidence");
+        self.host
+            .inspect_evidence(ParseSourceArtifactCommand {
+                tender_id: self.tender_id.clone(),
+                artifact_id: document.artifact_id.clone(),
+                version: document.version,
+            })
+            .expect("inspect evidence")
+            .locations
+            .into_iter()
+            .map(|location| TenderEvidenceReference {
+                artifact_id: document.artifact_id.clone(),
+                version: document.version,
+                ordinal: location.ordinal,
+            })
+            .collect()
+    }
+}
+
+#[tokio::test]
+async fn repaired_extraction_records_truthful_boundaries() {
+    let harness = Harness::new("record-extraction-invalid-then-valid");
+    let evidence = harness.parsed_pdf_evidence().await;
+    let repaired = harness
+        .host
+        .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+            tender_id: harness.tender_id.clone(),
+            evidence,
+            authorities: Vec::new(),
+        })
+        .await
+        .expect("repair invalid extraction once");
+    assert_eq!(
+        repaired.run.state,
+        AgentRunState::Completed,
+        "{:#?}",
+        repaired.run
+    );
+    let runs = harness
+        .host
+        .inspect_agent_runs(&harness.tender_id)
+        .expect("inspect runs");
+    let initial_id = repaired
+        .run
+        .retry_of_run_id
+        .as_deref()
+        .expect("repair lineage");
+    let initial = runs
+        .iter()
+        .find(|run| run.run_id == initial_id)
+        .expect("initial extraction");
+    assert_eq!(initial.state, AgentRunState::Failed);
+    for run in [initial, &repaired.run] {
+        let kinds = run
+            .events
+            .iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(kinds.first(), Some(&ProviderEventKind::RunStarted));
+        assert_eq!(kinds.last(), Some(&ProviderEventKind::Terminal));
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|kind| **kind == ProviderEventKind::Terminal)
+                .count(),
+            1
+        );
+    }
+    let initial_kinds = initial
+        .events
+        .iter()
+        .map(|event| event.kind)
+        .collect::<Vec<_>>();
+    assert!(
+        initial_kinds
+            .iter()
+            .position(|kind| *kind == ProviderEventKind::CandidateRejected)
+            .expect("candidate rejected")
+            < initial_kinds
+                .iter()
+                .position(|kind| *kind == ProviderEventKind::Terminal)
+                .expect("terminal")
+    );
+    let repair_kinds = repaired
+        .run
+        .events
+        .iter()
+        .map(|event| event.kind)
+        .collect::<Vec<_>>();
+    assert!(
+        repair_kinds
+            .iter()
+            .position(|kind| *kind == ProviderEventKind::CandidateValidated)
+            .expect("candidate validated")
+            < repair_kinds
+                .iter()
+                .position(|kind| *kind == ProviderEventKind::ResultCommitted)
+                .expect("result committed")
+    );
+    assert!(
+        repair_kinds
+            .iter()
+            .position(|kind| *kind == ProviderEventKind::ResultCommitted)
+            .expect("result committed")
+            < repair_kinds
+                .iter()
+                .position(|kind| *kind == ProviderEventKind::Terminal)
+                .expect("terminal")
+    );
+    assert!(!std::fs::read_to_string(
+        harness
+            .application_home
+            .join("logs")
+            .join("tenders")
+            .join(&harness.tender_id)
+            .join("diagnostics.ndjson")
+    )
+    .unwrap_or_default()
+    .contains("provider_turn_completed"));
 }
 
 #[tokio::test]
@@ -306,7 +451,7 @@ async fn semantically_invalid_agent_manifest_requires_tender_recovery() {
     );
 }
 
-fn install_codex_fixture(resources: &Path, scenario: &str) {
+fn install_codex_fixture(resources: &Path, scenario: &str) -> std::path::PathBuf {
     let runtime_bin = resources.join("runtime").join("bin");
     fs::create_dir_all(&runtime_bin).expect("fake runtime bin");
     let codex = runtime_bin.join(executable_name("codex"));
@@ -317,6 +462,33 @@ fn install_codex_fixture(resources: &Path, scenario: &str) {
     .expect("copy fake app-server");
     fs::write(codex.with_extension("agent-scenario"), scenario)
         .expect("write fake app-server scenario");
+    codex
+}
+
+fn install_ocr_fixture(application_home: &Path) {
+    let executable = application_home
+        .join("runtimes")
+        .join("ocr")
+        .join(if cfg!(windows) { "Scripts" } else { "bin" })
+        .join(executable_name("python"));
+    fs::create_dir_all(executable.parent().expect("OCR executable parent"))
+        .expect("OCR executable directory");
+    fs::copy(
+        Path::new(env!("CARGO_BIN_EXE_quantix-runtime-fixture")),
+        &executable,
+    )
+    .expect("install OCR fixture");
+    fs::write(executable.with_extension("version"), "3.9.2\n").expect("OCR fixture version");
+    let models = application_home.join("models").join("ocr");
+    fs::create_dir_all(&models).expect("model directory");
+    for artifact in [
+        "PP-OCRv6_det_small.onnx",
+        "PP-OCRv6_rec_small.onnx",
+        "ch_ppocr_mobile_v2.0_cls_mobile.onnx",
+    ] {
+        fs::write(models.join(artifact), format!("{artifact} fixture model"))
+            .expect("model fixture");
+    }
 }
 
 fn executable_name(name: &str) -> String {

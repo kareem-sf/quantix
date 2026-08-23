@@ -1179,6 +1179,7 @@ fn run_agent_turn(
             | "record-extraction-parity-duplicate-stable-key-delayed"
             | "record-extraction-change-assessment"
             | "record-extraction-change-recovery-invalid-then-valid"
+            | "record-extraction-invalid-then-valid"
             | "record-extraction-duplicate-citation"
             | "record-extraction-invalid"
             | "record-extraction-parity-duplicate-stable-key"
@@ -1932,9 +1933,16 @@ fn run_agent_turn(
         submission_generation_fixture::candidate(provider_data_view, scenario)?
     } else if matches!(
         scenario,
-        "record-extraction" | "record-extraction-insignificant-space"
+        "record-extraction"
+            | "record-extraction-insignificant-space"
+            | "record-extraction-invalid-then-valid"
     ) {
-        record_extraction_candidate(provider_data_view)?
+        let mut candidate = record_extraction_candidate(provider_data_view)?;
+        if scenario == "record-extraction-invalid-then-valid" && !has_repair_feedback {
+            candidate["records"][0]["fields"][0]["basis"]["evidence"][0] =
+                serde_json::json!("e9999");
+        }
+        candidate
     } else if scenario == "record-extraction-invalid" {
         let mut candidate = record_extraction_candidate(provider_data_view)?;
         candidate["records"][0]["fields"][0]["basis"]["evidence"][0] = serde_json::json!("e9999");

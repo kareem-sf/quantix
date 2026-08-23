@@ -144,6 +144,23 @@ fn profile_supports_linked_retry(profile: &AgentProfileVersionView, task: &Tende
         })
 }
 
+fn terminal_event_summary(execution: &ProviderExecution) -> &'static str {
+    match execution.state {
+        AgentRunState::Completed => "Agent Run completed after candidate publication",
+        AgentRunState::Interrupted => "Agent Run interrupted",
+        AgentRunState::Indeterminate => "Agent Run outcome is indeterminate",
+        AgentRunState::Failed
+            if execution.failure.as_ref().is_some_and(|failure| {
+                failure.category == ProviderFailureCategory::OutputInvalid
+            }) =>
+        {
+            "Agent Run rejected after candidate validation"
+        }
+        AgentRunState::Failed => "Provider transport failed",
+        AgentRunState::Running => "Agent Run state is invalid",
+    }
+}
+
 fn load_agent_run_provider_binding(
     connection: &rusqlite::Connection,
     run_id: &str,
@@ -501,6 +518,11 @@ impl TenderStore {
         prepared: &PreparedAgentRun,
         mut execution: ProviderExecution,
     ) -> Result<(), TenderCommandError> {
+        // Provider callbacks may carry a terminal transport outcome internally,
+        // but completion owns the sole persisted terminal event.
+        execution
+            .events
+            .retain(|event| event.kind != ProviderEventKind::Terminal);
         let operation_budget = BidPackageOperationBudget::for_tender(tender_id);
         operation_budget.check()?;
         let pending_affected_run = self.pending_change_has_active_affected_run(&prepared.run_id)?;
@@ -1561,7 +1583,7 @@ impl TenderStore {
                 |row| row.get(0),
             )
             .map_err(sql_error)?;
-        for event in execution.events {
+        for event in execution.events.iter().cloned() {
             if event.kind == ProviderEventKind::ControlRequestDenied {
                 return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
             }
@@ -1573,6 +1595,36 @@ impl TenderStore {
                 &prepared.run_id,
                 sequence,
                 event,
+                &completed_at,
+            )?;
+        }
+        let candidate_rejected = execution.state == AgentRunState::Failed
+            && execution
+                .failure
+                .as_ref()
+                .is_some_and(|failure| failure.category == ProviderFailureCategory::OutputInvalid);
+        let candidate_validated = execution.state == AgentRunState::Completed;
+        if candidate_validated || candidate_rejected {
+            sequence = sequence
+                .checked_add(1)
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            insert_event(
+                &transaction,
+                &prepared.run_id,
+                sequence,
+                PendingProviderEvent::new(
+                    if candidate_validated {
+                        ProviderEventKind::CandidateValidated
+                    } else {
+                        ProviderEventKind::CandidateRejected
+                    },
+                    if candidate_validated {
+                        "Candidate passed domain validation"
+                    } else {
+                        "Candidate rejected by domain validation"
+                    },
+                    None,
+                ),
                 &completed_at,
             )?;
         }
@@ -1604,6 +1656,7 @@ impl TenderStore {
             }
             execution.candidate_payload_json = None;
         }
+        let terminal_summary = terminal_event_summary(&execution);
         let production_payload = execution.candidate_payload_json.clone();
         let result_id = if let Some(payload_json) = execution.candidate_payload_json {
             ensure_canonical_value(&payload_json)?;
@@ -1825,6 +1878,32 @@ impl TenderStore {
             &prepared.task.task_id,
             execution.state,
             production_payload.as_deref(),
+            &completed_at,
+        )?;
+        if result_id.is_some() {
+            sequence = sequence
+                .checked_add(1)
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            insert_event(
+                &transaction,
+                &prepared.run_id,
+                sequence,
+                PendingProviderEvent::new(
+                    ProviderEventKind::ResultCommitted,
+                    "Candidate result committed",
+                    None,
+                ),
+                &completed_at,
+            )?;
+        }
+        sequence = sequence
+            .checked_add(1)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        insert_event(
+            &transaction,
+            &prepared.run_id,
+            sequence,
+            PendingProviderEvent::new(ProviderEventKind::Terminal, terminal_summary, None),
             &completed_at,
         )?;
         append_audit_event(
@@ -2100,7 +2179,6 @@ impl TenderStore {
             ProviderEventKind::UsageObserved
                 | ProviderEventKind::RateLimitObserved
                 | ProviderEventKind::Warning
-                | ProviderEventKind::Terminal
         ) {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }

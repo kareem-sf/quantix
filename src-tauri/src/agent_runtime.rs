@@ -538,6 +538,9 @@ pub enum ProviderEventKind {
     ControlRequestResolved,
     ControlRequestDenied,
     Warning,
+    CandidateValidated,
+    CandidateRejected,
+    ResultCommitted,
     Terminal,
 }
 
@@ -554,6 +557,9 @@ impl ProviderEventKind {
             Self::ControlRequestResolved => "control_request_resolved",
             Self::ControlRequestDenied => "control_request_denied",
             Self::Warning => "warning",
+            Self::CandidateValidated => "candidate_validated",
+            Self::CandidateRejected => "candidate_rejected",
+            Self::ResultCommitted => "result_committed",
             Self::Terminal => "terminal",
         }
     }
@@ -570,6 +576,9 @@ impl ProviderEventKind {
             "control_request_resolved" => Ok(Self::ControlRequestResolved),
             "control_request_denied" => Ok(Self::ControlRequestDenied),
             "warning" => Ok(Self::Warning),
+            "candidate_validated" => Ok(Self::CandidateValidated),
+            "candidate_rejected" => Ok(Self::CandidateRejected),
+            "result_committed" => Ok(Self::ResultCommitted),
             "terminal" => Ok(Self::Terminal),
             _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
         }
@@ -802,7 +811,11 @@ pub(crate) struct PendingProviderEvent {
 }
 
 impl PendingProviderEvent {
-    fn new(kind: ProviderEventKind, summary: &str, opaque_reference: Option<&str>) -> Self {
+    pub(crate) fn new(
+        kind: ProviderEventKind,
+        summary: &str,
+        opaque_reference: Option<&str>,
+    ) -> Self {
         Self {
             kind,
             summary: summary.to_owned(),
@@ -2955,6 +2968,9 @@ async fn execute_provider_turn_from(
         }),
         on_event: Box::new(move |event, usage| {
             event_host.observe_provider_usage(usage);
+            if event.kind == ProviderEventKind::Terminal {
+                return Ok(());
+            }
             event_store
                 .lock()
                 .map_err(|_| outcome_unknown())?
@@ -3083,7 +3099,10 @@ fn record_provider_turn_diagnostic(
     started: Instant,
 ) {
     let (event_name, severity) = match execution.state {
-        AgentRunState::Completed => ("provider_turn_completed", crate::DiagnosticSeverity::Info),
+        AgentRunState::Completed => (
+            "provider_transport_completed",
+            crate::DiagnosticSeverity::Info,
+        ),
         AgentRunState::Failed => ("provider_turn_failed", crate::DiagnosticSeverity::Error),
         AgentRunState::Interrupted => {
             ("provider_turn_interrupted", crate::DiagnosticSeverity::Info)
@@ -3102,7 +3121,7 @@ fn record_provider_turn_diagnostic(
         severity,
         crate::DiagnosticComponent::Provider,
         event_name,
-        "Provider turn reached an execution boundary",
+        "Provider transport reached a terminal outcome",
     );
     fact.correlation.operation_id = Some(format!("provider-turn-{}", prepared.run_id));
     fact.correlation.run_id = Some(prepared.run_id.clone());
@@ -3110,7 +3129,7 @@ fn record_provider_turn_diagnostic(
     fact.duration_ms = Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
     fact.outcome = Some(execution.state.as_str().into());
     fact.error_code = error_code.clone();
-    fact.success = Some(execution.state == AgentRunState::Completed);
+    fact.success = None;
     host.diagnostics().record_tender(tender_id, fact);
 
     let mut deep = crate::RecordDiagnosticFact::new(
@@ -3131,7 +3150,7 @@ fn record_provider_turn_diagnostic(
         .candidate_payload_json
         .as_ref()
         .map(|payload| u64::try_from(payload.len()).unwrap_or(u64::MAX));
-    deep.success = Some(execution.state == AgentRunState::Completed);
+    deep.success = None;
     host.diagnostics().record_tender(tender_id, deep);
 }
 

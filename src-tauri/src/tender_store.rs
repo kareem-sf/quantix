@@ -1719,7 +1719,8 @@ CREATE TABLE provider_events (
     'run_started', 'thread_established', 'thread_resumed', 'turn_requested',
     'turn_started',
     'usage_observed', 'rate_limit_observed', 'control_request_resolved',
-    'control_request_denied', 'warning', 'terminal'
+    'control_request_denied', 'warning', 'candidate_validated', 'candidate_rejected',
+    'result_committed', 'terminal'
   )),
   summary TEXT NOT NULL,
   correlation_id TEXT,
