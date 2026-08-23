@@ -1586,6 +1586,8 @@ async fn in_flight_agent_work_on_one_host_blocks_update_authorization_on_another
     );
     host.accept_runtime_fixture();
     assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    host.approve_runtime_fixture_ai_selection()
+        .expect("approve fixture AI selection before creating the bound Tender");
     let tender = host
         .create_tender(CreateTenderCommand {
             name: "Agent Update Race".into(),

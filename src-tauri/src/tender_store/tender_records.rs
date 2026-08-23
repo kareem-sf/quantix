@@ -18,6 +18,7 @@ use crate::{
     tender_intake::SourceRelationshipKind,
 };
 
+use super::tender_record_proposals::{ResolvedTenderRecordProposal, TenderRecordProposalContext};
 use super::{
     agent_records::{
         ensure_agent_run_capacity, insert_event, insert_profile_version, insert_task, load_profile,
@@ -532,7 +533,7 @@ pub(crate) struct TenderRecordReviewCandidate {
 pub(crate) fn record_extraction_profile(profile_id: String) -> AgentProfileVersionView {
     AgentProfileVersionView {
         profile_id,
-        version: 4,
+        version: 5,
         identity: "Tender Analyst".into(),
         profession: "Tender Engineer".into(),
         seniority: "Senior".into(),
@@ -542,7 +543,7 @@ pub(crate) fn record_extraction_profile(profile_id: String) -> AgentProfileVersi
         skepticism: "Treat every material claim as unsupported until exact provenance is supplied.".into(),
         risk_tolerance: "Low tolerance for invented or weakly attributed Tender facts.".into(),
         instructions: "Extract only structured pre-bid Tender records supported by the supplied exact Evidence. When the Evidence explicitly controls submission generation, publish one typed generation_instruction containing its requirement kind, mandatory status, section, exact package path, envelope, language, supported authoring mode, and exact Evidence; otherwise omit it. Preserve original-language authority, label translations as derived, represent absence as an Assumption or Tender Query, surface contradictions, and make no approval decision.".into(),
-        output_contract_json: record_extraction_output_contract(),
+        output_contract_json: record_extraction_profile_contract(),
         review_policy: "Every proposed record requires independent review or exact Engineer User verification. Missing provenance blocks verification.".into(),
         permissions: record_extraction_permissions(),
         prohibited_actions: standard_prohibited_actions(),
@@ -641,7 +642,10 @@ pub(crate) fn record_extraction_task(
         profile_version: profile.version,
         objective: "Propose evidence-backed requirements, evaluation criteria, deliverables, deadlines, forms, clauses, risks, assumptions, Tender Queries, and project characteristics from the supplied exact Evidence.".into(),
         exact_inputs,
-        output_contract_json: profile.output_contract_json.clone(),
+        output_contract_json: TenderRecordProposalContext::new(evidence, authorities)
+            .expect("record extraction task inputs were validated before task construction")
+            .output_contract_json()
+            .expect("task-scoped Tender Record contract must serialize"),
         review_policy: profile.review_policy.clone(),
         deadline,
         permissions: record_extraction_permissions(),
@@ -708,7 +712,7 @@ fn record_review_output_contract() -> String {
     .expect("static Tender Record review output contract is canonical JSON")
 }
 
-fn record_extraction_output_contract() -> String {
+fn record_extraction_profile_contract() -> String {
     serde_json_canonicalizer::to_string(&serde_json::json!({
         "additionalProperties": false,
         "properties": {
@@ -1471,7 +1475,21 @@ impl TenderStore {
         prepared
     }
 
-    pub(crate) fn validate_tender_record_candidate(
+    pub(crate) fn resolve_tender_record_proposal(
+        &self,
+        task: &TenderTaskView,
+        payload_json: &str,
+    ) -> Result<ResolvedTenderRecordProposal, TenderCommandError> {
+        let context = TenderRecordProposalContext::from_task(task)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let resolved = context
+            .resolve(payload_json)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        self.validate_canonical_tender_record_candidate(task, &resolved.canonical_payload_json)?;
+        Ok(resolved)
+    }
+
+    pub(crate) fn validate_canonical_tender_record_candidate(
         &self,
         task: &TenderTaskView,
         payload_json: &str,
@@ -2028,7 +2046,7 @@ impl TenderStore {
                 let task = load_task(&self.connection, &task_id)?;
                 let payload = canonical_json(&candidate)?;
                 if self
-                    .validate_tender_record_candidate(&task, &payload)
+                    .validate_canonical_tender_record_candidate(&task, &payload)
                     .is_err()
                 {
                     return Ok(false);
@@ -3163,6 +3181,8 @@ fn record_extraction_data_view(
     evidence: &[TenderEvidenceReference],
     authorities: &[TenderRecordAuthority],
 ) -> Result<Value, TenderCommandError> {
+    let proposal_context = TenderRecordProposalContext::new(evidence, authorities)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
     let tender_name: String = connection
         .query_row(
             "SELECT name FROM tender_revisions WHERE tender_id = ?1 AND revision = ?2",
@@ -3171,7 +3191,7 @@ fn record_extraction_data_view(
         )
         .map_err(sql_error)?;
     let mut resolved = Vec::with_capacity(evidence.len());
-    for reference in evidence {
+    for (index, reference) in evidence.iter().enumerate() {
         let (package_path, location): (String, RawEvidenceLocation) = connection
             .query_row(
                 "SELECT source_artifacts.package_path,
@@ -3194,6 +3214,7 @@ fn record_extraction_data_view(
             .map_err(sql_error)?
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
         resolved.push(json!({
+            "handle": format!("e{:04}", index + 1),
             "location": location.into_domain()?,
             "package_path": package_path,
             "reference": reference,
@@ -3204,7 +3225,12 @@ fn record_extraction_data_view(
     Ok(json!({
         "data_classification": DataClassification::TenderInternal,
         "data_scope": RECORD_EXTRACTION_SCOPE,
-        "authorities": authorities,
+        "authorities": authorities.iter().map(|authority| json!({
+            "handle": proposal_context
+                .authority_handle(&authority.authority_id)
+                .expect("authority handle exists for task authority"),
+            "authority": authority,
+        })).collect::<Vec<_>>(),
         "evidence": resolved,
         "schema_version": 1,
         "source_relationships": source_relationships,
@@ -3497,7 +3523,7 @@ mod tests {
     #[test]
     fn record_extraction_schema_uses_strict_nullable_generation_instruction() {
         let profile = record_extraction_profile("tender-analyst".into());
-        assert_eq!(profile.version, 4);
+        assert_eq!(profile.version, 5);
         let contract: serde_json::Value =
             serde_json::from_str(&profile.output_contract_json).expect("valid contract");
         let instruction = contract

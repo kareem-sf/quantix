@@ -56,6 +56,7 @@ mod production_scheduler;
 mod submission_packages;
 mod team_composer;
 mod tender_queries;
+mod tender_record_proposals;
 mod tender_records;
 mod workspace;
 
