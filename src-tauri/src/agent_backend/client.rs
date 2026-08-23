@@ -3,6 +3,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+use jiff::{fmt::rfc2822::DateTimeParser, Timestamp};
+
 use crate::chatgpt_oauth::StoredConnection;
 
 #[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
@@ -515,17 +517,20 @@ pub(super) fn status_error(status: u16, retry_after_ms: Option<u64>) -> BackendE
     }
 }
 
-fn retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+fn retry_after_ms(headers: &reqwest::header::HeaderMap, now: Timestamp) -> Option<u64> {
     if let Some(value) = header_value(headers, "retry-after-ms") {
         if let Ok(ms) = value.parse::<u64>() {
             return Some(ms);
         }
     }
-    header_value(headers, "retry-after")?
-        .trim()
-        .parse::<u64>()
-        .ok()
-        .map(|secs| secs.saturating_mul(1000))
+    let value = header_value(headers, "retry-after")?;
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(seconds.saturating_mul(1000));
+    }
+    let retry_at = DateTimeParser::new().parse_timestamp(value).ok()?;
+    let milliseconds = now.duration_until(retry_at).as_millis().max(0);
+    Some(u64::try_from(milliseconds).unwrap_or(u64::MAX))
 }
 
 fn header_value(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
@@ -538,6 +543,7 @@ fn header_value(headers: &reqwest::header::HeaderMap, name: &str) -> Option<Stri
 pub(crate) struct ReqwestBackend {
     endpoint: String,
     http: reqwest::Client,
+    now: fn() -> Timestamp,
 }
 
 impl ReqwestBackend {
@@ -547,6 +553,7 @@ impl ReqwestBackend {
             http: reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(30))
                 .build()?,
+            now: Timestamp::now,
         })
     }
 }
@@ -598,7 +605,7 @@ impl ChatGptBackend for ReqwestBackend {
             if !status.is_success() {
                 return Err(status_error(
                     status.as_u16(),
-                    retry_after_ms(response.headers()),
+                    retry_after_ms(response.headers(), (self.now)()),
                 ));
             }
             pump_response(response, is_cancelled, on_event).await
@@ -1242,6 +1249,10 @@ mod tests {
         for (headers, expected) in [
             (vec![("retry-after-ms", "1500")], Some(1500)),
             (vec![("retry-after", "2")], Some(2000)),
+            (
+                vec![("retry-after", "Sun, 06 Nov 1994 08:49:39 GMT")],
+                Some(2000),
+            ),
             (Vec::new(), None),
         ] {
             let header_pairs: Vec<(String, String)> = headers
@@ -1249,7 +1260,8 @@ mod tests {
                 .map(|(name, value)| (name.to_string(), value.to_string()))
                 .collect();
             let server = MockServer::start(move |_| (429, header_pairs.clone(), Vec::new()));
-            let backend = ReqwestBackend::new(&server.base_url).unwrap();
+            let mut backend = ReqwestBackend::new(&server.base_url).unwrap();
+            backend.now = fixed_retry_after_reference;
 
             let mut noop = |_: StreamEvent| Ok(());
             let auth = sample_auth();
@@ -1266,6 +1278,12 @@ mod tests {
                 other => panic!("expected rate limit error, got {other:?}"),
             }
         }
+    }
+
+    fn fixed_retry_after_reference() -> Timestamp {
+        DateTimeParser::new()
+            .parse_timestamp("Sun, 06 Nov 1994 08:49:37 GMT")
+            .expect("fixed HTTP-date reference")
     }
 
     #[tokio::test(flavor = "multi_thread")]
