@@ -2,6 +2,7 @@
 logs
 .dev/
 .release-wizard/
+.worktrees/
 src-tauri/runtime/runtime-provenance.json
 *.log
 npm-debug.log*
