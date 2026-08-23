@@ -2,7 +2,7 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(feature = "runtime-fixture")]
@@ -37,7 +37,7 @@ use crate::{
         CreateBidDecisionPackageCommand, CreateTenderEngineerEntryCommand,
         DecideBidDecisionPackageCommand, DecideTenderRecordCommand, ExternalRfiReviewResult,
         InspectBidDecisionApprovalHistoryCommand, InvalidateBidDecisionApprovalCommand,
-        ManagerIntakeExtractionRecovery, PricedCostBaselineReviewResult,
+        ManagerIntakeExtractionRecovery, ManagerIntakeStage, PricedCostBaselineReviewResult,
         PricingAdjustmentReviewResult, ProductionTaskRunResult, ProductionTaskState,
         ResolveBidDecisionReturnReworkCommand, RunBasisOfEstimateReviewCommand,
         RunBidDecisionPackageReviewCommand, RunCalculationRuleReviewCommand,
@@ -949,6 +949,82 @@ fn agent_run_waits_for_provider(run: &AgentRunInspection) -> bool {
 }
 
 impl QuantixHost {
+    fn schedule_manager_intake_wakeup(
+        &self,
+        tender_id: String,
+        intake_run_id: String,
+        retry_not_before_epoch_seconds: i64,
+    ) -> Result<(), TenderCommandError> {
+        TenderId::parse(&tender_id)?;
+        let Some(cancellation) = self.register_manager_intake_wakeup(
+            &tender_id,
+            &intake_run_id,
+            retry_not_before_epoch_seconds,
+        )?
+        else {
+            return Ok(());
+        };
+        let deadline = UNIX_EPOCH
+            + Duration::from_secs(
+                u64::try_from(retry_not_before_epoch_seconds)
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+            );
+        let delay = deadline
+            .duration_since(SystemTime::now())
+            .unwrap_or_default();
+        let weak_host = self.weak();
+        tauri::async_runtime::spawn(async move {
+            tokio::select! {
+                () = tokio::time::sleep(delay) => {}
+                () = cancellation.cancelled() => return,
+            }
+            let Some(host) = weak_host.upgrade() else {
+                return;
+            };
+            let state = (|| {
+                let parsed_tender_id = TenderId::parse(&tender_id).ok()?;
+                let store = host.tender_store(&parsed_tender_id).ok()?;
+                let mut store = store.lock().ok()?;
+                let status = store.current_manager_intake_status().ok()?;
+                let identity_is_current = status.as_ref().is_some_and(|status| {
+                    status.intake_run_id == intake_run_id
+                        && status.stage == ManagerIntakeStage::WaitingForProvider
+                        && status.retry_not_before_epoch_seconds
+                            == Some(retry_not_before_epoch_seconds)
+                });
+                let cooldown_is_future =
+                    identity_is_current && store.manager_intake_cooldown_is_active().ok()?;
+                Some((identity_is_current, cooldown_is_future))
+            })();
+            let Some((identity_is_current, cooldown_is_future)) = state else {
+                host.finish_manager_intake_wakeup(
+                    &tender_id,
+                    &intake_run_id,
+                    retry_not_before_epoch_seconds,
+                );
+                return;
+            };
+            if !host.finish_manager_intake_wakeup(
+                &tender_id,
+                &intake_run_id,
+                retry_not_before_epoch_seconds,
+            ) || !identity_is_current
+            {
+                return;
+            }
+            if cooldown_is_future {
+                let _ = host.schedule_manager_intake_wakeup(
+                    tender_id,
+                    intake_run_id,
+                    retry_not_before_epoch_seconds,
+                );
+            } else {
+                let _ = host.start_manager_intake_background(tender_id);
+            }
+        });
+        Ok(())
+    }
+
     pub(crate) fn start_manager_intake_background(
         &self,
         tender_id: String,
@@ -1020,18 +1096,28 @@ impl QuantixHost {
                     }
                 }
             }
-            if let Ok(parsed) = TenderId::parse(&tender_id) {
-                if let Ok(store) = host.tender_store(&parsed) {
-                    let pending = store
+            let status = TenderId::parse(&tender_id)
+                .ok()
+                .and_then(|parsed| host.tender_store(&parsed).ok())
+                .and_then(|store| {
+                    store
                         .lock()
                         .ok()
                         .and_then(|store| store.current_manager_intake_status().ok().flatten())
-                        .is_some_and(|status| status.stage.is_active());
-                    if pending {
-                        let _ = host.start_manager_intake_background(tender_id);
+                });
+            if let Some(status) = status {
+                if status.stage == ManagerIntakeStage::WaitingForProvider {
+                    if let Some(deadline) = status.retry_not_before_epoch_seconds {
+                        let _ = host.schedule_manager_intake_wakeup(
+                            tender_id,
+                            status.intake_run_id,
+                            deadline,
+                        );
+                        return;
                     }
                 }
             }
+            host.cancel_manager_intake_wakeup(&tender_id);
         });
         Ok(())
     }
@@ -1043,16 +1129,40 @@ impl QuantixHost {
             }
             let tender_id = TenderId::parse(&entry.tender_id)?;
             let store = self.tender_store(&tender_id)?;
-            let active = store
-                .lock()
-                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-                .current_manager_intake_status()?
-                .is_some_and(|status| status.stage.is_resumable());
-            if active {
+            let (status, cooldown_is_future) = {
+                let mut store = store
+                    .lock()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+                let status = store.current_manager_intake_status()?;
+                let cooldown_is_future = status
+                    .as_ref()
+                    .is_some_and(|status| status.retry_not_before_epoch_seconds.is_some())
+                    && store.manager_intake_cooldown_is_active()?;
+                (status, cooldown_is_future)
+            };
+            let Some(status) = status.filter(|status| status.stage.is_resumable()) else {
+                self.cancel_manager_intake_wakeup(&entry.tender_id);
+                continue;
+            };
+            if cooldown_is_future {
+                self.schedule_manager_intake_wakeup(
+                    entry.tender_id,
+                    status.intake_run_id,
+                    status
+                        .retry_not_before_epoch_seconds
+                        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?,
+                )?;
+            } else {
+                self.cancel_manager_intake_wakeup(&entry.tender_id);
                 self.start_manager_intake_background(entry.tender_id)?;
             }
         }
         Ok(())
+    }
+
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    pub fn resume_manager_intakes_for_verification(&self) -> Result<(), TenderCommandError> {
+        self.resume_manager_intakes()
     }
 
     pub(crate) fn retry_manager_intake(&self, tender_id: &str) -> Result<(), TenderCommandError> {

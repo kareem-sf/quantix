@@ -163,6 +163,211 @@ fn diagnostic_facts_for_run(harness: &Harness, run_id: &str) -> Vec<DiagnosticEv
     facts
 }
 
+async fn prepare_rate_limited_manager_intake(harness: &Harness) {
+    let source = harness._root.path().join("manager-cooldown-resume-source");
+    fs::create_dir_all(&source).expect("create Manager cooldown source");
+    fs::write(
+        source.join("ITT.pdf"),
+        b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
+    )
+    .expect("write Manager cooldown source");
+    harness
+        .host
+        .import_tender_package(ImportTenderPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            source_path: source.to_string_lossy().into_owned(),
+        })
+        .expect("register Manager cooldown package");
+    harness
+        .host
+        .run_manager_intake_for_verification(&harness.tender_id)
+        .await
+        .expect("prepare Manager intake");
+    let source_run = harness
+        .host
+        .run_rate_limited_bootstrap_agent_for_verification(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("create rate-limited provider run");
+    harness
+        .host
+        .persist_manager_rate_limit_for_verification(&harness.tender_id, &source_run.run_id)
+        .expect("persist Manager cooldown");
+}
+
+fn agent_run_count(application_home: &Path, tender_id: &str) -> u32 {
+    rusqlite::Connection::open(
+        application_home
+            .join("tenders")
+            .join(tender_id)
+            .join("tender.sqlite"),
+    )
+    .expect("open Tender Store for Agent Run count")
+    .query_row("SELECT COUNT(*) FROM agent_runs", [], |row| row.get(0))
+    .expect("count Agent Runs")
+}
+
+async fn wait_for_exact_agent_run_count(
+    application_home: &Path,
+    tender_id: &str,
+    expected: u32,
+    context: &str,
+) {
+    for _ in 0..300 {
+        let actual = agent_run_count(application_home, tender_id);
+        if actual == expected {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert_eq!(
+                agent_run_count(application_home, tender_id),
+                expected,
+                "{context}: cooldown wake-up must not make a duplicate provider call"
+            );
+            return;
+        }
+        assert!(
+            actual < expected,
+            "{context}: cooldown wake-up made more than one provider call"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let connection = rusqlite::Connection::open(
+        application_home
+            .join("tenders")
+            .join(tender_id)
+            .join("tender.sqlite"),
+    )
+    .expect("open timed-out Tender Store");
+    let (stage, deadline): (String, Option<i64>) = connection
+        .query_row(
+            "SELECT stage, retry_not_before_epoch_seconds
+             FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("inspect timed-out Manager intake");
+    panic!(
+        "{context}: cooldown wake-up did not make the expected provider call; stage={stage}, deadline={deadline:?}"
+    );
+}
+
+#[tokio::test]
+async fn manager_cooldown_resumes_once_and_survives_restart() {
+    let future = Harness::new("rate-limited");
+    prepare_rate_limited_manager_intake(&future).await;
+    let baseline = agent_run_count(&future.application_home, &future.tender_id);
+    future
+        .database()
+        .execute(
+            "UPDATE manager_intake_runs
+             SET retry_not_before_epoch_seconds = unixepoch('now') + 3600",
+            [],
+        )
+        .expect("store distant future cooldown");
+
+    future
+        .host
+        .resume_manager_intakes_for_verification()
+        .expect("schedule future cooldown");
+    future
+        .host
+        .resume_manager_intakes_for_verification()
+        .expect("deduplicate future cooldown schedule");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        agent_run_count(&future.application_home, &future.tender_id),
+        baseline,
+        "a future cooldown must not call the provider"
+    );
+
+    future
+        .database()
+        .execute(
+            "UPDATE manager_intake_runs
+             SET retry_not_before_epoch_seconds = unixepoch('now') + 1",
+            [],
+        )
+        .expect("store restart-sized future cooldown");
+    let Harness {
+        _root: root,
+        application_home,
+        host,
+        tender_id,
+        ..
+    } = future;
+    drop(host);
+    let reopened = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(root.path().join("resources")),
+    );
+    reopened.accept_runtime_fixture();
+    assert_eq!(ensure_quantix_setup(&reopened).state, SetupState::Ready);
+    reopened
+        .approve_runtime_fixture_ai_selection()
+        .expect("approve reopened fixture AI selection");
+    reopened
+        .resume_manager_intakes_for_verification()
+        .expect("reconstruct future cooldown after restart");
+    reopened
+        .resume_manager_intakes_for_verification()
+        .expect("deduplicate reconstructed cooldown");
+    wait_for_exact_agent_run_count(
+        &application_home,
+        &tender_id,
+        baseline + 1,
+        "reopened future wait",
+    )
+    .await;
+
+    let expired = Harness::new("rate-limited");
+    prepare_rate_limited_manager_intake(&expired).await;
+    let expired_baseline = agent_run_count(&expired.application_home, &expired.tender_id);
+    expired
+        .database()
+        .execute(
+            "UPDATE manager_intake_runs
+             SET retry_not_before_epoch_seconds = unixepoch('now') - 1",
+            [],
+        )
+        .expect("store expired cooldown");
+    let Harness {
+        _root: expired_root,
+        application_home: expired_application_home,
+        host: expired_host,
+        tender_id: expired_tender_id,
+        ..
+    } = expired;
+    drop(expired_host);
+    let reopened_expired = QuantixHost::with_setup_platform_and_runtime(
+        &expired_application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(expired_root.path().join("resources")),
+    );
+    reopened_expired.accept_runtime_fixture();
+    assert_eq!(
+        ensure_quantix_setup(&reopened_expired).state,
+        SetupState::Ready
+    );
+    reopened_expired
+        .approve_runtime_fixture_ai_selection()
+        .expect("approve expired fixture AI selection");
+    reopened_expired
+        .resume_manager_intakes_for_verification()
+        .expect("resume expired cooldown");
+    reopened_expired
+        .resume_manager_intakes_for_verification()
+        .expect("deduplicate expired cooldown start");
+    wait_for_exact_agent_run_count(
+        &expired_application_home,
+        &expired_tender_id,
+        expired_baseline + 1,
+        "expired wait",
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn rebind_cannot_bypass_future_cooldown() {
     let harness = Harness::new("rate-limited");

@@ -57,6 +57,7 @@ struct QuantixHostInner {
     agent_capacity: Arc<Semaphore>,
     active_manager_intakes: Mutex<HashMap<String, OrdinaryWorkLease>>,
     manager_intake_execution: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    manager_intake_wakeups: Mutex<HashMap<ManagerIntakeWakeupKey, CancellationToken>>,
     production_schedulers: Mutex<HashMap<String, OrdinaryWorkLease>>,
     #[cfg(feature = "runtime-fixture")]
     agent_provider: tokio::sync::Mutex<Option<AgentProvider>>,
@@ -72,6 +73,14 @@ struct QuantixHostInner {
 
 impl Drop for QuantixHostInner {
     fn drop(&mut self) {
+        for wakeup in self
+            .manager_intake_wakeups
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .values()
+        {
+            wakeup.cancel();
+        }
         self.diagnostics.shutdown();
     }
 }
@@ -135,6 +144,22 @@ struct ActivePackageIntake {
     operation_id: String,
     control: PackageIntakeControl,
     _ordinary_work: OrdinaryWorkLease,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ManagerIntakeWakeupKey {
+    tender_id: String,
+    intake_run_id: String,
+    retry_not_before_epoch_seconds: i64,
+}
+
+#[derive(Clone)]
+pub(crate) struct WeakQuantixHost(Weak<QuantixHostInner>);
+
+impl WeakQuantixHost {
+    pub(crate) fn upgrade(&self) -> Option<QuantixHost> {
+        self.0.upgrade().map(|inner| QuantixHost { inner })
+    }
 }
 
 static PACKAGE_INTAKE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -237,6 +262,7 @@ impl QuantixHost {
                 agent_capacity: Arc::new(Semaphore::new(2)),
                 active_manager_intakes: Mutex::new(HashMap::new()),
                 manager_intake_execution: Mutex::new(HashMap::new()),
+                manager_intake_wakeups: Mutex::new(HashMap::new()),
                 production_schedulers: Mutex::new(HashMap::new()),
                 #[cfg(feature = "runtime-fixture")]
                 agent_provider: tokio::sync::Mutex::new(None),
@@ -979,6 +1005,75 @@ impl QuantixHost {
                 .clone()
         };
         Ok(mutex.lock_owned().await)
+    }
+
+    pub(crate) fn weak(&self) -> WeakQuantixHost {
+        WeakQuantixHost(Arc::downgrade(&self.inner))
+    }
+
+    pub(crate) fn register_manager_intake_wakeup(
+        &self,
+        tender_id: &str,
+        intake_run_id: &str,
+        retry_not_before_epoch_seconds: i64,
+    ) -> Result<Option<CancellationToken>, TenderCommandError> {
+        let key = ManagerIntakeWakeupKey {
+            tender_id: tender_id.to_owned(),
+            intake_run_id: intake_run_id.to_owned(),
+            retry_not_before_epoch_seconds,
+        };
+        let mut wakeups = self
+            .inner
+            .manager_intake_wakeups
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        if wakeups.contains_key(&key) {
+            return Ok(None);
+        }
+        wakeups.retain(|scheduled, cancellation| {
+            let keep = scheduled.tender_id != tender_id;
+            if !keep {
+                cancellation.cancel();
+            }
+            keep
+        });
+        let cancellation = CancellationToken::new();
+        wakeups.insert(key, cancellation.clone());
+        Ok(Some(cancellation))
+    }
+
+    pub(crate) fn finish_manager_intake_wakeup(
+        &self,
+        tender_id: &str,
+        intake_run_id: &str,
+        retry_not_before_epoch_seconds: i64,
+    ) -> bool {
+        let mut wakeups = self
+            .inner
+            .manager_intake_wakeups
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        wakeups
+            .remove(&ManagerIntakeWakeupKey {
+                tender_id: tender_id.to_owned(),
+                intake_run_id: intake_run_id.to_owned(),
+                retry_not_before_epoch_seconds,
+            })
+            .is_some()
+    }
+
+    pub(crate) fn cancel_manager_intake_wakeup(&self, tender_id: &str) {
+        self.inner
+            .manager_intake_wakeups
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|scheduled, cancellation| {
+                let keep = scheduled.tender_id != tender_id;
+                if !keep {
+                    cancellation.cancel();
+                }
+                keep
+            });
     }
 
     pub(crate) fn set_document_tools_verified(&self, verified: bool) {
