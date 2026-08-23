@@ -641,11 +641,20 @@ pub enum ProviderFailureCategory {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
+pub struct OutputValidationIssue {
+    pub code: String,
+    pub path: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct ProviderFailure {
     pub category: ProviderFailureCategory,
     pub retry_safe: bool,
     pub required_user_action: String,
     pub redacted_detail: Option<String>,
+    pub validation_issues: Vec<OutputValidationIssue>,
 }
 
 impl ProviderFailure {
@@ -660,7 +669,16 @@ impl ProviderFailure {
             retry_safe,
             required_user_action: required_user_action.to_owned(),
             redacted_detail: redacted_detail.map(str::to_owned),
+            validation_issues: Vec::new(),
         }
+    }
+
+    pub(crate) fn with_validation_issues(
+        mut self,
+        validation_issues: Vec<OutputValidationIssue>,
+    ) -> Self {
+        self.validation_issues = validation_issues;
+        self
     }
 }
 

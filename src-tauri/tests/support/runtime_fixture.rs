@@ -1150,6 +1150,16 @@ fn run_agent_turn(
             | "record-extraction-change-assessment"
             | "record-extraction-duplicate-citation"
             | "record-extraction-invalid"
+            | "record-extraction-parity-duplicate-stable-key"
+            | "record-extraction-parity-whitespace-title"
+            | "record-extraction-parity-utf8-title"
+            | "record-extraction-parity-duplicate-field"
+            | "record-extraction-parity-duplicate-evidence"
+            | "record-extraction-parity-evidence-metadata"
+            | "record-extraction-parity-authoring-format"
+            | "record-extraction-parity-deadline"
+            | "record-extraction-parity-contradiction"
+            | "record-extraction-parity-foreign-authority"
             | "record-review"
             | "record-review-delayed"
             | "manager-intake"
@@ -1846,6 +1856,59 @@ fn run_agent_turn(
         let mut candidate = record_extraction_candidate(provider_data_view)?;
         let first = candidate["records"][2]["contradictions"][0]["evidence"][0].clone();
         candidate["records"][2]["contradictions"][0]["evidence"][1] = first;
+        candidate
+    } else if scenario.starts_with("record-extraction-parity-") {
+        let mut candidate = record_extraction_candidate(provider_data_view)?;
+        match scenario {
+            "record-extraction-parity-duplicate-stable-key" => {
+                candidate["records"][1]["stable_key"] =
+                    candidate["records"][0]["stable_key"].clone();
+            }
+            "record-extraction-parity-whitespace-title" => {
+                candidate["records"][0]["title"] = serde_json::json!("  ")
+            }
+            "record-extraction-parity-utf8-title" => {
+                candidate["records"][0]["title"] = serde_json::json!("😀".repeat(126))
+            }
+            "record-extraction-parity-duplicate-field" => {
+                let field = candidate["records"][0]["fields"][0].clone();
+                candidate["records"][0]["fields"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(field);
+            }
+            "record-extraction-parity-duplicate-evidence" => {
+                let first = candidate["records"][0]["fields"][0]["basis"]["evidence"][0].clone();
+                candidate["records"][0]["fields"][0]["basis"]["evidence"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(first);
+            }
+            "record-extraction-parity-contradiction" => {
+                let first = candidate["records"][2]["contradictions"][0]["evidence"][0].clone();
+                candidate["records"][2]["contradictions"][0]["evidence"][1] = first;
+            }
+            "record-extraction-parity-evidence-metadata" => {
+                candidate["records"][0]["fields"][0]["basis"]["authority"] =
+                    serde_json::json!("a0001");
+            }
+            "record-extraction-parity-authoring-format" => {
+                candidate["records"][0]["generation_instruction"] = serde_json::json!({
+                    "kind": "deliverable", "mandatory": true, "section_key": "s", "package_path": "p",
+                    "envelope_key": "e", "language": "en", "authoring_mode": "docx",
+                    "requested_authoring_format": "docx", "evidence": ["e0001"]
+                });
+            }
+            "record-extraction-parity-deadline" => {
+                candidate["records"][2]["fields"][0]["normalized_value"] =
+                    serde_json::json!("not-a-timestamp")
+            }
+            "record-extraction-parity-foreign-authority" => {
+                candidate["records"][0]["fields"][0]["basis"] =
+                    serde_json::json!({"kind": "engineer_entry", "authority": "a0001"});
+            }
+            _ => unreachable!("listed parity fixture scenario"),
+        }
         candidate
     } else if scenario == "record-review-delayed" {
         fs::write(

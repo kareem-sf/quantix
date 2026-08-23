@@ -18,7 +18,9 @@ use crate::{
     tender_intake::SourceRelationshipKind,
 };
 
-use super::tender_record_proposals::{ResolvedTenderRecordProposal, TenderRecordProposalContext};
+use super::tender_record_proposals::{
+    ResolvedTenderRecordProposal, TenderRecordProposalContext, TenderRecordValidationReport,
+};
 use super::{
     agent_records::{
         ensure_agent_run_capacity, insert_event, insert_profile_version, insert_task, load_profile,
@@ -46,6 +48,9 @@ const MAX_EXPANDED_RECORD_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_RECORD_PAGE_ITEMS: u32 = 4;
 const MAX_RECORD_PAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_RECORD_AUTHORITIES: usize = 256;
+
+pub(crate) type TenderRecordProposalValidationResult =
+    Result<ResolvedTenderRecordProposal, TenderRecordValidationReport>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS, Validate)]
 #[serde(deny_unknown_fields)]
@@ -1475,11 +1480,11 @@ impl TenderStore {
         prepared
     }
 
-    pub(crate) fn resolve_tender_record_proposal(
+    pub(crate) fn validate_tender_record_proposal(
         &self,
         task: &TenderTaskView,
-        payload_json: &str,
-    ) -> Result<ResolvedTenderRecordProposal, TenderCommandError> {
+        provider_payload_json: &str,
+    ) -> Result<TenderRecordProposalValidationResult, TenderCommandError> {
         let authorities = task
             .exact_inputs
             .iter()
@@ -1492,12 +1497,130 @@ impl TenderStore {
             .map(|input| load_record_authority(&self.connection, &input.reference))
             .collect::<Result<Vec<_>, _>>()?;
         let context = TenderRecordProposalContext::from_task(task, &authorities)
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-        let resolved = context
-            .resolve(payload_json)
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-        self.validate_canonical_tender_record_candidate(task, &resolved.canonical_payload_json)?;
-        Ok(resolved)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let resolved = match context.resolve(provider_payload_json) {
+            Ok(resolved) => resolved,
+            Err(report) => return Ok(Err(report)),
+        };
+        let report = self.validate_resolved_tender_record_candidate(task, &resolved.candidate);
+        if !report.is_empty() {
+            return Ok(Err(report));
+        }
+        match self
+            .validate_canonical_tender_record_candidate(task, &resolved.canonical_payload_json)
+        {
+            Ok(_) => Ok(Ok(resolved)),
+            Err(error) if error.code == TenderErrorCode::InvalidCommand => {
+                Ok(Err(TenderRecordValidationReport::one("invalid_record", "")))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn validate_resolved_tender_record_candidate(
+        &self,
+        task: &TenderTaskView,
+        candidate: &TenderRecordCandidateBatch,
+    ) -> TenderRecordValidationReport {
+        let mut report = TenderRecordValidationReport { issues: Vec::new() };
+        if candidate.records.is_empty() || candidate.records.len() > MAX_RECORDS_PER_RESULT {
+            report.push("invalid_record", "/records");
+        }
+        let allowed_evidence = task
+            .exact_inputs
+            .iter()
+            .filter(|input| input.kind == "source_evidence")
+            .filter_map(|input| {
+                input
+                    .reference
+                    .split_once('#')
+                    .and_then(|(artifact_id, ordinal)| {
+                        ordinal.parse().ok().map(|ordinal| TenderEvidenceReference {
+                            artifact_id: artifact_id.into(),
+                            version: input.version,
+                            ordinal,
+                        })
+                    })
+            })
+            .collect::<HashSet<_>>();
+        let mut stable_keys = HashSet::new();
+        for (record_index, record) in candidate.records.iter().enumerate() {
+            let record_path = format!("/records/{record_index}");
+            if !valid_record_key(&record.stable_key) {
+                report.push("invalid_record", format!("{record_path}/stable_key"));
+            } else if !stable_keys.insert(record.stable_key.as_str()) {
+                report.push("duplicate_stable_key", format!("{record_path}/stable_key"));
+            }
+            if record.title.trim().is_empty() {
+                report.push("blank_title", format!("{record_path}/title"));
+            } else if record.title.len() > 500 {
+                report.push("title_too_long", format!("{record_path}/title"));
+            }
+            if record.fields.is_empty() || record.fields.len() > MAX_RECORD_FIELDS {
+                report.push("invalid_record", format!("{record_path}/fields"));
+            }
+            if record.contradictions.len() > MAX_RECORD_CONTRADICTIONS {
+                report.push("invalid_record", format!("{record_path}/contradictions"));
+            }
+            if let Some(instruction) = &record.generation_instruction {
+                let path = format!("{record_path}/generation_instruction");
+                let invalid_format = match instruction.authoring_mode {
+                    GenerationAuthoringMode::Unsupported => instruction
+                        .requested_authoring_format
+                        .as_deref()
+                        .is_none_or(|format| format.trim().is_empty() || format.len() > 200),
+                    _ => instruction.requested_authoring_format.is_some(),
+                };
+                if invalid_format {
+                    report.push(
+                        "invalid_authoring_format",
+                        format!("{path}/requested_authoring_format"),
+                    );
+                }
+                if has_duplicate_or_foreign_evidence(&instruction.evidence, &allowed_evidence) {
+                    report.push("duplicate_evidence", format!("{path}/evidence"));
+                }
+            }
+            let mut field_names = HashSet::new();
+            for (field_index, field) in record.fields.iter().enumerate() {
+                let path = format!("{record_path}/fields/{field_index}");
+                if !valid_record_key(&field.name) {
+                    report.push("invalid_record", format!("{path}/name"));
+                } else if !field_names.insert(field.name.as_str()) {
+                    report.push("duplicate_field_name", format!("{path}/name"));
+                }
+                if has_duplicate_or_foreign_evidence(&field.evidence, &allowed_evidence) {
+                    report.push("duplicate_evidence", format!("{path}/basis/evidence"));
+                }
+                if field.basis_kind == TenderRecordBasisKind::Evidence
+                    && (field.basis_reference.is_some() || field.basis_description.is_some())
+                {
+                    report.push("evidence_basis_metadata_forbidden", format!("{path}/basis"));
+                }
+                if record.kind == TenderRecordKind::Deadline
+                    && (field.original_expression.is_none()
+                        || field.timezone.is_none()
+                        || (field.normalized_value.is_none() && field.uncertainty.is_none())
+                        || field
+                            .normalized_value
+                            .as_deref()
+                            .is_some_and(|value| value.parse::<Timestamp>().is_err()))
+                {
+                    report.push("invalid_deadline", path.clone());
+                }
+            }
+            for (contradiction_index, contradiction) in record.contradictions.iter().enumerate() {
+                if contradiction.evidence.len() < 2
+                    || has_duplicate_or_foreign_evidence(&contradiction.evidence, &allowed_evidence)
+                {
+                    report.push(
+                        "invalid_contradiction_evidence",
+                        format!("{record_path}/contradictions/{contradiction_index}/evidence"),
+                    );
+                }
+            }
+        }
+        report
     }
 
     pub(crate) fn validate_canonical_tender_record_candidate(
@@ -3418,6 +3541,16 @@ fn valid_record_key(value: &str) -> bool {
                 || byte.is_ascii_digit()
                 || (index > 0 && matches!(byte, b'_' | b'-'))
         })
+}
+
+fn has_duplicate_or_foreign_evidence(
+    evidence: &[TenderEvidenceReference],
+    allowed_evidence: &HashSet<TenderEvidenceReference>,
+) -> bool {
+    let mut unique = HashSet::new();
+    evidence
+        .iter()
+        .any(|reference| !allowed_evidence.contains(reference) || !unique.insert(reference))
 }
 
 fn format_record_cursor(stable_key: &str, version: u32) -> String {

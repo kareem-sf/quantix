@@ -5,8 +5,8 @@ use quantix_lib::{
     BootstrapRole, ChangeAssessmentClassification, ChangeAssessmentStatus,
     ConfirmSourceRelationshipCommand, CreateTenderCommand, CreateTenderEngineerEntryCommand,
     DecideChangeAssessmentCommand, DecideTenderRecordCommand, ImportTenderPackageCommand,
-    InspectChangeAssessmentsCommand, ParseSourceArtifactCommand, ProviderFailureCategory,
-    QuantixHost, ResolveIndeterminateAgentRunCommand, ReviseTenderCommand,
+    InspectChangeAssessmentsCommand, OutputValidationIssue, ParseSourceArtifactCommand,
+    ProviderFailureCategory, QuantixHost, ResolveIndeterminateAgentRunCommand, ReviseTenderCommand,
     RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, RuntimeLayout, SetupPlatform,
     SetupState, SourceRelationshipKind, StoragePermissions, TenderEvidenceReference,
     TenderIntegrityState, TenderLifecyclePhase, TenderRecordAuthorityReference,
@@ -177,6 +177,113 @@ fn records_for_run(
         .into_iter()
         .filter(|record| record.author_run_id == run_id)
         .collect()
+}
+
+#[tokio::test]
+async fn schema_domain_parity_reports_stable_paths() {
+    let cases = [
+        (
+            "record-extraction-parity-duplicate-stable-key",
+            "duplicate_stable_key",
+            "/records/1/stable_key",
+            "Record stable keys must be unique.",
+        ),
+        (
+            "record-extraction-parity-whitespace-title",
+            "blank_title",
+            "/records/0/title",
+            "Record titles cannot be blank.",
+        ),
+        (
+            "record-extraction-parity-utf8-title",
+            "title_too_long",
+            "/records/0/title",
+            "Record titles must not exceed 500 bytes.",
+        ),
+        (
+            "record-extraction-parity-duplicate-field",
+            "duplicate_field_name",
+            "/records/0/fields/1/name",
+            "Record field names must be unique.",
+        ),
+        (
+            "record-extraction-parity-duplicate-evidence",
+            "duplicate_evidence",
+            "/records/0/fields/0/basis/evidence",
+            "Evidence references must be unique.",
+        ),
+        (
+            "record-extraction-parity-evidence-metadata",
+            "schema_rejection",
+            "",
+            "Provider output is not a valid Tender Record proposal.",
+        ),
+        (
+            "record-extraction-parity-authoring-format",
+            "invalid_authoring_format",
+            "/records/0/generation_instruction/requested_authoring_format",
+            "Generation instruction authoring format is invalid.",
+        ),
+        (
+            "record-extraction-parity-deadline",
+            "invalid_deadline",
+            "/records/2/fields/0",
+            "Deadline fields require a valid parsed deadline.",
+        ),
+        (
+            "record-extraction-parity-contradiction",
+            "invalid_contradiction_evidence",
+            "/records/2/contradictions/0/evidence",
+            "Contradictions require at least two distinct evidence references.",
+        ),
+        (
+            "record-extraction-parity-foreign-authority",
+            "schema_rejection",
+            "/records/0/fields/0/basis/authority",
+            "Authority handle is not available to this Tender task.",
+        ),
+    ];
+    for (scenario, code, path, message) in cases {
+        let harness = RuntimeHarness::new(scenario);
+        let evidence = harness
+            .parsed_pdf_evidence("parity", b"TENDER_RECORD_GOLDEN")
+            .await;
+        let result = harness
+            .host
+            .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+                tender_id: harness.tender_id.clone(),
+                evidence: evidence.references,
+                authorities: Vec::new(),
+            })
+            .await
+            .expect("run parity scenario");
+        let failure = result.run.failure.expect("invalid output failure");
+        assert_eq!(
+            failure.category,
+            ProviderFailureCategory::OutputInvalid,
+            "{scenario}"
+        );
+        if code == "schema_rejection" {
+            assert!(
+                failure.validation_issues.is_empty(),
+                "{scenario}: {failure:#?}"
+            );
+            continue;
+        }
+        assert!(
+            !failure.validation_issues.is_empty(),
+            "{scenario} did not retain its validation report: {failure:#?}"
+        );
+        assert_eq!(
+            failure.validation_issues[0],
+            OutputValidationIssue {
+                code: code.into(),
+                path: path.into(),
+                message: message.into(),
+            },
+            "{scenario}"
+        );
+    }
 }
 
 #[test]

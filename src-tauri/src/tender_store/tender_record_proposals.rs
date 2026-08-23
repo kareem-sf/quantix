@@ -152,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn resolver_rejects_an_evidence_handle_from_another_task() {
+    fn schema_domain_parity_reports_stable_paths() {
         let context = TenderRecordProposalContext::new(
             &[evidence("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1, 4)],
             &[],
@@ -180,9 +180,10 @@ mod tests {
         let report = context.resolve(&payload.to_string()).unwrap_err();
         assert_eq!(
             report.issues,
-            vec![TenderRecordValidationIssue {
+            vec![OutputValidationIssue {
                 code: "unknown_evidence_handle".into(),
-                pointer: "/records/0/fields/0/basis/evidence/0".into(),
+                path: "/records/0/fields/0/basis/evidence/0".into(),
+                message: "Evidence handle is not available to this Tender task.".into(),
             }]
         );
     }
@@ -241,7 +242,7 @@ use super::tender_records::{
     TenderRecordCandidateBatch, TenderRecordContradictionCandidate, TenderRecordFieldCandidate,
     TenderRecordGenerationInstructionCandidate, TenderRecordKind,
 };
-use crate::agent_runtime::TenderTaskView;
+use crate::agent_runtime::{OutputValidationIssue, TenderTaskView};
 
 const MAX_HANDLES: usize = 9_999;
 
@@ -319,35 +320,64 @@ pub(crate) struct TenderRecordContradictionProposal {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TenderRecordValidationIssue {
-    pub code: String,
-    pub pointer: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TenderRecordValidationReport {
-    pub issues: Vec<TenderRecordValidationIssue>,
+    pub issues: Vec<OutputValidationIssue>,
 }
 
 impl TenderRecordValidationReport {
-    fn one(code: &str, pointer: impl Into<String>) -> Self {
-        Self {
-            issues: vec![TenderRecordValidationIssue {
-                code: code.into(),
-                pointer: pointer.into(),
-            }],
-        }
+    const MAX_ISSUES: usize = 64;
+
+    pub(crate) fn one(code: &str, path: impl Into<String>) -> Self {
+        let mut report = Self { issues: Vec::new() };
+        report.push(code, path);
+        report
     }
 
-    fn push(&mut self, code: &str, pointer: impl Into<String>) {
-        self.issues.push(TenderRecordValidationIssue {
+    pub(crate) fn push(&mut self, code: &str, path: impl Into<String>) {
+        self.issues.push(OutputValidationIssue {
             code: code.into(),
-            pointer: pointer.into(),
+            path: path.into(),
+            message: validation_message(code).into(),
         });
+        self.issues
+            .sort_by(|left, right| left.path.cmp(&right.path).then(left.code.cmp(&right.code)));
+        self.issues.truncate(Self::MAX_ISSUES);
     }
 
     pub(crate) fn is_empty(&self) -> bool {
         self.issues.is_empty()
+    }
+}
+
+fn validation_message(code: &str) -> &'static str {
+    match code {
+        "invalid_evidence_context" => "Tender task evidence context is invalid.",
+        "duplicate_evidence_reference" => "Tender task evidence references must be unique.",
+        "invalid_authority_context" => "Tender task authority context is invalid.",
+        "duplicate_authority" => "Tender task authorities must be unique.",
+        "invalid_task_context" => "Tender task context is invalid.",
+        "contract_serialization_failed" => "Tender output contract could not be serialized.",
+        "invalid_provider_payload" => "Provider output is not a valid Tender Record proposal.",
+        "canonicalization_failed" => "Tender Record proposal could not be canonicalized.",
+        "unknown_evidence_handle" => "Evidence handle is not available to this Tender task.",
+        "unknown_authority_handle" => "Authority handle is not available to this Tender task.",
+        "duplicate_stable_key" => "Record stable keys must be unique.",
+        "blank_title" => "Record titles cannot be blank.",
+        "title_too_long" => "Record titles must not exceed 500 bytes.",
+        "duplicate_field_name" => "Record field names must be unique.",
+        "duplicate_evidence" => "Evidence references must be unique.",
+        "evidence_basis_metadata_forbidden" => {
+            "Evidence-backed fields cannot contain authority metadata."
+        }
+        "invalid_authoring_format" => "Generation instruction authoring format is invalid.",
+        "invalid_deadline" => "Deadline fields require a valid parsed deadline.",
+        "invalid_contradiction_evidence" => {
+            "Contradictions require at least two distinct evidence references."
+        }
+        "foreign_authority" => "Authority is not available to this Tender task.",
+        "invalid_record" => "Tender Record violates a domain validation rule.",
+        "expanded_record_too_large" => "Tender Record exceeds the expanded size limit.",
+        _ => "Tender Record proposal failed validation.",
     }
 }
 

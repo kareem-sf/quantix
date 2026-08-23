@@ -569,24 +569,25 @@ impl TenderStore {
                 .iter()
                 .any(|capability| capability == RECORD_EXTRACTION_CAPABILITY)
         {
-            let validation = execution
+            let payload = execution
                 .candidate_payload_json
                 .as_deref()
-                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
-                .and_then(|payload| self.resolve_tender_record_proposal(&prepared.task, payload));
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            let validation = self.validate_tender_record_proposal(&prepared.task, payload)?;
             match validation {
                 Ok(resolved) => {
                     execution.candidate_payload_json = Some(resolved.provider_payload_json);
                     tender_record_candidate = Some(resolved.candidate);
                 }
-                Err(_) => {
+                Err(report) => {
                     execution.state = AgentRunState::Failed;
                     execution.failure = Some(ProviderFailure::new(
                         ProviderFailureCategory::OutputInvalid,
                         true,
                         "Run the Tender Record extraction again with complete exact provenance.",
                         Some("The candidate Tender Records failed Quantix provenance validation."),
-                    ));
+                    )
+                    .with_validation_issues(report.issues));
                     execution.candidate_payload_json = None;
                     if let Some(event) = execution
                         .events
