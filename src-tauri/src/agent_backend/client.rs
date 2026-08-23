@@ -114,6 +114,7 @@ pub(crate) enum TurnDisposition {
 pub(crate) enum BackendError {
     AuthenticationRequired,
     RateLimited { retry_after_ms: Option<u64> },
+    RequestBudgetExceeded { request_bytes: u64 },
     Protocol(String),
     Transport(String),
     Interrupted,
@@ -128,6 +129,9 @@ impl std::fmt::Display for BackendError {
                 Some(ms) => write!(f, "chatgpt rate limited (retry after {ms} ms)"),
                 None => write!(f, "chatgpt rate limited"),
             },
+            BackendError::RequestBudgetExceeded { request_bytes } => {
+                write!(f, "chatgpt request budget exceeded ({request_bytes} bytes)")
+            }
             BackendError::Protocol(detail) => write!(f, "chatgpt protocol error: {detail}"),
             BackendError::Transport(detail) => write!(f, "chatgpt transport error: {detail}"),
             BackendError::Interrupted => write!(f, "chatgpt request interrupted"),
@@ -571,6 +575,16 @@ impl ChatGptBackend for ReqwestBackend {
             if is_cancelled() {
                 return Err(BackendError::Interrupted);
             }
+            let request_body = serde_json::to_vec(&build_request_body(req))
+                .map_err(|_| BackendError::Protocol("request serialization failed".to_string()))?;
+            let request_bytes = u64::try_from(request_body.len()).map_err(|_| {
+                BackendError::RequestBudgetExceeded {
+                    request_bytes: u64::MAX,
+                }
+            })?;
+            if request_bytes > DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES {
+                return Err(BackendError::RequestBudgetExceeded { request_bytes });
+            }
             let mut request = self
                 .http
                 .post(&self.endpoint)
@@ -578,7 +592,9 @@ impl ChatGptBackend for ReqwestBackend {
                 .header("ChatGPT-Account-Id", &auth.account_id)
                 .header("originator", ORIGINATOR)
                 .header("session-id", &req.session_id)
-                .header("user-agent", user_agent());
+                .header("user-agent", user_agent())
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(request_body);
             if let Some(compute_residency) = auth
                 .compute_residency
                 .as_deref()
@@ -586,7 +602,7 @@ impl ChatGptBackend for ReqwestBackend {
             {
                 request = request.header(COMPUTE_RESIDENCY_HEADER, compute_residency);
             }
-            let send = request.json(&build_request_body(req)).send();
+            let send = request.send();
             tokio::pin!(send);
             let response = loop {
                 tokio::select! {
@@ -668,6 +684,31 @@ mod tests {
             plan_type: Some("plus".to_string()),
             compute_residency: Some("us".to_string()),
         }
+    }
+
+    fn request_with_serialized_size(target_bytes: u64, follow_up: bool) -> BackendRequest {
+        let mut request = sample_request();
+        if follow_up {
+            request.input_items.push(serde_json::json!({
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": "tool result",
+            }));
+        }
+        request.instructions.clear();
+        let base_bytes = serde_json::to_vec(&build_request_body(&request))
+            .expect("serialize base request")
+            .len();
+        let target_bytes = usize::try_from(target_bytes).expect("request target fits usize");
+        assert!(base_bytes <= target_bytes, "base request exceeds target");
+        request.instructions = "x".repeat(target_bytes - base_bytes);
+        assert_eq!(
+            serde_json::to_vec(&build_request_body(&request))
+                .expect("serialize sized request")
+                .len(),
+            target_bytes
+        );
+        request
     }
 
     #[test]
@@ -1180,6 +1221,55 @@ mod tests {
         assert_eq!(
             body["reasoning"],
             serde_json::json!({"effort": "high", "summary": "auto"})
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn request_body_respects_hard_intake_budget() {
+        let stream_body = script_bytes("happy-text");
+        let exact_server = MockServer::start(move |_| (200, Vec::new(), stream_body.clone()));
+        let exact_backend = ReqwestBackend::new(&exact_server.base_url).unwrap();
+        let auth = sample_auth();
+        let exact_request =
+            request_with_serialized_size(DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES, false);
+        let exact_bytes = serde_json::to_vec(&build_request_body(&exact_request)).unwrap();
+
+        let disposition = exact_backend
+            .create_response(&auth, &exact_request, &|| false, &mut |_| Ok(()))
+            .await
+            .expect("an exact-cap initial request must be sent");
+
+        assert_eq!(disposition, TurnDisposition::Completed);
+        let captured = exact_server
+            .captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("exact-cap request reached HTTP server");
+        assert_eq!(
+            captured.body, exact_bytes,
+            "measured bytes must be transmitted"
+        );
+
+        let stream_body = script_bytes("happy-text");
+        let over_server = MockServer::start(move |_| (200, Vec::new(), stream_body.clone()));
+        let over_backend = ReqwestBackend::new(&over_server.base_url).unwrap();
+        let over_request =
+            request_with_serialized_size(DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES + 1, true);
+
+        let error = over_backend
+            .create_response(&auth, &over_request, &|| false, &mut |_| Ok(()))
+            .await
+            .expect_err("an over-cap follow-up request must fail locally");
+
+        assert!(matches!(
+            error,
+            BackendError::RequestBudgetExceeded { request_bytes }
+                if request_bytes == DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES + 1
+        ));
+        assert!(
+            over_server.captured.lock().unwrap().is_none(),
+            "an over-cap follow-up must make zero HTTP calls"
         );
     }
 

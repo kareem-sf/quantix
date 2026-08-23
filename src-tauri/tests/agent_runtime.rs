@@ -653,6 +653,48 @@ async fn missing_chatgpt_connection_fails_before_a_backend_turn_is_established()
 }
 
 #[tokio::test]
+async fn local_request_budget_failure_is_nonretryable_and_stably_diagnosed() {
+    let harness = Harness::new("success");
+    let request_bytes = 512_u64 * 1024 + 1;
+
+    let run = harness
+        .host
+        .run_request_budget_exceeded_bootstrap_agent_for_verification(
+            RunBootstrapAgentCommand {
+                tender_id: harness.tender_id.clone(),
+                retry_of_run_id: None,
+            },
+            request_bytes,
+        )
+        .await
+        .expect("persist local request budget failure");
+
+    assert_eq!(run.state, AgentRunState::Failed, "{run:#?}");
+    let failure = run.failure.as_ref().expect("request budget failure");
+    assert_eq!(
+        failure.category,
+        ProviderFailureCategory::RequestBudgetExceeded
+    );
+    assert!(!failure.retry_safe);
+    assert!(run.proposed_result.is_none());
+    assert_eq!(
+        run.events
+            .iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        vec![ProviderEventKind::RunStarted, ProviderEventKind::Terminal]
+    );
+    let facts = diagnostic_facts_for_run(&harness, &run.run_id);
+    let failed = facts
+        .iter()
+        .find(|fact| fact.event_name == "provider_turn_failed")
+        .expect("provider failure diagnostic");
+    assert_eq!(failed.error_code.as_deref(), Some("REQUESTBUDGETEXCEEDED"));
+    assert!(!failed.summary.contains(&harness.tender_id));
+    assert!(!failed.summary.contains(&run.task.task_id));
+}
+
+#[tokio::test]
 async fn schema_invalid_provider_output_is_a_completed_transport_and_rejected_candidate() {
     let harness = Harness::new("output-invalid");
     let run = harness

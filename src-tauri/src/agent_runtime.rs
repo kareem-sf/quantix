@@ -646,6 +646,7 @@ pub enum ProviderFailureCategory {
     ProtocolInvalid,
     ProcessFailed,
     RateLimited,
+    RequestBudgetExceeded,
     OutputInvalid,
     Interrupted,
     OutcomeUnknown,
@@ -686,6 +687,9 @@ pub struct ProviderFailure {
     pub redacted_detail: Option<String>,
     pub retry_after_milliseconds: Option<u64>,
     pub validation_issues: Vec<OutputValidationIssue>,
+    #[serde(skip)]
+    #[ts(skip)]
+    pub(crate) request_body_bytes: Option<u64>,
 }
 
 impl ProviderFailure {
@@ -702,11 +706,17 @@ impl ProviderFailure {
             redacted_detail: redacted_detail.map(str::to_owned),
             retry_after_milliseconds: None,
             validation_issues: Vec::new(),
+            request_body_bytes: None,
         }
     }
 
     pub(crate) fn with_retry_after_milliseconds(mut self, value: Option<u64>) -> Self {
         self.retry_after_milliseconds = value;
+        self
+    }
+
+    pub(crate) fn with_request_body_bytes(mut self, value: u64) -> Self {
+        self.request_body_bytes = Some(value);
         self
     }
 
@@ -890,6 +900,7 @@ pub(crate) enum DeterministicProviderOutcome {
     Completed,
     Failed,
     RateLimited,
+    RequestBudgetExceeded(u64),
     Interrupted,
 }
 
@@ -1599,6 +1610,19 @@ impl QuantixHost {
         self.run_bootstrap_agent_with_deterministic_provider(
             command,
             DeterministicProviderOutcome::RateLimited,
+        )
+        .await
+    }
+
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    pub async fn run_request_budget_exceeded_bootstrap_agent_for_verification(
+        &self,
+        command: RunBootstrapAgentCommand,
+        request_bytes: u64,
+    ) -> Result<AgentRunInspection, TenderCommandError> {
+        self.run_bootstrap_agent_with_deterministic_provider(
+            command,
+            DeterministicProviderOutcome::RequestBudgetExceeded(request_bytes),
         )
         .await
     }
@@ -3562,12 +3586,22 @@ fn record_provider_turn_diagnostic(
     deep.error_code = error_code;
     deep.deep = true;
     deep.request_id = Some(format!("run-{}", prepared.run_id));
-    deep.size_bytes = execution
-        .candidate_payload_json
-        .as_ref()
-        .map(|payload| u64::try_from(payload.len()).unwrap_or(u64::MAX));
+    deep.size_bytes = provider_protocol_size_bytes(execution);
     deep.success = None;
     host.diagnostics().record_tender(tender_id, deep);
+}
+
+fn provider_protocol_size_bytes(execution: &ProviderExecution) -> Option<u64> {
+    execution
+        .failure
+        .as_ref()
+        .and_then(|failure| failure.request_body_bytes)
+        .or_else(|| {
+            execution
+                .candidate_payload_json
+                .as_ref()
+                .map(|payload| u64::try_from(payload.len()).unwrap_or(u64::MAX))
+        })
 }
 
 fn record_provider_turn_started(host: &QuantixHost, tender_id: &str, prepared: &PreparedAgentRun) {
@@ -4219,6 +4253,9 @@ fn deterministic_provider_execution(
             .with_retry_after_milliseconds(Some(60_000)),
             Instant::now(),
         ),
+        DeterministicProviderOutcome::RequestBudgetExceeded(request_bytes) => {
+            failed_execution(request_budget_failure(request_bytes), Instant::now())
+        }
         DeterministicProviderOutcome::Interrupted => interrupted_execution(Instant::now()),
     }
 }
@@ -4330,6 +4367,16 @@ fn permission_failure() -> ProviderFailure {
         "Create a new Agent Run with a current Permission Grant.",
         Some("The Agent Run Permission Grant expired."),
     )
+}
+
+pub(crate) fn request_budget_failure(request_bytes: u64) -> ProviderFailure {
+    ProviderFailure::new(
+        ProviderFailureCategory::RequestBudgetExceeded,
+        false,
+        "Reduce the Tender evidence included in this request before retrying.",
+        Some("The prepared request exceeded the local provider request budget."),
+    )
+    .with_request_body_bytes(request_bytes)
 }
 
 #[cfg(feature = "runtime-fixture")]
@@ -4855,6 +4902,26 @@ fn valid_identifier(value: &str) -> bool {
 mod tests {
     use super::*;
     use crate::tender_store::CreateTenderCommand;
+
+    #[test]
+    fn request_budget_diagnostics_record_only_the_exact_byte_count() {
+        let request_bytes = crate::agent_backend::DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES + 1;
+        let execution = failed_execution(request_budget_failure(request_bytes), Instant::now());
+
+        assert_eq!(
+            provider_protocol_size_bytes(&execution),
+            Some(request_bytes)
+        );
+        let failure = execution.failure.expect("request budget failure");
+        assert!(!failure
+            .required_user_action
+            .contains(&request_bytes.to_string()));
+        assert!(!failure
+            .redacted_detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains(&request_bytes.to_string()));
+    }
 
     #[tokio::test]
     async fn deterministic_provider_accepts_a_new_default_local_only_tender() {

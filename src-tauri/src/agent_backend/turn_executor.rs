@@ -1,6 +1,8 @@
 use serde_json::Value;
 
-use crate::agent_runtime::{ProviderFailure, ProviderFailureCategory, ProviderUsage};
+use crate::agent_runtime::{
+    request_budget_failure, ProviderFailure, ProviderFailureCategory, ProviderUsage,
+};
 use crate::chatgpt_oauth::StoredConnection;
 
 use super::client::{
@@ -391,6 +393,9 @@ fn backend_failure(error: BackendError, turn_advanced: bool) -> ProviderFailure 
     match error {
         BackendError::AuthenticationRequired => authentication_failure(),
         BackendError::RateLimited { retry_after_ms } => rate_limit_failure(retry_after_ms),
+        BackendError::RequestBudgetExceeded { request_bytes } => {
+            request_budget_failure(request_bytes)
+        }
         BackendError::Protocol(_) => protocol_failure(turn_advanced),
         BackendError::Transport(_) => transport_failure(turn_advanced),
         BackendError::Interrupted => interruption_failure(turn_advanced),
@@ -1356,5 +1361,31 @@ mod tests {
             assert_eq!(failure.category, ProviderFailureCategory::RateLimited);
             assert_eq!(failure.retry_after_milliseconds, expected, "{source}");
         }
+    }
+
+    #[test]
+    fn request_budget_failure_is_distinct_nonretryable_and_redacted() {
+        let request_bytes = super::super::client::DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES + 1;
+
+        let failure = backend_failure(BackendError::RequestBudgetExceeded { request_bytes }, false);
+
+        assert_eq!(
+            failure.category,
+            ProviderFailureCategory::RequestBudgetExceeded
+        );
+        assert!(!failure.retry_safe);
+        assert_eq!(failure.request_body_bytes, Some(request_bytes));
+        assert!(!failure
+            .required_user_action
+            .contains(&request_bytes.to_string()));
+        assert!(!failure
+            .redacted_detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains(&request_bytes.to_string()));
+        assert!(serde_json::to_value(&failure)
+            .expect("serialize provider failure")
+            .get("request_body_bytes")
+            .is_none());
     }
 }
