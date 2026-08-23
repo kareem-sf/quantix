@@ -214,6 +214,118 @@ fn fixture_record_extraction_turn_count(codex: &Path) -> u32 {
         .expect("parse fixture extraction turn count")
 }
 
+async fn wait_until_agent_grant_expires(application_home: &Path, tender_id: &str, run_id: &str) {
+    let database = application_home
+        .join("tenders")
+        .join(tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open Tender Store database");
+    let permission_grant_json: String = connection
+        .query_row(
+            "SELECT permission_grant_json FROM agent_runs WHERE run_id = ?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .expect("load Agent Run Permission Grant");
+    drop(connection);
+    let permission_grant: serde_json::Value =
+        serde_json::from_str(&permission_grant_json).expect("parse Agent Run Permission Grant");
+    let issued_at = permission_grant
+        .get("issued_at")
+        .and_then(serde_json::Value::as_str)
+        .expect("Permission Grant issue time")
+        .parse::<jiff::Timestamp>()
+        .expect("parse Permission Grant issue time");
+    let duration_seconds = permission_grant
+        .pointer("/resource_budget/duration_seconds")
+        .and_then(serde_json::Value::as_u64)
+        .expect("Permission Grant duration");
+    let elapsed = std::time::Duration::try_from(issued_at.duration_until(jiff::Timestamp::now()))
+        .unwrap_or_default();
+    let until_expired = std::time::Duration::from_secs(duration_seconds).saturating_sub(elapsed);
+    tokio::time::sleep(until_expired + std::time::Duration::from_millis(250)).await;
+}
+
+fn set_fixture_provider_unavailable(application_home: &Path) {
+    let database = application_home.join("installation.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open installation database");
+    let (connection_id, connection_json): (String, String) = connection
+        .query_row(
+            "SELECT connection_id, connection_json FROM provider_connections LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load fixture Provider connection");
+    let mut provider: serde_json::Value =
+        serde_json::from_str(&connection_json).expect("parse fixture Provider connection");
+    provider["status"] = serde_json::Value::String("temporarily_unavailable".into());
+    provider["status_summary"] =
+        serde_json::Value::String("Fixture Provider temporarily unavailable.".into());
+    connection
+        .execute(
+            "UPDATE provider_connections
+             SET connection_json = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE connection_id = ?1",
+            rusqlite::params![
+                connection_id,
+                serde_json_canonicalizer::to_string(&provider)
+                    .expect("canonical fixture Provider connection")
+            ],
+        )
+        .expect("make fixture Provider unavailable");
+}
+
+fn persist_repair_thread_checkpoint(application_home: &Path, tender_id: &str, repair_run_id: &str) {
+    let database = application_home
+        .join("tenders")
+        .join(tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open Tender Store database");
+    let (thread_ref, permission_grant_json): (String, String) = connection
+        .query_row(
+            "SELECT provider_threads.thread_ref, agent_runs.permission_grant_json
+             FROM provider_threads, agent_runs
+             WHERE provider_threads.status = 'active' AND agent_runs.run_id = ?1",
+            [repair_run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load persisted repair thread checkpoint inputs");
+    let permission_grant: serde_json::Value = serde_json::from_str(&permission_grant_json)
+        .expect("parse persisted repair Permission Grant");
+    let exposure_json = serde_json_canonicalizer::to_string(
+        permission_grant
+            .get("thread_exposure")
+            .expect("Permission Grant thread exposure"),
+    )
+    .expect("canonical repair thread exposure");
+    connection
+        .execute(
+            "UPDATE agent_runs SET provider_thread_ref = ?2 WHERE run_id = ?1",
+            rusqlite::params![repair_run_id, thread_ref],
+        )
+        .expect("persist repair thread ref before simulated process loss");
+    connection
+        .execute(
+            "INSERT INTO provider_thread_exposures (
+               thread_ref, run_id, exposure_json, created_at
+             ) VALUES (?1, ?2, ?3, '2026-08-23T00:00:00Z')",
+            rusqlite::params![thread_ref, repair_run_id, exposure_json],
+        )
+        .expect("persist repair thread exposure before simulated process loss");
+    connection
+        .execute(
+            "INSERT INTO provider_events (
+               run_id, sequence, kind, summary, correlation_id,
+               request_fingerprint, denial_reason, opaque_reference, created_at
+             ) VALUES (
+               ?1, 2, 'thread_resumed', 'Provider Thread resumed', NULL,
+               NULL, NULL, ?2, '2026-08-23T00:00:00Z'
+             )",
+            rusqlite::params![repair_run_id, thread_ref],
+        )
+        .expect("persist repair thread event before simulated process loss");
+}
+
 fn extraction_run_inspections(
     host: &QuantixHost,
     tender_id: &str,
@@ -754,56 +866,11 @@ async fn manager_intake_restart_blocks_a_repair_after_thread_checkpoint_without_
     let runs_before_restart =
         tender_record_extraction_runs(&harness.application_home, &harness.tender_id);
     let repair_run_id = runs_before_restart[1].0.clone();
-    let database = harness
-        .application_home
-        .join("tenders")
-        .join(&harness.tender_id)
-        .join("tender.sqlite");
-    let connection = rusqlite::Connection::open(database).expect("open Tender Store database");
-    let (thread_ref, permission_grant_json): (String, String) = connection
-        .query_row(
-            "SELECT provider_threads.thread_ref, agent_runs.permission_grant_json
-             FROM provider_threads, agent_runs
-             WHERE provider_threads.status = 'active' AND agent_runs.run_id = ?1",
-            [&repair_run_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .expect("load persisted repair thread checkpoint inputs");
-    let permission_grant: serde_json::Value = serde_json::from_str(&permission_grant_json)
-        .expect("parse persisted repair Permission Grant");
-    let exposure_json = serde_json_canonicalizer::to_string(
-        permission_grant
-            .get("thread_exposure")
-            .expect("Permission Grant thread exposure"),
-    )
-    .expect("canonical repair thread exposure");
-    connection
-        .execute(
-            "UPDATE agent_runs SET provider_thread_ref = ?2 WHERE run_id = ?1",
-            rusqlite::params![repair_run_id, thread_ref],
-        )
-        .expect("persist repair thread ref before simulated crash");
-    connection
-        .execute(
-            "INSERT INTO provider_thread_exposures (
-               thread_ref, run_id, exposure_json, created_at
-             ) VALUES (?1, ?2, ?3, '2026-08-23T00:00:00Z')",
-            rusqlite::params![thread_ref, repair_run_id, exposure_json],
-        )
-        .expect("persist repair thread exposure before simulated crash");
-    connection
-        .execute(
-            "INSERT INTO provider_events (
-               run_id, sequence, kind, summary, correlation_id,
-               request_fingerprint, denial_reason, opaque_reference, created_at
-             ) VALUES (
-               ?1, 2, 'thread_resumed', 'Provider Thread resumed', NULL,
-               NULL, NULL, ?2, '2026-08-23T00:00:00Z'
-             )",
-            rusqlite::params![repair_run_id, thread_ref],
-        )
-        .expect("persist repair thread event before simulated crash");
-    drop(connection);
+    persist_repair_thread_checkpoint(
+        &harness.application_home,
+        &harness.tender_id,
+        &repair_run_id,
+    );
     intake.abort();
     let _ = intake.await;
 
@@ -844,6 +911,212 @@ async fn manager_intake_restart_blocks_a_repair_after_thread_checkpoint_without_
         tender_record_extraction_runs(&application_home, &tender_id),
         reopened_runs,
         "blocked recovery cannot execute the child or create another source"
+    );
+    assert_eq!(fixture_record_extraction_turn_count(&codex), 1);
+}
+
+#[tokio::test]
+async fn manager_intake_same_host_retries_a_repair_that_expires_while_waiting_for_provider() {
+    let harness = RuntimeHarness::new("manager-intake-repair-invalid-then-valid");
+    harness
+        .parsed_pdf_evidence("repair-same-host-expiry", b"TENDER_RECORD_GOLDEN")
+        .await;
+    fs::write(
+        harness.codex.with_extension("repair-before-turn-pause"),
+        b"pause",
+    )
+    .expect("pause persisted repair before Provider dispatch");
+    fs::write(
+        harness.codex.with_extension("manager-output-release"),
+        b"release",
+    )
+    .expect("release Manager outcome");
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let intake =
+        tokio::spawn(async move { host.run_manager_intake_for_verification(&tender_id).await });
+    let waiting = harness.codex.with_extension("repair-before-turn-waiting");
+    for _ in 0..1_000 {
+        if waiting.is_file() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(waiting.is_file(), "repair did not reach pre-dispatch pause");
+    let runs_before_restart =
+        tender_record_extraction_runs(&harness.application_home, &harness.tender_id);
+    assert_eq!(runs_before_restart.len(), 2);
+    let source_run_id = runs_before_restart[0].0.clone();
+    let repair_run_id = runs_before_restart[1].0.clone();
+    intake.abort();
+    let _ = intake.await;
+
+    let RuntimeHarness {
+        _root,
+        application_home,
+        codex,
+        host,
+        tender_id,
+    } = harness;
+    drop(host);
+    fs::remove_file(codex.with_extension("repair-before-turn-pause"))
+        .expect("clear repair pause before restart");
+    let restarted = reopen_runtime_host(&application_home, &_root.path().join("resources"));
+    let reopened = restarted
+        .inspect_agent_runs(&tender_id)
+        .expect("open Tender Store while repair is safely restartable");
+    assert_eq!(
+        reopened
+            .iter()
+            .find(|run| run.run_id == repair_run_id)
+            .map(|run| run.state),
+        Some(AgentRunState::Running)
+    );
+
+    set_fixture_provider_unavailable(&application_home);
+    restarted
+        .run_manager_intake_for_verification(&tender_id)
+        .await
+        .expect("Provider unavailability leaves intake waiting");
+    let database = application_home
+        .join("tenders")
+        .join(&tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(&database).expect("open Tender Store database");
+    let stage: String = connection
+        .query_row(
+            "SELECT stage FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("load waiting Manager intake stage");
+    assert_eq!(stage, "waiting_for_provider");
+    drop(connection);
+
+    wait_until_agent_grant_expires(&application_home, &tender_id, &repair_run_id).await;
+    restarted
+        .approve_runtime_fixture_ai_selection()
+        .expect("restore fixture Provider readiness");
+    restarted
+        .run_manager_intake_for_verification(&tender_id)
+        .await
+        .expect("same Host terminalizes the expired repair and retries its transport");
+
+    let runs = tender_record_extraction_runs(&application_home, &tender_id);
+    assert_eq!(runs.len(), 3);
+    assert_eq!(runs[0].0, source_run_id);
+    assert_eq!(runs[1].0, repair_run_id);
+    assert_eq!(runs[1].1.as_deref(), Some(source_run_id.as_str()));
+    assert_eq!(runs[1].2, "failed");
+    assert_eq!(runs[2].1.as_deref(), Some(repair_run_id.as_str()));
+    assert_eq!(runs[2].2, "completed");
+    let inspection = restarted
+        .inspect_agent_runs(&tender_id)
+        .expect("inspect same-Host repair recovery");
+    let expired = inspection
+        .iter()
+        .find(|run| run.run_id == repair_run_id)
+        .expect("inspect expired repair");
+    assert_eq!(
+        expired.failure.as_ref().map(|failure| failure.category),
+        Some(ProviderFailureCategory::ProcessFailed)
+    );
+    assert_eq!(
+        expired
+            .events
+            .iter()
+            .filter(|event| event.kind == ProviderEventKind::Terminal)
+            .count(),
+        1
+    );
+    assert_eq!(fixture_record_extraction_turn_count(&codex), 2);
+}
+
+#[tokio::test]
+async fn manager_intake_same_host_blocks_a_repair_after_a_thread_checkpoint() {
+    let harness = RuntimeHarness::new("manager-intake-repair-invalid-then-valid");
+    harness
+        .parsed_pdf_evidence(
+            "repair-same-host-thread-checkpoint",
+            b"TENDER_RECORD_GOLDEN",
+        )
+        .await;
+    fs::write(
+        harness.codex.with_extension("repair-before-turn-pause"),
+        b"pause",
+    )
+    .expect("pause persisted repair before Provider dispatch");
+    let host = harness.host.clone();
+    let tender_id = harness.tender_id.clone();
+    let intake =
+        tokio::spawn(async move { host.run_manager_intake_for_verification(&tender_id).await });
+    let waiting = harness.codex.with_extension("repair-before-turn-waiting");
+    for _ in 0..1_000 {
+        if waiting.is_file() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(waiting.is_file(), "repair did not reach pre-dispatch pause");
+    let runs_before_restart =
+        tender_record_extraction_runs(&harness.application_home, &harness.tender_id);
+    let repair_run_id = runs_before_restart[1].0.clone();
+    intake.abort();
+    let _ = intake.await;
+
+    let RuntimeHarness {
+        _root,
+        application_home,
+        codex,
+        host,
+        tender_id,
+    } = harness;
+    drop(host);
+    fs::remove_file(codex.with_extension("repair-before-turn-pause"))
+        .expect("clear repair pause before restart");
+    let restarted = reopen_runtime_host(&application_home, &_root.path().join("resources"));
+    let reopened = restarted
+        .inspect_agent_runs(&tender_id)
+        .expect("open Tender Store while repair is safely restartable");
+    assert_eq!(
+        reopened
+            .iter()
+            .find(|run| run.run_id == repair_run_id)
+            .map(|run| run.state),
+        Some(AgentRunState::Running)
+    );
+    persist_repair_thread_checkpoint(&application_home, &tender_id, &repair_run_id);
+
+    let error = restarted
+        .run_manager_intake_for_verification(&tender_id)
+        .await
+        .expect_err("same-Host thread checkpoint blocks automatic replay");
+    assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+    let runs = tender_record_extraction_runs(&application_home, &tender_id);
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[1].0, repair_run_id);
+    assert_eq!(runs[1].2, "indeterminate");
+    let inspection = restarted
+        .inspect_agent_runs(&tender_id)
+        .expect("inspect same-Host indeterminate repair");
+    let indeterminate = inspection
+        .iter()
+        .find(|run| run.run_id == repair_run_id)
+        .expect("inspect checkpointed repair");
+    assert_eq!(
+        indeterminate
+            .failure
+            .as_ref()
+            .map(|failure| failure.category),
+        Some(ProviderFailureCategory::OutcomeUnknown)
+    );
+    assert_eq!(
+        indeterminate
+            .events
+            .iter()
+            .filter(|event| event.kind == ProviderEventKind::Terminal)
+            .count(),
+        1
     );
     assert_eq!(fixture_record_extraction_turn_count(&codex), 1);
 }
@@ -920,36 +1193,12 @@ async fn manager_intake_retries_an_expired_predispatch_repair_without_a_second_s
     let first_repair_run_id = runs_before_restart[1].0.clone();
     intake.abort();
     let _ = intake.await;
-    let database = harness
-        .application_home
-        .join("tenders")
-        .join(&harness.tender_id)
-        .join("tender.sqlite");
-    let connection = rusqlite::Connection::open(database).expect("open Tender Store database");
-    let permission_grant_json: String = connection
-        .query_row(
-            "SELECT permission_grant_json FROM agent_runs WHERE run_id = ?1",
-            [&first_repair_run_id],
-            |row| row.get(0),
-        )
-        .expect("load first repair Permission Grant");
-    let permission_grant: serde_json::Value =
-        serde_json::from_str(&permission_grant_json).expect("parse first repair Permission Grant");
-    drop(connection);
-    let issued_at = permission_grant
-        .get("issued_at")
-        .and_then(serde_json::Value::as_str)
-        .expect("first repair Permission Grant issue time")
-        .parse::<jiff::Timestamp>()
-        .expect("parse first repair Permission Grant issue time");
-    let duration_seconds = permission_grant
-        .pointer("/resource_budget/duration_seconds")
-        .and_then(serde_json::Value::as_u64)
-        .expect("first repair Permission Grant duration");
-    let elapsed = std::time::Duration::try_from(issued_at.duration_until(jiff::Timestamp::now()))
-        .unwrap_or_default();
-    let until_expired = std::time::Duration::from_secs(duration_seconds).saturating_sub(elapsed);
-    tokio::time::sleep(until_expired + std::time::Duration::from_millis(250)).await;
+    wait_until_agent_grant_expires(
+        &harness.application_home,
+        &harness.tender_id,
+        &first_repair_run_id,
+    )
+    .await;
 
     let RuntimeHarness {
         _root,

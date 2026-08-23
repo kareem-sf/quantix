@@ -3480,6 +3480,148 @@ impl TenderStore {
         }
         transaction.commit().map_err(sql_error)
     }
+
+    pub(super) fn reconcile_inactive_manager_intake_repair(
+        &mut self,
+        tender_id: &TenderId,
+        run_id: &str,
+    ) -> Result<AgentRunState, TenderCommandError> {
+        if run_id.len() != 32 {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        self.require_storage_writable()?;
+        let application_home = self
+            .root
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let workspace = agent_workspace_path(application_home, tender_id.as_str(), run_id);
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let (status, thread_ref, turn_ref, event_count, run_started_count): (
+            String,
+            Option<String>,
+            Option<String>,
+            u32,
+            u32,
+        ) = transaction
+            .query_row(
+                "SELECT status, provider_thread_ref, provider_turn_ref,
+                        (SELECT COUNT(*) FROM provider_events WHERE run_id = ?1),
+                        (SELECT COUNT(*) FROM provider_events
+                         WHERE run_id = ?1 AND kind = 'run_started')
+                 FROM agent_runs WHERE run_id = ?1",
+                [run_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(sql_error)?
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        if status != AgentRunState::Running.as_str() {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let exact_predispatch_history = thread_ref.is_none()
+            && turn_ref.is_none()
+            && event_count == 1
+            && run_started_count == 1;
+        let state = if exact_predispatch_history {
+            AgentRunState::Failed
+        } else {
+            AgentRunState::Indeterminate
+        };
+        dispose_workspace(&self.root, &workspace, run_id, state)?;
+        let completed_at = sqlite_timestamp(&transaction)?;
+        let failure = if state == AgentRunState::Failed {
+            ProviderFailure::new(
+                ProviderFailureCategory::ProcessFailed,
+                true,
+                "Retry the Agent Run because no Provider Turn was accepted.",
+                Some(
+                    "The persisted pre-dispatch Agent Run could no longer be safely resumed in the current Host.",
+                ),
+            )
+        } else {
+            ProviderFailure::new(
+                ProviderFailureCategory::OutcomeUnknown,
+                false,
+                "Resolve the quarantined Agent Run before retrying.",
+                Some(
+                    "Provider progress was checkpointed while the Agent Run remained open, so acceptance or outcome cannot be disproved.",
+                ),
+            )
+        };
+        let usage_json = canonical_json(&ProviderUsage::default())?;
+        let failure_json = canonical_json(&failure)?;
+        if transaction
+            .execute(
+                "UPDATE agent_runs
+                 SET status = ?2, usage_json = COALESCE(usage_json, ?3), failure_json = ?4,
+                     completed_at = ?5
+                 WHERE run_id = ?1 AND status = 'running'",
+                params![
+                    run_id,
+                    state.as_str(),
+                    usage_json,
+                    failure_json,
+                    completed_at
+                ],
+            )
+            .map_err(sql_error)?
+            != 1
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        append_final_terminal_event(
+            &transaction,
+            run_id,
+            if state == AgentRunState::Failed {
+                "Agent Run failed safely before Provider Turn acceptance".into()
+            } else {
+                "Agent Run outcome became indeterminate after Provider progress was checkpointed"
+                    .into()
+            },
+            turn_ref,
+            &completed_at,
+        )?;
+        let tender_revision: u32 = transaction
+            .query_row(
+                "SELECT current_revision FROM tender WHERE singleton = 1 AND tender_id = ?1",
+                [tender_id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        append_audit_event(
+            &transaction,
+            tender_id.as_str(),
+            if state == AgentRunState::Failed {
+                "agent_run_failed"
+            } else {
+                "agent_run_indeterminate"
+            },
+            tender_revision,
+            json!({
+                "reason": if state == AgentRunState::Failed {
+                    "same_host_predispatch_recovery"
+                } else {
+                    "same_host_provider_checkpoint"
+                },
+                "run_id": run_id,
+            }),
+            &completed_at,
+        )?;
+        transaction.commit().map_err(sql_error)?;
+        Ok(state)
+    }
 }
 
 struct RawAgentRun {

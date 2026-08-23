@@ -1042,7 +1042,14 @@ impl TenderStore {
                         .load_restartable_manager_intake_repair(tender_id, &latest_repair_run_id)
                         .map(ManagerIntakeExtractionRecovery::Execute);
                 }
-                let latest_repair = self.inspect_agent_run(&latest_repair_run_id)?;
+                let mut latest_repair = self.inspect_agent_run(&latest_repair_run_id)?;
+                if latest_repair.state == AgentRunState::Running {
+                    self.reconcile_inactive_manager_intake_repair(
+                        tender_id,
+                        &latest_repair_run_id,
+                    )?;
+                    latest_repair = self.inspect_agent_run(&latest_repair_run_id)?;
+                }
                 if terminal_noncandidate_retry_is_allowed(&latest_repair) {
                     if let Some(retry) = self.prepare_tender_record_repair_transport_retry(
                         tender_id,
