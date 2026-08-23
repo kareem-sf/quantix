@@ -571,12 +571,12 @@ impl TenderStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_error)?;
-        let (intake_run_id, attempts, blocking_run_id): (String, u32, Option<String>) = transaction
+        let (intake_run_id, attempts): (String, u32) = transaction
             .query_row(
-                "SELECT intake_run_id, provider_retry_attempt_count, blocking_agent_run_id
+                "SELECT intake_run_id, provider_retry_attempt_count
                  FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(sql_error)?;
         let updated_at = sqlite_timestamp(&transaction)?;
@@ -590,7 +590,17 @@ impl TenderStore {
                     .is_some_and(|failure| failure.category == ProviderFailureCategory::RateLimited)
         });
         if let Some(source_run) = rate_limited {
-            if blocking_run_id.as_deref() == Some(source_run.run_id.as_str()) {
+            let already_consumed: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM manager_intake_provider_rate_limit_consumptions
+                       WHERE intake_run_id = ?1 AND source_run_id = ?2
+                     )",
+                    params![intake_run_id, source_run.run_id],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            if already_consumed {
                 transaction.commit().map_err(sql_error)?;
                 return Ok(());
             }
@@ -615,6 +625,25 @@ impl TenderStore {
                     Some(updated_at.as_str()),
                 )
             };
+            if transaction
+                .execute(
+                    "INSERT INTO manager_intake_provider_rate_limit_consumptions (
+                       intake_run_id, source_run_id, provider_retry_attempt_count,
+                       retry_not_before_epoch_seconds, created_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        intake_run_id,
+                        source_run.run_id,
+                        next_attempt,
+                        automatic_deadline,
+                        updated_at,
+                    ],
+                )
+                .map_err(sql_error)?
+                != 1
+            {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
             if transaction
                 .execute(
                     "UPDATE manager_intake_runs

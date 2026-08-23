@@ -258,7 +258,7 @@ static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static CONTENT_VERIFY_PASS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 40;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 41;
 
 pub(crate) fn record_agent_run_provider_binding(
     transaction: &Transaction<'_>,
@@ -388,6 +388,23 @@ CREATE TABLE manager_intake_runs (
     )
   )
 );
+CREATE TABLE manager_intake_provider_rate_limit_consumptions (
+  intake_run_id TEXT NOT NULL,
+  source_run_id TEXT NOT NULL,
+  provider_retry_attempt_count INTEGER NOT NULL
+    CHECK (provider_retry_attempt_count BETWEEN 1 AND 4),
+  retry_not_before_epoch_seconds INTEGER CHECK (retry_not_before_epoch_seconds > 0),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (intake_run_id, source_run_id),
+  FOREIGN KEY (intake_run_id) REFERENCES manager_intake_runs(intake_run_id),
+  FOREIGN KEY (source_run_id) REFERENCES agent_runs(run_id),
+  CHECK (
+    (provider_retry_attempt_count BETWEEN 1 AND 3
+      AND retry_not_before_epoch_seconds IS NOT NULL)
+    OR (provider_retry_attempt_count = 4
+      AND retry_not_before_epoch_seconds IS NULL)
+  )
+);
 CREATE TABLE tender_office_messages (
   message_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   message_id TEXT NOT NULL UNIQUE CHECK (length(message_id) = 32),
@@ -500,6 +517,16 @@ CREATE TRIGGER manager_intake_answers_no_delete
 BEFORE DELETE ON manager_intake_answers
 BEGIN
   SELECT RAISE(ABORT, 'Manager intake answers are immutable');
+END;
+CREATE TRIGGER manager_intake_provider_rate_limit_consumptions_no_update
+BEFORE UPDATE ON manager_intake_provider_rate_limit_consumptions
+BEGIN
+  SELECT RAISE(ABORT, 'Manager intake rate-limit consumptions are immutable');
+END;
+CREATE TRIGGER manager_intake_provider_rate_limit_consumptions_no_delete
+BEFORE DELETE ON manager_intake_provider_rate_limit_consumptions
+BEGIN
+  SELECT RAISE(ABORT, 'Manager intake rate-limit consumptions are immutable');
 END;
 CREATE TRIGGER manager_intake_extraction_batches_no_update
 BEFORE UPDATE ON manager_intake_extraction_batches

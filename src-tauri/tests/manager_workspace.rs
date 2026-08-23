@@ -248,13 +248,6 @@ async fn rate_limited_manager_wait_is_persisted_atomically() {
         .join(&tender.tender_id)
         .join("tender.sqlite");
     let connection = Connection::open(database).expect("open Tender store");
-    let source_run_id: String = connection
-        .query_row(
-            "SELECT run_id FROM agent_runs ORDER BY run_sequence DESC LIMIT 1",
-            [],
-            |row| row.get(0),
-        )
-        .expect("read completed provider run");
     let ordinary_wait: (Option<String>, Option<i64>, u32) = connection
         .query_row(
             "SELECT blocking_agent_run_id, retry_not_before_epoch_seconds,
@@ -266,12 +259,16 @@ async fn rate_limited_manager_wait_is_persisted_atomically() {
         .expect("read non-rate-limited provider wait");
     assert_eq!(ordinary_wait, (None, None, 0));
     drop(connection);
-    host.persist_manager_rate_limit_for_verification(
-        &tender.tender_id,
-        &source_run_id,
-        Some(60_000),
-    )
-    .expect("persist completed rate-limit result");
+    let source_run = host
+        .run_rate_limited_bootstrap_agent_for_verification(RunBootstrapAgentCommand {
+            tender_id: tender.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("create completed rate-limited provider run");
+    let source_run_id = source_run.run_id;
+    host.persist_manager_rate_limit_for_verification(&tender.tender_id, &source_run_id)
+        .expect("persist completed rate-limit result");
     let connection = Connection::open(
         application_home
             .join("tenders")
@@ -310,12 +307,8 @@ async fn rate_limited_manager_wait_is_persisted_atomically() {
         .expect("read cooldown audit");
     assert_eq!(audit_count, 1);
     drop(connection);
-    host.persist_manager_rate_limit_for_verification(
-        &tender.tender_id,
-        &source_run_id,
-        Some(60_000),
-    )
-    .expect("duplicate completion is idempotent");
+    host.persist_manager_rate_limit_for_verification(&tender.tender_id, &source_run_id)
+        .expect("duplicate completion is idempotent");
     let (attempts, audit_count): (u32, u32) = Connection::open(
         application_home
             .join("tenders")
@@ -334,10 +327,109 @@ async fn rate_limited_manager_wait_is_persisted_atomically() {
     .expect("inspect idempotent cooldown");
     assert_eq!((attempts, audit_count), (1, 1));
 
+    Connection::open(
+        application_home
+            .join("tenders")
+            .join(&tender.tender_id)
+            .join("tender.sqlite"),
+    )
+    .expect("open cooldown for resume")
+    .execute(
+        "UPDATE manager_intake_runs
+         SET retry_not_before_epoch_seconds = unixepoch('now') - 1",
+        [],
+    )
+    .expect("expire cooldown before legitimate resume");
+    assert_eq!(
+        host.begin_manager_intake_processing_for_verification(&tender.tender_id)
+            .expect("resume expired cooldown"),
+        ManagerIntakeStage::ReadingDocuments
+    );
+    let state_after_resume: (String, Option<String>, Option<i64>, u32, u32, u32) =
+        Connection::open(
+            application_home
+                .join("tenders")
+                .join(&tender.tender_id)
+                .join("tender.sqlite"),
+        )
+        .expect("open resumed cooldown")
+        .query_row(
+            "SELECT mir.stage, mir.blocking_agent_run_id,
+                    mir.retry_not_before_epoch_seconds,
+                    mir.provider_retry_attempt_count,
+                    (SELECT COUNT(*) FROM audit_events
+                     WHERE event_type = 'manager_intake_provider_cooldown_started'),
+                    (SELECT COUNT(*)
+                     FROM manager_intake_provider_rate_limit_consumptions)
+             FROM manager_intake_runs mir
+             ORDER BY intake_run_sequence DESC LIMIT 1",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .expect("inspect resumed cooldown");
+    assert_eq!(
+        state_after_resume,
+        ("reading_documents".into(), None, None, 1, 1, 1)
+    );
+    let reopened = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(user_home.path().join("resources")),
+    );
+    reopened.accept_runtime_fixture();
+    assert_eq!(ensure_quantix_setup(&reopened).state, SetupState::Ready);
+    reopened
+        .persist_manager_rate_limit_for_verification(&tender.tender_id, &source_run_id)
+        .expect("replayed source remains consumed after reopen");
+    reopened
+        .open_tender(&tender.tender_id)
+        .expect("cold open accepts durable rate-limit consumption history");
+    let state_after_replay: (String, Option<String>, Option<i64>, u32, u32, u32) =
+        Connection::open(
+            application_home
+                .join("tenders")
+                .join(&tender.tender_id)
+                .join("tender.sqlite"),
+        )
+        .expect("open replayed cooldown")
+        .query_row(
+            "SELECT mir.stage, mir.blocking_agent_run_id,
+                    mir.retry_not_before_epoch_seconds,
+                    mir.provider_retry_attempt_count,
+                    (SELECT COUNT(*) FROM audit_events
+                     WHERE event_type = 'manager_intake_provider_cooldown_started'),
+                    (SELECT COUNT(*)
+                     FROM manager_intake_provider_rate_limit_consumptions)
+             FROM manager_intake_runs mir
+             ORDER BY intake_run_sequence DESC LIMIT 1",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .expect("inspect replayed cooldown");
+    assert_eq!(state_after_replay, state_after_resume);
+
     let mut prior_run_id = source_run_id;
     for expected_attempt in 2..=4 {
         let source_run = host
-            .run_completed_bootstrap_agent_for_verification(RunBootstrapAgentCommand {
+            .run_rate_limited_bootstrap_agent_for_verification(RunBootstrapAgentCommand {
                 tender_id: tender.tender_id.clone(),
                 retry_of_run_id: None,
             })
@@ -345,12 +437,8 @@ async fn rate_limited_manager_wait_is_persisted_atomically() {
             .expect("create distinct completed provider run");
         let next_run_id = source_run.run_id;
         assert_ne!(next_run_id, prior_run_id);
-        host.persist_manager_rate_limit_for_verification(
-            &tender.tender_id,
-            &next_run_id,
-            Some(1_000),
-        )
-        .expect("persist next completed rate-limit result");
+        host.persist_manager_rate_limit_for_verification(&tender.tender_id, &next_run_id)
+            .expect("persist next completed rate-limit result");
         prior_run_id = next_run_id;
 
         let connection = Connection::open(

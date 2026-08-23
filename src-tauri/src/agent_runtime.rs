@@ -886,6 +886,7 @@ impl CandidateDisposition {
 pub(crate) enum DeterministicProviderOutcome {
     Completed,
     Failed,
+    RateLimited,
     Interrupted,
 }
 
@@ -1113,26 +1114,28 @@ impl QuantixHost {
         &self,
         tender_id: &str,
         run_id: &str,
-        retry_after_milliseconds: Option<u64>,
     ) -> Result<(), TenderCommandError> {
         let tender_id = TenderId::parse(tender_id)?;
         let store = self.tender_store(&tender_id)?;
         let mut store = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
-        let mut run = store.inspect_agent_run(run_id)?;
-        run.state = AgentRunState::Failed;
-        run.failure = Some(
-            ProviderFailure::new(
-                ProviderFailureCategory::RateLimited,
-                true,
-                "Wait for AI capacity before retrying.",
-                Some("The fixture represents a completed rate-limited provider run."),
-            )
-            .with_retry_after_milliseconds(retry_after_milliseconds),
-        );
-        run.usage.rate_limit = None;
+        let run = store.inspect_agent_run(run_id)?;
         store.wait_manager_intake_for_provider(Some(&run))
+    }
+
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    pub fn begin_manager_intake_processing_for_verification(
+        &self,
+        tender_id: &str,
+    ) -> Result<crate::tender_store::ManagerIntakeStage, TenderCommandError> {
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let result = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .begin_manager_intake_processing();
+        result
     }
 
     async fn run_manager_intake_pipeline(&self, tender_id: &str) -> Result<(), TenderCommandError> {
@@ -1389,13 +1392,13 @@ impl QuantixHost {
     }
 
     #[cfg(any(test, feature = "runtime-fixture"))]
-    pub async fn run_completed_bootstrap_agent_for_verification(
+    pub async fn run_rate_limited_bootstrap_agent_for_verification(
         &self,
         command: RunBootstrapAgentCommand,
     ) -> Result<AgentRunInspection, TenderCommandError> {
         self.run_bootstrap_agent_with_deterministic_provider(
             command,
-            DeterministicProviderOutcome::Completed,
+            DeterministicProviderOutcome::RateLimited,
         )
         .await
     }
@@ -3951,6 +3954,16 @@ fn deterministic_provider_execution(
                 "Retry only after the deterministic provider failure is reviewed.",
                 Some("The deterministic adapter injected an invalid provider outcome."),
             ),
+            Instant::now(),
+        ),
+        DeterministicProviderOutcome::RateLimited => failed_execution(
+            ProviderFailure::new(
+                ProviderFailureCategory::RateLimited,
+                true,
+                "Wait for AI capacity before retrying.",
+                Some("The deterministic adapter injected a rate-limited provider outcome."),
+            )
+            .with_retry_after_milliseconds(Some(60_000)),
             Instant::now(),
         ),
         DeterministicProviderOutcome::Interrupted => interrupted_execution(Instant::now()),

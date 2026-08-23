@@ -186,21 +186,18 @@ async fn rebind_cannot_bypass_future_cooldown() {
         .await
         .expect("persist initial cooldown");
     let connection = harness.database();
-    let source_run_id: String = connection
-        .query_row(
-            "SELECT run_id FROM agent_runs ORDER BY run_sequence DESC LIMIT 1",
-            [],
-            |row| row.get(0),
-        )
-        .expect("read provider run");
     drop(connection);
+    let source_run = harness
+        .host
+        .run_rate_limited_bootstrap_agent_for_verification(RunBootstrapAgentCommand {
+            tender_id: harness.tender_id.clone(),
+            retry_of_run_id: None,
+        })
+        .await
+        .expect("create rate-limited provider run");
     harness
         .host
-        .persist_manager_rate_limit_for_verification(
-            &harness.tender_id,
-            &source_run_id,
-            Some(60_000),
-        )
+        .persist_manager_rate_limit_for_verification(&harness.tender_id, &source_run.run_id)
         .expect("persist initial cooldown");
     let connection = harness.database();
     let initial_runs: u32 = connection
