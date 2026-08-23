@@ -258,7 +258,7 @@ static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static CONTENT_VERIFY_PASS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 41;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 42;
 
 pub(crate) fn record_agent_run_provider_binding(
     transaction: &Transaction<'_>,
@@ -460,6 +460,18 @@ CREATE TABLE manager_intake_extraction_batches (
   FOREIGN KEY (intake_run_id) REFERENCES manager_intake_runs(intake_run_id),
   FOREIGN KEY (extraction_run_id) REFERENCES agent_runs(run_id)
 );
+CREATE TABLE manager_intake_extraction_plan_batches (
+  intake_run_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+  batch_fingerprint TEXT NOT NULL CHECK (length(batch_fingerprint) = 64),
+  canonical_inputs_json TEXT NOT NULL CHECK (json_valid(canonical_inputs_json)),
+  estimated_request_bytes INTEGER NOT NULL CHECK (estimated_request_bytes > 0),
+  estimator_version TEXT NOT NULL CHECK (length(estimator_version) BETWEEN 1 AND 100),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (intake_run_id, ordinal),
+  UNIQUE (intake_run_id, batch_fingerprint),
+  FOREIGN KEY (intake_run_id) REFERENCES manager_intake_runs(intake_run_id)
+);
 CREATE TABLE tender_office_message_references (
   message_id TEXT NOT NULL,
   ordinal INTEGER NOT NULL CHECK (ordinal > 0),
@@ -537,6 +549,16 @@ CREATE TRIGGER manager_intake_extraction_batches_no_delete
 BEFORE DELETE ON manager_intake_extraction_batches
 BEGIN
   SELECT RAISE(ABORT, 'Manager intake extraction batches are immutable');
+END;
+CREATE TRIGGER manager_intake_extraction_plan_batches_no_update
+BEFORE UPDATE ON manager_intake_extraction_plan_batches
+BEGIN
+  SELECT RAISE(ABORT, 'Manager intake extraction plans are immutable');
+END;
+CREATE TRIGGER manager_intake_extraction_plan_batches_no_delete
+BEFORE DELETE ON manager_intake_extraction_plan_batches
+BEGIN
+  SELECT RAISE(ABORT, 'Manager intake extraction plans are immutable');
 END;
 CREATE TRIGGER tender_office_message_references_no_update
 BEFORE UPDATE ON tender_office_message_references

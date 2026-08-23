@@ -465,6 +465,193 @@ fn canonical_evidence_references(
 }
 
 #[tokio::test]
+async fn byte_batch_plan_is_deterministic_at_boundaries() {
+    let harness = RuntimeHarness::new("manager-intake");
+    let parsed = harness
+        .parsed_pdf_evidence_package(
+            "byte-plan-boundary",
+            &[
+                ("byte-plan-a", b"BYTE_PLAN_A"),
+                ("byte-plan-b", b"BYTE_PLAN_B"),
+                ("byte-plan-c", b"BYTE_PLAN_C"),
+            ],
+        )
+        .await;
+    let mut expected = parsed
+        .iter()
+        .flat_map(|document| document.references.clone())
+        .collect::<Vec<_>>();
+    expected.sort_by(|left, right| {
+        (&left.artifact_id, left.version, left.ordinal).cmp(&(
+            &right.artifact_id,
+            right.version,
+            right.ordinal,
+        ))
+    });
+    let exact_fit = harness
+        .host
+        .preview_manager_intake_byte_plan_for_verification(&harness.tender_id, u64::MAX)
+        .expect("preview one exact-fit batch");
+    assert_eq!(exact_fit.len(), 1, "the unbounded preview should fit once");
+    let exact_budget = exact_fit[0].3;
+
+    let plan = harness
+        .host
+        .persist_manager_intake_byte_plan_for_verification(&harness.tender_id, exact_budget)
+        .expect("persist exact-fit plan");
+    assert_eq!(plan.len(), 1, "a request exactly at the budget must fit");
+    assert_eq!(plan[0].0, expected);
+    assert_eq!(plan[0].3, exact_budget);
+
+    let overflow = RuntimeHarness::new("manager-intake");
+    let overflow_parsed = overflow
+        .parsed_pdf_evidence_package(
+            "byte-plan-boundary",
+            &[
+                ("byte-plan-a", b"BYTE_PLAN_A"),
+                ("byte-plan-b", b"BYTE_PLAN_B"),
+                ("byte-plan-c", b"BYTE_PLAN_C"),
+            ],
+        )
+        .await;
+    let mut overflow_expected = overflow_parsed
+        .iter()
+        .flat_map(|document| document.references.clone())
+        .collect::<Vec<_>>();
+    overflow_expected.sort_by(|left, right| {
+        (&left.artifact_id, left.version, left.ordinal).cmp(&(
+            &right.artifact_id,
+            right.version,
+            right.ordinal,
+        ))
+    });
+    let overflow_plan = overflow
+        .host
+        .persist_manager_intake_byte_plan_for_verification(&overflow.tender_id, exact_budget - 1)
+        .expect("split one-byte overflow");
+    assert!(overflow_plan.len() > 1, "one byte over must split");
+    let flattened = overflow_plan
+        .iter()
+        .flat_map(|batch| batch.0.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        flattened, overflow_expected,
+        "no Evidence may be omitted or reordered"
+    );
+    assert_eq!(
+        flattened.iter().collect::<HashSet<_>>().len(),
+        flattened.len()
+    );
+    assert!(overflow_plan
+        .iter()
+        .all(|batch| batch.3 <= exact_budget - 1));
+    assert_eq!(
+        overflow_plan
+            .iter()
+            .map(|batch| batch.2.clone())
+            .collect::<HashSet<_>>()
+            .len(),
+        overflow_plan.len(),
+        "batch fingerprints must be stable and distinct",
+    );
+
+    let oversized = RuntimeHarness::new("manager-intake");
+    oversized
+        .parsed_pdf_evidence("byte-plan-oversized", b"BYTE_PLAN_OVERSIZED")
+        .await;
+    let error = oversized
+        .host
+        .persist_manager_intake_byte_plan_for_verification(&oversized.tender_id, 1)
+        .expect_err("one individually oversized Evidence item must be typed");
+    assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+}
+
+#[tokio::test]
+async fn byte_batch_plan_is_persisted_and_resumed() {
+    let harness = RuntimeHarness::new("manager-intake");
+    harness
+        .parsed_pdf_evidence_package(
+            "byte-plan-restart",
+            &[
+                ("byte-plan-restart-a", b"TENDER_RECORD_GOLDEN"),
+                ("byte-plan-restart-b", b"TENDER_RECORD_GOLDEN"),
+                ("byte-plan-restart-c", b"TENDER_RECORD_GOLDEN"),
+            ],
+        )
+        .await;
+    let preview = harness
+        .host
+        .preview_manager_intake_byte_plan_for_verification(&harness.tender_id, u64::MAX)
+        .expect("preview persisted plan");
+    let budget = preview[0].3 - 1;
+    let planned = harness
+        .host
+        .persist_manager_intake_byte_plan_for_verification(&harness.tender_id, budget)
+        .expect("persist byte plan");
+    assert!(planned.len() > 1);
+
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(&database).expect("open planned Tender Store");
+    let immutable_update = connection.execute(
+        "UPDATE manager_intake_extraction_plan_batches SET estimated_request_bytes = estimated_request_bytes + 1",
+        [],
+    );
+    assert!(immutable_update.is_err());
+    let immutable_delete =
+        connection.execute("DELETE FROM manager_intake_extraction_plan_batches", []);
+    assert!(immutable_delete.is_err());
+    drop(connection);
+
+    let resources = harness._root.path().join("resources");
+    let reopened = reopen_runtime_host(&harness.application_home, &resources);
+    let resumed = reopened
+        .persist_manager_intake_byte_plan_for_verification(&harness.tender_id, u64::MAX)
+        .expect("resume immutable persisted plan without rebuilding");
+    assert_eq!(
+        resumed, planned,
+        "restart must load the original immutable plan"
+    );
+    fs::write(
+        harness.codex.with_extension("manager-output-release"),
+        b"release",
+    )
+    .expect("release Manager outcome after plan restart");
+    let resumed_result = reopened
+        .run_manager_intake_for_verification(&harness.tender_id)
+        .await;
+    assert!(
+        resumed_result.is_err(),
+        "the deterministic fixture stops after proving the first planned receipt"
+    );
+    let remaining = reopened
+        .persist_manager_intake_byte_plan_for_verification(&harness.tender_id, 1)
+        .expect("load immutable plan and subtract its completed receipt");
+    assert_eq!(remaining.len(), planned.len() - 1);
+    assert!(!remaining.iter().any(|batch| batch.2 == planned[0].2));
+    let connection = rusqlite::Connection::open(database).expect("reopen completed byte plan");
+    let (plan_count, completed_count, distinct_completed): (u32, u32, u32) = connection
+        .query_row(
+            "SELECT
+               (SELECT COUNT(*) FROM manager_intake_extraction_plan_batches),
+               (SELECT COUNT(*) FROM manager_intake_extraction_batches),
+               (SELECT COUNT(DISTINCT batch_fingerprint) FROM manager_intake_extraction_batches)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("count persisted and completed byte batches");
+    assert_eq!(plan_count as usize, planned.len());
+    assert_eq!(completed_count, 1, "one completed batch is subtracted once");
+    assert_eq!(
+        distinct_completed, completed_count,
+        "no batch may be duplicated"
+    );
+}
+
+#[tokio::test]
 async fn manager_intake_automatically_repairs_one_invalid_extraction() {
     let harness = RuntimeHarness::new("manager-intake-repair-invalid-then-valid");
     harness

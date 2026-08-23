@@ -24,7 +24,9 @@ use super::{
         insert_task, load_profile, load_task, load_thread_exposure, update_profile_head,
     },
     append_audit_event, random_identifier, sha256_hex, sql_error, sqlite_timestamp,
-    tender_records::MAX_RECORD_EVIDENCE_INPUTS,
+    tender_records::{
+        estimate_record_extraction_request_bytes, record_extraction_request_hard_cap_bytes,
+    },
     TenderCommandError, TenderErrorCode, TenderEvidenceReference, TenderId, TenderRecordBasisKind,
     TenderRecordInspection, TenderRecordKind, TenderRecordVersionReference, TenderStore,
 };
@@ -36,6 +38,7 @@ const MANAGER_STABLE_IDENTITY: &str = BootstrapRole::TenderingManager.stable_ide
 const MAX_SUPPORTING_RECORDS: usize = 16;
 const MAX_SUPPORTING_EVIDENCE: usize = 32;
 const MAX_MESSAGE_REFERENCE_DETAIL: usize = 2_000;
+const RECORD_EXTRACTION_ESTIMATOR_VERSION: &str = "canonical-provider-request-v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -257,6 +260,14 @@ struct ManagerIntakeOutcomeManifest<'a> {
 struct ManagerIntakeBatchInputs {
     authorities: Vec<super::TenderRecordAuthorityReference>,
     evidence: Vec<TenderEvidenceReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlannedManagerIntakeExtractionBatch {
+    pub evidence: Vec<TenderEvidenceReference>,
+    pub authorities: Vec<super::TenderRecordAuthorityReference>,
+    pub fingerprint: String,
+    pub estimated_request_bytes: u64,
 }
 
 pub(super) fn initialize_manager_intake_run(
@@ -1073,62 +1084,113 @@ impl TenderStore {
 
     pub(crate) fn manager_intake_evidence_batches(
         &mut self,
-        authorities: &[super::TenderRecordAuthorityReference],
-    ) -> Result<Vec<Vec<TenderEvidenceReference>>, TenderCommandError> {
-        let mut statement = self
+    ) -> Result<Vec<PlannedManagerIntakeExtractionBatch>, TenderCommandError> {
+        self.persist_manager_intake_byte_plan(record_extraction_request_hard_cap_bytes())
+    }
+
+    fn persist_manager_intake_byte_plan(
+        &mut self,
+        byte_budget: u64,
+    ) -> Result<Vec<PlannedManagerIntakeExtractionBatch>, TenderCommandError> {
+        let transaction = self
             .connection
-            .prepare(
-                "SELECT el.artifact_id, el.version, el.ordinal
-                 FROM evidence_locations el
-                 JOIN source_artifacts sa ON sa.artifact_id = el.artifact_id
-                 JOIN manager_intake_runs mir ON mir.package_intake_id = sa.intake_id
-                 WHERE mir.intake_run_sequence = (
-                   SELECT MAX(intake_run_sequence) FROM manager_intake_runs
-                 )
-                   AND NOT EXISTS (
-                     SELECT 1 FROM source_relationships sr
-                     WHERE sr.prior_artifact_id = el.artifact_id
-                       AND sr.prior_version = el.version
-                       AND sr.relationship_kind = 'replacement'
-                   )
-                 ORDER BY el.artifact_id, el.version, el.ordinal",
-            )
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_error)?;
-        let references = statement
-            .query_map([], |row| {
-                Ok(TenderEvidenceReference {
-                    artifact_id: row.get(0)?,
-                    version: row.get(1)?,
-                    ordinal: row.get(2)?,
-                })
-            })
-            .map_err(sql_error)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(sql_error)?;
-        drop(statement);
-        let completed = self
-            .connection
-            .prepare(
-                "SELECT batch_fingerprint FROM manager_intake_extraction_batches
-                 WHERE intake_run_id = (
-                   SELECT intake_run_id FROM manager_intake_runs
-                   ORDER BY intake_run_sequence DESC LIMIT 1
-                 )",
-            )
-            .map_err(sql_error)?
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(sql_error)?
-            .collect::<rusqlite::Result<HashSet<_>>>()
-            .map_err(sql_error)?;
-        let mut batches = Vec::new();
-        for batch in references.chunks(MAX_RECORD_EVIDENCE_INPUTS) {
-            let batch = batch.to_vec();
-            if !completed.contains(&manager_intake_batch_fingerprint(&batch, authorities)?) {
-                batches.push(batch);
+        let (intake_run_id, tender_id, tender_revision, selection) =
+            current_manager_intake_plan_context(&transaction)?;
+        let mut planned = load_manager_intake_plan(&transaction, &intake_run_id)?;
+        if planned.is_empty() {
+            let (evidence, authorities) = current_manager_intake_plan_inputs(&transaction)?;
+            planned = build_manager_intake_plan(
+                &transaction,
+                &tender_id,
+                tender_revision,
+                &intake_run_id,
+                &evidence,
+                &authorities,
+                &selection,
+                byte_budget,
+            )?;
+            let created_at = sqlite_timestamp(&transaction)?;
+            for (index, batch) in planned.iter().enumerate() {
+                let ordinal = i64::try_from(index + 1)
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+                let inputs = canonical_json(&ManagerIntakeBatchInputs {
+                    authorities: batch.authorities.clone(),
+                    evidence: batch.evidence.clone(),
+                })?;
+                let estimated_request_bytes = i64::try_from(batch.estimated_request_bytes)
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+                transaction
+                    .execute(
+                        "INSERT INTO manager_intake_extraction_plan_batches (
+                           intake_run_id, ordinal, batch_fingerprint, canonical_inputs_json,
+                           estimated_request_bytes, estimator_version, created_at
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        params![
+                            intake_run_id,
+                            ordinal,
+                            batch.fingerprint,
+                            inputs,
+                            estimated_request_bytes,
+                            RECORD_EXTRACTION_ESTIMATOR_VERSION,
+                            created_at,
+                        ],
+                    )
+                    .map_err(sql_error)?;
             }
         }
-        self.update_manager_intake_stage(ManagerIntakeStage::ExtractingTenderFacts, None)?;
-        Ok(batches)
+        let completed = completed_manager_intake_batch_fingerprints(&transaction, &intake_run_id)?;
+        planned.retain(|batch| !completed.contains(&batch.fingerprint));
+        let updated_at = sqlite_timestamp(&transaction)?;
+        if transaction
+            .execute(
+                "UPDATE manager_intake_runs
+                 SET stage = 'extracting_tender_facts', failure_summary = NULL,
+                     completed_at = NULL, updated_at = ?2
+                 WHERE intake_run_id = ?1
+                   AND stage IN ('reading_documents', 'extracting_tender_facts')",
+                params![intake_run_id, updated_at],
+            )
+            .map_err(sql_error)?
+            != 1
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        transaction.commit().map_err(sql_error)?;
+        Ok(planned)
+    }
+
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    pub(crate) fn preview_manager_intake_byte_plan(
+        &mut self,
+        byte_budget: u64,
+    ) -> Result<Vec<PlannedManagerIntakeExtractionBatch>, TenderCommandError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let (intake_run_id, tender_id, tender_revision, selection) =
+            current_manager_intake_plan_context(&transaction)?;
+        let (evidence, authorities) = current_manager_intake_plan_inputs(&transaction)?;
+        build_manager_intake_plan(
+            &transaction,
+            &tender_id,
+            tender_revision,
+            &intake_run_id,
+            &evidence,
+            &authorities,
+            &selection,
+            byte_budget,
+        )
+    }
+
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    pub(crate) fn persist_manager_intake_byte_plan_for_verification(
+        &mut self,
+        byte_budget: u64,
+    ) -> Result<Vec<PlannedManagerIntakeExtractionBatch>, TenderCommandError> {
+        self.persist_manager_intake_byte_plan(byte_budget)
     }
 
     pub(crate) fn manager_intake_review_targets(
@@ -1146,19 +1208,6 @@ impl TenderStore {
 
     pub(crate) fn begin_manager_intake_reviewing(&mut self) -> Result<(), TenderCommandError> {
         self.update_manager_intake_stage(ManagerIntakeStage::ReviewingTenderFacts, None)
-    }
-
-    pub(crate) fn manager_intake_authority_references(
-        &self,
-    ) -> Result<Vec<super::TenderRecordAuthorityReference>, TenderCommandError> {
-        self.inspect_tender_record_authorities().map(|authorities| {
-            authorities
-                .into_iter()
-                .map(|authority| super::TenderRecordAuthorityReference {
-                    authority_id: authority.authority_id,
-                })
-                .collect()
-        })
     }
 
     pub(crate) fn record_manager_intake_extraction_count(
@@ -1686,6 +1735,45 @@ impl TenderStore {
         }
         drop(rows);
         drop(statement);
+        let mut plan_statement = self
+            .connection
+            .prepare(
+                "SELECT intake_run_id, ordinal, batch_fingerprint, canonical_inputs_json,
+                        estimated_request_bytes, estimator_version
+                 FROM manager_intake_extraction_plan_batches
+                 ORDER BY intake_run_id, ordinal",
+            )
+            .map_err(sql_error)?;
+        let mut plan_rows = plan_statement.query([]).map_err(sql_error)?;
+        let mut expected_ordinal = 0_i64;
+        let mut prior_intake = String::new();
+        while let Some(row) = plan_rows.next().map_err(sql_error)? {
+            check()?;
+            let intake_run_id = row.get::<_, String>(0).map_err(sql_error)?;
+            let ordinal = row.get::<_, i64>(1).map_err(sql_error)?;
+            if intake_run_id != prior_intake {
+                prior_intake = intake_run_id;
+                expected_ordinal = 1;
+            } else {
+                expected_ordinal += 1;
+            }
+            let fingerprint = row.get::<_, String>(2).map_err(sql_error)?;
+            let inputs_json = row.get::<_, String>(3).map_err(sql_error)?;
+            let estimated_bytes = row.get::<_, i64>(4).map_err(sql_error)?;
+            let estimator_version = row.get::<_, String>(5).map_err(sql_error)?;
+            let inputs: ManagerIntakeBatchInputs = parse_canonical(&inputs_json)?;
+            if ordinal != expected_ordinal
+                || estimated_bytes <= 0
+                || estimator_version != RECORD_EXTRACTION_ESTIMATOR_VERSION
+                || canonical_json(&inputs)? != inputs_json
+                || manager_intake_batch_fingerprint(&inputs.evidence, &inputs.authorities)?
+                    != fingerprint
+            {
+                return Ok(false);
+            }
+        }
+        drop(plan_rows);
+        drop(plan_statement);
         let mut statement = self
             .connection
             .prepare(
@@ -1705,6 +1793,20 @@ impl TenderStore {
                 || manager_intake_batch_fingerprint(&inputs.evidence, &inputs.authorities)?
                     != fingerprint
             {
+                return Ok(false);
+            }
+            let planned_inputs: Option<String> = self
+                .connection
+                .query_row(
+                    "SELECT canonical_inputs_json
+                     FROM manager_intake_extraction_plan_batches
+                     WHERE intake_run_id = ?1 AND batch_fingerprint = ?2",
+                    params![intake_run_id, fingerprint],
+                    |plan| plan.get(0),
+                )
+                .optional()
+                .map_err(sql_error)?;
+            if planned_inputs.as_deref() != Some(inputs_json.as_str()) {
                 return Ok(false);
             }
             let run: Option<(String, String)> = self
@@ -1786,6 +1888,253 @@ impl TenderStore {
     }
 }
 
+fn current_manager_intake_plan_context(
+    transaction: &Transaction<'_>,
+) -> Result<(String, TenderId, u32, AiExecutionSelection), TenderCommandError> {
+    let (intake_run_id, stage, selection_json): (String, String, Option<String>) = transaction
+        .query_row(
+            "SELECT intake_run_id, stage, provider_selection_json
+             FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(sql_error)?;
+    if !matches!(
+        stage.as_str(),
+        "reading_documents" | "extracting_tender_facts"
+    ) {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let selection = selection_json
+        .as_deref()
+        .map(parse_canonical)
+        .transpose()?
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
+    let (tender_id, tender_revision): (String, u32) = transaction
+        .query_row(
+            "SELECT tender_id, current_revision FROM tender WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(sql_error)?;
+    Ok((
+        intake_run_id,
+        TenderId::parse(&tender_id)?,
+        tender_revision,
+        selection,
+    ))
+}
+
+fn current_manager_intake_plan_inputs(
+    transaction: &Transaction<'_>,
+) -> Result<
+    (
+        Vec<TenderEvidenceReference>,
+        Vec<super::TenderRecordAuthorityReference>,
+    ),
+    TenderCommandError,
+> {
+    let mut evidence_statement = transaction
+        .prepare(
+            "SELECT el.artifact_id, el.version, el.ordinal
+             FROM evidence_locations el
+             JOIN source_artifacts sa ON sa.artifact_id = el.artifact_id
+             JOIN manager_intake_runs mir ON mir.package_intake_id = sa.intake_id
+             WHERE mir.intake_run_sequence = (
+               SELECT MAX(intake_run_sequence) FROM manager_intake_runs
+             )
+               AND NOT EXISTS (
+                 SELECT 1 FROM source_relationships sr
+                 WHERE sr.prior_artifact_id = el.artifact_id
+                   AND sr.prior_version = el.version
+                   AND sr.relationship_kind = 'replacement'
+               )
+             ORDER BY el.artifact_id, el.version, el.ordinal",
+        )
+        .map_err(sql_error)?;
+    let evidence = evidence_statement
+        .query_map([], |row| {
+            Ok(TenderEvidenceReference {
+                artifact_id: row.get(0)?,
+                version: row.get(1)?,
+                ordinal: row.get(2)?,
+            })
+        })
+        .map_err(sql_error)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(sql_error)?;
+    drop(evidence_statement);
+    if evidence.is_empty() {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let mut authority_statement = transaction
+        .prepare("SELECT authority_id FROM tender_record_authorities ORDER BY authority_id")
+        .map_err(sql_error)?;
+    let authorities = authority_statement
+        .query_map([], |row| {
+            Ok(super::TenderRecordAuthorityReference {
+                authority_id: row.get(0)?,
+            })
+        })
+        .map_err(sql_error)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(sql_error)?;
+    Ok((evidence, authorities))
+}
+
+fn build_manager_intake_plan(
+    transaction: &Transaction<'_>,
+    tender_id: &TenderId,
+    tender_revision: u32,
+    intake_run_id: &str,
+    evidence: &[TenderEvidenceReference],
+    authorities: &[super::TenderRecordAuthorityReference],
+    selection: &AiExecutionSelection,
+    byte_budget: u64,
+) -> Result<Vec<PlannedManagerIntakeExtractionBatch>, TenderCommandError> {
+    if byte_budget == 0 {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let mut result = Vec::new();
+    let mut current = Vec::new();
+    for reference in evidence {
+        current.push(reference.clone());
+        let estimate = estimate_record_extraction_request_bytes(
+            transaction,
+            tender_id,
+            tender_revision,
+            intake_run_id,
+            &current,
+            authorities,
+            selection,
+        )?;
+        if estimate <= byte_budget {
+            continue;
+        }
+        let overflow = current
+            .pop()
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        if current.is_empty() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let completed_evidence = std::mem::take(&mut current);
+        let completed_estimate = estimate_record_extraction_request_bytes(
+            transaction,
+            tender_id,
+            tender_revision,
+            intake_run_id,
+            &completed_evidence,
+            authorities,
+            selection,
+        )?;
+        result.push(planned_manager_intake_batch(
+            completed_evidence,
+            authorities,
+            completed_estimate,
+        )?);
+        current.push(overflow);
+        let single_estimate = estimate_record_extraction_request_bytes(
+            transaction,
+            tender_id,
+            tender_revision,
+            intake_run_id,
+            &current,
+            authorities,
+            selection,
+        )?;
+        if single_estimate > byte_budget {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+    }
+    if !current.is_empty() {
+        let estimate = estimate_record_extraction_request_bytes(
+            transaction,
+            tender_id,
+            tender_revision,
+            intake_run_id,
+            &current,
+            authorities,
+            selection,
+        )?;
+        result.push(planned_manager_intake_batch(
+            current,
+            authorities,
+            estimate,
+        )?);
+    }
+    Ok(result)
+}
+
+fn planned_manager_intake_batch(
+    evidence: Vec<TenderEvidenceReference>,
+    authorities: &[super::TenderRecordAuthorityReference],
+    estimated_request_bytes: u64,
+) -> Result<PlannedManagerIntakeExtractionBatch, TenderCommandError> {
+    let authorities = authorities.to_vec();
+    Ok(PlannedManagerIntakeExtractionBatch {
+        fingerprint: manager_intake_batch_fingerprint(&evidence, &authorities)?,
+        evidence,
+        authorities,
+        estimated_request_bytes,
+    })
+}
+
+fn load_manager_intake_plan(
+    transaction: &Transaction<'_>,
+    intake_run_id: &str,
+) -> Result<Vec<PlannedManagerIntakeExtractionBatch>, TenderCommandError> {
+    let mut statement = transaction
+        .prepare(
+            "SELECT batch_fingerprint, canonical_inputs_json, estimated_request_bytes,
+                    estimator_version
+             FROM manager_intake_extraction_plan_batches
+             WHERE intake_run_id = ?1 ORDER BY ordinal",
+        )
+        .map_err(sql_error)?;
+    let mut rows = statement.query([intake_run_id]).map_err(sql_error)?;
+    let mut planned = Vec::new();
+    while let Some(row) = rows.next().map_err(sql_error)? {
+        let fingerprint: String = row.get(0).map_err(sql_error)?;
+        let inputs_json: String = row.get(1).map_err(sql_error)?;
+        let estimated_request_bytes = u64::try_from(row.get::<_, i64>(2).map_err(sql_error)?)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let estimator_version: String = row.get(3).map_err(sql_error)?;
+        let inputs: ManagerIntakeBatchInputs = parse_canonical(&inputs_json)?;
+        if estimator_version != RECORD_EXTRACTION_ESTIMATOR_VERSION
+            || inputs.evidence.is_empty()
+            || estimated_request_bytes == 0
+            || canonical_json(&inputs)? != inputs_json
+            || manager_intake_batch_fingerprint(&inputs.evidence, &inputs.authorities)?
+                != fingerprint
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        planned.push(PlannedManagerIntakeExtractionBatch {
+            evidence: inputs.evidence,
+            authorities: inputs.authorities,
+            fingerprint,
+            estimated_request_bytes,
+        });
+    }
+    Ok(planned)
+}
+
+fn completed_manager_intake_batch_fingerprints(
+    transaction: &Transaction<'_>,
+    intake_run_id: &str,
+) -> Result<HashSet<String>, TenderCommandError> {
+    transaction
+        .prepare(
+            "SELECT batch_fingerprint FROM manager_intake_extraction_batches
+             WHERE intake_run_id = ?1",
+        )
+        .map_err(sql_error)?
+        .query_map([intake_run_id], |row| row.get(0))
+        .map_err(sql_error)?
+        .collect::<rusqlite::Result<HashSet<_>>>()
+        .map_err(sql_error)
+}
+
 pub(super) fn record_manager_intake_extraction_batch(
     transaction: &Transaction<'_>,
     run_id: &str,
@@ -1856,6 +2205,21 @@ pub(super) fn record_manager_intake_extraction_batch(
         authorities,
         evidence,
     })?;
+    let planned_inputs: Option<(String, String)> = transaction
+        .query_row(
+            "SELECT canonical_inputs_json, estimator_version
+             FROM manager_intake_extraction_plan_batches
+             WHERE intake_run_id = ?1 AND batch_fingerprint = ?2",
+            params![intake_run_id, batch_fingerprint],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    if planned_inputs.as_ref().is_none_or(|(inputs, version)| {
+        inputs != &evidence_json || version != RECORD_EXTRACTION_ESTIMATOR_VERSION
+    }) {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
     transaction
         .execute(
             "INSERT INTO manager_intake_extraction_batches (

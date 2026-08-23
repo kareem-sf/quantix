@@ -9,6 +9,7 @@ use crate::chatgpt_oauth::StoredConnection;
 
 #[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
 pub(crate) const BACKEND_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
+pub(crate) const DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES: u64 = 512 * 1024;
 const ORIGINATOR: &str = "quantix";
 const COMPUTE_RESIDENCY_HEADER: &str = "x-openai-internal-codex-residency";
 

@@ -46,8 +46,9 @@ use crate::{
         RunPricingAdjustmentReviewCommand, RunProductionTaskCommand,
         RunSubmissionSectionReviewCommand, RunTenderRecordExtractionCommand,
         RunTenderRecordReviewCommand, SubmissionSectionReviewRunResult, TenderCommandError,
-        TenderErrorCode, TenderId, TenderRecordAuthority, TenderRecordDecisionResult,
-        TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult, TenderStore,
+        TenderErrorCode, TenderEvidenceReference, TenderId, TenderRecordAuthority,
+        TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordPage,
+        TenderRecordReviewResult, TenderStore,
     },
     QuantixHost,
 };
@@ -1335,16 +1336,16 @@ impl QuantixHost {
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .bind_manager_intake_provider_selection(&selection, false)?;
-        let (batches, authorities) = {
+        let batches = {
             let mut store = store
                 .lock()
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
             store.refresh_manager_intake_parse_counts()?;
-            let authorities = store.manager_intake_authority_references()?;
-            let batches = store.manager_intake_evidence_batches(&authorities)?;
-            (batches, authorities)
+            store.manager_intake_evidence_batches()?
         };
-        for evidence in batches {
+        for batch in batches {
+            let evidence = batch.evidence;
+            let authorities = batch.authorities;
             let recovery = store
                 .lock()
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
@@ -1445,6 +1446,89 @@ impl QuantixHost {
         tender_id: &str,
     ) -> Result<(), TenderCommandError> {
         self.run_manager_intake_pipeline(tender_id).await
+    }
+
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    pub fn preview_manager_intake_byte_plan_for_verification(
+        &self,
+        tender_id: &str,
+        byte_budget: u64,
+    ) -> Result<
+        Vec<(
+            Vec<TenderEvidenceReference>,
+            Vec<crate::tender_store::TenderRecordAuthorityReference>,
+            String,
+            u64,
+        )>,
+        TenderCommandError,
+    > {
+        self.manager_intake_byte_plan_for_verification(tender_id, byte_budget, false)
+    }
+
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    pub fn persist_manager_intake_byte_plan_for_verification(
+        &self,
+        tender_id: &str,
+        byte_budget: u64,
+    ) -> Result<
+        Vec<(
+            Vec<TenderEvidenceReference>,
+            Vec<crate::tender_store::TenderRecordAuthorityReference>,
+            String,
+            u64,
+        )>,
+        TenderCommandError,
+    > {
+        self.manager_intake_byte_plan_for_verification(tender_id, byte_budget, true)
+    }
+
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    fn manager_intake_byte_plan_for_verification(
+        &self,
+        tender_id: &str,
+        byte_budget: u64,
+        persist: bool,
+    ) -> Result<
+        Vec<(
+            Vec<TenderEvidenceReference>,
+            Vec<crate::tender_store::TenderRecordAuthorityReference>,
+            String,
+            u64,
+        )>,
+        TenderCommandError,
+    > {
+        require_setup(self)?;
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let mut store = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let stage = store.begin_manager_intake_processing()?;
+        if !matches!(
+            stage,
+            crate::tender_store::ManagerIntakeStage::ReadingDocuments
+                | crate::tender_store::ManagerIntakeStage::ExtractingTenderFacts
+        ) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let selection = store.required_tender_ai_execution_selection()?;
+        store.bind_manager_intake_provider_selection(&selection, false)?;
+        let batches = if persist {
+            store.persist_manager_intake_byte_plan_for_verification(byte_budget)?
+        } else {
+            store.preview_manager_intake_byte_plan(byte_budget)?
+        };
+        Ok(batches
+            .into_iter()
+            .map(|batch| {
+                (
+                    batch.evidence,
+                    batch.authorities,
+                    batch.fingerprint,
+                    batch.estimated_request_bytes,
+                )
+            })
+            .collect())
     }
 
     async fn run_manager_intake_outcome(
