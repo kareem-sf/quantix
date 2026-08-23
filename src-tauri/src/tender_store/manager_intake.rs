@@ -1180,6 +1180,7 @@ impl TenderStore {
                     relative_path: "manager-intake-v1.json",
                     view_id: "manager-intake-v1",
                     payload: &payload,
+                    additional_data_views: &[],
                 })?;
             if materialized_workspace != workspace
                 || permission_duration(&permission_grant, Timestamp::now())
@@ -1978,6 +1979,7 @@ fn manager_intake_task(
         deadline,
         permissions: manager_intake_permissions(),
         resource_budget: profile.resource_budget.clone(),
+        repair_feedback: None,
     }
 }
 

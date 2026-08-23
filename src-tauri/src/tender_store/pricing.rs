@@ -1195,6 +1195,7 @@ fn adjustment_review_task(
         deadline,
         permissions: profile.permissions.clone(),
         resource_budget: profile.resource_budget.clone(),
+        repair_feedback: None,
     })
 }
 
@@ -2913,6 +2914,7 @@ fn review_task(
         deadline,
         permissions: profile.permissions.clone(),
         resource_budget: profile.resource_budget.clone(),
+        repair_feedback: None,
     })
 }
 

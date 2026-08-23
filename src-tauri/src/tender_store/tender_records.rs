@@ -9,10 +9,14 @@ use ts_rs::TS;
 
 use crate::{
     agent_runtime::{
-        permissions::{derive_pre_bid_data_grant, permission_duration, PreBidDataGrantRequest},
-        AgentProfileVersionView, AgentResourceBudget, AgentRunInspection, AgentRunPermissions,
-        AgentTaskInputReference, BootstrapRole, DataClassification, PendingProviderEvent,
-        PreparedAgentRun, ProviderEventKind, TenderTaskView, VerificationStatus,
+        permissions::{
+            derive_pre_bid_data_grant, permission_duration, PreBidAdditionalDataView,
+            PreBidDataGrantRequest,
+        },
+        AgentProfileVersionView, AgentRepairFeedback, AgentResourceBudget, AgentRunInspection,
+        AgentRunPermissions, AgentRunState, AgentTaskInputReference, BootstrapRole,
+        DataClassification, PendingProviderEvent, PreparedAgentRun, ProviderEventKind,
+        ProviderFailureCategory, TenderTaskView, VerificationStatus,
     },
     document_parsing::EvidenceLocation,
     tender_intake::SourceRelationshipKind,
@@ -608,6 +612,7 @@ fn record_review_task(
         deadline,
         permissions: record_review_permissions(),
         resource_budget: profile.resource_budget.clone(),
+        repair_feedback: None,
     }
 }
 
@@ -655,6 +660,7 @@ pub(crate) fn record_extraction_task(
         deadline,
         permissions: record_extraction_permissions(),
         resource_budget: profile.resource_budget.clone(),
+        repair_feedback: None,
     }
 }
 
@@ -1062,6 +1068,7 @@ impl TenderStore {
                     relative_path: "tender-evidence-v1.json",
                     view_id: "tender-evidence-v1",
                     payload: &payload,
+                    additional_data_views: &[],
                 })?;
             if materialized_workspace != workspace
                 || permission_duration(&permission_grant, jiff::Timestamp::now())
@@ -1177,6 +1184,288 @@ impl TenderStore {
                 run_id,
                 provider_selection,
                 profile,
+                task,
+                permission_grant,
+                provider_thread_ref,
+                provider_thread_to_archive,
+                workspace: workspace.clone(),
+            })
+        })();
+        if prepared.is_err() {
+            let _ = fs::remove_dir_all(&workspace);
+        }
+        prepared
+    }
+
+    pub(crate) fn prepare_tender_record_repair_run(
+        &mut self,
+        tender_id: &TenderId,
+        rejected_run_id: &str,
+    ) -> Result<PreparedAgentRun, TenderCommandError> {
+        if !valid_identifier(rejected_run_id) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let rejected_run = self.inspect_agent_run(rejected_run_id)?;
+        let failure = rejected_run
+            .failure
+            .as_ref()
+            .filter(|failure| {
+                rejected_run.retry_of_run_id.is_none()
+                    && rejected_run.state == AgentRunState::Failed
+                    && failure.category == ProviderFailureCategory::OutputInvalid
+            })
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        if rejected_run.task.repair_feedback.is_some()
+            || rejected_run.profile.capabilities.as_slice() != [RECORD_EXTRACTION_CAPABILITY]
+            || rejected_run.task.profile_id != rejected_run.profile.profile_id
+            || rejected_run.task.profile_version != rejected_run.profile.version
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let required_selection = self.required_tender_ai_execution_selection()?;
+        if required_selection != rejected_run.provider_selection {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let rejected = self.rejected_agent_output(rejected_run_id)?;
+        if rejected.validation_issues.is_empty()
+            || rejected.validation_issues != failure.validation_issues
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let tender_revision = rejected_run
+            .task
+            .exact_inputs
+            .iter()
+            .find(|input| input.kind == "tender_revision")
+            .filter(|input| input.reference == tender_id.as_str() && input.version > 0)
+            .map(|input| input.version)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let evidence = rejected_run
+            .task
+            .exact_inputs
+            .iter()
+            .filter(|input| input.kind == "source_evidence")
+            .map(|input| {
+                let (artifact_id, ordinal) = input
+                    .reference
+                    .split_once('#')
+                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+                let ordinal = ordinal
+                    .parse()
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+                if !valid_identifier(artifact_id) || input.version == 0 || ordinal == 0 {
+                    return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+                }
+                Ok(TenderEvidenceReference {
+                    artifact_id: artifact_id.into(),
+                    version: input.version,
+                    ordinal,
+                })
+            })
+            .collect::<Result<Vec<_>, TenderCommandError>>()?;
+        if evidence.is_empty() || evidence.len() > MAX_RECORD_EVIDENCE_INPUTS {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        let authority_references = rejected_run
+            .task
+            .exact_inputs
+            .iter()
+            .filter(|input| {
+                matches!(
+                    input.kind.as_str(),
+                    "engineer_entry" | "approved_calculation_run"
+                )
+            })
+            .map(|input| TenderRecordAuthorityReference {
+                authority_id: input.reference.clone(),
+            })
+            .collect::<Vec<_>>();
+        let run_id = random_identifier(&self.connection)?;
+        let application_home = self
+            .root
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+        let workspace = application_home
+            .join("staging")
+            .join(format!("agent-{}-{run_id}", tender_id.as_str()));
+
+        let prepared = (|| {
+            let transaction = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(sql_error)?;
+            let current_revision: u32 = transaction
+                .query_row(
+                    "SELECT current_revision FROM tender WHERE singleton = 1 AND tender_id = ?1",
+                    [tender_id.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            if current_revision != tender_revision {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            let child_exists: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE retry_of_run_id = ?1)",
+                    [rejected_run_id],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            if child_exists {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            let created_at = sqlite_timestamp(&transaction)?;
+            let authorities =
+                load_record_authorities_by_references(&transaction, &authority_references)?;
+            let mut task = rejected_run.task.clone();
+            task.task_id = random_identifier(&transaction)?;
+            task.repair_feedback = Some(AgentRepairFeedback {
+                rejected_run_id: rejected.run_id.clone(),
+                rejected_payload_sha256: rejected.payload_sha256.clone(),
+                validation_issues: rejected.validation_issues.clone(),
+            });
+            insert_task(&transaction, &task, &created_at)?;
+            let payload = record_extraction_data_view(
+                &transaction,
+                tender_id,
+                tender_revision,
+                &evidence,
+                &authorities,
+            )?;
+            let rejected_payload: Value = serde_json::from_str(&rejected.payload_json)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            let repair_payload = json!({
+                "data_classification": DataClassification::TenderInternal,
+                "data_scope": RECORD_EXTRACTION_SCOPE,
+                "rejected_payload_sha256": rejected.payload_sha256,
+                "rejected_proposal": rejected_payload,
+                "schema_version": 1,
+                "validation_issues": rejected.validation_issues,
+            });
+            let feedback_view = [PreBidAdditionalDataView {
+                relative_path: "repair-feedback-v1.json",
+                view_id: "repair-feedback-v1",
+                payload: &repair_payload,
+            }];
+            let (permission_grant, materialized_workspace) =
+                derive_pre_bid_data_grant(PreBidDataGrantRequest {
+                    run_id: &run_id,
+                    grant_id: random_identifier(&transaction)?,
+                    application_home,
+                    tender_id: tender_id.as_str(),
+                    profile: &rejected_run.profile,
+                    task: &task,
+                    issued_at: &created_at,
+                    data_scope: RECORD_EXTRACTION_SCOPE,
+                    allowed_action: RECORD_EXTRACTION_ACTION,
+                    relative_path: "tender-evidence-v1.json",
+                    view_id: "tender-evidence-v1",
+                    payload: &payload,
+                    additional_data_views: &feedback_view,
+                })?;
+            if materialized_workspace != workspace
+                || permission_duration(&permission_grant, Timestamp::now())
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?
+                    .is_zero()
+            {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            let existing_provider_thread: Option<(String, String)> = transaction
+                .query_row(
+                    "SELECT thread_ref, status FROM provider_threads
+                     WHERE profile_id = ?1 AND profile_version = ?2
+                       AND status IN ('active', 'archive_pending')",
+                    params![
+                        rejected_run.profile.profile_id,
+                        rejected_run.profile.version
+                    ],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(sql_error)?;
+            let (provider_thread_ref, provider_thread_to_archive) = match existing_provider_thread {
+                Some((thread_ref, status)) if status == "archive_pending" => {
+                    (None, Some(thread_ref))
+                }
+                Some((thread_ref, status)) if status == "active" => {
+                    if load_thread_exposure(&transaction, &thread_ref)?
+                        .is_compatible_with(&permission_grant)
+                    {
+                        (Some(thread_ref), None)
+                    } else {
+                        transaction
+                            .execute(
+                                "UPDATE provider_threads SET status = 'archive_pending'
+                                 WHERE thread_ref = ?1 AND status = 'active'",
+                                [&thread_ref],
+                            )
+                            .map_err(sql_error)?;
+                        (None, Some(thread_ref))
+                    }
+                }
+                Some(_) => return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
+                None => (None, None),
+            };
+            ensure_agent_run_capacity(&transaction)?;
+            transaction
+                .execute(
+                    "INSERT INTO agent_runs (
+                       run_id, task_id, profile_id, profile_version, retry_of_run_id,
+                       permission_grant_json, status, started_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'running', ?7)",
+                    params![
+                        run_id,
+                        task.task_id,
+                        rejected_run.profile.profile_id,
+                        rejected_run.profile.version,
+                        rejected_run_id,
+                        serde_json_canonicalizer::to_string(&permission_grant).map_err(|_| {
+                            TenderCommandError::new(TenderErrorCode::StoreUnavailable)
+                        })?,
+                        created_at,
+                    ],
+                )
+                .map_err(sql_error)?;
+            super::record_agent_run_provider_binding(
+                &transaction,
+                &run_id,
+                &required_selection,
+                &created_at,
+            )?;
+            insert_event(
+                &transaction,
+                &run_id,
+                1,
+                PendingProviderEvent {
+                    kind: ProviderEventKind::RunStarted,
+                    summary: "Agent Run started".into(),
+                    correlation_id: None,
+                    request_fingerprint: None,
+                    denial_reason: None,
+                    opaque_reference: None,
+                },
+                &created_at,
+            )?;
+            append_audit_event(
+                &transaction,
+                tender_id.as_str(),
+                "agent_run_started",
+                tender_revision,
+                json!({
+                    "profile_id": rejected_run.profile.profile_id,
+                    "profile_version": rejected_run.profile.version.to_string(),
+                    "retry_of_run_id": rejected_run_id,
+                    "run_id": run_id,
+                    "task_id": task.task_id,
+                }),
+                &created_at,
+            )?;
+            transaction.commit().map_err(sql_error)?;
+            Ok(PreparedAgentRun {
+                run_id,
+                provider_selection: required_selection.clone(),
+                profile: rejected_run.profile.clone(),
                 task,
                 permission_grant,
                 provider_thread_ref,
@@ -1355,6 +1644,7 @@ impl TenderStore {
                     relative_path: "tender-record-review-v1.json",
                     view_id: "tender-record-review-v1",
                     payload: &payload,
+                    additional_data_views: &[],
                 })?;
             if materialized_workspace != workspace
                 || permission_duration(&permission_grant, jiff::Timestamp::now())
@@ -3772,6 +4062,7 @@ mod tests {
                 duration_seconds: 1,
                 output_bytes: 1,
             },
+            repair_feedback: None,
         };
 
         let error = store

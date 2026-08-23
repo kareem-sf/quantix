@@ -367,6 +367,13 @@ pub(crate) struct PreBidDataGrantRequest<'a> {
     pub relative_path: &'a str,
     pub view_id: &'a str,
     pub payload: &'a Value,
+    pub additional_data_views: &'a [PreBidAdditionalDataView<'a>],
+}
+
+pub(crate) struct PreBidAdditionalDataView<'a> {
+    pub relative_path: &'a str,
+    pub view_id: &'a str,
+    pub payload: &'a Value,
 }
 
 pub(crate) struct PlannedTaskGrantRequest<'a> {
@@ -538,6 +545,9 @@ pub(crate) fn derive_pre_bid_data_grant(
         || request.profile.profile_id != request.task.profile_id
         || request.profile.version != request.task.profile_version
         || request.relative_path.contains(['/', '\\'])
+        || request.additional_data_views.iter().any(|view| {
+            view.relative_path.contains(['/', '\\']) || view.relative_path == request.relative_path
+        })
     {
         return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
     }
@@ -581,6 +591,35 @@ pub(crate) fn derive_pre_bid_data_grant(
             data_classification: DataClassification::TenderInternal,
             exact_inputs: request.task.exact_inputs.clone(),
         };
+        let mut data_views = vec![view];
+        for additional in request.additional_data_views {
+            let payload = serde_json_canonicalizer::to_string(additional.payload)
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?
+                .into_bytes();
+            if payload.len() > 4 * 1024 * 1024 {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            let relative_path = format!("inputs/{}", additional.relative_path);
+            let path = workspace.join(&relative_path);
+            fs::write(&path, &payload).map_err(store_unavailable)?;
+            let mut permissions = fs::metadata(&path)
+                .map_err(store_unavailable)?
+                .permissions();
+            permissions.set_readonly(true);
+            fs::set_permissions(&path, permissions).map_err(store_unavailable)?;
+            data_views.push(DataViewManifest {
+                view_id: additional.view_id.into(),
+                schema_version: 1,
+                relative_path,
+                sha256: Sha256::digest(&payload)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
+                data_scope: request.data_scope.into(),
+                data_classification: DataClassification::TenderInternal,
+                exact_inputs: request.task.exact_inputs.clone(),
+            });
+        }
         let mut grant = PermissionGrant {
             grant_id: request.grant_id,
             policy_version: PERMISSION_POLICY_VERSION,
@@ -596,7 +635,7 @@ pub(crate) fn derive_pre_bid_data_grant(
             typed_tools: Vec::new(),
             network_allowed: false,
             workspace_write_allowed: true,
-            data_views: vec![view],
+            data_views,
             thread_exposure: ThreadExposureSet::default(),
             workspace: AgentRunWorkspaceManifest {
                 workspace_id: request.run_id.into(),

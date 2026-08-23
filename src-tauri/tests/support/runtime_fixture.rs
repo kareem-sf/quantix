@@ -827,6 +827,19 @@ fn run_agent_turn(
     let provider_data_view = provider_input
         .pointer("/provider_data_views/0/payload")
         .ok_or("provider-visible Data View payload")?;
+    if scenario.starts_with("manager-intake-repair-")
+        && inputs.join("repair-feedback-v1.json").is_file()
+        && (provider_input
+            .pointer("/repair_feedback/rejected_run_id")
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+            || provider_input
+                .pointer("/repair_instruction")
+                .and_then(serde_json::Value::as_str)
+                .is_none())
+    {
+        return Err("repair turn lacks its bounded provider instruction bundle".into());
+    }
     if provider_input
         .pointer("/quantix_invariants")
         .and_then(serde_json::Value::as_array)
@@ -1166,6 +1179,8 @@ fn run_agent_turn(
             | "record-review-delayed"
             | "manager-intake"
             | "manager-intake-bid"
+            | "manager-intake-repair-invalid-then-valid"
+            | "manager-intake-repair-invalid-twice"
             | "bid-package-review"
             | "bid-package-review-change-assessment"
             | "bid-package-review-failed"
@@ -1572,6 +1587,31 @@ fn run_agent_turn(
             && provider_data_view.get("record").is_none()
         {
             let mut candidate = record_extraction_candidate(provider_data_view)?;
+            if scenario.starts_with("manager-intake-repair-")
+                && inputs.join("repair-feedback-v1.json").is_file()
+            {
+                let repair_feedback: serde_json::Value =
+                    serde_json::from_slice(&fs::read(inputs.join("repair-feedback-v1.json"))?)?;
+                if repair_feedback.get("rejected_proposal").is_none()
+                    || repair_feedback
+                        .get("rejected_payload_sha256")
+                        .and_then(serde_json::Value::as_str)
+                        .is_none()
+                    || repair_feedback
+                        .get("validation_issues")
+                        .and_then(serde_json::Value::as_array)
+                        .is_none()
+                {
+                    return Err("repair feedback lacks the rejected proposal contract".into());
+                }
+            }
+            if scenario == "manager-intake-repair-invalid-twice"
+                || (scenario == "manager-intake-repair-invalid-then-valid"
+                    && !inputs.join("repair-feedback-v1.json").is_file())
+            {
+                candidate["records"][1]["stable_key"] =
+                    candidate["records"][0]["stable_key"].clone();
+            }
             if scenario == "manager-intake-bid" {
                 candidate["records"] = serde_json::Value::Array(
                     candidate["records"]

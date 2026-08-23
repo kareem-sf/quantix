@@ -2177,6 +2177,7 @@ impl TenderStore {
                 deadline: definition.deadline.clone(),
                 permissions: profile.permissions.clone(),
                 resource_budget: profile.resource_budget.clone(),
+                repair_feedback: None,
             };
             let created_at = sqlite_timestamp(&transaction)?;
             let grant_expires_at: String = transaction

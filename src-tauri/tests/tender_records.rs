@@ -8,11 +8,11 @@ use quantix_lib::{
     InspectChangeAssessmentsCommand, OutputValidationIssue, ParseSourceArtifactCommand,
     ProviderFailureCategory, QuantixHost, ResolveIndeterminateAgentRunCommand, ReviseTenderCommand,
     RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, RuntimeLayout, SetupPlatform,
-    SetupState, SourceRelationshipKind, StoragePermissions, TenderEvidenceReference,
-    TenderIntegrityState, TenderLifecyclePhase, TenderRecordAuthorityReference,
-    TenderRecordBasisKind, TenderRecordEngineerDecisionKind, TenderRecordInspection,
-    TenderRecordKind, TenderRecordReviewOutcome, TenderRecordTrustClass, VerificationStatus,
-    MINIMUM_SETUP_FREE_SPACE_BYTES,
+    SetupState, SourceRelationshipKind, StoragePermissions, TenderErrorCode,
+    TenderEvidenceReference, TenderIntegrityState, TenderLifecyclePhase,
+    TenderRecordAuthorityReference, TenderRecordBasisKind, TenderRecordEngineerDecisionKind,
+    TenderRecordInspection, TenderRecordKind, TenderRecordReviewOutcome, TenderRecordTrustClass,
+    VerificationStatus, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use sha2::{Digest, Sha256};
 
@@ -178,6 +178,153 @@ fn records_for_run(
         .into_iter()
         .filter(|record| record.author_run_id == run_id)
         .collect()
+}
+
+fn tender_record_extraction_runs(
+    application_home: &Path,
+    tender_id: &str,
+) -> Vec<(String, Option<String>, String)> {
+    let database = application_home
+        .join("tenders")
+        .join(tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open Tender Store database");
+    let runs = connection
+        .prepare(
+            "SELECT agent_runs.run_id, agent_runs.retry_of_run_id, agent_runs.status
+             FROM agent_runs
+             JOIN tender_tasks USING (task_id)
+             WHERE tender_tasks.objective LIKE 'Propose evidence-backed requirements%'
+             ORDER BY agent_runs.run_sequence",
+        )
+        .expect("prepare extraction runs")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .expect("query extraction runs")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("collect extraction runs");
+    runs
+}
+
+#[tokio::test]
+async fn manager_intake_automatically_repairs_one_invalid_extraction() {
+    let harness = RuntimeHarness::new("manager-intake-repair-invalid-then-valid");
+    harness
+        .parsed_pdf_evidence("repair-invalid-then-valid", b"TENDER_RECORD_GOLDEN")
+        .await;
+    fs::write(
+        harness.codex.with_extension("manager-output-release"),
+        b"release",
+    )
+    .expect("release Manager outcome");
+
+    harness
+        .host
+        .run_manager_intake_for_verification(&harness.tender_id)
+        .await
+        .expect("repair one invalid extraction and finish Manager intake");
+
+    let runs = tender_record_extraction_runs(&harness.application_home, &harness.tender_id);
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[0].2, "failed");
+    assert_eq!(runs[1].1.as_deref(), Some(runs[0].0.as_str()));
+    assert_eq!(runs[1].2, "completed");
+    assert!(
+        records_for_run(&harness.host, &harness.tender_id, &runs[0].0).is_empty(),
+        "the rejected attempt must never publish records"
+    );
+    assert!(
+        !records_for_run(&harness.host, &harness.tender_id, &runs[1].0).is_empty(),
+        "only the completed repair may publish records"
+    );
+
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open Tender Store database");
+    let (source_inputs, source_feedback, repair_inputs, repair_feedback): (
+        String,
+        Option<String>,
+        String,
+        Option<String>,
+    ) = connection
+        .query_row(
+            "SELECT source_task.exact_inputs_json, source_task.repair_feedback_json,
+                    repair_task.exact_inputs_json, repair_task.repair_feedback_json
+             FROM agent_runs AS source_run
+             JOIN tender_tasks AS source_task ON source_task.task_id = source_run.task_id
+             JOIN agent_runs AS repair_run ON repair_run.retry_of_run_id = source_run.run_id
+             JOIN tender_tasks AS repair_task ON repair_task.task_id = repair_run.task_id
+             WHERE source_run.run_id = ?1",
+            [&runs[0].0],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("load immutable repair task lineage");
+    assert_eq!(source_inputs, repair_inputs);
+    assert!(source_feedback.is_none());
+    let repair_feedback = repair_feedback.expect("repair feedback is immutable task data");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&repair_feedback)
+            .expect("canonical repair feedback")
+            .pointer("/rejected_run_id")
+            .and_then(serde_json::Value::as_str),
+        Some(runs[0].0.as_str())
+    );
+    let extraction_run_count: u32 = connection
+        .query_row(
+            "SELECT extraction_run_count FROM manager_intake_runs",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read Manager extraction count");
+    assert_eq!(extraction_run_count, 1);
+}
+
+#[tokio::test]
+async fn manager_intake_stops_after_one_failed_repair() {
+    let harness = RuntimeHarness::new("manager-intake-repair-invalid-twice");
+    harness
+        .parsed_pdf_evidence("repair-invalid-twice", b"TENDER_RECORD_GOLDEN")
+        .await;
+
+    let error = harness
+        .host
+        .run_manager_intake_for_verification(&harness.tender_id)
+        .await
+        .expect_err("two invalid extraction attempts stop without a third call");
+    assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+
+    let runs = tender_record_extraction_runs(&harness.application_home, &harness.tender_id);
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[0].2, "failed");
+    assert_eq!(runs[1].1.as_deref(), Some(runs[0].0.as_str()));
+    assert_eq!(runs[1].2, "failed");
+    assert!(records_for_run(&harness.host, &harness.tender_id, &runs[0].0).is_empty());
+    assert!(records_for_run(&harness.host, &harness.tender_id, &runs[1].0).is_empty());
+
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open Tender Store database");
+    let rejected_count: u32 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM agent_run_rejected_outputs",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count rejected provider outputs");
+    assert_eq!(rejected_count, 2);
+    let extraction_run_count: u32 = connection
+        .query_row(
+            "SELECT extraction_run_count FROM manager_intake_runs",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read Manager extraction count");
+    assert_eq!(extraction_run_count, 0);
 }
 
 #[tokio::test]

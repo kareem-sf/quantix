@@ -491,6 +491,7 @@ pub(super) fn provider_instruction_bundle(
             "review_policy": prepared.task.review_policy,
             "deadline": prepared.task.deadline,
         },
+        "repair_feedback": prepared.task.repair_feedback,
         "output_contract": serde_json::from_str::<Value>(&prepared.task.output_contract_json)
             .map_err(|_| protocol_failure(false))?,
         "permissions": prepared.task.permissions,
@@ -498,7 +499,10 @@ pub(super) fn provider_instruction_bundle(
         "data_views": prepared.permission_grant.data_views,
         "provider_data_views": provider_data_views,
         "resource_budget": prepared.task.resource_budget,
-        "required_language": "English"
+        "required_language": "English",
+        "repair_instruction": prepared.task.repair_feedback.as_ref().map(|_| {
+            "Review the rejected proposal against the unchanged exact evidence, correct every listed issue, and return one complete replacement JSON object, not a patch."
+        })
     }))
     .map_err(|_| protocol_failure(false))
 }

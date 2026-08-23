@@ -12,14 +12,14 @@ use crate::agent_runtime::{
         BootstrapGrantRequest, ToolCallDecision,
     },
     AccessApproval, AccessRequest, AgentAccessRequestStatus, AgentAccessRequestView,
-    AgentProfileStatus, AgentProfileVersionView, AgentRunActivity, AgentRunHistoryItem,
-    AgentRunHistoryPage, AgentRunInspection, AgentRunRecoveryDecision, AgentRunRecoveryDisposition,
-    AgentRunState, AgentRunSummary, ApproveAgentAccessCommand, BootstrapAuthority, BootstrapRole,
-    BootstrapTeamMember, DataClassification, PendingProviderEvent, PermissionGrant,
-    PreparedAgentRun, ProposedAgentResult, ProviderEvent, ProviderEventKind, ProviderExecution,
-    ProviderFailure, ProviderFailureCategory, ProviderUsage, RejectedAgentOutput,
-    RequestAgentAccessCommand, ResolveAgentAccessCommand, ResolveIndeterminateAgentRunCommand,
-    TenderTaskView, ThreadExposureSet, VerificationStatus,
+    AgentProfileStatus, AgentProfileVersionView, AgentRepairFeedback, AgentRunActivity,
+    AgentRunHistoryItem, AgentRunHistoryPage, AgentRunInspection, AgentRunRecoveryDecision,
+    AgentRunRecoveryDisposition, AgentRunState, AgentRunSummary, ApproveAgentAccessCommand,
+    BootstrapAuthority, BootstrapRole, BootstrapTeamMember, DataClassification,
+    PendingProviderEvent, PermissionGrant, PreparedAgentRun, ProposedAgentResult, ProviderEvent,
+    ProviderEventKind, ProviderExecution, ProviderFailure, ProviderFailureCategory, ProviderUsage,
+    RejectedAgentOutput, RequestAgentAccessCommand, ResolveAgentAccessCommand,
+    ResolveIndeterminateAgentRunCommand, TenderTaskView, ThreadExposureSet, VerificationStatus,
 };
 use crate::application_settings::AiExecutionSelection;
 
@@ -3678,6 +3678,7 @@ struct RawTenderTask {
     deadline: String,
     permissions_json: String,
     resource_budget_json: String,
+    repair_feedback_json: Option<String>,
 }
 
 pub(super) fn insert_profile(
@@ -3790,8 +3791,8 @@ pub(super) fn insert_task(
             "INSERT INTO tender_tasks (
                task_id, profile_id, profile_version, objective, exact_inputs_json,
                output_contract_json, review_policy, deadline, permissions_json,
-               resource_budget_json, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+               resource_budget_json, repair_feedback_json, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 task.task_id,
                 task.profile_id,
@@ -3803,6 +3804,10 @@ pub(super) fn insert_task(
                 task.deadline,
                 canonical_json(&task.permissions)?,
                 canonical_json(&task.resource_budget)?,
+                task.repair_feedback
+                    .as_ref()
+                    .map(canonical_json)
+                    .transpose()?,
                 created_at,
             ],
         )
@@ -3902,7 +3907,7 @@ pub(super) fn load_task(
         .query_row(
             "SELECT profile_id, profile_version, objective, exact_inputs_json,
                     output_contract_json, review_policy, deadline, permissions_json,
-                    resource_budget_json
+                    resource_budget_json, repair_feedback_json
              FROM tender_tasks WHERE task_id = ?1",
             [task_id],
             |row| {
@@ -3916,6 +3921,7 @@ pub(super) fn load_task(
                     deadline: row.get(6)?,
                     permissions_json: row.get(7)?,
                     resource_budget_json: row.get(8)?,
+                    repair_feedback_json: row.get(9)?,
                 })
             },
         )
@@ -3934,6 +3940,11 @@ pub(super) fn load_task(
         deadline: raw.deadline,
         permissions: parse_canonical_json(&raw.permissions_json)?,
         resource_budget: parse_canonical_json(&raw.resource_budget_json)?,
+        repair_feedback: raw
+            .repair_feedback_json
+            .as_deref()
+            .map(parse_canonical_json::<AgentRepairFeedback>)
+            .transpose()?,
     })
 }
 

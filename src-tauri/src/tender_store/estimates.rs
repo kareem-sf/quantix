@@ -1441,6 +1441,7 @@ fn basis_task(
         deadline,
         permissions: profile.permissions.clone(),
         resource_budget: profile.resource_budget.clone(),
+        repair_feedback: None,
     })
 }
 
@@ -1538,6 +1539,7 @@ fn review_task(request: BasisReviewTaskRequest<'_>) -> Result<TenderTaskView, Te
         deadline: request.deadline,
         permissions: request.profile.permissions.clone(),
         resource_budget: request.profile.resource_budget.clone(),
+        repair_feedback: None,
     })
 }
 

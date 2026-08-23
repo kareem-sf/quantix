@@ -953,6 +953,7 @@ fn external_rfi_review_task(
         deadline,
         permissions: profile.permissions.clone(),
         resource_budget: profile.resource_budget.clone(),
+        repair_feedback: None,
     }
 }
 

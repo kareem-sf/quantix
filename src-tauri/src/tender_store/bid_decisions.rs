@@ -4559,6 +4559,7 @@ fn bid_package_review_task(
         deadline,
         permissions: bid_package_review_permissions(),
         resource_budget: profile.resource_budget.clone(),
+        repair_feedback: None,
     }
 }
 
@@ -4735,6 +4736,7 @@ impl TenderStore {
                     relative_path: "bid-decision-package-review-v1.json",
                     view_id: "bid-decision-package-review-v1",
                     payload: &payload,
+                    additional_data_views: &[],
                 })?;
             if materialized_workspace != workspace
                 || permission_duration(&permission_grant, jiff::Timestamp::now())

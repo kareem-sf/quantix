@@ -521,6 +521,7 @@ pub struct TenderTaskView {
     pub deadline: String,
     pub permissions: AgentRunPermissions,
     pub resource_budget: AgentResourceBudget,
+    pub repair_feedback: Option<AgentRepairFeedback>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -645,6 +646,14 @@ pub struct OutputValidationIssue {
     pub code: String,
     pub path: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AgentRepairFeedback {
+    pub rejected_run_id: String,
+    pub rejected_payload_sha256: String,
+    pub validation_issues: Vec<OutputValidationIssue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1583,16 +1592,56 @@ impl QuantixHost {
             )?;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
 
-        let execution =
-            execute_tender_provider_turn(self, tender_id.as_str(), &store, &prepared, cancellation)
-                .await;
-        let mut store = store
+        let execution = execute_tender_provider_turn(
+            self,
+            tender_id.as_str(),
+            &store,
+            &prepared,
+            cancellation.clone(),
+        )
+        .await;
+        let repair = {
+            let mut tender_store = store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            tender_store.complete_agent_run(&tender_id, &prepared, execution)?;
+            let initial_run = tender_store.inspect_agent_run(&prepared.run_id)?;
+            if initial_run.retry_of_run_id.is_none()
+                && initial_run.state == AgentRunState::Failed
+                && initial_run.failure.as_ref().is_some_and(|failure| {
+                    failure.category == ProviderFailureCategory::OutputInvalid
+                })
+            {
+                Some(tender_store.prepare_tender_record_repair_run(&tender_id, &prepared.run_id)?)
+            } else {
+                None
+            }
+        };
+        if let Some(repair) = repair {
+            self.identify_active_agent_run(&lease_id, &repair.run_id)?;
+            let repair_execution = execute_tender_provider_turn(
+                self,
+                tender_id.as_str(),
+                &store,
+                &repair,
+                cancellation,
+            )
+            .await;
+            let mut tender_store = store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            tender_store.complete_agent_run(&tender_id, &repair, repair_execution)?;
+            return Ok(TenderRecordExtractionResult {
+                run: tender_store.inspect_agent_run(&repair.run_id)?,
+                published_record_count: tender_store.count_tender_records_by_run(&repair.run_id)?,
+            });
+        }
+        let tender_store = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
-        store.complete_agent_run(&tender_id, &prepared, execution)?;
         Ok(TenderRecordExtractionResult {
-            run: store.inspect_agent_run(&prepared.run_id)?,
-            published_record_count: store.count_tender_records_by_run(&prepared.run_id)?,
+            run: tender_store.inspect_agent_run(&prepared.run_id)?,
+            published_record_count: tender_store.count_tender_records_by_run(&prepared.run_id)?,
         })
     }
 

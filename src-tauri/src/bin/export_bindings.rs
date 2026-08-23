@@ -1,6 +1,6 @@
 use quantix_lib::{
-    AcceptanceArtifactHash, AcceptanceCheckResult, AcceptanceStageTiming, AgentRunInspection,
-    AgentRunSummary, AiExecutionApproval, AiExecutionSelection, AiProviderKind,
+    AcceptanceArtifactHash, AcceptanceCheckResult, AcceptanceStageTiming, AgentRepairFeedback,
+    AgentRunInspection, AgentRunSummary, AiExecutionApproval, AiExecutionSelection, AiProviderKind,
     AppearancePreference, ApplicationDiagnostics, ApplicationSettingsView, ApplicationStorageFacts,
     ApproveSubmissionReleaseCommand, BootstrapRole, CancelPackageIntakeCommand,
     ChatGptConnectionState, ChatGptConnectionStatus, ChatGptProductionAssuranceEvidence,
@@ -204,6 +204,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     StartChatGptLoginError::export_all(&config)?;
     StartChatGptLoginResult::export_all(&config)?;
     StartChatGptLoginStatus::export_all(&config)?;
+    AgentRepairFeedback::export_all(&config)?;
     AgentRunInspection::export_all(&config)?;
     AgentRunSummary::export_all(&config)?;
     RuntimePreparationActivity::export_all(&config)?;

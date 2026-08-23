@@ -1577,6 +1577,9 @@ CREATE TABLE tender_tasks (
   deadline TEXT NOT NULL,
   permissions_json TEXT NOT NULL CHECK (json_valid(permissions_json)),
   resource_budget_json TEXT NOT NULL CHECK (json_valid(resource_budget_json)),
+  repair_feedback_json TEXT CHECK (
+    repair_feedback_json IS NULL OR json_valid(repair_feedback_json)
+  ),
   created_at TEXT NOT NULL,
   FOREIGN KEY (profile_id, profile_version)
     REFERENCES agent_profile_versions(profile_id, version)
@@ -1643,6 +1646,8 @@ CREATE TABLE agent_run_provider_bindings (
   recorded_at TEXT NOT NULL,
   FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
 );
+CREATE UNIQUE INDEX agent_runs_one_direct_retry
+ON agent_runs(retry_of_run_id) WHERE retry_of_run_id IS NOT NULL;
 CREATE TABLE agent_run_recovery_dispositions (
   run_id TEXT PRIMARY KEY,
   disposition TEXT NOT NULL CHECK (disposition IN ('retry_task', 'close_task')),

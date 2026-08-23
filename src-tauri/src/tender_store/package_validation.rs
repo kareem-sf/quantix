@@ -4498,6 +4498,7 @@ impl TenderStore {
                 deadline: deadline.clone(),
                 permissions: profile.permissions.clone(),
                 resource_budget: profile.resource_budget.clone(),
+                repair_feedback: None,
             };
             let scoped_items = package
                 .items

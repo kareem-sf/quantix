@@ -1505,6 +1505,7 @@ fn cost_estimator_calculation_task(basis: CostEstimatorTaskBasis<'_>) -> TenderT
         deadline,
         permissions: profile.permissions.clone(),
         resource_budget: profile.resource_budget.clone(),
+        repair_feedback: None,
     }
 }
 
@@ -1604,6 +1605,7 @@ fn calculation_rule_review_task(request: CalculationRuleReviewTaskRequest<'_>) -
         deadline,
         permissions: profile.permissions.clone(),
         resource_budget: profile.resource_budget.clone(),
+        repair_feedback: None,
     }
 }
 
