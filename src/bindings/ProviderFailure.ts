@@ -2,4 +2,4 @@
 import type { OutputValidationIssue } from "./OutputValidationIssue";
 import type { ProviderFailureCategory } from "./ProviderFailureCategory";
 
-export type ProviderFailure = { category: ProviderFailureCategory, retry_safe: boolean, required_user_action: string, redacted_detail: string | null, validation_issues: Array<OutputValidationIssue>, };
+export type ProviderFailure = { category: ProviderFailureCategory, retry_safe: boolean, required_user_action: string, redacted_detail: string | null, retry_after_milliseconds: bigint | null, validation_issues: Array<OutputValidationIssue>, };

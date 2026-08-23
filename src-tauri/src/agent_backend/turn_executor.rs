@@ -306,6 +306,7 @@ fn rate_limit_failure(retry_after_ms: Option<u64>) -> ProviderFailure {
         "Wait for ChatGPT capacity to recover before retrying.",
         Some(&detail),
     )
+    .with_retry_after_milliseconds(retry_after_ms)
 }
 
 fn protocol_failure(turn_advanced: bool) -> ProviderFailure {
@@ -1321,5 +1322,39 @@ mod tests {
         assert_eq!(issuer_bodies.lock().unwrap().len(), 1, "refresh only once");
         assert_eq!(backend.access_tokens.lock().unwrap().len(), 2);
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn rate_limit_failure_preserves_retry_after_through_provider_failure() {
+        for (source, retry_after_ms, expected) in [
+            ("retry-after-ms", Some(1500), Some(1500)),
+            ("retry-after seconds", Some(2000), Some(2000)),
+            ("missing retry-after", None, None),
+        ] {
+            let backend =
+                ScriptedBackend::new(vec![Err(BackendError::RateLimited { retry_after_ms })]);
+            let auth = stored_connection("at-rate-limited");
+            let refresh_auth =
+                |_expected_account_id: &str| -> Result<StoredConnection, ProviderFailure> {
+                    panic!("a rate-limited request must not refresh authentication")
+                };
+            let no_tools = |_name: &str, _arguments: &str| -> Result<Value, ToolRejection> {
+                panic!("no tool call expected")
+            };
+            let mut sink = |_: BackendEvent| {};
+
+            let failure = run_turn_with_refresh(
+                &backend,
+                &auth,
+                &refresh_auth,
+                &no_tools,
+                &|| false,
+                &mut sink,
+            )
+            .expect_err("{source} must surface as a provider failure");
+
+            assert_eq!(failure.category, ProviderFailureCategory::RateLimited);
+            assert_eq!(failure.retry_after_milliseconds, expected, "{source}");
+        }
     }
 }

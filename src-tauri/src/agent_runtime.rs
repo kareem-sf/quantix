@@ -681,6 +681,7 @@ pub struct ProviderFailure {
     pub retry_safe: bool,
     pub required_user_action: String,
     pub redacted_detail: Option<String>,
+    pub retry_after_milliseconds: Option<u64>,
     pub validation_issues: Vec<OutputValidationIssue>,
 }
 
@@ -696,8 +697,14 @@ impl ProviderFailure {
             retry_safe,
             required_user_action: required_user_action.to_owned(),
             redacted_detail: redacted_detail.map(str::to_owned),
+            retry_after_milliseconds: None,
             validation_issues: Vec::new(),
         }
+    }
+
+    pub(crate) fn with_retry_after_milliseconds(mut self, value: Option<u64>) -> Self {
+        self.retry_after_milliseconds = value;
+        self
     }
 
     pub(crate) fn with_validation_issues(
