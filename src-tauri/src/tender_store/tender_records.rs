@@ -4674,10 +4674,7 @@ pub(crate) fn estimate_record_extraction_request_bytes(
     let request_body_json = canonical_json(&build_request_body(&backend_request))?;
     let request_body_bytes = u64::try_from(request_body_json.len())
         .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-    let estimated_request_bytes = request_body_bytes
-        .checked_add(RECORD_EXTRACTION_ESTIMATOR_FIXED_OVERHEAD_BYTES)
-        .and_then(|bytes| bytes.checked_add(RECORD_EXTRACTION_ESTIMATOR_OUTPUT_HEADROOM_BYTES))
-        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let estimated_request_bytes = estimated_record_extraction_request_bytes(request_body_bytes)?;
     Ok(RecordExtractionRequestEstimate {
         estimated_request_bytes,
         context: record_extraction_request_plan_context(
@@ -4691,6 +4688,48 @@ pub(crate) fn estimate_record_extraction_request_bytes(
 pub(crate) fn record_extraction_request_context_for_prepared(
     prepared: &PreparedAgentRun,
 ) -> Result<RecordExtractionRequestPlanContext, TenderCommandError> {
+    let normalized = normalize_record_extraction_prepared_request(prepared);
+    let instructions = provider_instruction_bundle(&normalized)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    record_extraction_request_context_with_instructions(&normalized, instructions)
+}
+
+pub(crate) fn estimate_prepared_record_extraction_request_bytes(
+    prepared: &PreparedAgentRun,
+) -> Result<RecordExtractionRequestEstimate, TenderCommandError> {
+    let context = record_extraction_request_context_for_prepared(prepared)?;
+    Ok(RecordExtractionRequestEstimate {
+        estimated_request_bytes: estimated_record_extraction_request_bytes(
+            context.request_body_bytes,
+        )?,
+        context,
+    })
+}
+
+pub(crate) fn record_extraction_request_context_for_prepared_with_stored_data_views(
+    prepared: &PreparedAgentRun,
+    stored: &RecordExtractionRequestPlanContext,
+) -> Result<RecordExtractionRequestPlanContext, TenderCommandError> {
+    let request_body: Value = serde_json::from_str(&stored.request_body_json)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let stored_instructions: Value = request_body
+        .get("instructions")
+        .and_then(Value::as_str)
+        .and_then(|instructions| serde_json::from_str(instructions).ok())
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let provider_data_views = stored_instructions
+        .get("provider_data_views")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    let normalized = normalize_record_extraction_prepared_request(prepared);
+    let instructions =
+        provider_instruction_bundle_from_data_views(&normalized, provider_data_views)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    record_extraction_request_context_with_instructions(&normalized, instructions)
+}
+
+fn normalize_record_extraction_prepared_request(prepared: &PreparedAgentRun) -> PreparedAgentRun {
     let placeholder_id = "00000000000000000000000000000000";
     let mut normalized = prepared.clone();
     normalized.run_id = placeholder_id.into();
@@ -4709,12 +4748,17 @@ pub(crate) fn record_extraction_request_context_for_prepared(
     normalized.permission_grant.access_ceiling.exact_inputs = normalized.task.exact_inputs.clone();
     normalized.permission_grant.thread_exposure =
         ThreadExposureSet::from_grant(&normalized.permission_grant);
+    normalized
+}
+
+fn record_extraction_request_context_with_instructions(
+    normalized: &PreparedAgentRun,
+    instructions: String,
+) -> Result<RecordExtractionRequestPlanContext, TenderCommandError> {
     let output_contract: Value = serde_json::from_str(&normalized.task.output_contract_json)
         .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-    let instructions = provider_instruction_bundle(&normalized)
-        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
     let backend_request =
-        build_direct_backend_request(&normalized, instructions, Vec::new(), output_contract)
+        build_direct_backend_request(normalized, instructions, Vec::new(), output_contract)
             .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
     let request_body_json = canonical_json(&build_request_body(&backend_request))?;
     let request_body_bytes = u64::try_from(request_body_json.len())
@@ -4724,6 +4768,15 @@ pub(crate) fn record_extraction_request_context_for_prepared(
         request_body_json,
         request_body_bytes,
     )
+}
+
+pub(crate) fn estimated_record_extraction_request_bytes(
+    request_body_bytes: u64,
+) -> Result<u64, TenderCommandError> {
+    request_body_bytes
+        .checked_add(RECORD_EXTRACTION_ESTIMATOR_FIXED_OVERHEAD_BYTES)
+        .and_then(|bytes| bytes.checked_add(RECORD_EXTRACTION_ESTIMATOR_OUTPUT_HEADROOM_BYTES))
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
 }
 
 fn record_extraction_request_plan_context(

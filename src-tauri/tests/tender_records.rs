@@ -567,24 +567,64 @@ async fn byte_batch_plan_is_deterministic_at_boundaries() {
 }
 
 #[tokio::test]
-async fn byte_batch_estimate_matches_the_production_request_body() {
+async fn byte_batch_estimator_matches_the_actual_initial_prepared_request() {
     let harness = RuntimeHarness::new("manager-intake");
     harness
-        .parsed_pdf_evidence("byte-plan-request-parity", b"BYTE_PLAN_REQUEST_PARITY")
+        .parsed_pdf_evidence("byte-plan-request-parity", b"TENDER_RECORD_GOLDEN")
         .await;
-    let plan = harness
+    harness
         .host
-        .preview_manager_intake_byte_plan_for_verification(&harness.tender_id, u64::MAX)
-        .expect("preview byte-budgeted request");
-    assert_eq!(plan.len(), 1);
-    assert!(
-        plan[0].4 > 0,
-        "the production request body must be non-empty"
-    );
+        .persist_manager_intake_byte_plan_for_verification(&harness.tender_id, u64::MAX)
+        .expect("persist estimated production request");
+    fs::write(
+        harness.codex.with_extension("manager-output-release"),
+        b"release",
+    )
+    .expect("release Manager outcome");
+    let _ = harness
+        .host
+        .run_manager_intake_for_verification(&harness.tender_id)
+        .await;
+
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let connection = rusqlite::Connection::open(database).expect("open Tender Store database");
+    let (planned_inputs_json, actual_context_json, actual_context_sha, estimated_bytes): (
+        String,
+        String,
+        String,
+        i64,
+    ) = connection
+        .query_row(
+            "SELECT plan.canonical_inputs_json, binding.run_request_context_json,
+                    binding.run_request_context_sha256, binding.estimated_request_bytes
+             FROM manager_intake_extraction_plan_batches AS plan
+             JOIN manager_intake_extraction_plan_run_bindings AS binding
+               ON binding.intake_run_id = plan.intake_run_id
+              AND binding.batch_fingerprint = plan.batch_fingerprint
+             WHERE binding.lineage_kind = 'initial'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("load planned and actually prepared request contexts");
+    let planned_inputs: serde_json::Value =
+        serde_json::from_str(&planned_inputs_json).expect("parse planned inputs");
+    let actual_context: serde_json::Value =
+        serde_json::from_str(&actual_context_json).expect("parse actual prepared context");
+    assert_eq!(actual_context, planned_inputs["request_context"]);
+    assert_eq!(actual_context["request_context_sha256"], actual_context_sha);
     assert_eq!(
-        plan[0].3 - plan[0].4,
-        72 * 1024,
-        "only the documented fixed transport overhead and output headroom may differ from the exact serialized request body",
+        estimated_bytes,
+        i64::try_from(
+            actual_context["request_body_bytes"]
+                .as_u64()
+                .expect("actual request body byte count")
+        )
+        .expect("request body fits SQLite")
+            + 72 * 1024,
     );
 }
 
@@ -863,6 +903,77 @@ async fn manager_intake_automatically_repairs_one_invalid_extraction() {
         )
         .expect("count direct repair children");
     assert_eq!(direct_child_count, 1);
+    let bindings = connection
+        .prepare(
+            "SELECT extraction_run_id, source_run_id, lineage_kind,
+                    plan_request_context_sha256, run_request_context_json,
+                    run_request_context_sha256, estimated_request_bytes
+             FROM manager_intake_extraction_plan_run_bindings
+             ORDER BY created_at, extraction_run_id",
+        )
+        .expect("prepare exact run context query")
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })
+        .expect("query exact run contexts")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("collect exact run contexts");
+    assert_eq!(bindings.len(), 2);
+    let source_binding = bindings
+        .iter()
+        .find(|binding| binding.0 == runs[0].0)
+        .expect("source run binding");
+    let repair_binding = bindings
+        .iter()
+        .find(|binding| binding.0 == runs[1].0)
+        .expect("semantic repair binding");
+    assert_eq!(source_binding.1, None);
+    assert_eq!(source_binding.2, "initial");
+    assert_eq!(repair_binding.1.as_deref(), Some(runs[0].0.as_str()));
+    assert_eq!(repair_binding.2, "semantic_repair");
+    assert_eq!(repair_binding.3, source_binding.3);
+    assert_ne!(repair_binding.5, source_binding.5);
+    assert_ne!(repair_binding.4, source_binding.4);
+    assert!(source_binding.6 <= 512 * 1024);
+    assert!(repair_binding.6 <= 512 * 1024);
+    let repair_context: serde_json::Value =
+        serde_json::from_str(&repair_binding.4).expect("parse semantic repair request context");
+    assert_eq!(repair_context["request_context_sha256"], repair_binding.5);
+    let repair_body: serde_json::Value = serde_json::from_str(
+        repair_context["request_body_json"]
+            .as_str()
+            .expect("semantic repair request body"),
+    )
+    .expect("parse semantic repair request body");
+    let repair_instructions: serde_json::Value = serde_json::from_str(
+        repair_body["instructions"]
+            .as_str()
+            .expect("semantic repair instructions"),
+    )
+    .expect("parse semantic repair instructions");
+    assert_eq!(
+        repair_instructions["repair_feedback"]["rejected_run_id"],
+        runs[0].0
+    );
+    assert_eq!(
+        repair_instructions["provider_data_views"]
+            .as_array()
+            .expect("semantic repair provider data views")
+            .len(),
+        2
+    );
+    assert_eq!(
+        repair_instructions["provider_data_views"][1]["manifest"]["view_id"],
+        "repair-feedback-v1"
+    );
     let retry_index_sql: String = connection
         .query_row(
             "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'agent_runs_one_direct_retry'",
@@ -897,6 +1008,17 @@ async fn manager_intake_automatically_repairs_one_invalid_extraction() {
         )
         .expect("read Manager extraction count");
     assert_eq!(extraction_run_count, 1);
+    drop(connection);
+    let cold_host =
+        QuantixHost::with_setup_platform(&harness.application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&cold_host).state, SetupState::Ready);
+    assert_eq!(
+        cold_host
+            .inspect_tender_integrity(&harness.tender_id)
+            .expect("cold-open semantic repair integrity")
+            .state,
+        TenderIntegrityState::Ready
+    );
 }
 
 #[tokio::test]
@@ -1554,6 +1676,27 @@ async fn manager_intake_retries_an_expired_predispatch_repair_without_a_second_s
         )
         .expect("count direct semantic repair children");
     assert_eq!(semantic_child_count, 1);
+    let first_repair_context: String = connection
+        .query_row(
+            "SELECT run_request_context_json
+             FROM manager_intake_extraction_plan_run_bindings
+             WHERE extraction_run_id = ?1 AND lineage_kind = 'semantic_repair'",
+            [&first_repair_run_id],
+            |row| row.get(0),
+        )
+        .expect("load semantic repair request context");
+    let (retry_source, retry_lineage, retry_context): (String, String, String) = connection
+        .query_row(
+            "SELECT source_run_id, lineage_kind, run_request_context_json
+             FROM manager_intake_extraction_plan_run_bindings
+             WHERE extraction_run_id = ?1",
+            [&transport_retry_run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load transport retry request context");
+    assert_eq!(retry_source, first_repair_run_id);
+    assert_eq!(retry_lineage, "transport_retry");
+    assert_eq!(retry_context, first_repair_context);
     assert_eq!(fixture_record_extraction_turn_count(&codex), 2);
 }
 

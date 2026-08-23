@@ -258,7 +258,7 @@ static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static CONTENT_VERIFY_PASS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 44;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 45;
 
 pub(crate) fn record_agent_run_provider_binding(
     transaction: &Transaction<'_>,
@@ -475,16 +475,28 @@ CREATE TABLE manager_intake_extraction_plan_batches (
 );
 CREATE TABLE manager_intake_extraction_plan_run_bindings (
   extraction_run_id TEXT PRIMARY KEY CHECK (length(extraction_run_id) = 32),
+  source_run_id TEXT,
+  lineage_kind TEXT NOT NULL CHECK (lineage_kind IN (
+    'initial', 'semantic_repair', 'transport_retry'
+  )),
   intake_run_id TEXT NOT NULL,
   batch_fingerprint TEXT NOT NULL CHECK (length(batch_fingerprint) = 64),
   task_id TEXT NOT NULL CHECK (length(task_id) = 32),
   provider_selection_json TEXT NOT NULL CHECK (json_valid(provider_selection_json)),
-  request_context_sha256 TEXT NOT NULL CHECK (length(request_context_sha256) = 64),
+  plan_request_context_sha256 TEXT NOT NULL CHECK (length(plan_request_context_sha256) = 64),
+  run_request_context_json TEXT NOT NULL CHECK (json_valid(run_request_context_json)),
+  run_request_context_sha256 TEXT NOT NULL CHECK (length(run_request_context_sha256) = 64),
+  estimated_request_bytes INTEGER NOT NULL CHECK (estimated_request_bytes > 0),
   created_at TEXT NOT NULL,
   FOREIGN KEY (extraction_run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (source_run_id) REFERENCES agent_runs(run_id),
   FOREIGN KEY (task_id) REFERENCES tender_tasks(task_id),
   FOREIGN KEY (intake_run_id, batch_fingerprint)
-    REFERENCES manager_intake_extraction_plan_batches(intake_run_id, batch_fingerprint)
+    REFERENCES manager_intake_extraction_plan_batches(intake_run_id, batch_fingerprint),
+  CHECK (
+    (lineage_kind = 'initial' AND source_run_id IS NULL)
+    OR (lineage_kind != 'initial' AND source_run_id IS NOT NULL)
+  )
 );
 CREATE TABLE tender_office_message_references (
   message_id TEXT NOT NULL,
