@@ -1722,6 +1722,8 @@ impl QuantixHost {
             host: self.clone(),
             lease_id: lease_id.clone(),
         };
+        #[cfg(feature = "runtime-fixture")]
+        pause_repair_before_provider_turn(self, &prepared).await;
         self.identify_active_agent_run(&lease_id, &prepared.run_id)?;
         let execution =
             execute_tender_provider_turn(self, tender_id.as_str(), store, &prepared, cancellation)

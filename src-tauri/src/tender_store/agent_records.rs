@@ -3341,7 +3341,8 @@ impl TenderStore {
             let mut statement = self
                 .connection
                 .prepare(
-                    "SELECT agent_runs.run_id, agent_runs.provider_turn_ref,
+                    "SELECT agent_runs.run_id, agent_runs.provider_thread_ref,
+                            agent_runs.provider_turn_ref,
                             EXISTS(
                               SELECT 1 FROM provider_events
                               WHERE provider_events.run_id = agent_runs.run_id
@@ -3356,7 +3357,8 @@ impl TenderStore {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, Option<String>>(1)?,
-                        row.get::<_, bool>(2)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, bool>(3)?,
                     ))
                 })
                 .map_err(sql_error)?
@@ -3374,7 +3376,7 @@ impl TenderStore {
         if runs.is_empty() {
             return Ok(());
         }
-        for (run_id, turn_ref, turn_requested) in &runs {
+        for (run_id, thread_ref, turn_ref, turn_requested) in &runs {
             if run_id.len() != 32 {
                 return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
             }
@@ -3388,7 +3390,7 @@ impl TenderStore {
                 &self.root,
                 &workspace,
                 run_id,
-                if turn_ref.is_some() || *turn_requested {
+                if thread_ref.is_some() || turn_ref.is_some() || *turn_requested {
                     AgentRunState::Indeterminate
                 } else {
                     AgentRunState::Failed
@@ -3408,8 +3410,8 @@ impl TenderStore {
             .map_err(sql_error)?;
         let completed_at = sqlite_timestamp(&transaction)?;
         let usage_json = canonical_json(&ProviderUsage::default())?;
-        for (run_id, turn_ref, turn_requested) in runs {
-            let outcome_uncertain = turn_ref.is_some() || turn_requested;
+        for (run_id, thread_ref, turn_ref, turn_requested) in runs {
+            let outcome_uncertain = thread_ref.is_some() || turn_ref.is_some() || turn_requested;
             let state = if outcome_uncertain {
                 AgentRunState::Indeterminate
             } else {
