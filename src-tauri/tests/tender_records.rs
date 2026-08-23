@@ -563,7 +563,89 @@ async fn byte_batch_plan_is_deterministic_at_boundaries() {
         .host
         .persist_manager_intake_byte_plan_for_verification(&oversized.tender_id, 1)
         .expect_err("one individually oversized Evidence item must be typed");
-    assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+    assert_eq!(error.code, TenderErrorCode::RequestBudgetExceeded);
+}
+
+#[tokio::test]
+async fn byte_batch_estimate_matches_the_production_request_body() {
+    let harness = RuntimeHarness::new("manager-intake");
+    harness
+        .parsed_pdf_evidence("byte-plan-request-parity", b"BYTE_PLAN_REQUEST_PARITY")
+        .await;
+    let plan = harness
+        .host
+        .preview_manager_intake_byte_plan_for_verification(&harness.tender_id, u64::MAX)
+        .expect("preview byte-budgeted request");
+    assert_eq!(plan.len(), 1);
+    assert!(
+        plan[0].4 > 0,
+        "the production request body must be non-empty"
+    );
+    assert_eq!(
+        plan[0].3 - plan[0].4,
+        72 * 1024,
+        "only the documented fixed transport overhead and output headroom may differ from the exact serialized request body",
+    );
+}
+
+#[tokio::test]
+async fn byte_batch_plan_rejects_a_changed_tender_context_without_replanning() {
+    let harness = RuntimeHarness::new("manager-intake");
+    harness
+        .parsed_pdf_evidence("byte-plan-context-drift", b"TENDER_RECORD_GOLDEN")
+        .await;
+    let planned = harness
+        .host
+        .persist_manager_intake_byte_plan_for_verification(&harness.tender_id, u64::MAX)
+        .expect("persist immutable request context");
+    let database = harness
+        .application_home
+        .join("tenders")
+        .join(&harness.tender_id)
+        .join("tender.sqlite");
+    let original_contexts = rusqlite::Connection::open(&database)
+        .expect("open planned Tender Store")
+        .prepare(
+            "SELECT canonical_inputs_json FROM manager_intake_extraction_plan_batches
+             ORDER BY ordinal",
+        )
+        .expect("prepare immutable context query")
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("query immutable contexts")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("collect immutable contexts");
+    harness
+        .host
+        .revise_tender(ReviseTenderCommand {
+            tender_id: harness.tender_id.clone(),
+            name: "Tender revision changed after intake planning".into(),
+        })
+        .expect("revise Tender after request planning");
+    let run_count_before =
+        tender_record_extraction_runs(&harness.application_home, &harness.tender_id).len();
+    let result = harness
+        .host
+        .run_manager_intake_for_verification(&harness.tender_id)
+        .await;
+    assert!(result.is_err(), "changed context must fail before dispatch");
+    assert_eq!(
+        tender_record_extraction_runs(&harness.application_home, &harness.tender_id).len(),
+        run_count_before,
+        "a changed request must not create an extraction run",
+    );
+    let connection = rusqlite::Connection::open(database).expect("reopen planned Tender Store");
+    let persisted_contexts = connection
+        .prepare(
+            "SELECT canonical_inputs_json FROM manager_intake_extraction_plan_batches
+             ORDER BY ordinal",
+        )
+        .expect("prepare persisted context query")
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("query persisted contexts")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("collect persisted contexts");
+    assert_eq!(persisted_contexts, original_contexts);
+    assert_eq!(persisted_contexts.len(), planned.len());
 }
 
 #[tokio::test]
@@ -649,6 +731,17 @@ async fn byte_batch_plan_is_persisted_and_resumed() {
         distinct_completed, completed_count,
         "no batch may be duplicated"
     );
+    let immutable_binding_update = connection.execute(
+        "UPDATE manager_intake_extraction_plan_run_bindings
+         SET request_context_sha256 = lower(request_context_sha256)",
+        [],
+    );
+    assert!(immutable_binding_update.is_err());
+    let immutable_binding_delete = connection.execute(
+        "DELETE FROM manager_intake_extraction_plan_run_bindings",
+        [],
+    );
+    assert!(immutable_binding_delete.is_err());
 }
 
 #[tokio::test]

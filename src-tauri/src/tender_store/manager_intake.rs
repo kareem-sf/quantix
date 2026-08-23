@@ -25,7 +25,9 @@ use super::{
     },
     append_audit_event, random_identifier, sha256_hex, sql_error, sqlite_timestamp,
     tender_records::{
-        estimate_record_extraction_request_bytes, record_extraction_request_hard_cap_bytes,
+        estimate_record_extraction_request_bytes, record_extraction_request_context_for_prepared,
+        record_extraction_request_hard_cap_bytes, record_extraction_request_plan_context_is_valid,
+        RecordExtractionRequestEstimate, RecordExtractionRequestPlanContext,
     },
     TenderCommandError, TenderErrorCode, TenderEvidenceReference, TenderId, TenderRecordBasisKind,
     TenderRecordInspection, TenderRecordKind, TenderRecordVersionReference, TenderStore,
@@ -260,6 +262,7 @@ struct ManagerIntakeOutcomeManifest<'a> {
 struct ManagerIntakeBatchInputs {
     authorities: Vec<super::TenderRecordAuthorityReference>,
     evidence: Vec<TenderEvidenceReference>,
+    request_context: RecordExtractionRequestPlanContext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -268,6 +271,7 @@ pub(crate) struct PlannedManagerIntakeExtractionBatch {
     pub authorities: Vec<super::TenderRecordAuthorityReference>,
     pub fingerprint: String,
     pub estimated_request_bytes: u64,
+    pub request_context: RecordExtractionRequestPlanContext,
 }
 
 pub(super) fn initialize_manager_intake_run(
@@ -1118,6 +1122,7 @@ impl TenderStore {
                 let inputs = canonical_json(&ManagerIntakeBatchInputs {
                     authorities: batch.authorities.clone(),
                     evidence: batch.evidence.clone(),
+                    request_context: batch.request_context.clone(),
                 })?;
                 let estimated_request_bytes = i64::try_from(batch.estimated_request_bytes)
                     .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
@@ -1125,13 +1130,15 @@ impl TenderStore {
                     .execute(
                         "INSERT INTO manager_intake_extraction_plan_batches (
                            intake_run_id, ordinal, batch_fingerprint, canonical_inputs_json,
-                           estimated_request_bytes, estimator_version, created_at
-                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                           request_context_sha256, estimated_request_bytes, estimator_version,
+                           created_at
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                         params![
                             intake_run_id,
                             ordinal,
                             batch.fingerprint,
                             inputs,
+                            batch.request_context.request_context_sha256,
                             estimated_request_bytes,
                             RECORD_EXTRACTION_ESTIMATOR_VERSION,
                             created_at,
@@ -1739,7 +1746,7 @@ impl TenderStore {
             .connection
             .prepare(
                 "SELECT intake_run_id, ordinal, batch_fingerprint, canonical_inputs_json,
-                        estimated_request_bytes, estimator_version
+                        request_context_sha256, estimated_request_bytes, estimator_version
                  FROM manager_intake_extraction_plan_batches
                  ORDER BY intake_run_id, ordinal",
             )
@@ -1759,21 +1766,101 @@ impl TenderStore {
             }
             let fingerprint = row.get::<_, String>(2).map_err(sql_error)?;
             let inputs_json = row.get::<_, String>(3).map_err(sql_error)?;
-            let estimated_bytes = row.get::<_, i64>(4).map_err(sql_error)?;
-            let estimator_version = row.get::<_, String>(5).map_err(sql_error)?;
+            let context_sha256 = row.get::<_, String>(4).map_err(sql_error)?;
+            let estimated_bytes = row.get::<_, i64>(5).map_err(sql_error)?;
+            let estimator_version = row.get::<_, String>(6).map_err(sql_error)?;
             let inputs: ManagerIntakeBatchInputs = parse_canonical(&inputs_json)?;
             if ordinal != expected_ordinal
                 || estimated_bytes <= 0
                 || estimator_version != RECORD_EXTRACTION_ESTIMATOR_VERSION
                 || canonical_json(&inputs)? != inputs_json
-                || manager_intake_batch_fingerprint(&inputs.evidence, &inputs.authorities)?
-                    != fingerprint
+                || inputs.request_context.request_context_sha256 != context_sha256
+                || !record_extraction_request_plan_context_is_valid(&inputs.request_context)?
+                || manager_intake_batch_fingerprint(&inputs)? != fingerprint
             {
                 return Ok(false);
             }
         }
         drop(plan_rows);
         drop(plan_statement);
+        let mut binding_statement = self
+            .connection
+            .prepare(
+                "SELECT extraction_run_id, intake_run_id, batch_fingerprint, task_id,
+                        provider_selection_json, request_context_sha256
+                 FROM manager_intake_extraction_plan_run_bindings
+                 ORDER BY extraction_run_id",
+            )
+            .map_err(sql_error)?;
+        let mut binding_rows = binding_statement.query([]).map_err(sql_error)?;
+        while let Some(row) = binding_rows.next().map_err(sql_error)? {
+            check()?;
+            let run_id = row.get::<_, String>(0).map_err(sql_error)?;
+            let intake_run_id = row.get::<_, String>(1).map_err(sql_error)?;
+            let fingerprint = row.get::<_, String>(2).map_err(sql_error)?;
+            let task_id = row.get::<_, String>(3).map_err(sql_error)?;
+            let provider_selection_json = row.get::<_, String>(4).map_err(sql_error)?;
+            let context_sha = row.get::<_, String>(5).map_err(sql_error)?;
+            let provider_selection: AiExecutionSelection =
+                parse_canonical(&provider_selection_json)?;
+            if canonical_json(&provider_selection)? != provider_selection_json {
+                return Ok(false);
+            }
+            let planned_inputs_json: Option<String> = self
+                .connection
+                .query_row(
+                    "SELECT canonical_inputs_json
+                     FROM manager_intake_extraction_plan_batches
+                     WHERE intake_run_id = ?1 AND batch_fingerprint = ?2
+                       AND request_context_sha256 = ?3 AND estimator_version = ?4",
+                    params![
+                        intake_run_id,
+                        fingerprint,
+                        context_sha,
+                        RECORD_EXTRACTION_ESTIMATOR_VERSION,
+                    ],
+                    |plan| plan.get(0),
+                )
+                .optional()
+                .map_err(sql_error)?;
+            let Some(planned_inputs_json) = planned_inputs_json else {
+                return Ok(false);
+            };
+            let planned_inputs: ManagerIntakeBatchInputs = parse_canonical(&planned_inputs_json)?;
+            if planned_inputs.request_context.provider_selection_json != provider_selection_json
+                || planned_inputs.request_context.request_context_sha256 != context_sha
+            {
+                return Ok(false);
+            }
+            let persisted_run: Option<(String, String)> = self
+                .connection
+                .query_row(
+                    "SELECT agent_runs.task_id, agent_run_provider_bindings.binding_json
+                     FROM agent_runs JOIN agent_run_provider_bindings USING (run_id)
+                     WHERE agent_runs.run_id = ?1",
+                    [&run_id],
+                    |run| Ok((run.get(0)?, run.get(1)?)),
+                )
+                .optional()
+                .map_err(sql_error)?;
+            if persisted_run.as_ref() != Some(&(task_id.clone(), provider_selection_json)) {
+                return Ok(false);
+            }
+            let task = load_task(&self.connection, &task_id)?;
+            let Some((task_intake, task_evidence, task_authorities)) =
+                manager_intake_task_batch_inputs(&task)?
+            else {
+                return Ok(false);
+            };
+            if task_intake != intake_run_id
+                || task_evidence != planned_inputs.evidence
+                || task_authorities != planned_inputs.authorities
+            {
+                return Ok(false);
+            }
+        }
+        drop(binding_rows);
+        drop(binding_statement);
         let mut statement = self
             .connection
             .prepare(
@@ -1790,8 +1877,7 @@ impl TenderStore {
             let inputs_json = row.get::<_, String>(3).map_err(sql_error)?;
             let inputs: ManagerIntakeBatchInputs = parse_canonical(&inputs_json)?;
             if canonical_json(&inputs)? != inputs_json
-                || manager_intake_batch_fingerprint(&inputs.evidence, &inputs.authorities)?
-                    != fingerprint
+                || manager_intake_batch_fingerprint(&inputs)? != fingerprint
             {
                 return Ok(false);
             }
@@ -2008,14 +2094,16 @@ fn build_manager_intake_plan(
             authorities,
             selection,
         )?;
-        if estimate <= byte_budget {
+        if estimate.estimated_request_bytes <= byte_budget {
             continue;
         }
         let overflow = current
             .pop()
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
         if current.is_empty() {
-            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            return Err(TenderCommandError::new(
+                TenderErrorCode::RequestBudgetExceeded,
+            ));
         }
         let completed_evidence = std::mem::take(&mut current);
         let completed_estimate = estimate_record_extraction_request_bytes(
@@ -2042,8 +2130,10 @@ fn build_manager_intake_plan(
             authorities,
             selection,
         )?;
-        if single_estimate > byte_budget {
-            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        if single_estimate.estimated_request_bytes > byte_budget {
+            return Err(TenderCommandError::new(
+                TenderErrorCode::RequestBudgetExceeded,
+            ));
         }
     }
     if !current.is_empty() {
@@ -2068,14 +2158,20 @@ fn build_manager_intake_plan(
 fn planned_manager_intake_batch(
     evidence: Vec<TenderEvidenceReference>,
     authorities: &[super::TenderRecordAuthorityReference],
-    estimated_request_bytes: u64,
+    estimate: RecordExtractionRequestEstimate,
 ) -> Result<PlannedManagerIntakeExtractionBatch, TenderCommandError> {
     let authorities = authorities.to_vec();
+    let inputs = ManagerIntakeBatchInputs {
+        evidence: evidence.clone(),
+        authorities: authorities.clone(),
+        request_context: estimate.context.clone(),
+    };
     Ok(PlannedManagerIntakeExtractionBatch {
-        fingerprint: manager_intake_batch_fingerprint(&evidence, &authorities)?,
+        fingerprint: manager_intake_batch_fingerprint(&inputs)?,
         evidence,
         authorities,
-        estimated_request_bytes,
+        estimated_request_bytes: estimate.estimated_request_bytes,
+        request_context: estimate.context,
     })
 }
 
@@ -2085,8 +2181,8 @@ fn load_manager_intake_plan(
 ) -> Result<Vec<PlannedManagerIntakeExtractionBatch>, TenderCommandError> {
     let mut statement = transaction
         .prepare(
-            "SELECT batch_fingerprint, canonical_inputs_json, estimated_request_bytes,
-                    estimator_version
+            "SELECT batch_fingerprint, canonical_inputs_json, request_context_sha256,
+                    estimated_request_bytes, estimator_version
              FROM manager_intake_extraction_plan_batches
              WHERE intake_run_id = ?1 ORDER BY ordinal",
         )
@@ -2096,16 +2192,20 @@ fn load_manager_intake_plan(
     while let Some(row) = rows.next().map_err(sql_error)? {
         let fingerprint: String = row.get(0).map_err(sql_error)?;
         let inputs_json: String = row.get(1).map_err(sql_error)?;
-        let estimated_request_bytes = u64::try_from(row.get::<_, i64>(2).map_err(sql_error)?)
+        let context_sha256: String = row.get(2).map_err(sql_error)?;
+        let estimated_request_bytes = u64::try_from(row.get::<_, i64>(3).map_err(sql_error)?)
             .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-        let estimator_version: String = row.get(3).map_err(sql_error)?;
+        let estimator_version: String = row.get(4).map_err(sql_error)?;
         let inputs: ManagerIntakeBatchInputs = parse_canonical(&inputs_json)?;
         if estimator_version != RECORD_EXTRACTION_ESTIMATOR_VERSION
             || inputs.evidence.is_empty()
             || estimated_request_bytes == 0
             || canonical_json(&inputs)? != inputs_json
-            || manager_intake_batch_fingerprint(&inputs.evidence, &inputs.authorities)?
-                != fingerprint
+            || inputs.request_context.request_context_sha256 != context_sha256
+            || !record_extraction_request_plan_context_is_valid(&inputs.request_context)?
+            || u64::try_from(inputs.request_context.request_body_json.len()).ok()
+                != Some(inputs.request_context.request_body_bytes)
+            || manager_intake_batch_fingerprint(&inputs)? != fingerprint
         {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
@@ -2114,6 +2214,7 @@ fn load_manager_intake_plan(
             authorities: inputs.authorities,
             fingerprint,
             estimated_request_bytes,
+            request_context: inputs.request_context,
         });
     }
     Ok(planned)
@@ -2137,18 +2238,260 @@ fn completed_manager_intake_batch_fingerprints(
 
 pub(super) fn record_manager_intake_extraction_batch(
     transaction: &Transaction<'_>,
-    run_id: &str,
-    task: &TenderTaskView,
+    prepared: &PreparedAgentRun,
     completed_at: &str,
 ) -> Result<(), TenderCommandError> {
-    let Some(expected_intake_run_id) = task
-        .exact_inputs
-        .iter()
-        .find(|input| input.kind == "manager_intake_run")
-        .filter(|input| input.version == 1)
-        .map(|input| input.reference.as_str())
+    let run_id = prepared.run_id.as_str();
+    let Some((expected_intake_run_id, evidence, authorities)) =
+        manager_intake_task_batch_inputs(&prepared.task)?
     else {
         return Ok(());
+    };
+    let Some(intake_run_id) = transaction
+        .query_row(
+            "SELECT intake_run_id FROM manager_intake_runs
+             WHERE stage = 'extracting_tender_facts'
+             ORDER BY intake_run_sequence DESC LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(sql_error)?
+    else {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    };
+    if intake_run_id != expected_intake_run_id {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    if evidence.is_empty() {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let (batch_fingerprint, evidence_json) =
+        require_manager_intake_extraction_plan(transaction, prepared, &evidence, &authorities)?;
+    transaction
+        .execute(
+            "INSERT INTO manager_intake_extraction_batches (
+               intake_run_id, batch_fingerprint, extraction_run_id,
+               evidence_json, completed_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                intake_run_id,
+                batch_fingerprint,
+                run_id,
+                evidence_json,
+                completed_at,
+            ],
+        )
+        .map_err(sql_error)?;
+    Ok(())
+}
+
+pub(super) fn authorize_manager_intake_extraction_completion(
+    transaction: &Transaction<'_>,
+    prepared: &PreparedAgentRun,
+) -> Result<(), TenderCommandError> {
+    let Some((_, evidence, authorities)) = manager_intake_task_batch_inputs(&prepared.task)? else {
+        return Ok(());
+    };
+    require_manager_intake_extraction_plan(transaction, prepared, &evidence, &authorities)
+        .map(|_| ())
+}
+
+pub(super) fn bind_manager_intake_extraction_plan(
+    transaction: &Transaction<'_>,
+    prepared: &PreparedAgentRun,
+    source_run_id: Option<&str>,
+    created_at: &str,
+) -> Result<(), TenderCommandError> {
+    let Some((intake_run_id, evidence, authorities)) =
+        manager_intake_task_batch_inputs(&prepared.task)?
+    else {
+        return Ok(());
+    };
+    let provider_selection_json = canonical_json(&prepared.provider_selection)?;
+    let (batch_fingerprint, request_context_sha256, planned_inputs_json) =
+        if let Some(source_run_id) = source_run_id {
+            let source: Option<(String, String, String, String)> = transaction
+                .query_row(
+                    "SELECT intake_run_id, batch_fingerprint, request_context_sha256,
+                            provider_selection_json
+                     FROM manager_intake_extraction_plan_run_bindings
+                     WHERE extraction_run_id = ?1",
+                    [source_run_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()
+                .map_err(sql_error)?;
+            let Some((source_intake, fingerprint, context_sha, source_selection)) = source else {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            };
+            if source_intake != intake_run_id || source_selection != provider_selection_json {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            }
+            let planned_inputs_json: String = transaction
+                .query_row(
+                    "SELECT canonical_inputs_json FROM manager_intake_extraction_plan_batches
+                     WHERE intake_run_id = ?1 AND batch_fingerprint = ?2
+                       AND request_context_sha256 = ?3 AND estimator_version = ?4",
+                    params![
+                        source_intake,
+                        fingerprint,
+                        context_sha,
+                        RECORD_EXTRACTION_ESTIMATOR_VERSION,
+                    ],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            (fingerprint, context_sha, planned_inputs_json)
+        } else {
+            let request_context = record_extraction_request_context_for_prepared(prepared)?;
+            let mut statement = transaction
+                .prepare(
+                    "SELECT batch_fingerprint, canonical_inputs_json
+                     FROM manager_intake_extraction_plan_batches
+                     WHERE intake_run_id = ?1 AND request_context_sha256 = ?2
+                       AND estimator_version = ?3",
+                )
+                .map_err(sql_error)?;
+            let matches = statement
+                .query_map(
+                    params![
+                        intake_run_id,
+                        request_context.request_context_sha256,
+                        RECORD_EXTRACTION_ESTIMATOR_VERSION,
+                    ],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .map_err(sql_error)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(sql_error)?;
+            let [(fingerprint, planned_inputs_json)] = matches.as_slice() else {
+                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+            };
+            (
+                fingerprint.clone(),
+                request_context.request_context_sha256,
+                planned_inputs_json.clone(),
+            )
+        };
+    let planned_inputs: ManagerIntakeBatchInputs = parse_canonical(&planned_inputs_json)?;
+    if planned_inputs.evidence != evidence
+        || planned_inputs.authorities != authorities
+        || planned_inputs.request_context.provider_selection_json != provider_selection_json
+        || planned_inputs.request_context.request_context_sha256 != request_context_sha256
+        || manager_intake_batch_fingerprint(&planned_inputs)? != batch_fingerprint
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    transaction
+        .execute(
+            "INSERT INTO manager_intake_extraction_plan_run_bindings (
+               extraction_run_id, intake_run_id, batch_fingerprint, task_id,
+               provider_selection_json, request_context_sha256, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                prepared.run_id,
+                intake_run_id,
+                batch_fingerprint,
+                prepared.task.task_id,
+                provider_selection_json,
+                request_context_sha256,
+                created_at,
+            ],
+        )
+        .map_err(sql_error)?;
+    Ok(())
+}
+
+fn require_manager_intake_extraction_plan(
+    transaction: &Transaction<'_>,
+    prepared: &PreparedAgentRun,
+    evidence: &[TenderEvidenceReference],
+    authorities: &[super::TenderRecordAuthorityReference],
+) -> Result<(String, String), TenderCommandError> {
+    let provider_selection_json = canonical_json(&prepared.provider_selection)?;
+    let binding: Option<(String, String, String, String, String)> = transaction
+        .query_row(
+            "SELECT intake_run_id, batch_fingerprint, task_id, provider_selection_json,
+                    request_context_sha256
+             FROM manager_intake_extraction_plan_run_bindings
+             WHERE extraction_run_id = ?1",
+            [&prepared.run_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let Some((intake_run_id, fingerprint, task_id, stored_selection, context_sha)) = binding else {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    };
+    if task_id != prepared.task.task_id || stored_selection != provider_selection_json {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let persisted_binding: Option<(String, String)> = transaction
+        .query_row(
+            "SELECT agent_runs.task_id, agent_run_provider_bindings.binding_json
+             FROM agent_runs
+             JOIN agent_run_provider_bindings USING (run_id)
+             WHERE agent_runs.run_id = ?1",
+            [&prepared.run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    if persisted_binding.as_ref() != Some(&(task_id.clone(), stored_selection.clone())) {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let planned_inputs_json: String = transaction
+        .query_row(
+            "SELECT canonical_inputs_json FROM manager_intake_extraction_plan_batches
+             WHERE intake_run_id = ?1 AND batch_fingerprint = ?2
+               AND request_context_sha256 = ?3 AND estimator_version = ?4",
+            params![
+                intake_run_id,
+                fingerprint,
+                context_sha,
+                RECORD_EXTRACTION_ESTIMATOR_VERSION,
+            ],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    let planned_inputs: ManagerIntakeBatchInputs = parse_canonical(&planned_inputs_json)?;
+    if planned_inputs.evidence != evidence
+        || planned_inputs.authorities != authorities
+        || planned_inputs.request_context.provider_selection_json != stored_selection
+        || planned_inputs.request_context.request_context_sha256 != context_sha
+        || manager_intake_batch_fingerprint(&planned_inputs)? != fingerprint
+    {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    Ok((fingerprint, planned_inputs_json))
+}
+
+fn manager_intake_task_batch_inputs(
+    task: &TenderTaskView,
+) -> Result<
+    Option<(
+        String,
+        Vec<TenderEvidenceReference>,
+        Vec<super::TenderRecordAuthorityReference>,
+    )>,
+    TenderCommandError,
+> {
+    let Some(intake_run_id) = task
+        .exact_inputs
+        .iter()
+        .find(|input| input.kind == "manager_intake_run" && input.version == 1)
+        .map(|input| input.reference.clone())
+    else {
+        return Ok(None);
     };
     let evidence = task
         .exact_inputs
@@ -2180,77 +2523,14 @@ pub(super) fn record_manager_intake_extraction_batch(
         .map(|input| super::TenderRecordAuthorityReference {
             authority_id: input.reference.clone(),
         })
-        .collect::<Vec<_>>();
-    let Some(intake_run_id) = transaction
-        .query_row(
-            "SELECT intake_run_id FROM manager_intake_runs
-             WHERE stage = 'extracting_tender_facts'
-             ORDER BY intake_run_sequence DESC LIMIT 1",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(sql_error)?
-    else {
-        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-    };
-    if intake_run_id != expected_intake_run_id {
-        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
-    }
-    if evidence.is_empty() {
-        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
-    }
-    let batch_fingerprint = manager_intake_batch_fingerprint(&evidence, &authorities)?;
-    let evidence_json = canonical_json(&ManagerIntakeBatchInputs {
-        authorities,
-        evidence,
-    })?;
-    let planned_inputs: Option<(String, String)> = transaction
-        .query_row(
-            "SELECT canonical_inputs_json, estimator_version
-             FROM manager_intake_extraction_plan_batches
-             WHERE intake_run_id = ?1 AND batch_fingerprint = ?2",
-            params![intake_run_id, batch_fingerprint],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()
-        .map_err(sql_error)?;
-    if planned_inputs.as_ref().is_none_or(|(inputs, version)| {
-        inputs != &evidence_json || version != RECORD_EXTRACTION_ESTIMATOR_VERSION
-    }) {
-        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
-    }
-    transaction
-        .execute(
-            "INSERT INTO manager_intake_extraction_batches (
-               intake_run_id, batch_fingerprint, extraction_run_id,
-               evidence_json, completed_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                intake_run_id,
-                batch_fingerprint,
-                run_id,
-                evidence_json,
-                completed_at,
-            ],
-        )
-        .map_err(sql_error)?;
-    Ok(())
+        .collect();
+    Ok(Some((intake_run_id, evidence, authorities)))
 }
 
 fn manager_intake_batch_fingerprint(
-    evidence: &[TenderEvidenceReference],
-    authorities: &[super::TenderRecordAuthorityReference],
+    inputs: &ManagerIntakeBatchInputs,
 ) -> Result<String, TenderCommandError> {
-    let mut authority_ids = authorities
-        .iter()
-        .map(|authority| authority.authority_id.as_str())
-        .collect::<Vec<_>>();
-    authority_ids.sort_unstable();
-    let input_json = canonical_json(&json!({
-        "authorities": authority_ids,
-        "evidence": evidence,
-    }))?;
+    let input_json = canonical_json(inputs)?;
     Ok(sha256_hex(input_json.as_bytes()))
 }
 

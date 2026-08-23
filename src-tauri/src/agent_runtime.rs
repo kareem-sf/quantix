@@ -76,8 +76,10 @@ pub(crate) use bootstrap_profile::{bootstrap_profile, bootstrap_task};
 pub(crate) use codex_actor::CodexProvider;
 use codex_protocol::{
     direct_tool_specs, execute_typed_tool, outcome_unknown, process_failure, protocol_failure,
-    provider_instruction_bundle, typed_tool_arguments_are_valid, typed_tool_is_known,
-    validate_candidate,
+    typed_tool_arguments_are_valid, typed_tool_is_known, validate_candidate,
+};
+pub(crate) use codex_protocol::{
+    provider_instruction_bundle, provider_instruction_bundle_from_data_views,
 };
 #[cfg(feature = "runtime-fixture")]
 use codex_protocol::{read_expected_response, write_rpc};
@@ -1459,6 +1461,7 @@ impl QuantixHost {
             Vec<crate::tender_store::TenderRecordAuthorityReference>,
             String,
             u64,
+            u64,
         )>,
         TenderCommandError,
     > {
@@ -1475,6 +1478,7 @@ impl QuantixHost {
             Vec<TenderEvidenceReference>,
             Vec<crate::tender_store::TenderRecordAuthorityReference>,
             String,
+            u64,
             u64,
         )>,
         TenderCommandError,
@@ -1493,6 +1497,7 @@ impl QuantixHost {
             Vec<TenderEvidenceReference>,
             Vec<crate::tender_store::TenderRecordAuthorityReference>,
             String,
+            u64,
             u64,
         )>,
         TenderCommandError,
@@ -1526,6 +1531,7 @@ impl QuantixHost {
                     batch.authorities,
                     batch.fingerprint,
                     batch.estimated_request_bytes,
+                    batch.request_context.request_body_bytes,
                 )
             })
             .collect())
@@ -3668,6 +3674,29 @@ fn chatgpt_reasoning_effort(
     Ok(effort)
 }
 
+pub(crate) fn build_direct_backend_request(
+    prepared: &PreparedAgentRun,
+    instructions: String,
+    tools: Vec<Value>,
+    output_schema: Value,
+) -> Result<BackendRequest, ProviderFailure> {
+    Ok(BackendRequest {
+        model: prepared.provider_selection.model_id.clone(),
+        instructions,
+        input_items: vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": prepared.task.objective.clone()}],
+        })],
+        tools,
+        output_schema,
+        store: false,
+        include_reasoning: true,
+        reasoning_effort: chatgpt_reasoning_effort(&prepared.provider_selection.reasoning)?,
+        session_id: String::new(),
+    })
+}
+
 #[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
 fn with_production_token_client<T>(
     operation: impl FnOnce(&TokenClient) -> Result<T, ProviderFailure>,
@@ -3892,25 +3921,13 @@ async fn chatgpt_provider_turn(
             )
         }
     };
-    let reasoning_effort = match chatgpt_reasoning_effort(&prepared.provider_selection.reasoning) {
-        Ok(effort) => effort,
-        Err(failure) => return chatgpt_failure_execution(Some(thread_ref), None, failure, started),
-    };
-    let request = BackendRequest {
-        model: prepared.provider_selection.model_id.clone(),
-        instructions: instruction,
-        input_items: vec![json!({
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": prepared.task.objective.clone()}],
-        })],
-        tools,
-        output_schema: output_schema.clone(),
-        store: false,
-        include_reasoning: true,
-        reasoning_effort,
-        session_id: String::new(),
-    };
+    let request =
+        match build_direct_backend_request(&prepared, instruction, tools, output_schema.clone()) {
+            Ok(request) => request,
+            Err(failure) => {
+                return chatgpt_failure_execution(Some(thread_ref), None, failure, started)
+            }
+        };
 
     let deadline = started.checked_add(operation_limit).unwrap_or(started);
     let is_cancelled = || cancellation.is_cancelled() || Instant::now() >= deadline;

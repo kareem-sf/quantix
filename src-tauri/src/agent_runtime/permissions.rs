@@ -376,6 +376,12 @@ pub(crate) struct PreBidAdditionalDataView<'a> {
     pub payload: &'a Value,
 }
 
+pub(crate) struct PreparedPreBidDataGrant {
+    pub grant: PermissionGrant,
+    pub workspace: PathBuf,
+    files: Vec<(PathBuf, Vec<u8>)>,
+}
+
 pub(crate) struct PlannedTaskGrantRequest<'a> {
     pub run_id: &'a str,
     pub grant_id: String,
@@ -532,6 +538,35 @@ pub(crate) fn derive_bootstrap_grant(
 pub(crate) fn derive_pre_bid_data_grant(
     request: PreBidDataGrantRequest<'_>,
 ) -> Result<(PermissionGrant, PathBuf), TenderCommandError> {
+    let prepared = prepare_pre_bid_data_grant(request)?;
+    fs::create_dir(&prepared.workspace).map_err(store_unavailable)?;
+    let materialized = (|| {
+        fs::create_dir(prepared.workspace.join("inputs")).map_err(store_unavailable)?;
+        fs::create_dir(prepared.workspace.join("working")).map_err(store_unavailable)?;
+        fs::create_dir(prepared.workspace.join("outputs")).map_err(store_unavailable)?;
+        for (relative_path, payload) in &prepared.files {
+            let path = prepared.workspace.join(relative_path);
+            fs::write(&path, payload).map_err(store_unavailable)?;
+            let mut permissions = fs::metadata(&path)
+                .map_err(store_unavailable)?
+                .permissions();
+            permissions.set_readonly(true);
+            fs::set_permissions(&path, permissions).map_err(store_unavailable)?;
+        }
+        Ok(())
+    })();
+    match materialized {
+        Ok(()) => Ok((prepared.grant, prepared.workspace)),
+        Err(error) => {
+            let _ = fs::remove_dir_all(&prepared.workspace);
+            Err(error)
+        }
+    }
+}
+
+pub(crate) fn prepare_pre_bid_data_grant(
+    request: PreBidDataGrantRequest<'_>,
+) -> Result<PreparedPreBidDataGrant, TenderCommandError> {
     let expected_permissions = AgentRunPermissions {
         data_scopes: vec![request.data_scope.into()],
         data_classifications: vec![DataClassification::TenderInternal],
@@ -556,33 +591,40 @@ pub(crate) fn derive_pre_bid_data_grant(
         .application_home
         .join("staging")
         .join(format!("agent-{}-{}", request.tender_id, request.run_id));
-    let inputs = workspace.join("inputs");
-    let working = workspace.join("working");
-    let outputs = workspace.join("outputs");
-    fs::create_dir(&workspace).map_err(store_unavailable)?;
-    let materialized = (|| {
-        fs::create_dir(&inputs).map_err(store_unavailable)?;
-        fs::create_dir(&working).map_err(store_unavailable)?;
-        fs::create_dir(&outputs).map_err(store_unavailable)?;
-        let payload = serde_json_canonicalizer::to_string(request.payload)
+    let mut files = Vec::with_capacity(1 + request.additional_data_views.len());
+    let payload = serde_json_canonicalizer::to_string(request.payload)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?
+        .into_bytes();
+    if payload.len() > 4 * 1024 * 1024 {
+        return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+    }
+    let relative_path = format!("inputs/{}", request.relative_path);
+    let view = DataViewManifest {
+        view_id: request.view_id.into(),
+        schema_version: 1,
+        relative_path: relative_path.clone(),
+        sha256: Sha256::digest(&payload)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+        data_scope: request.data_scope.into(),
+        data_classification: DataClassification::TenderInternal,
+        exact_inputs: request.task.exact_inputs.clone(),
+    };
+    files.push((PathBuf::from(relative_path), payload));
+    let mut data_views = vec![view];
+    for additional in request.additional_data_views {
+        let payload = serde_json_canonicalizer::to_string(additional.payload)
             .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?
             .into_bytes();
         if payload.len() > 4 * 1024 * 1024 {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
-        let relative_path = format!("inputs/{}", request.relative_path);
-        let path = workspace.join(&relative_path);
-        fs::write(&path, &payload).map_err(store_unavailable)?;
-        let mut permissions = fs::metadata(&path)
-            .map_err(store_unavailable)?
-            .permissions();
-        permissions.set_readonly(true);
-        fs::set_permissions(&path, permissions).map_err(store_unavailable)?;
-
-        let view = DataViewManifest {
-            view_id: request.view_id.into(),
+        let relative_path = format!("inputs/{}", additional.relative_path);
+        data_views.push(DataViewManifest {
+            view_id: additional.view_id.into(),
             schema_version: 1,
-            relative_path,
+            relative_path: relative_path.clone(),
             sha256: Sha256::digest(&payload)
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
@@ -590,80 +632,49 @@ pub(crate) fn derive_pre_bid_data_grant(
             data_scope: request.data_scope.into(),
             data_classification: DataClassification::TenderInternal,
             exact_inputs: request.task.exact_inputs.clone(),
-        };
-        let mut data_views = vec![view];
-        for additional in request.additional_data_views {
-            let payload = serde_json_canonicalizer::to_string(additional.payload)
-                .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?
-                .into_bytes();
-            if payload.len() > 4 * 1024 * 1024 {
-                return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
-            }
-            let relative_path = format!("inputs/{}", additional.relative_path);
-            let path = workspace.join(&relative_path);
-            fs::write(&path, &payload).map_err(store_unavailable)?;
-            let mut permissions = fs::metadata(&path)
-                .map_err(store_unavailable)?
-                .permissions();
-            permissions.set_readonly(true);
-            fs::set_permissions(&path, permissions).map_err(store_unavailable)?;
-            data_views.push(DataViewManifest {
-                view_id: additional.view_id.into(),
-                schema_version: 1,
-                relative_path,
-                sha256: Sha256::digest(&payload)
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect(),
-                data_scope: request.data_scope.into(),
-                data_classification: DataClassification::TenderInternal,
-                exact_inputs: request.task.exact_inputs.clone(),
-            });
-        }
-        let mut grant = PermissionGrant {
-            grant_id: request.grant_id,
-            policy_version: PERMISSION_POLICY_VERSION,
-            capability_catalogue_version: CAPABILITY_CATALOGUE_VERSION,
-            work_plan_version: BOOTSTRAP_WORK_PLAN_VERSION,
-            profile_id: request.profile.profile_id.clone(),
-            profile_version: request.profile.version,
-            task_id: request.task.task_id.clone(),
-            purpose: request.task.objective.clone(),
-            data_scopes: expected_permissions.data_scopes.clone(),
-            data_classifications: expected_permissions.data_classifications.clone(),
-            allowed_actions: expected_permissions.allowed_actions.clone(),
-            typed_tools: Vec::new(),
-            network_allowed: false,
-            workspace_write_allowed: true,
-            data_views,
-            thread_exposure: ThreadExposureSet::default(),
-            workspace: AgentRunWorkspaceManifest {
-                workspace_id: request.run_id.into(),
-                read_only_inputs: "inputs".into(),
-                working_area: "working".into(),
-                staged_outputs: "outputs".into(),
-            },
-            access_ceiling: PermissionCeiling {
-                exact_inputs: request.task.exact_inputs.clone(),
-                data_scopes: expected_permissions.data_scopes,
-                data_classifications: expected_permissions.data_classifications,
-                allowed_actions: expected_permissions.allowed_actions,
-                allowed_tools: Vec::new(),
-            },
-            resource_budget: request.task.resource_budget.clone(),
-            issued_at: request.issued_at.into(),
-            expires_at: request.task.deadline.clone(),
-        };
-        grant.thread_exposure = ThreadExposureSet::from_grant(&grant);
-        Ok(grant)
-    })();
-    match materialized {
-        Ok(grant) => Ok((grant, workspace)),
-        Err(error) => {
-            let _ = fs::remove_dir_all(&workspace);
-            Err(error)
-        }
+        });
+        files.push((PathBuf::from(relative_path), payload));
     }
+    let mut grant = PermissionGrant {
+        grant_id: request.grant_id,
+        policy_version: PERMISSION_POLICY_VERSION,
+        capability_catalogue_version: CAPABILITY_CATALOGUE_VERSION,
+        work_plan_version: BOOTSTRAP_WORK_PLAN_VERSION,
+        profile_id: request.profile.profile_id.clone(),
+        profile_version: request.profile.version,
+        task_id: request.task.task_id.clone(),
+        purpose: request.task.objective.clone(),
+        data_scopes: expected_permissions.data_scopes.clone(),
+        data_classifications: expected_permissions.data_classifications.clone(),
+        allowed_actions: expected_permissions.allowed_actions.clone(),
+        typed_tools: Vec::new(),
+        network_allowed: false,
+        workspace_write_allowed: true,
+        data_views,
+        thread_exposure: ThreadExposureSet::default(),
+        workspace: AgentRunWorkspaceManifest {
+            workspace_id: request.run_id.into(),
+            read_only_inputs: "inputs".into(),
+            working_area: "working".into(),
+            staged_outputs: "outputs".into(),
+        },
+        access_ceiling: PermissionCeiling {
+            exact_inputs: request.task.exact_inputs.clone(),
+            data_scopes: expected_permissions.data_scopes,
+            data_classifications: expected_permissions.data_classifications,
+            allowed_actions: expected_permissions.allowed_actions,
+            allowed_tools: Vec::new(),
+        },
+        resource_budget: request.task.resource_budget.clone(),
+        issued_at: request.issued_at.into(),
+        expires_at: request.task.deadline.clone(),
+    };
+    grant.thread_exposure = ThreadExposureSet::from_grant(&grant);
+    Ok(PreparedPreBidDataGrant {
+        grant,
+        workspace,
+        files,
+    })
 }
 
 pub(crate) fn derive_planned_task_grant(

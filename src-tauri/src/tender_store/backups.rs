@@ -4196,6 +4196,7 @@ fn tender_error_code(code: TenderErrorCode) -> &'static str {
         TenderErrorCode::InsufficientSpace => "insufficient_space",
         TenderErrorCode::IntegrityFailed => "integrity_failed",
         TenderErrorCode::InvalidCommand => "invalid_command",
+        TenderErrorCode::RequestBudgetExceeded => "request_budget_exceeded",
         TenderErrorCode::NotFound => "not_found",
         TenderErrorCode::OauthAlreadyRunning => "oauth_already_running",
         TenderErrorCode::OauthPortBlocked => "oauth_port_blocked",

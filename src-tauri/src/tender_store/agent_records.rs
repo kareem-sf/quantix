@@ -43,8 +43,8 @@ use super::external_rfis::{
     ExternalRfiReviewPublication,
 };
 use super::manager_intake::{
-    publish_manager_intake_outcome, record_manager_intake_extraction_batch, ManagerIntakeCandidate,
-    MANAGER_INTAKE_CAPABILITY,
+    authorize_manager_intake_extraction_completion, publish_manager_intake_outcome,
+    record_manager_intake_extraction_batch, ManagerIntakeCandidate, MANAGER_INTAKE_CAPABILITY,
 };
 use super::package_validation::{
     publish_submission_section_review, submission_section_review_target_is_open,
@@ -1449,6 +1449,7 @@ impl TenderStore {
             if result_id.is_none() {
                 return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
             }
+            authorize_manager_intake_extraction_completion(&transaction, prepared)?;
             publish_tender_record_candidates(
                 &transaction,
                 tender_id,
@@ -1457,12 +1458,7 @@ impl TenderStore {
                 candidate,
                 &completed_at,
             )?;
-            record_manager_intake_extraction_batch(
-                &transaction,
-                &prepared.run_id,
-                &prepared.task,
-                &completed_at,
-            )?;
+            record_manager_intake_extraction_batch(&transaction, prepared, &completed_at)?;
         }
         if let Some(candidate) = tender_record_review.as_ref() {
             if result_id.is_none() {

@@ -258,7 +258,7 @@ static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static CONTENT_VERIFY_PASS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 42;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 44;
 
 pub(crate) fn record_agent_run_provider_binding(
     transaction: &Transaction<'_>,
@@ -465,12 +465,26 @@ CREATE TABLE manager_intake_extraction_plan_batches (
   ordinal INTEGER NOT NULL CHECK (ordinal > 0),
   batch_fingerprint TEXT NOT NULL CHECK (length(batch_fingerprint) = 64),
   canonical_inputs_json TEXT NOT NULL CHECK (json_valid(canonical_inputs_json)),
+  request_context_sha256 TEXT NOT NULL CHECK (length(request_context_sha256) = 64),
   estimated_request_bytes INTEGER NOT NULL CHECK (estimated_request_bytes > 0),
   estimator_version TEXT NOT NULL CHECK (length(estimator_version) BETWEEN 1 AND 100),
   created_at TEXT NOT NULL,
   PRIMARY KEY (intake_run_id, ordinal),
   UNIQUE (intake_run_id, batch_fingerprint),
   FOREIGN KEY (intake_run_id) REFERENCES manager_intake_runs(intake_run_id)
+);
+CREATE TABLE manager_intake_extraction_plan_run_bindings (
+  extraction_run_id TEXT PRIMARY KEY CHECK (length(extraction_run_id) = 32),
+  intake_run_id TEXT NOT NULL,
+  batch_fingerprint TEXT NOT NULL CHECK (length(batch_fingerprint) = 64),
+  task_id TEXT NOT NULL CHECK (length(task_id) = 32),
+  provider_selection_json TEXT NOT NULL CHECK (json_valid(provider_selection_json)),
+  request_context_sha256 TEXT NOT NULL CHECK (length(request_context_sha256) = 64),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (extraction_run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (task_id) REFERENCES tender_tasks(task_id),
+  FOREIGN KEY (intake_run_id, batch_fingerprint)
+    REFERENCES manager_intake_extraction_plan_batches(intake_run_id, batch_fingerprint)
 );
 CREATE TABLE tender_office_message_references (
   message_id TEXT NOT NULL,
@@ -559,6 +573,16 @@ CREATE TRIGGER manager_intake_extraction_plan_batches_no_delete
 BEFORE DELETE ON manager_intake_extraction_plan_batches
 BEGIN
   SELECT RAISE(ABORT, 'Manager intake extraction plans are immutable');
+END;
+CREATE TRIGGER manager_intake_extraction_plan_run_bindings_no_update
+BEFORE UPDATE ON manager_intake_extraction_plan_run_bindings
+BEGIN
+  SELECT RAISE(ABORT, 'Manager intake extraction plan bindings are immutable');
+END;
+CREATE TRIGGER manager_intake_extraction_plan_run_bindings_no_delete
+BEFORE DELETE ON manager_intake_extraction_plan_run_bindings
+BEGIN
+  SELECT RAISE(ABORT, 'Manager intake extraction plan bindings are immutable');
 END;
 CREATE TRIGGER tender_office_message_references_no_update
 BEFORE UPDATE ON tender_office_message_references
@@ -4100,6 +4124,7 @@ pub enum TenderErrorCode {
     InsufficientSpace,
     IntegrityFailed,
     InvalidCommand,
+    RequestBudgetExceeded,
     NotFound,
     OauthAlreadyRunning,
     OauthPortBlocked,
