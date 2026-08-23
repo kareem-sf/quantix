@@ -164,6 +164,109 @@ fn diagnostic_facts_for_run(harness: &Harness, run_id: &str) -> Vec<DiagnosticEv
 }
 
 #[tokio::test]
+async fn rebind_cannot_bypass_future_cooldown() {
+    let harness = Harness::new("rate-limited");
+    let source = harness._root.path().join("manager-cooldown-source");
+    fs::create_dir_all(&source).expect("create Manager source");
+    fs::write(
+        source.join("ITT.pdf"),
+        b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
+    )
+    .expect("write Manager source");
+    harness
+        .host
+        .import_tender_package(ImportTenderPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            source_path: source.to_string_lossy().into_owned(),
+        })
+        .expect("register Manager package");
+    harness
+        .host
+        .run_manager_intake_for_verification(&harness.tender_id)
+        .await
+        .expect("persist initial cooldown");
+    let connection = harness.database();
+    let source_run_id: String = connection
+        .query_row(
+            "SELECT run_id FROM agent_runs ORDER BY run_sequence DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read provider run");
+    drop(connection);
+    harness
+        .host
+        .persist_manager_rate_limit_for_verification(
+            &harness.tender_id,
+            &source_run_id,
+            Some(60_000),
+        )
+        .expect("persist initial cooldown");
+    let connection = harness.database();
+    let initial_runs: u32 = connection
+        .query_row("SELECT COUNT(*) FROM agent_runs", [], |row| row.get(0))
+        .expect("count initial runs");
+    connection
+        .execute(
+            "UPDATE manager_intake_runs
+             SET retry_not_before_epoch_seconds = unixepoch('now') + 3600",
+            [],
+        )
+        .expect("set fixed future cooldown");
+    drop(connection);
+
+    harness
+        .host
+        .rebind_manager_intake_provider_for_verification(&harness.tender_id)
+        .await
+        .expect("future cooldown is an admitted no-op");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        harness
+            .database()
+            .query_row("SELECT COUNT(*) FROM agent_runs", [], |row| row
+                .get::<_, u32>(0))
+            .expect("count runs after blocked rebind"),
+        initial_runs
+    );
+
+    harness
+        .database()
+        .execute(
+            "UPDATE manager_intake_runs
+             SET retry_not_before_epoch_seconds = unixepoch('now') - 1",
+            [],
+        )
+        .expect("expire cooldown");
+    fs::write(
+        harness.fixture_executable.with_extension("agent-scenario"),
+        "manager-intake",
+    )
+    .expect("restore available provider fixture");
+    harness
+        .host
+        .approve_runtime_fixture_ai_selection()
+        .expect("refresh available provider selection");
+    harness
+        .host
+        .rebind_manager_intake_provider_for_verification(&harness.tender_id)
+        .await
+        .expect("expired cooldown resumes");
+    for _ in 0..100 {
+        let count: u32 = harness
+            .database()
+            .query_row("SELECT COUNT(*) FROM agent_runs", [], |row| row.get(0))
+            .expect("count resumed runs");
+        if count > initial_runs {
+            assert_eq!(count, initial_runs + 1);
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("expired cooldown did not admit exactly one Agent Run");
+}
+
+#[tokio::test]
 async fn repaired_extraction_records_truthful_boundaries() {
     let harness = Harness::new("manager-intake-repair-invalid-then-valid");
     let evidence = harness.parsed_pdf_evidence().await;

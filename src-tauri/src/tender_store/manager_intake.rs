@@ -9,9 +9,10 @@ use ts_rs::TS;
 use crate::{
     agent_runtime::{
         permissions::{derive_pre_bid_data_grant, permission_duration, PreBidDataGrantRequest},
-        AgentProfileStatus, AgentProfileVersionView, AgentResourceBudget, AgentRunPermissions,
-        AgentTaskInputReference, BootstrapRole, DataClassification, PendingProviderEvent,
-        PreparedAgentRun, ProviderEventKind, TenderTaskView, VerificationStatus,
+        AgentProfileStatus, AgentProfileVersionView, AgentResourceBudget, AgentRunInspection,
+        AgentRunPermissions, AgentTaskInputReference, BootstrapRole, DataClassification,
+        PendingProviderEvent, PreparedAgentRun, ProviderEventKind, ProviderFailureCategory,
+        TenderTaskView, VerificationStatus,
     },
     application_settings::AiExecutionSelection,
     document_parsing::{ParseSourceArtifactCommand, ParseState},
@@ -130,6 +131,8 @@ pub struct ManagerIntakeStatus {
     pub parseable_document_count: u32,
     pub parsed_document_count: u32,
     pub extraction_run_count: u32,
+    pub blocking_agent_run_id: Option<String>,
+    pub retry_not_before_epoch_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -308,7 +311,8 @@ impl TenderStore {
             .connection
             .query_row(
                 "SELECT intake_run_id, stage, parseable_document_count,
-                        parsed_document_count, extraction_run_count, failure_summary
+                        parsed_document_count, extraction_run_count, failure_summary,
+                        blocking_agent_run_id, retry_not_before_epoch_seconds
                  FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
                 [],
                 |row| {
@@ -319,12 +323,24 @@ impl TenderStore {
                         row.get::<_, i64>(3)?,
                         row.get::<_, i64>(4)?,
                         row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<i64>>(7)?,
                     ))
                 },
             )
             .optional()
             .map_err(sql_error)?;
-        let Some((intake_run_id, stage, parseable, parsed, extraction_runs, failure)) = row else {
+        let Some((
+            intake_run_id,
+            stage,
+            parseable,
+            parsed,
+            extraction_runs,
+            failure,
+            blocking_agent_run_id,
+            retry_not_before_epoch_seconds,
+        )) = row
+        else {
             return Ok(None);
         };
         let stage = ManagerIntakeStage::parse(&stage)?;
@@ -396,6 +412,8 @@ impl TenderStore {
             parseable_document_count: checked_u32(parseable)?,
             parsed_document_count: checked_u32(parsed)?,
             extraction_run_count: checked_u32(extraction_runs)?,
+            blocking_agent_run_id,
+            retry_not_before_epoch_seconds,
         }))
     }
 
@@ -416,6 +434,26 @@ impl TenderStore {
         row.as_deref().map(parse_canonical).transpose()
     }
 
+    pub(crate) fn manager_intake_cooldown_is_active(&mut self) -> Result<bool, TenderCommandError> {
+        self.require_storage_writable()?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let deadline = transaction
+            .query_row(
+                "SELECT retry_not_before_epoch_seconds
+                 FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
+                [],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .map_err(sql_error)?;
+        let now = sqlite_epoch_seconds(&transaction)?;
+        let active = deadline.is_some_and(|deadline| deadline > now);
+        transaction.commit().map_err(sql_error)?;
+        Ok(active)
+    }
+
     pub(crate) fn bind_manager_intake_provider_selection(
         &mut self,
         selection: &AiExecutionSelection,
@@ -426,15 +464,26 @@ impl TenderStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_error)?;
-        let (intake_run_id, stage, prior_json): (String, String, Option<String>) = transaction
+        let (intake_run_id, stage, prior_json, retry_not_before): (
+            String,
+            String,
+            Option<String>,
+            Option<i64>,
+        ) = transaction
             .query_row(
-                "SELECT intake_run_id, stage, provider_selection_json
+                "SELECT intake_run_id, stage, provider_selection_json,
+                        retry_not_before_epoch_seconds
                  FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .map_err(sql_error)?;
         let stage = ManagerIntakeStage::parse(&stage)?;
+        let now = sqlite_epoch_seconds(&transaction)?;
+        if retry_not_before.is_some_and(|deadline| deadline > now) {
+            transaction.commit().map_err(sql_error)?;
+            return Ok(());
+        }
         if !stage.is_resumable()
             || (allow_choice_change
                 && !matches!(
@@ -513,28 +562,134 @@ impl TenderStore {
         transaction.commit().map_err(sql_error)
     }
 
-    pub(crate) fn wait_manager_intake_for_provider(&mut self) -> Result<(), TenderCommandError> {
+    pub(crate) fn wait_manager_intake_for_provider(
+        &mut self,
+        source_run: Option<&AgentRunInspection>,
+    ) -> Result<(), TenderCommandError> {
         self.require_storage_writable()?;
-        let updated_at = connection_timestamp(&self.connection)?;
-        self.connection
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_error)?;
+        let (intake_run_id, attempts, blocking_run_id): (String, u32, Option<String>) = transaction
+            .query_row(
+                "SELECT intake_run_id, provider_retry_attempt_count, blocking_agent_run_id
+                 FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(sql_error)?;
+        let updated_at = sqlite_timestamp(&transaction)?;
+        let now = sqlite_epoch_seconds(&transaction)?;
+        let rate_limited = source_run.filter(|run| {
+            run.state == crate::agent_runtime::AgentRunState::Failed
+                && run.completed_at.is_some()
+                && run
+                    .failure
+                    .as_ref()
+                    .is_some_and(|failure| failure.category == ProviderFailureCategory::RateLimited)
+        });
+        if let Some(source_run) = rate_limited {
+            if blocking_run_id.as_deref() == Some(source_run.run_id.as_str()) {
+                transaction.commit().map_err(sql_error)?;
+                return Ok(());
+            }
+            let next_attempt = attempts
+                .checked_add(1)
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            let automatic_deadline = if next_attempt <= 3 {
+                Some(manager_provider_retry_deadline(
+                    source_run,
+                    now,
+                    next_attempt,
+                )?)
+            } else {
+                None
+            };
+            let (stage, failure_summary, completed_at) = if automatic_deadline.is_some() {
+                ("waiting_for_provider", None, None)
+            } else {
+                (
+                    "failed",
+                    Some("AI capacity remained unavailable after three automatic retries. Retry intake when you are ready."),
+                    Some(updated_at.as_str()),
+                )
+            };
+            if transaction
+                .execute(
+                    "UPDATE manager_intake_runs
+                     SET stage = ?2, current_manager_run_id = NULL,
+                         blocking_agent_run_id = ?3,
+                         retry_not_before_epoch_seconds = ?4,
+                         provider_retry_attempt_count = ?5,
+                         failure_summary = ?6, completed_at = ?7, updated_at = ?8
+                     WHERE intake_run_id = ?1 AND stage IN (
+                       'waiting_for_local_tools', 'waiting_for_provider_approval',
+                       'waiting_for_provider', 'package_registered', 'reading_documents',
+                       'extracting_tender_facts', 'reviewing_tender_facts',
+                       'preparing_first_decision'
+                     )",
+                    params![
+                        intake_run_id,
+                        stage,
+                        source_run.run_id,
+                        automatic_deadline,
+                        next_attempt,
+                        failure_summary,
+                        completed_at,
+                        updated_at,
+                    ],
+                )
+                .map_err(sql_error)?
+                != 1
+            {
+                return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+            }
+            let (tender_id, tender_revision): (String, u32) = transaction
+                .query_row(
+                    "SELECT tender_id, current_revision FROM tender WHERE singleton = 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(sql_error)?;
+            append_audit_event(
+                &transaction,
+                &tender_id,
+                if automatic_deadline.is_some() {
+                    "manager_intake_provider_cooldown_started"
+                } else {
+                    "manager_intake_provider_retry_exhausted"
+                },
+                tender_revision,
+                json!({
+                    "intake_run_id": intake_run_id,
+                    "blocking_agent_run_id": source_run.run_id,
+                    "provider_retry_attempt_count": next_attempt,
+                    "retry_not_before_epoch_seconds": automatic_deadline,
+                }),
+                &updated_at,
+            )?;
+        } else if transaction
             .execute(
                 "UPDATE manager_intake_runs
                  SET stage = 'waiting_for_provider', current_manager_run_id = NULL,
-                     failure_summary = NULL, completed_at = NULL, updated_at = ?1
-                 WHERE intake_run_id = (
-                   SELECT intake_run_id FROM manager_intake_runs
-                   ORDER BY intake_run_sequence DESC LIMIT 1
-                 ) AND stage IN (
+                     blocking_agent_run_id = NULL,
+                     retry_not_before_epoch_seconds = NULL,
+                     failure_summary = NULL, completed_at = NULL, updated_at = ?2
+                 WHERE intake_run_id = ?1 AND stage IN (
                    'waiting_for_local_tools', 'waiting_for_provider_approval',
-                   'waiting_for_provider',
-                   'package_registered', 'reading_documents',
+                   'waiting_for_provider', 'package_registered', 'reading_documents',
                    'extracting_tender_facts', 'reviewing_tender_facts',
                    'preparing_first_decision'
                  )",
-                [updated_at],
+                params![intake_run_id, updated_at],
             )
-            .map_err(sql_error)?;
-        Ok(())
+            .map_err(sql_error)?
+            != 1
+        {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+        transaction.commit().map_err(sql_error)
     }
 
     pub(crate) fn wait_manager_intake_for_local_tools(&mut self) -> Result<(), TenderCommandError> {
@@ -544,6 +699,7 @@ impl TenderStore {
             .execute(
                 "UPDATE manager_intake_runs
                  SET stage = 'waiting_for_local_tools', current_manager_run_id = NULL,
+                     blocking_agent_run_id = NULL, retry_not_before_epoch_seconds = NULL,
                      failure_summary = NULL, completed_at = NULL, updated_at = ?1
                  WHERE intake_run_id = (
                    SELECT intake_run_id FROM manager_intake_runs
@@ -569,6 +725,7 @@ impl TenderStore {
             .execute(
                 "UPDATE manager_intake_runs
                  SET stage = 'waiting_for_provider_approval', current_manager_run_id = NULL,
+                     blocking_agent_run_id = NULL, retry_not_before_epoch_seconds = NULL,
                      failure_summary = NULL, completed_at = NULL, updated_at = ?1
                  WHERE intake_run_id = (
                    SELECT intake_run_id FROM manager_intake_runs
@@ -654,18 +811,25 @@ impl TenderStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_error)?;
-        let (intake_run_id, stage): (String, String) = transaction
+        let (intake_run_id, stage, retry_not_before): (String, String, Option<i64>) = transaction
             .query_row(
-                "SELECT intake_run_id, stage FROM manager_intake_runs
+                "SELECT intake_run_id, stage, retry_not_before_epoch_seconds FROM manager_intake_runs
                  ORDER BY intake_run_sequence DESC LIMIT 1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .map_err(sql_error)?;
         let prior = ManagerIntakeStage::parse(&stage)?;
+        let now = sqlite_epoch_seconds(&transaction)?;
+        if retry_not_before.is_some_and(|deadline| deadline > now) {
+            transaction.commit().map_err(sql_error)?;
+            return Ok(ManagerIntakeStage::WaitingForProvider);
+        }
         if matches!(
             prior,
-            ManagerIntakeStage::WaitingForEngineer | ManagerIntakeStage::BidDecisionReady
+            ManagerIntakeStage::WaitingForEngineer
+                | ManagerIntakeStage::BidDecisionReady
+                | ManagerIntakeStage::Failed
         ) {
             return Ok(prior);
         }
@@ -674,6 +838,8 @@ impl TenderStore {
             .execute(
                 "UPDATE manager_intake_runs
                  SET stage = 'reading_documents', failure_summary = NULL,
+                     blocking_agent_run_id = NULL,
+                     retry_not_before_epoch_seconds = NULL,
                      completed_at = NULL, updated_at = ?2
                  WHERE intake_run_id = ?1",
                 params![intake_run_id, updated_at],
@@ -693,6 +859,9 @@ impl TenderStore {
                  SET stage = CASE WHEN provider_selection_json IS NULL
                                   THEN 'waiting_for_local_tools'
                                   ELSE 'waiting_for_provider' END,
+                     blocking_agent_run_id = NULL,
+                     retry_not_before_epoch_seconds = NULL,
+                     provider_retry_attempt_count = 0,
                      failure_summary = NULL,
                      completed_at = NULL, updated_at = ?1
                  WHERE intake_run_id = (
@@ -2291,6 +2460,51 @@ fn connection_timestamp(connection: &rusqlite::Connection) -> Result<String, Ten
             row.get(0)
         })
         .map_err(sql_error)
+}
+
+fn sqlite_epoch_seconds(transaction: &Transaction<'_>) -> Result<i64, TenderCommandError> {
+    transaction
+        .query_row("SELECT unixepoch('now')", [], |row| row.get(0))
+        .map_err(sql_error)
+}
+
+fn manager_provider_retry_deadline(
+    source_run: &AgentRunInspection,
+    now: i64,
+    attempt: u32,
+) -> Result<i64, TenderCommandError> {
+    if !(1..=3).contains(&attempt) {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    }
+    let usage_reset = source_run
+        .usage
+        .rate_limit
+        .as_ref()
+        .into_iter()
+        .flat_map(|rate_limit| [rate_limit.primary.as_ref(), rate_limit.secondary.as_ref()])
+        .flatten()
+        .filter_map(|window| window.resets_at_epoch_seconds)
+        .filter(|reset| *reset > now)
+        .max();
+    if let Some(reset) = usage_reset {
+        return Ok(reset);
+    }
+    let retry_after_seconds = source_run
+        .failure
+        .as_ref()
+        .and_then(|failure| failure.retry_after_milliseconds)
+        .map(|milliseconds| milliseconds.saturating_add(999) / 1_000)
+        .filter(|seconds| *seconds > 0);
+    let delay = retry_after_seconds.unwrap_or(match attempt {
+        1 => 60,
+        2 => 120,
+        3 => 240,
+        _ => unreachable!(),
+    });
+    let delay = i64::try_from(delay)
+        .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+    now.checked_add(delay)
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
 }
 
 fn canonical_json<T: Serialize>(value: &T) -> Result<String, TenderCommandError> {

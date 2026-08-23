@@ -1007,7 +1007,7 @@ impl QuantixHost {
                         if let Ok(store) = host.tender_store(&parsed) {
                             if let Ok(mut store) = store.lock() {
                                 if error.code == TenderErrorCode::AiProviderRequired {
-                                    let _ = store.wait_manager_intake_for_provider();
+                                    let _ = store.wait_manager_intake_for_provider(None);
                                 } else {
                                     let _ = store.fail_manager_intake(
                                         &parsed,
@@ -1081,16 +1081,58 @@ impl QuantixHost {
         tender_id: &str,
     ) -> Result<(), TenderCommandError> {
         let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        if store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .manager_intake_cooldown_is_active()?
+        {
+            return Ok(());
+        }
         let selection = self
             .refresh_exact_ai_execution_selection(None)
             .await?
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-        let store = self.tender_store(&tender_id)?;
         store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .bind_manager_intake_provider_selection(&selection, true)?;
         self.start_manager_intake_background(tender_id.as_str().into())
+    }
+
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    pub async fn rebind_manager_intake_provider_for_verification(
+        &self,
+        tender_id: &str,
+    ) -> Result<(), TenderCommandError> {
+        self.rebind_manager_intake_provider(tender_id).await
+    }
+
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    pub fn persist_manager_rate_limit_for_verification(
+        &self,
+        tender_id: &str,
+        run_id: &str,
+        retry_after_milliseconds: Option<u64>,
+    ) -> Result<(), TenderCommandError> {
+        let tender_id = TenderId::parse(tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let mut store = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        let mut run = store.inspect_agent_run(run_id)?;
+        run.state = AgentRunState::Failed;
+        run.failure = Some(
+            ProviderFailure::new(
+                ProviderFailureCategory::RateLimited,
+                true,
+                "Wait for AI capacity before retrying.",
+                Some("The fixture represents a completed rate-limited provider run."),
+            )
+            .with_retry_after_milliseconds(retry_after_milliseconds),
+        );
+        run.usage.rate_limit = None;
+        store.wait_manager_intake_for_provider(Some(&run))
     }
 
     async fn run_manager_intake_pipeline(&self, tender_id: &str) -> Result<(), TenderCommandError> {
@@ -1111,8 +1153,10 @@ impl QuantixHost {
             .begin_manager_intake_processing()?;
         if matches!(
             stage,
-            crate::tender_store::ManagerIntakeStage::WaitingForEngineer
+            crate::tender_store::ManagerIntakeStage::WaitingForProvider
+                | crate::tender_store::ManagerIntakeStage::WaitingForEngineer
                 | crate::tender_store::ManagerIntakeStage::BidDecisionReady
+                | crate::tender_store::ManagerIntakeStage::Failed
         ) {
             return Ok(());
         }
@@ -1168,7 +1212,7 @@ impl QuantixHost {
                 .lock()
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
             if preferred.is_some() {
-                store.wait_manager_intake_for_provider()?;
+                store.wait_manager_intake_for_provider(None)?;
             } else {
                 store.wait_manager_intake_for_provider_approval()?;
             }
@@ -1228,7 +1272,7 @@ impl QuantixHost {
                 store
                     .lock()
                     .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-                    .wait_manager_intake_for_provider()?;
+                    .wait_manager_intake_for_provider(Some(&result.run))?;
                 return Ok(());
             }
             if result.run.state != AgentRunState::Completed || result.published_record_count == 0 {
@@ -1261,7 +1305,7 @@ impl QuantixHost {
                 store
                     .lock()
                     .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-                    .wait_manager_intake_for_provider()?;
+                    .wait_manager_intake_for_provider(Some(&result.run))?;
                 return Ok(());
             }
             if result.run.state != AgentRunState::Completed {
@@ -1273,7 +1317,7 @@ impl QuantixHost {
             store
                 .lock()
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-                .wait_manager_intake_for_provider()?;
+                .wait_manager_intake_for_provider(Some(&run))?;
             return Ok(());
         }
         if run.state != AgentRunState::Completed {
@@ -1342,6 +1386,18 @@ impl QuantixHost {
         outcome: DeterministicProviderOutcome,
     ) -> Result<AgentRunInspection, TenderCommandError> {
         self.run_bootstrap_agent_inner(command, Some(outcome)).await
+    }
+
+    #[cfg(any(test, feature = "runtime-fixture"))]
+    pub async fn run_completed_bootstrap_agent_for_verification(
+        &self,
+        command: RunBootstrapAgentCommand,
+    ) -> Result<AgentRunInspection, TenderCommandError> {
+        self.run_bootstrap_agent_with_deterministic_provider(
+            command,
+            DeterministicProviderOutcome::Completed,
+        )
+        .await
     }
 
     async fn run_bootstrap_agent_inner(

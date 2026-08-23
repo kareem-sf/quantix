@@ -2,4 +2,4 @@
 import type { ManagerIntakeStage } from "./ManagerIntakeStage";
 import type { ManagerIntakeStatusKind } from "./ManagerIntakeStatusKind";
 
-export type ManagerIntakeStatus = { intake_run_id: string, stage: ManagerIntakeStage, status: ManagerIntakeStatusKind, label: string, summary: string, parseable_document_count: number, parsed_document_count: number, extraction_run_count: number, };
+export type ManagerIntakeStatus = { intake_run_id: string, stage: ManagerIntakeStage, status: ManagerIntakeStatusKind, label: string, summary: string, parseable_document_count: number, parsed_document_count: number, extraction_run_count: number, blocking_agent_run_id: string | null, retry_not_before_epoch_seconds: bigint | null, };

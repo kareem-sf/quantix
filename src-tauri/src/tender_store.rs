@@ -258,7 +258,7 @@ static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static CONTENT_VERIFY_PASS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 39;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 40;
 
 pub(crate) fn record_agent_run_provider_binding(
     transaction: &Transaction<'_>,
@@ -341,6 +341,10 @@ CREATE TABLE manager_intake_runs (
   parsed_document_count INTEGER NOT NULL DEFAULT 0 CHECK (parsed_document_count >= 0),
   extraction_run_count INTEGER NOT NULL DEFAULT 0 CHECK (extraction_run_count >= 0),
   current_manager_run_id TEXT,
+  blocking_agent_run_id TEXT,
+  retry_not_before_epoch_seconds INTEGER CHECK (retry_not_before_epoch_seconds > 0),
+  provider_retry_attempt_count INTEGER NOT NULL DEFAULT 0
+    CHECK (provider_retry_attempt_count BETWEEN 0 AND 4),
   failure_summary TEXT CHECK (
     failure_summary IS NULL OR length(CAST(failure_summary AS BLOB)) BETWEEN 1 AND 2000
   ),
@@ -349,6 +353,7 @@ CREATE TABLE manager_intake_runs (
   completed_at TEXT,
   FOREIGN KEY (package_intake_id) REFERENCES intake_runs(intake_id),
   FOREIGN KEY (current_manager_run_id) REFERENCES agent_runs(run_id),
+  FOREIGN KEY (blocking_agent_run_id) REFERENCES agent_runs(run_id),
   CHECK (parsed_document_count <= parseable_document_count),
   CHECK (
     (stage = 'failed' AND failure_summary IS NOT NULL AND completed_at IS NOT NULL)
@@ -365,6 +370,22 @@ CREATE TABLE manager_intake_runs (
     stage IN ('waiting_for_local_tools', 'waiting_for_provider_approval',
               'package_registered', 'reading_documents')
     OR provider_selection_json IS NOT NULL
+  ),
+  CHECK (
+    retry_not_before_epoch_seconds IS NULL
+    OR (
+      stage = 'waiting_for_provider'
+      AND blocking_agent_run_id IS NOT NULL
+      AND provider_retry_attempt_count BETWEEN 1 AND 3
+    )
+  ),
+  CHECK (
+    provider_retry_attempt_count < 4
+    OR (
+      stage = 'failed'
+      AND blocking_agent_run_id IS NOT NULL
+      AND retry_not_before_epoch_seconds IS NULL
+    )
   )
 );
 CREATE TABLE tender_office_messages (

@@ -10,9 +10,9 @@ use quantix_lib::{
     ProviderCleanupStatus, ProviderConnectionStatus, ProviderReasoningSelection,
     PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand, QuantixHost,
     RecordEngineerWorkspaceMessageCommand, RegistrationState, RunBidDecisionPackageReviewCommand,
-    RuntimeLayout, SelectManagerWorkspaceTenderCommand, SetupPlatform, SetupState,
-    StoragePermissions, TenderAiSelectionReadiness, TenderErrorCode, TenderOfficeMessageAuthor,
-    TenderOfficeMessageKind, TenderRecordInspection, TenderRecordKind,
+    RunBootstrapAgentCommand, RuntimeLayout, SelectManagerWorkspaceTenderCommand, SetupPlatform,
+    SetupState, StoragePermissions, TenderAiSelectionReadiness, TenderErrorCode,
+    TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderRecordInspection, TenderRecordKind,
     TenderRecordVersionReference, TenderRetentionDecisionCommand, TenderRetentionState,
     TrashedTenderDecisionCommand, TrashedTenderState, UpdateAiExecutionSelectionCommand,
     WorkspaceActionKind, WorkspaceMessageReference, WorkspaceMessageReferenceKind,
@@ -204,6 +204,189 @@ async fn approve_fixture_ai_selection(host: &QuantixHost) {
     })
     .await
     .expect("approve fixture AI selection");
+}
+
+#[tokio::test]
+async fn rate_limited_manager_wait_is_persisted_atomically() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let resources = user_home.path().join("resources");
+    install_codex_fixture(&resources, "rate-limited");
+    let host = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(resources),
+    );
+    host.accept_runtime_fixture();
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    approve_fixture_ai_selection(&host).await;
+    install_ocr_fixture(&application_home);
+    let tender = host
+        .create_tender(CreateTenderCommand {
+            name: "Durable cooldown Tender".into(),
+        })
+        .expect("create Tender");
+    let package = user_home.path().join("cooldown-source");
+    fs::create_dir_all(&package).expect("create package");
+    fs::write(
+        package.join("ITT.pdf"),
+        b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
+    )
+    .expect("write package");
+    host.import_tender_package(ImportTenderPackageCommand {
+        tender_id: tender.tender_id.clone(),
+        source_path: package.to_string_lossy().into_owned(),
+    })
+    .expect("register package");
+
+    host.run_manager_intake_for_verification(&tender.tender_id)
+        .await
+        .expect("rate-limited intake waits durably");
+
+    let database = application_home
+        .join("tenders")
+        .join(&tender.tender_id)
+        .join("tender.sqlite");
+    let connection = Connection::open(database).expect("open Tender store");
+    let source_run_id: String = connection
+        .query_row(
+            "SELECT run_id FROM agent_runs ORDER BY run_sequence DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read completed provider run");
+    let ordinary_wait: (Option<String>, Option<i64>, u32) = connection
+        .query_row(
+            "SELECT blocking_agent_run_id, retry_not_before_epoch_seconds,
+                    provider_retry_attempt_count
+             FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("read non-rate-limited provider wait");
+    assert_eq!(ordinary_wait, (None, None, 0));
+    drop(connection);
+    host.persist_manager_rate_limit_for_verification(
+        &tender.tender_id,
+        &source_run_id,
+        Some(60_000),
+    )
+    .expect("persist completed rate-limit result");
+    let connection = Connection::open(
+        application_home
+            .join("tenders")
+            .join(&tender.tender_id)
+            .join("tender.sqlite"),
+    )
+    .expect("reopen Tender store");
+    let now: i64 = connection
+        .query_row("SELECT unixepoch('now')", [], |row| row.get(0))
+        .expect("read SQLite current time");
+    let (stage, blocking_run_id, deadline, attempts): (String, Option<String>, Option<i64>, u32) =
+        connection
+            .query_row(
+                "SELECT stage, blocking_agent_run_id,
+                    retry_not_before_epoch_seconds, provider_retry_attempt_count
+             FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("read durable Manager cooldown");
+    assert_eq!(stage, "waiting_for_provider");
+    let blocking_run_id = blocking_run_id.expect("blocking Agent Run");
+    assert_eq!(blocking_run_id, source_run_id);
+    let delay_seconds = deadline.expect("automatic retry deadline") - now;
+    assert!((59..=60).contains(&delay_seconds));
+    assert_eq!(attempts, 1);
+    let audit_count: u32 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM audit_events
+             WHERE event_type = 'manager_intake_provider_cooldown_started'
+               AND json_extract(payload_json, '$.change.blocking_agent_run_id') = ?1
+               AND json_extract(payload_json, '$.change.provider_retry_attempt_count') = 1",
+            [&blocking_run_id],
+            |row| row.get(0),
+        )
+        .expect("read cooldown audit");
+    assert_eq!(audit_count, 1);
+    drop(connection);
+    host.persist_manager_rate_limit_for_verification(
+        &tender.tender_id,
+        &source_run_id,
+        Some(60_000),
+    )
+    .expect("duplicate completion is idempotent");
+    let (attempts, audit_count): (u32, u32) = Connection::open(
+        application_home
+            .join("tenders")
+            .join(&tender.tender_id)
+            .join("tender.sqlite"),
+    )
+    .expect("open idempotent cooldown")
+    .query_row(
+        "SELECT mir.provider_retry_attempt_count,
+                (SELECT COUNT(*) FROM audit_events
+                 WHERE event_type = 'manager_intake_provider_cooldown_started')
+         FROM manager_intake_runs mir ORDER BY intake_run_sequence DESC LIMIT 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .expect("inspect idempotent cooldown");
+    assert_eq!((attempts, audit_count), (1, 1));
+
+    let mut prior_run_id = source_run_id;
+    for expected_attempt in 2..=4 {
+        let source_run = host
+            .run_completed_bootstrap_agent_for_verification(RunBootstrapAgentCommand {
+                tender_id: tender.tender_id.clone(),
+                retry_of_run_id: None,
+            })
+            .await
+            .expect("create distinct completed provider run");
+        let next_run_id = source_run.run_id;
+        assert_ne!(next_run_id, prior_run_id);
+        host.persist_manager_rate_limit_for_verification(
+            &tender.tender_id,
+            &next_run_id,
+            Some(1_000),
+        )
+        .expect("persist next completed rate-limit result");
+        prior_run_id = next_run_id;
+
+        let connection = Connection::open(
+            application_home
+                .join("tenders")
+                .join(&tender.tender_id)
+                .join("tender.sqlite"),
+        )
+        .expect("inspect bounded cooldown");
+        let (stage, deadline, attempts): (String, Option<i64>, u32) = connection
+            .query_row(
+                "SELECT stage, retry_not_before_epoch_seconds,
+                        provider_retry_attempt_count
+                 FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read bounded cooldown state");
+        assert_eq!(attempts, expected_attempt);
+        if expected_attempt <= 3 {
+            assert_eq!(stage, "waiting_for_provider");
+            assert!(deadline.is_some());
+        } else {
+            assert_eq!(stage, "failed");
+            assert_eq!(deadline, None);
+            let exhausted: u32 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM audit_events
+                     WHERE event_type = 'manager_intake_provider_retry_exhausted'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("read exhausted retry audit");
+            assert_eq!(exhausted, 1);
+        }
+    }
 }
 
 fn inspect_all_records(host: &QuantixHost, tender_id: &str) -> Vec<TenderRecordInspection> {
