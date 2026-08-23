@@ -1494,7 +1494,15 @@ impl TenderStore {
                     "engineer_entry" | "approved_calculation_run"
                 )
             })
-            .map(|input| load_record_authority(&self.connection, &input.reference))
+            .map(|input| {
+                load_record_authority(&self.connection, &input.reference).map_err(|error| {
+                    if error.code == TenderErrorCode::InvalidCommand {
+                        TenderCommandError::new(TenderErrorCode::IntegrityFailed)
+                    } else {
+                        error
+                    }
+                })
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let context = TenderRecordProposalContext::from_task(task, &authorities)
             .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
@@ -3707,6 +3715,7 @@ fn parse_record_cursor(value: &str) -> Result<(String, u32), TenderCommandError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_runtime::{AgentResourceBudget, AgentRunPermissions};
 
     fn candidate(stable_key: &str) -> TenderRecordCandidate {
         TenderRecordCandidate {
@@ -3717,6 +3726,58 @@ mod tests {
             fields: Vec::new(),
             contradictions: Vec::new(),
         }
+    }
+
+    #[test]
+    fn missing_task_authority_is_an_outer_integrity_error() {
+        let connection = rusqlite::Connection::open_in_memory().expect("open SQLite");
+        connection
+            .execute_batch(
+                "CREATE TABLE tender_record_authorities (
+                    authority_id TEXT PRIMARY KEY, kind TEXT NOT NULL, value TEXT NOT NULL,
+                    description TEXT NOT NULL, manifest_sha256 TEXT, tender_revision INTEGER NOT NULL,
+                    created_by TEXT NOT NULL, created_at TEXT NOT NULL
+                );",
+            )
+            .expect("authority table");
+        let store = TenderStore {
+            root: std::path::PathBuf::new(),
+            connection,
+            recovery_required: false,
+            archived: false,
+        };
+        let task = TenderTaskView {
+            task_id: "task".into(),
+            profile_id: "profile".into(),
+            profile_version: 1,
+            objective: "extract".into(),
+            exact_inputs: vec![AgentTaskInputReference {
+                kind: "engineer_entry".into(),
+                reference: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                version: 1,
+            }],
+            output_contract_json: "{}".into(),
+            review_policy: "policy".into(),
+            deadline: "2026-08-23T00:00:00Z".into(),
+            permissions: AgentRunPermissions {
+                data_scopes: Vec::new(),
+                data_classifications: Vec::new(),
+                allowed_actions: Vec::new(),
+                allowed_tools: Vec::new(),
+                network_allowed: false,
+                workspace_write_allowed: false,
+            },
+            resource_budget: AgentResourceBudget {
+                provider_turns: 1,
+                duration_seconds: 1,
+                output_bytes: 1,
+            },
+        };
+
+        let error = store
+            .validate_tender_record_proposal(&task, "{}")
+            .expect_err("missing immutable authority must not become provider output invalid");
+        assert_eq!(error.code, TenderErrorCode::IntegrityFailed);
     }
 
     #[test]
