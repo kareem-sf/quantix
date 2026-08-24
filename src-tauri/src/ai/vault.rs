@@ -32,6 +32,10 @@ use windows::Win32::{
 use windows_core::PCWSTR;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
+use super::contract::{
+    normalize_label, AiConnectionConfiguration, AiConnectionRevision, AiProbeEvidence,
+    AiProviderKind, CredentialGeneration,
+};
 use super::windows_dpapi::{protect_for_current_user, unprotect_for_current_user};
 use crate::setup::validate_application_home_path;
 
@@ -43,6 +47,10 @@ const VAULT_SCHEMA_VERSION: u32 = 1;
 const MAX_CLEAR_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CIPHERTEXT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_STREAM_QUERY_BYTES: usize = 64 * 1024;
+const MAX_CONNECTIONS: usize = 32;
+const MAX_ACCOUNT_ID_BYTES: usize = 4 * 1024;
+const MAX_CREDENTIAL_BYTES: usize = 16 * 1024;
+const MAX_CUSTOM_VALUE_BYTES: usize = 4 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultError {
@@ -51,6 +59,7 @@ pub enum VaultError {
     Unsupported,
     Invalid,
     RevisionConflict,
+    RevisionOverflow,
 }
 
 impl fmt::Display for VaultError {
@@ -61,6 +70,7 @@ impl fmt::Display for VaultError {
             Self::Unsupported => "AI connection vault version is unsupported",
             Self::Invalid => "AI connection vault mutation is invalid",
             Self::RevisionConflict => "AI connection vault revision conflict",
+            Self::RevisionOverflow => "AI connection counter overflow",
         })
     }
 }
@@ -143,21 +153,207 @@ impl VaultPayload {
         if self.schema_version != VAULT_SCHEMA_VERSION {
             return Err(VaultError::Unsupported);
         }
-        if self.connections.iter().any(|(key, connection)| {
-            key != &connection.connection_id || !is_connection_id(key) || !connection.is_valid()
-        }) {
+        if self.connections.len() > MAX_CONNECTIONS
+            || self.connections.iter().any(|(key, connection)| {
+                key != &connection.connection_id || !is_connection_id(key) || !connection.is_valid()
+            })
+        {
             return Err(VaultError::Corrupt);
         }
         Ok(())
     }
 
     pub(crate) fn insert(&mut self, connection: StoredAiConnection) -> Result<(), VaultError> {
-        if !connection.is_valid() || self.connections.contains_key(&connection.connection_id) {
+        if self.connections.len() >= MAX_CONNECTIONS
+            || !connection.is_valid()
+            || self.connections.contains_key(&connection.connection_id)
+        {
             return Err(VaultError::Invalid);
         }
         self.connections
             .insert(connection.connection_id.clone(), connection);
         Ok(())
+    }
+
+    pub(crate) fn connections(&self) -> impl Iterator<Item = &StoredAiConnection> {
+        self.connections.values()
+    }
+
+    pub(crate) fn record_probe(
+        &mut self,
+        evidence: AiProbeEvidence,
+        expected_endpoint_fingerprint: &str,
+        expected_adapter_version: &str,
+    ) -> Result<(), VaultError> {
+        let connection = self
+            .connections
+            .get_mut(evidence.connection_id.as_str())
+            .ok_or(VaultError::Invalid)?;
+        connection.record_probe(
+            evidence,
+            expected_endpoint_fingerprint,
+            expected_adapter_version,
+        )
+    }
+
+    pub(crate) fn replace_connection_configuration(
+        &mut self,
+        connection_id: &str,
+        expected_execution_revision: u64,
+        expected_credential_generation: u64,
+        display_name: String,
+        configuration: AiConnectionConfiguration,
+        replacement_credential: Option<StoredCredential>,
+    ) -> Result<(), VaultError> {
+        let connection = self.require_exact_connection_mut(
+            connection_id,
+            expected_execution_revision,
+            expected_credential_generation,
+        )?;
+        let material_change =
+            connection.configuration != configuration || replacement_credential.is_some();
+        if material_change {
+            connection.execution_revision = connection
+                .execution_revision
+                .checked_add(1)
+                .ok_or(VaultError::RevisionOverflow)?;
+            connection.probe_evidence = None;
+        }
+        if let Some(credential) = replacement_credential {
+            connection.credential_generation = connection
+                .credential_generation
+                .checked_add(1)
+                .ok_or(VaultError::RevisionOverflow)?;
+            connection.credential = Some(credential);
+        }
+        connection.display_name = display_name;
+        connection.configuration = configuration;
+        Ok(())
+    }
+
+    pub(crate) fn rename_connection(
+        &mut self,
+        connection_id: &str,
+        expected_execution_revision: u64,
+        expected_credential_generation: u64,
+        display_name: String,
+        expected_configuration: &AiConnectionConfiguration,
+    ) -> Result<(), VaultError> {
+        let connection = self.require_exact_connection_mut(
+            connection_id,
+            expected_execution_revision,
+            expected_credential_generation,
+        )?;
+        if &connection.configuration != expected_configuration {
+            return Err(VaultError::Invalid);
+        }
+        connection.display_name = display_name;
+        Ok(())
+    }
+
+    pub(crate) fn set_enabled(
+        &mut self,
+        connection_id: &str,
+        expected_execution_revision: u64,
+        expected_credential_generation: u64,
+        enabled: bool,
+    ) -> Result<(), VaultError> {
+        let connection = self.require_exact_connection_mut(
+            connection_id,
+            expected_execution_revision,
+            expected_credential_generation,
+        )?;
+        connection.enabled = enabled;
+        Ok(())
+    }
+
+    pub(crate) fn disconnect(
+        &mut self,
+        connection_id: &str,
+        expected_execution_revision: u64,
+        expected_credential_generation: u64,
+    ) -> Result<(), VaultError> {
+        let connection = self.require_exact_connection_mut(
+            connection_id,
+            expected_execution_revision,
+            expected_credential_generation,
+        )?;
+        connection.credential_generation = connection
+            .credential_generation
+            .checked_add(1)
+            .ok_or(VaultError::RevisionOverflow)?;
+        connection.credential = None;
+        Ok(())
+    }
+
+    pub(crate) fn remove_connection(
+        &mut self,
+        connection_id: &str,
+        expected_execution_revision: u64,
+        expected_credential_generation: u64,
+    ) -> Result<(), VaultError> {
+        self.require_exact_connection_mut(
+            connection_id,
+            expected_execution_revision,
+            expected_credential_generation,
+        )?;
+        self.connections
+            .remove(connection_id)
+            .ok_or(VaultError::Invalid)?;
+        Ok(())
+    }
+
+    pub(crate) fn rotate_same_account_tokens(
+        &mut self,
+        connection_id: &str,
+        expected_execution_revision: u64,
+        expected_credential_generation: u64,
+        verified_account_id: &str,
+        replacement_credential: StoredCredential,
+    ) -> Result<(), VaultError> {
+        let connection = self.require_exact_connection_mut(
+            connection_id,
+            expected_execution_revision,
+            expected_credential_generation,
+        )?;
+        let configured_account_id = match &connection.configuration {
+            AiConnectionConfiguration::AccountLogin { account_id, .. } => account_id,
+            _ => return Err(VaultError::Invalid),
+        };
+        if configured_account_id != verified_account_id
+            || connection
+                .credential
+                .as_ref()
+                .and_then(StoredCredential::verified_account_id)
+                != Some(verified_account_id)
+            || replacement_credential.verified_account_id() != Some(verified_account_id)
+        {
+            return Err(VaultError::Invalid);
+        }
+        connection.credential_generation = connection
+            .credential_generation
+            .checked_add(1)
+            .ok_or(VaultError::RevisionOverflow)?;
+        connection.credential = Some(replacement_credential);
+        Ok(())
+    }
+
+    fn require_exact_connection_mut(
+        &mut self,
+        connection_id: &str,
+        expected_execution_revision: u64,
+        expected_credential_generation: u64,
+    ) -> Result<&mut StoredAiConnection, VaultError> {
+        let connection = self
+            .connections
+            .get_mut(connection_id)
+            .ok_or(VaultError::Invalid)?;
+        if connection.execution_revision != expected_execution_revision
+            || connection.credential_generation != expected_credential_generation
+        {
+            return Err(VaultError::RevisionConflict);
+        }
+        Ok(connection)
     }
 
     fn finish_mutation(&mut self, original_revision: u64) -> Result<(), VaultError> {
@@ -181,11 +377,31 @@ impl VaultPayload {
     }
 }
 
-#[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StoredAiConnection {
     pub(crate) connection_id: String,
-    pub(crate) credential: StoredCredential,
+    display_name: String,
+    configuration: AiConnectionConfiguration,
+    enabled: bool,
+    execution_revision: u64,
+    credential_generation: u64,
+    credential: Option<StoredCredential>,
+    probe_evidence: Option<AiProbeEvidence>,
+}
+
+impl Zeroize for StoredAiConnection {
+    fn zeroize(&mut self) {
+        self.credential.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for StoredAiConnection {}
+
+impl Drop for StoredAiConnection {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
 }
 
 impl fmt::Debug for StoredAiConnection {
@@ -195,8 +411,101 @@ impl fmt::Debug for StoredAiConnection {
 }
 
 impl StoredAiConnection {
+    pub(crate) fn new(
+        connection_id: String,
+        display_name: String,
+        configuration: AiConnectionConfiguration,
+        credential: StoredCredential,
+    ) -> Result<Self, VaultError> {
+        let connection = Self {
+            connection_id,
+            display_name,
+            configuration,
+            enabled: true,
+            execution_revision: 1,
+            credential_generation: 1,
+            credential: Some(credential),
+            probe_evidence: None,
+        };
+        connection
+            .is_valid()
+            .then_some(connection)
+            .ok_or(VaultError::Invalid)
+    }
+
     fn is_valid(&self) -> bool {
-        is_connection_id(&self.connection_id) && self.credential.is_valid()
+        is_connection_id(&self.connection_id)
+            && normalize_label(&self.display_name)
+                .is_ok_and(|normalized| normalized == self.display_name)
+            && self.configuration.validate().is_ok()
+            && configuration_account_is_valid(&self.configuration)
+            && AiConnectionRevision::new(self.execution_revision).is_ok()
+            && CredentialGeneration::new(self.credential_generation).is_ok()
+            && self
+                .credential
+                .as_ref()
+                .is_none_or(|credential| credential.is_valid_for(&self.configuration))
+            && self.probe_evidence.as_ref().is_none_or(|evidence| {
+                evidence.connection_id.as_str() == self.connection_id
+                    && evidence.execution_revision.get() == self.execution_revision
+                    && evidence.provider == self.configuration.provider()
+                    && self
+                        .configuration
+                        .endpoint_fingerprint()
+                        .is_ok_and(|fingerprint| evidence.endpoint_fingerprint == fingerprint)
+                    && !evidence.models.is_empty()
+            })
+    }
+
+    pub(crate) fn connection_id(&self) -> &str {
+        &self.connection_id
+    }
+
+    pub(crate) fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    pub(crate) fn configuration(&self) -> &AiConnectionConfiguration {
+        &self.configuration
+    }
+
+    pub(crate) fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub(crate) fn execution_revision(&self) -> u64 {
+        self.execution_revision
+    }
+
+    pub(crate) fn credential_generation(&self) -> u64 {
+        self.credential_generation
+    }
+
+    pub(crate) fn has_credential(&self) -> bool {
+        self.credential.is_some()
+    }
+
+    pub(crate) fn probe_evidence(&self) -> Option<&AiProbeEvidence> {
+        self.probe_evidence.as_ref()
+    }
+
+    fn record_probe(
+        &mut self,
+        evidence: AiProbeEvidence,
+        expected_endpoint_fingerprint: &str,
+        expected_adapter_version: &str,
+    ) -> Result<(), VaultError> {
+        if evidence.connection_id.as_str() != self.connection_id
+            || evidence.execution_revision.get() != self.execution_revision
+            || evidence.provider != self.configuration.provider()
+            || evidence.endpoint_fingerprint != expected_endpoint_fingerprint
+            || evidence.adapter_version != expected_adapter_version
+            || evidence.models.is_empty()
+        {
+            return Err(VaultError::Invalid);
+        }
+        self.probe_evidence = Some(evidence);
+        Ok(())
     }
 }
 
@@ -213,8 +522,129 @@ impl fmt::Debug for StoredCredential {
 }
 
 impl StoredCredential {
+    pub(crate) fn from_api_key(api_key: String) -> Result<Self, VaultError> {
+        Self::from_values(vec![("api_key".to_owned(), api_key)])
+    }
+
+    pub(crate) fn from_account(
+        access_token: String,
+        refresh_token: String,
+        expires_at: String,
+        verified_account_id: String,
+    ) -> Result<Self, VaultError> {
+        Self::from_values(vec![
+            ("access_token".to_owned(), access_token),
+            ("refresh_token".to_owned(), refresh_token),
+            ("expires_at".to_owned(), expires_at),
+            ("verified_account_id".to_owned(), verified_account_id),
+        ])
+    }
+
+    pub(crate) fn from_compatible(
+        api_key: String,
+        header_values: Vec<(String, String)>,
+        query_values: Vec<(String, String)>,
+    ) -> Result<Self, VaultError> {
+        let mut values = Vec::with_capacity(1 + header_values.len() + query_values.len());
+        values.push(("api_key".to_owned(), api_key));
+        values.extend(
+            header_values
+                .into_iter()
+                .map(|(name, value)| (format!("header:{name}"), value)),
+        );
+        values.extend(
+            query_values
+                .into_iter()
+                .map(|(name, value)| (format!("query:{name}"), value)),
+        );
+        Self::from_values(values)
+    }
+
+    fn from_values(values: Vec<(String, String)>) -> Result<Self, VaultError> {
+        let credential = Self {
+            values: values
+                .into_iter()
+                .map(|(name, value)| SecretNameValue {
+                    name: SecretName(name),
+                    value: SecretValue(value),
+                })
+                .collect(),
+        };
+        credential
+            .is_valid()
+            .then_some(credential)
+            .ok_or(VaultError::Invalid)
+    }
+
     fn is_valid(&self) -> bool {
-        !self.values.is_empty() && self.values.iter().all(SecretNameValue::is_valid)
+        !self.values.is_empty()
+            && self.values.iter().all(SecretNameValue::is_valid)
+            && self.values.iter().enumerate().all(|(index, value)| {
+                !self.values[..index]
+                    .iter()
+                    .any(|prior| prior.name.0 == value.name.0)
+            })
+            && self
+                .values
+                .iter()
+                .try_fold(0usize, |total, value| {
+                    total
+                        .checked_add(value.name.0.len())?
+                        .checked_add(value.value.0.len())
+                })
+                .is_some_and(|total| total <= MAX_CREDENTIAL_BYTES)
+    }
+
+    fn is_valid_for(&self, configuration: &AiConnectionConfiguration) -> bool {
+        if !self.is_valid() {
+            return false;
+        }
+        match configuration {
+            AiConnectionConfiguration::AccountLogin { account_id, .. } => {
+                self.values.iter().all(|value| {
+                    matches!(
+                        value.name.0.as_str(),
+                        "access_token" | "refresh_token" | "expires_at" | "verified_account_id"
+                    )
+                }) && self.named_value("access_token").is_some()
+                    && self.named_value("refresh_token").is_some()
+                    && self.named_value("expires_at").is_some()
+                    && self.named_value("verified_account_id") == Some(account_id.as_str())
+            }
+            AiConnectionConfiguration::DirectProviderKey { .. } => {
+                self.values.len() == 1 && self.named_value("api_key").is_some()
+            }
+            AiConnectionConfiguration::OpenAiCompatible { endpoint, .. }
+            | AiConnectionConfiguration::AnthropicCompatible { endpoint, .. } => {
+                let expected_count = 1usize
+                    .checked_add(endpoint.custom_header_names.len())
+                    .and_then(|count| count.checked_add(endpoint.custom_query_names.len()));
+                expected_count == Some(self.values.len())
+                    && self.named_value("api_key").is_some()
+                    && endpoint.custom_header_names.iter().all(|name| {
+                        self.named_value(&format!("header:{name}"))
+                            .is_some_and(|value| value.len() <= MAX_CUSTOM_VALUE_BYTES)
+                    })
+                    && endpoint.custom_query_names.iter().all(|name| {
+                        self.named_value(&format!("query:{name}"))
+                            .is_some_and(|value| value.len() <= MAX_CUSTOM_VALUE_BYTES)
+                    })
+            }
+        }
+    }
+
+    fn named_value(&self, name: &str) -> Option<&str> {
+        self.values
+            .iter()
+            .find(|value| value.name.0 == name)
+            .map(|value| value.value.0.as_str())
+    }
+
+    fn verified_account_id(&self) -> Option<&str> {
+        self.values
+            .iter()
+            .find(|value| value.name.0 == "verified_account_id")
+            .map(|value| value.value.0.as_str())
     }
 }
 
@@ -234,6 +664,17 @@ impl fmt::Debug for SecretNameValue {
 impl SecretNameValue {
     fn is_valid(&self) -> bool {
         !self.name.0.is_empty() && !self.value.0.is_empty()
+    }
+}
+
+fn configuration_account_is_valid(configuration: &AiConnectionConfiguration) -> bool {
+    match configuration {
+        AiConnectionConfiguration::AccountLogin { account_id, .. } => {
+            !account_id.is_empty() && account_id.len() <= MAX_ACCOUNT_ID_BYTES
+        }
+        AiConnectionConfiguration::DirectProviderKey { .. }
+        | AiConnectionConfiguration::OpenAiCompatible { .. }
+        | AiConnectionConfiguration::AnthropicCompatible { .. } => true,
     }
 }
 
@@ -411,7 +852,15 @@ impl AiConnectionVault {
                 connection_id.clone(),
                 StoredAiConnection {
                     connection_id,
-                    credential: StoredCredential { values: Vec::new() },
+                    display_name: "Invalid fixture".to_owned(),
+                    configuration: AiConnectionConfiguration::DirectProviderKey {
+                        provider: AiProviderKind::OpenAi,
+                    },
+                    enabled: true,
+                    execution_revision: 1,
+                    credential_generation: 1,
+                    credential: Some(StoredCredential { values: Vec::new() }),
+                    probe_evidence: None,
                 },
             );
             Ok(())
@@ -422,6 +871,50 @@ impl AiConnectionVault {
     pub fn fixture_override_schema_current(&self) -> Result<VaultSnapshot, VaultError> {
         self.mutate_current(|payload| {
             payload.schema_version = VAULT_SCHEMA_VERSION + 1;
+            Ok(())
+        })
+    }
+
+    #[cfg(feature = "runtime-fixture")]
+    pub fn fixture_verify_cleartext_writer_backstop() -> Result<(), VaultError> {
+        let mut writer = CappedCleartextWriter::new()?;
+        let initial_capacity = writer.bytes.capacity();
+        let initial_pointer = writer.bytes.as_ptr();
+        let chunk = [b'x'; 4 * 1024];
+        for _ in 0..(MAX_CLEAR_BYTES / chunk.len()) {
+            writer.write_all(&chunk).map_err(|_| VaultError::Invalid)?;
+            if writer.bytes.capacity() != initial_capacity
+                || writer.bytes.as_ptr() != initial_pointer
+            {
+                return Err(VaultError::Invalid);
+            }
+        }
+        if writer.bytes.len() != MAX_CLEAR_BYTES
+            || writer.write_all(b"x").is_ok()
+            || writer.bytes.len() != MAX_CLEAR_BYTES
+            || writer.bytes.capacity() != initial_capacity
+            || writer.bytes.as_ptr() != initial_pointer
+        {
+            return Err(VaultError::Invalid);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "runtime-fixture")]
+    pub fn fixture_set_connection_counters(
+        &self,
+        connection_id: &str,
+        execution_revision: u64,
+        credential_generation: u64,
+    ) -> Result<VaultSnapshot, VaultError> {
+        self.mutate_current(|payload| {
+            let connection = payload
+                .connections
+                .get_mut(connection_id)
+                .ok_or(VaultError::Invalid)?;
+            connection.execution_revision = execution_revision;
+            connection.credential_generation = credential_generation;
+            connection.probe_evidence = None;
             Ok(())
         })
     }
@@ -983,15 +1476,14 @@ fn fixture_connection(
     if !is_connection_id(connection_id) || secret.is_empty() {
         return Err(VaultError::Invalid);
     }
-    Ok(StoredAiConnection {
-        connection_id: connection_id.to_owned(),
-        credential: StoredCredential {
-            values: vec![SecretNameValue {
-                name: SecretName("fixture".to_owned()),
-                value: SecretValue(secret.to_string()),
-            }],
+    StoredAiConnection::new(
+        connection_id.to_owned(),
+        "Vault fixture".to_owned(),
+        AiConnectionConfiguration::DirectProviderKey {
+            provider: AiProviderKind::OpenAi,
         },
-    })
+        StoredCredential::from_api_key(secret.to_string())?,
+    )
 }
 
 fn replace_file(target: &Path, staged: &Path) -> windows_core::Result<()> {

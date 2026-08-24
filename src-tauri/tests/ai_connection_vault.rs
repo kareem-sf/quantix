@@ -499,31 +499,8 @@ fn vault_enforces_cleartext_and_ciphertext_byte_bounds() {
 }
 
 #[test]
-fn valid_mutations_enforce_the_exact_four_mibibyte_serialization_boundary() {
-    const MAX_CLEAR_BYTES: usize = 4 * 1024 * 1024;
-    const PREFIX: &str = r#"{"schema_version":1,"mutation_revision":1,"connections":{"00000000000000000000000000000094":{"connection_id":"00000000000000000000000000000094","credential":{"values":[{"name":"fixture","value":""#;
-    const SUFFIX: &str = r#""}]}}}}"#;
-    let boundary_secret_bytes = MAX_CLEAR_BYTES - PREFIX.len() - SUFFIX.len();
-
-    let boundary_home = initialized_private_home("vault-clear-exact-bound");
-    let boundary_vault = AiConnectionVault::new(&boundary_home.path).unwrap();
-    let boundary_secret = Zeroizing::new("s".repeat(boundary_secret_bytes));
-    let committed = boundary_vault
-        .fixture_insert(0, "00000000000000000000000000000094", &boundary_secret)
-        .unwrap();
-    assert_eq!(committed.mutation_revision, 1);
-
-    let oversized_home = initialized_private_home("vault-clear-over-bound");
-    let oversized_vault = AiConnectionVault::new(&oversized_home.path).unwrap();
-    let oversized_secret = Zeroizing::new("s".repeat(boundary_secret_bytes + 1));
-    assert!(matches!(
-        oversized_vault.fixture_insert(0, "00000000000000000000000000000094", &oversized_secret,),
-        Err(VaultError::Invalid)
-    ));
-    assert!(matches!(
-        oversized_vault.load().unwrap(),
-        VaultLoadState::Missing
-    ));
+fn cleartext_writer_remains_an_exact_four_mibibyte_serialization_backstop() {
+    AiConnectionVault::fixture_verify_cleartext_writer_backstop().unwrap();
 }
 
 #[test]

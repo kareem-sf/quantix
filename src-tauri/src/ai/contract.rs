@@ -650,6 +650,46 @@ impl AiConnectionConfiguration {
             }
         }
     }
+
+    pub fn method(&self) -> AiConnectionMethod {
+        match self {
+            Self::AccountLogin { .. } => AiConnectionMethod::AccountLogin,
+            Self::DirectProviderKey { .. } => AiConnectionMethod::DirectProviderKey,
+            Self::OpenAiCompatible { .. } => AiConnectionMethod::OpenAiCompatible,
+            Self::AnthropicCompatible { .. } => AiConnectionMethod::AnthropicCompatible,
+        }
+    }
+
+    pub fn provider(&self) -> AiProviderKind {
+        match self {
+            Self::AccountLogin { provider, .. }
+            | Self::DirectProviderKey { provider }
+            | Self::OpenAiCompatible { provider, .. }
+            | Self::AnthropicCompatible { provider, .. } => *provider,
+        }
+    }
+
+    pub fn data_destination(&self) -> Result<&str, AiContractError> {
+        self.validate()?;
+        match self {
+            Self::AccountLogin { .. } => Ok("https://chatgpt.com"),
+            Self::DirectProviderKey { provider } => match provider {
+                AiProviderKind::OpenAi => Ok("https://api.openai.com"),
+                AiProviderKind::Anthropic => Ok("https://api.anthropic.com"),
+                AiProviderKind::GoogleGemini => Ok("https://generativelanguage.googleapis.com"),
+                AiProviderKind::XAi => Ok("https://api.x.ai"),
+                AiProviderKind::Codex
+                | AiProviderKind::OpenAiCompatible
+                | AiProviderKind::AnthropicCompatible => Err(AiContractError::InvalidPairing),
+            },
+            Self::OpenAiCompatible { endpoint, .. }
+            | Self::AnthropicCompatible { endpoint, .. } => Ok(&endpoint.base_url),
+        }
+    }
+
+    pub fn endpoint_fingerprint(&self) -> Result<String, AiContractError> {
+        Ok(sha256_hex(self.data_destination()?.as_bytes()))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -1437,6 +1477,36 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<AiConnectionConfiguration>(&json).unwrap(),
             configuration
+        );
+    }
+
+    #[test]
+    fn configuration_identity_accessors_are_canonical() {
+        let direct = AiConnectionConfiguration::DirectProviderKey {
+            provider: AiProviderKind::OpenAi,
+        };
+        assert_eq!(direct.method(), AiConnectionMethod::DirectProviderKey);
+        assert_eq!(direct.provider(), AiProviderKind::OpenAi);
+        assert_eq!(direct.data_destination().unwrap(), "https://api.openai.com");
+        assert_eq!(
+            direct.endpoint_fingerprint().unwrap(),
+            sha256_hex(b"https://api.openai.com")
+        );
+
+        let compatible = AiConnectionConfiguration::OpenAiCompatible {
+            provider: AiProviderKind::OpenAiCompatible,
+            endpoint: CompatibleEndpointConfiguration::parse(
+                "https://identity.example/v1/",
+                CompatibleCredentialKind::Bearer,
+                Vec::new(),
+                Vec::new(),
+                "model",
+            )
+            .unwrap(),
+        };
+        assert_eq!(
+            compatible.data_destination().unwrap(),
+            "https://identity.example/v1"
         );
     }
 
