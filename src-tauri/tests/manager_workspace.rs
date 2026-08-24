@@ -564,8 +564,8 @@ async fn engineer_retry_preserves_partial_provider_retry_consumption() {
              FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    )
-    .expect("inspect preserved partial retry count");
+        )
+        .expect("inspect preserved partial retry count");
     assert_eq!(preserved, ("waiting_for_local_tools".into(), 1, 1));
     drop(host);
 

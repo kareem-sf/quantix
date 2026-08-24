@@ -3736,8 +3736,8 @@ async fn affected_unapproved_package_review_can_be_interrupted_before_material_r
         &harness,
         records
             .iter()
-            .find(|record| record.stable_key == "programme_pressure")
-            .expect("programme record bound to the unapproved package"),
+            .find(|record| record.stable_key == "project_delivery_context")
+            .expect("technical isolated record bound to the unapproved package"),
         "unapproved-package-review-addendum",
     )
     .await;
