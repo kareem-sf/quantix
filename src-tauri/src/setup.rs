@@ -780,6 +780,67 @@ fn nearest_existing_directory(path: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+pub(crate) fn validate_application_home_path(application_home: &Path) -> io::Result<PathBuf> {
+    if !application_home.is_absolute() || path_contains_alternate_stream(application_home) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid application home",
+        ));
+    }
+
+    let metadata = fs::symlink_metadata(application_home)?;
+    if !metadata.is_dir() || metadata_is_unsafe_storage_link(&metadata) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid application home",
+        ));
+    }
+
+    let canonical = fs::canonicalize(application_home)?;
+    if !paths_are_exactly_equivalent(application_home, &canonical) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid application home",
+        ));
+    }
+    Ok(canonical)
+}
+
+fn path_contains_alternate_stream(path: &Path) -> bool {
+    path.components().any(|component| match component {
+        std::path::Component::Normal(value) => value.to_string_lossy().contains(':'),
+        _ => false,
+    })
+}
+
+#[cfg(windows)]
+fn paths_are_exactly_equivalent(left: &Path, right: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+
+    fn comparable(path: &Path) -> Vec<u16> {
+        let encoded: Vec<_> = path.as_os_str().encode_wide().collect();
+        const VERBATIM_PREFIX: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+        const UNC_PREFIX: [u16; 4] = [b'U' as u16, b'N' as u16, b'C' as u16, b'\\' as u16];
+        if encoded.starts_with(&VERBATIM_PREFIX) {
+            let remainder = &encoded[VERBATIM_PREFIX.len()..];
+            if remainder.starts_with(&UNC_PREFIX) {
+                let mut normalized = vec![b'\\' as u16, b'\\' as u16];
+                normalized.extend_from_slice(&remainder[UNC_PREFIX.len()..]);
+                return normalized;
+            }
+            return remainder.to_vec();
+        }
+        encoded
+    }
+
+    comparable(left) == comparable(right)
+}
+
+#[cfg(not(windows))]
+fn paths_are_exactly_equivalent(left: &Path, right: &Path) -> bool {
+    left == right
+}
+
 fn metadata_is_unsafe_storage_link(metadata: &fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
