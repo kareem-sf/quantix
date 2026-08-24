@@ -20,11 +20,13 @@ use fs4::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use windows::Win32::{
-    Foundation::HANDLE,
+    Foundation::{GENERIC_READ, HANDLE},
     Storage::FileSystem::{
-        GetFileInformationByHandle, MoveFileExW, ReplaceFileW, BY_HANDLE_FILE_INFORMATION,
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        MOVEFILE_WRITE_THROUGH, REPLACE_FILE_FLAGS,
+        FileDispositionInfo, FileStreamInfo, GetFileInformationByHandle,
+        GetFileInformationByHandleEx, MoveFileExW, ReplaceFileW, SetFileInformationByHandle,
+        BY_HANDLE_FILE_INFORMATION, DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+        FILE_STREAM_INFO, MOVEFILE_WRITE_THROUGH, REPLACE_FILE_FLAGS,
     },
 };
 use windows_core::PCWSTR;
@@ -40,6 +42,7 @@ const STAGED_FILE_SUFFIX: &str = ".tmp";
 const VAULT_SCHEMA_VERSION: u32 = 1;
 const MAX_CLEAR_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CIPHERTEXT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_STREAM_QUERY_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultError {
@@ -91,8 +94,8 @@ impl VaultLoadState {
 #[serde(deny_unknown_fields)]
 pub(crate) struct VaultPayload {
     schema_version: u32,
-    pub(crate) mutation_revision: u64,
-    pub(crate) connections: BTreeMap<String, StoredAiConnection>,
+    mutation_revision: u64,
+    connections: BTreeMap<String, StoredAiConnection>,
 }
 
 #[derive(Deserialize)]
@@ -154,6 +157,19 @@ impl VaultPayload {
         }
         self.connections
             .insert(connection.connection_id.clone(), connection);
+        Ok(())
+    }
+
+    fn finish_mutation(&mut self, original_revision: u64) -> Result<(), VaultError> {
+        if self.schema_version != VAULT_SCHEMA_VERSION
+            || self.mutation_revision != original_revision
+        {
+            return Err(VaultError::Invalid);
+        }
+        self.validate().map_err(|_| VaultError::Invalid)?;
+        self.mutation_revision = original_revision
+            .checked_add(1)
+            .ok_or(VaultError::Invalid)?;
         Ok(())
     }
 
@@ -285,11 +301,9 @@ impl AiConnectionVault {
         if payload.mutation_revision != expected_revision {
             return Err(VaultError::RevisionConflict);
         }
+        let original_revision = payload.mutation_revision;
         mutation(&mut payload)?;
-        payload.mutation_revision = payload
-            .mutation_revision
-            .checked_add(1)
-            .ok_or(VaultError::Invalid)?;
+        payload.finish_mutation(original_revision)?;
         self.publish_locked(&payload)?;
         Ok(payload.secret_free_snapshot())
     }
@@ -304,11 +318,9 @@ impl AiConnectionVault {
         FileExt::lock(&lock).map_err(|_| VaultError::Unavailable)?;
         validate_file_handle(&lock)?;
         let mut payload = self.load_payload_locked()?;
+        let original_revision = payload.mutation_revision;
         mutation(&mut payload)?;
-        payload.mutation_revision = payload
-            .mutation_revision
-            .checked_add(1)
-            .ok_or(VaultError::Invalid)?;
+        payload.finish_mutation(original_revision)?;
         self.publish_locked(&payload)?;
         Ok(payload.secret_free_snapshot())
     }
@@ -357,6 +369,61 @@ impl AiConnectionVault {
     pub fn fixture_fail_after_publish_once(&self) {
         self.publication_fault
             .store(PUBLISH_FAULT_AFTER, Ordering::Release);
+    }
+
+    #[cfg(feature = "runtime-fixture")]
+    pub fn fixture_add_staged_ads_before_publish_once(&self) {
+        self.publication_fault
+            .store(PUBLISH_FAULT_STAGE_ADS, Ordering::Release);
+    }
+
+    #[cfg(feature = "runtime-fixture")]
+    pub fn fixture_swap_staged_path_before_failure_once(&self) {
+        self.publication_fault
+            .store(PUBLISH_FAULT_STAGE_SWAP, Ordering::Release);
+    }
+
+    #[cfg(feature = "runtime-fixture")]
+    pub fn fixture_override_revision_current(&self) -> Result<VaultSnapshot, VaultError> {
+        self.mutate_current(|payload| {
+            payload.mutation_revision = 40;
+            Ok(())
+        })
+    }
+
+    #[cfg(feature = "runtime-fixture")]
+    pub fn fixture_insert_key_mismatch_current(&self) -> Result<VaultSnapshot, VaultError> {
+        let secret = Zeroizing::new("fixture-mismatch".to_owned());
+        let connection = fixture_connection("00000000000000000000000000000092", &secret)?;
+        self.mutate_current(|payload| {
+            payload
+                .connections
+                .insert("00000000000000000000000000000091".to_owned(), connection);
+            Ok(())
+        })
+    }
+
+    #[cfg(feature = "runtime-fixture")]
+    pub fn fixture_insert_invalid_record_current(&self) -> Result<VaultSnapshot, VaultError> {
+        self.mutate_current(|payload| {
+            let connection_id = "00000000000000000000000000000093".to_owned();
+            payload.connections.insert(
+                connection_id.clone(),
+                StoredAiConnection {
+                    connection_id,
+                    credential: StoredCredential { values: Vec::new() },
+                },
+            );
+            Ok(())
+        })
+    }
+
+    #[cfg(feature = "runtime-fixture")]
+    pub fn fixture_override_schema_current(&self) -> Result<VaultSnapshot, VaultError> {
+        self.mutate_current(|payload| {
+            payload.schema_version = VAULT_SCHEMA_VERSION + 1;
+            Ok(())
+        })
     }
 
     fn load_state_locked(&self) -> Result<VaultLoadState, VaultError> {
@@ -418,40 +485,47 @@ impl AiConnectionVault {
     }
 
     fn publish_locked(&self, payload: &VaultPayload) -> Result<(), VaultError> {
-        let clear = Zeroizing::new(serde_json::to_vec(payload).map_err(|_| VaultError::Invalid)?);
-        if clear.len() > MAX_CLEAR_BYTES {
-            return Err(VaultError::Invalid);
-        }
+        let mut clear = CappedCleartextWriter::new();
+        serde_json::to_writer(&mut clear, payload).map_err(|_| VaultError::Invalid)?;
+        let clear = clear.into_bytes();
         let ciphertext = protect_for_current_user(clear).map_err(|_| VaultError::Unavailable)?;
         if ciphertext.is_empty() || ciphertext.len() > MAX_CIPHERTEXT_BYTES {
             return Err(VaultError::Invalid);
         }
         let expected_ciphertext_sha256 = Sha256::digest(&ciphertext);
 
-        let (staged_path, mut staged) = self.create_staged_file()?;
+        let (mut staged_path, mut staged) = self.create_staged_file()?;
         staged
             .write_all(&ciphertext)
             .and_then(|()| staged.flush())
             .and_then(|()| staged.sync_all())
             .map_err(|_| VaultError::Unavailable)?;
+        let fault = self.take_publication_fault();
+        self.apply_staged_fixture_fault(fault, staged_path.path())?;
         validate_file_handle(&staged)?;
         drop(staged);
 
+        if matches!(fault, PUBLISH_FAULT_STAGE_ADS | PUBLISH_FAULT_STAGE_SWAP) {
+            return Err(VaultError::Unavailable);
+        }
+
         let target_state = self.validated_target_state()?;
-        let fault = self.take_publication_fault();
-        let publication = if fault == PUBLISH_FAULT_BEFORE {
+        let raw_publication = if fault == PUBLISH_FAULT_BEFORE {
             Err(())
         } else {
-            let result = match target_state {
+            match target_state {
                 TargetState::Existing => replace_file(&self.path, staged_path.path()),
                 TargetState::Missing => move_file_write_through(staged_path.path(), &self.path),
             }
-            .map_err(|_| ());
-            if fault == PUBLISH_FAULT_AFTER && result.is_ok() {
-                Err(())
-            } else {
-                result
-            }
+            .map_err(|_| ())
+        };
+        if raw_publication.is_ok() {
+            staged_path.disarm();
+        }
+        let publication = if fault == PUBLISH_FAULT_AFTER && raw_publication.is_ok() {
+            Err(())
+        } else {
+            raw_publication
         };
 
         let verified = self.reopen_and_verify(
@@ -459,7 +533,10 @@ impl AiConnectionVault {
             payload.mutation_revision,
         );
         match (publication, verified) {
-            (_, Ok(true)) => Ok(()),
+            (_, Ok(true)) => {
+                staged_path.disarm();
+                Ok(())
+            }
             (Ok(()), Ok(false)) | (Err(()), Ok(false)) => Err(VaultError::Unavailable),
             (Ok(()) | Err(()), Err(error)) => Err(error),
         }
@@ -474,7 +551,10 @@ impl AiConnectionVault {
                 .path
                 .with_file_name(format!("{STAGED_FILE_PREFIX}{suffix}{STAGED_FILE_SUFFIX}"));
             match open_create_new_file(&path, false) {
-                Ok(file) => return Ok((OwnedStagedPath(path), file)),
+                Ok(file) => {
+                    let identity = file_identity(&file).map_err(|_| VaultError::Unavailable)?;
+                    return Ok((OwnedStagedPath::new(path, identity), file));
+                }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(_) => return Err(VaultError::Unavailable),
             }
@@ -520,28 +600,124 @@ impl AiConnectionVault {
     fn take_publication_fault(&self) -> u8 {
         PUBLISH_FAULT_NONE
     }
+
+    #[cfg(feature = "runtime-fixture")]
+    fn apply_staged_fixture_fault(&self, fault: u8, path: &Path) -> Result<(), VaultError> {
+        if fault == PUBLISH_FAULT_STAGE_ADS {
+            let stream = PathBuf::from(format!("{}:fixture", path.display()));
+            std::fs::write(stream, b"fixture-stage-stream").map_err(|_| VaultError::Unavailable)?;
+        } else if fault == PUBLISH_FAULT_STAGE_SWAP {
+            let moved = path.with_extension("owned-stage");
+            move_file_write_through(path, &moved).map_err(|_| VaultError::Unavailable)?;
+            let mut replacement = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .map_err(|_| VaultError::Unavailable)?;
+            replacement
+                .write_all(b"replacement-path-object")
+                .and_then(|()| replacement.flush())
+                .and_then(|()| replacement.sync_all())
+                .map_err(|_| VaultError::Unavailable)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "runtime-fixture"))]
+    fn apply_staged_fixture_fault(&self, _fault: u8, _path: &Path) -> Result<(), VaultError> {
+        Ok(())
+    }
 }
 
 const PUBLISH_FAULT_NONE: u8 = 0;
 const PUBLISH_FAULT_BEFORE: u8 = 1;
 const PUBLISH_FAULT_AFTER: u8 = 2;
+const PUBLISH_FAULT_STAGE_ADS: u8 = 3;
+const PUBLISH_FAULT_STAGE_SWAP: u8 = 4;
 
 enum TargetState {
     Missing,
     Existing,
 }
 
-struct OwnedStagedPath(PathBuf);
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FileIdentity {
+    volume_serial_number: u32,
+    file_index_high: u32,
+    file_index_low: u32,
+}
+
+struct OwnedStagedPath {
+    path: PathBuf,
+    identity: FileIdentity,
+    armed: bool,
+}
+
+struct CappedCleartextWriter {
+    bytes: Zeroizing<Vec<u8>>,
+}
+
+impl CappedCleartextWriter {
+    fn new() -> Self {
+        Self {
+            bytes: Zeroizing::new(Vec::new()),
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    fn into_bytes(self) -> Zeroizing<Vec<u8>> {
+        self.bytes
+    }
+}
+
+impl Write for CappedCleartextWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let next_len = self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .filter(|next_len| *next_len <= MAX_CLEAR_BYTES)
+            .ok_or_else(|| io::Error::other("vault cleartext exceeds its fixed bound"))?;
+        let additional = next_len - self.bytes.len();
+        self.bytes
+            .try_reserve_exact(additional)
+            .map_err(|_| io::Error::other("vault cleartext allocation failed"))?;
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
 impl OwnedStagedPath {
+    fn new(path: PathBuf, identity: FileIdentity) -> Self {
+        Self {
+            path,
+            identity,
+            armed: true,
+        }
+    }
+
     fn path(&self) -> &Path {
-        &self.0
+        &self.path
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
     }
 }
 
 impl Drop for OwnedStagedPath {
     fn drop(&mut self) {
-        remove_owned_stage(&self.0);
+        if self.armed {
+            delete_file_if_identity_matches(&self.path, self.identity);
+        }
     }
 }
 
@@ -614,11 +790,7 @@ fn validate_file_handle(file: &File) -> Result<(), VaultError> {
 
 fn validate_file_handle_io(file: &File) -> io::Result<()> {
     let metadata = file.metadata()?;
-    let mut handle_information = BY_HANDLE_FILE_INFORMATION::default();
-    // SAFETY: the borrowed standard-library file handle remains valid for the call and
-    // the output points to an initialized structure owned by this stack frame.
-    unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut handle_information) }
-        .map_err(|_| io::Error::other("could not inspect vault storage object"))?;
+    let handle_information = file_information(file)?;
     if !metadata.is_file()
         || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
         || handle_information.nNumberOfLinks != 1
@@ -628,13 +800,146 @@ fn validate_file_handle_io(file: &File) -> io::Result<()> {
             "invalid vault storage object",
         ));
     }
+    validate_unnamed_data_stream_only(file)?;
     Ok(())
 }
 
-fn remove_owned_stage(path: &Path) {
-    if matches!(open_existing_validated_file(path, false), Ok(Some(_))) {
-        let _ = std::fs::remove_file(path);
+fn file_information(file: &File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: the borrowed standard-library file handle remains valid for the call and
+    // the output points to an initialized structure owned by this stack frame.
+    unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut information) }
+        .map_err(|_| io::Error::other("could not inspect vault storage object"))?;
+    Ok(information)
+}
+
+fn file_identity(file: &File) -> io::Result<FileIdentity> {
+    let information = file_information(file)?;
+    Ok(FileIdentity {
+        volume_serial_number: information.dwVolumeSerialNumber,
+        file_index_high: information.nFileIndexHigh,
+        file_index_low: information.nFileIndexLow,
+    })
+}
+
+fn validate_unnamed_data_stream_only(file: &File) -> io::Result<()> {
+    const UNNAMED_DATA_STREAM: &[u16] = &[
+        b':' as u16,
+        b':' as u16,
+        b'$' as u16,
+        b'D' as u16,
+        b'A' as u16,
+        b'T' as u16,
+        b'A' as u16,
+    ];
+    const STREAM_HEADER_BYTES: usize = std::mem::offset_of!(FILE_STREAM_INFO, StreamName);
+
+    let aligned_words = MAX_STREAM_QUERY_BYTES.div_ceil(std::mem::size_of::<u64>());
+    let mut storage = Zeroizing::new(vec![0u64; aligned_words]);
+    let buffer_bytes = storage.len() * std::mem::size_of::<u64>();
+    let query_size =
+        u32::try_from(buffer_bytes).map_err(|_| io::Error::other("invalid stream query bound"))?;
+
+    // SAFETY: `Vec<u64>` provides the documented 8-byte alignment for FILE_STREAM_INFO,
+    // the pointer remains valid and writable for the fixed query size, and the handle is
+    // borrowed from a live `File`. Any query failure is intentionally fail-closed.
+    unsafe {
+        GetFileInformationByHandleEx(
+            HANDLE(file.as_raw_handle()),
+            FileStreamInfo,
+            storage.as_mut_ptr().cast(),
+            query_size,
+        )
     }
+    .map_err(|_| io::Error::other("could not enumerate vault storage streams"))?;
+
+    if std::mem::size_of::<FILE_STREAM_INFO>() > buffer_bytes
+        || STREAM_HEADER_BYTES + std::mem::size_of::<u16>() > buffer_bytes
+    {
+        return Err(io::Error::other("invalid stream query layout"));
+    }
+
+    let base = storage.as_ptr().cast::<u8>();
+    // SAFETY: the allocation is 8-byte aligned, the query populated at least the first
+    // FILE_STREAM_INFO on success, and the fixed buffer was checked to contain its header.
+    let stream = unsafe { &*base.cast::<FILE_STREAM_INFO>() };
+    let name_bytes = usize::try_from(stream.StreamNameLength)
+        .map_err(|_| io::Error::other("invalid stream name length"))?;
+    if name_bytes == 0 || name_bytes % std::mem::size_of::<u16>() != 0 {
+        return Err(io::Error::other("invalid stream name length"));
+    }
+    let name_end = STREAM_HEADER_BYTES
+        .checked_add(name_bytes)
+        .filter(|end| *end <= buffer_bytes)
+        .ok_or_else(|| io::Error::other("stream name exceeds query buffer"))?;
+    if stream.NextEntryOffset != 0 {
+        let next = usize::try_from(stream.NextEntryOffset)
+            .map_err(|_| io::Error::other("invalid stream entry offset"))?;
+        let next_header_end = next
+            .checked_add(STREAM_HEADER_BYTES)
+            .ok_or_else(|| io::Error::other("invalid stream entry offset"))?;
+        if next % std::mem::align_of::<FILE_STREAM_INFO>() != 0
+            || next < name_end
+            || next_header_end > buffer_bytes
+        {
+            return Err(io::Error::other("invalid stream entry offset"));
+        }
+        return Err(io::Error::other("named stream is not allowed"));
+    }
+
+    let name_units = name_bytes / std::mem::size_of::<u16>();
+    let name_pointer = unsafe { base.add(STREAM_HEADER_BYTES).cast::<u16>() };
+    // SAFETY: StreamName begins at an aligned WCHAR field and `name_end` was checked
+    // against the bounded query allocation before constructing this exact-length slice.
+    let name = unsafe { std::slice::from_raw_parts(name_pointer, name_units) };
+    if name != UNNAMED_DATA_STREAM {
+        return Err(io::Error::other("named stream is not allowed"));
+    }
+    Ok(())
+}
+
+fn delete_file_if_identity_matches(path: &Path, expected_identity: FileIdentity) {
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .access_mode(GENERIC_READ.0 | DELETE.0)
+        .share_mode(FILE_SHARE_READ.0)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0);
+    let Ok(file) = options.open(path) else {
+        return;
+    };
+    let Ok(metadata) = file.metadata() else {
+        return;
+    };
+    let Ok(information) = file_information(&file) else {
+        return;
+    };
+    if !metadata.is_file()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
+        || information.nNumberOfLinks != 1
+        || (FileIdentity {
+            volume_serial_number: information.dwVolumeSerialNumber,
+            file_index_high: information.nFileIndexHigh,
+            file_index_low: information.nFileIndexLow,
+        }) != expected_identity
+    {
+        return;
+    }
+
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    let disposition_size = u32::try_from(std::mem::size_of::<FILE_DISPOSITION_INFO>())
+        .expect("FILE_DISPOSITION_INFO size fits u32");
+    // SAFETY: this exact still-live handle was opened with DELETE access, its stable
+    // identity was compared while the handle prevented a pathname swap, and the input
+    // points to a correctly sized FILE_DISPOSITION_INFO for the synchronous call.
+    let _ = unsafe {
+        SetFileInformationByHandle(
+            HANDLE(file.as_raw_handle()),
+            FileDispositionInfo,
+            std::ptr::from_ref(&disposition).cast(),
+            disposition_size,
+        )
+    };
 }
 
 fn is_connection_id(value: &str) -> bool {
@@ -694,4 +999,21 @@ fn move_file_write_through(staged: &Path, target: &Path) -> windows_core::Result
 
 fn wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::{CappedCleartextWriter, MAX_CLEAR_BYTES};
+
+    #[test]
+    fn cleartext_writer_never_accepts_or_retains_bytes_past_the_cap() {
+        let mut writer = CappedCleartextWriter::new();
+        writer.write_all(&vec![b'x'; MAX_CLEAR_BYTES]).unwrap();
+        assert_eq!(writer.len(), MAX_CLEAR_BYTES);
+
+        assert!(writer.write_all(b"x").is_err());
+        assert_eq!(writer.len(), MAX_CLEAR_BYTES);
+    }
 }

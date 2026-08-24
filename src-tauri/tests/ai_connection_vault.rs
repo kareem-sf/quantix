@@ -4,12 +4,14 @@ use std::{
     fs::OpenOptions,
     io,
     os::windows::fs::OpenOptionsExt,
-    path::Path,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
     sync::{Arc, Barrier},
+    time::{Duration, Instant},
 };
 
 use quantix_lib::{
-    ai::vault::{AiConnectionVault, VaultError, VaultLoadState},
+    ai::vault::{AiConnectionVault, VaultError, VaultLoadState, VaultSnapshot},
     ai::windows_dpapi::protect_for_current_user,
     ensure_quantix_setup, QuantixHost, SetupPlatform, SetupState, StoragePermissions,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
@@ -17,6 +19,10 @@ use quantix_lib::{
 use zeroize::Zeroizing;
 
 use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
+
+const VAULT_HELPER_MODE_ENV: &str = "QUANTIX_TEST_VAULT_HELPER_MODE";
+const VAULT_HELPER_HOME_ENV: &str = "QUANTIX_TEST_VAULT_HELPER_HOME";
+const VAULT_HELPER_WORKER_ENV: &str = "QUANTIX_TEST_VAULT_HELPER_WORKER";
 
 struct ReadySetupPlatform;
 
@@ -209,6 +215,132 @@ fn concurrent_current_mutations_are_contiguous_and_lossless() {
 }
 
 #[test]
+fn separate_processes_commit_contiguous_lossless_mutations() {
+    let home = initialized_private_home("vault-cross-process-contention");
+    let release = home.path.join("vault-helper-release");
+    let mut children = [
+        spawn_vault_helper(&home.path, 0),
+        spawn_vault_helper(&home.path, 1),
+    ];
+    wait_for_helper_files(&[
+        home.path.join("vault-helper-ready-0"),
+        home.path.join("vault-helper-ready-1"),
+    ]);
+    std::fs::write(&release, b"release").unwrap();
+
+    for child in &mut children {
+        assert!(child.wait().unwrap().success());
+    }
+    let mut revisions = [
+        read_helper_revision(&home.path.join("vault-helper-result-0")),
+        read_helper_revision(&home.path.join("vault-helper-result-1")),
+    ];
+    revisions.sort_unstable();
+    assert_eq!(revisions, [1, 2]);
+
+    let snapshot = AiConnectionVault::new(&home.path)
+        .unwrap()
+        .load()
+        .unwrap()
+        .ready()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        snapshot.connection_ids,
+        vec![
+            "000000000000000000000000000000a0".to_owned(),
+            "000000000000000000000000000000a1".to_owned(),
+        ]
+    );
+    assert_eq!(snapshot.mutation_revision, 2);
+}
+
+#[test]
+fn vault_helper_process_entrypoint() {
+    if let Some(exit_code) = run_vault_helper_if_requested() {
+        std::process::exit(exit_code);
+    }
+}
+
+fn spawn_vault_helper(application_home: &Path, worker: u8) -> Child {
+    Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "vault_helper_process_entrypoint",
+            "--test-threads=1",
+        ])
+        .env(VAULT_HELPER_MODE_ENV, "1")
+        .env(VAULT_HELPER_HOME_ENV, application_home)
+        .env(VAULT_HELPER_WORKER_ENV, worker.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
+fn run_vault_helper_if_requested() -> Option<i32> {
+    std::env::var_os(VAULT_HELPER_MODE_ENV)?;
+    Some(if run_vault_helper().is_ok() { 0 } else { 70 })
+}
+
+fn run_vault_helper() -> Result<(), ()> {
+    let application_home = std::env::var_os(VAULT_HELPER_HOME_ENV)
+        .map(PathBuf::from)
+        .ok_or(())?;
+    let worker: u8 = std::env::var(VAULT_HELPER_WORKER_ENV)
+        .map_err(|_| ())?
+        .parse()
+        .map_err(|_| ())?;
+    if worker > 1 {
+        return Err(());
+    }
+
+    let ready = application_home.join(format!("vault-helper-ready-{worker}"));
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(ready)
+        .and_then(|file| file.sync_all())
+        .map_err(|_| ())?;
+    wait_for_helper_files(&[application_home.join("vault-helper-release")]);
+
+    let vault = AiConnectionVault::new(&application_home).map_err(|_| ())?;
+    let connection_id = format!("{:032x}", 0xa0u64 + u64::from(worker));
+    let secret = Zeroizing::new(format!("cross-process-helper-{worker}"));
+    let revision = vault
+        .fixture_insert_current(&connection_id, &secret)
+        .map_err(|_| ())?
+        .mutation_revision;
+    let result = application_home.join(format!("vault-helper-result-{worker}"));
+    let mut result_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(result)
+        .map_err(|_| ())?;
+    use std::io::Write as _;
+    write!(result_file, "{revision}").map_err(|_| ())?;
+    result_file.sync_all().map_err(|_| ())?;
+    Ok(())
+}
+
+fn wait_for_helper_files(paths: &[PathBuf]) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !paths.iter().all(|path| {
+        std::fs::symlink_metadata(path)
+            .map(|metadata| metadata.is_file())
+            .unwrap_or(false)
+    }) {
+        assert!(Instant::now() < deadline, "vault helper barrier timed out");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn read_helper_revision(path: &Path) -> u64 {
+    std::fs::read_to_string(path).unwrap().parse().unwrap()
+}
+
+#[test]
 fn ambiguous_publication_error_reconciles_the_committed_revision() {
     let home = initialized_private_home("vault-ambiguous-publish");
     let vault = AiConnectionVault::new(&home.path).unwrap();
@@ -278,6 +410,34 @@ fn vault_enforces_cleartext_and_ciphertext_byte_bounds() {
 }
 
 #[test]
+fn valid_mutations_enforce_the_exact_four_mibibyte_serialization_boundary() {
+    const MAX_CLEAR_BYTES: usize = 4 * 1024 * 1024;
+    const PREFIX: &str = r#"{"schema_version":1,"mutation_revision":1,"connections":{"00000000000000000000000000000094":{"connection_id":"00000000000000000000000000000094","credential":{"values":[{"name":"fixture","value":""#;
+    const SUFFIX: &str = r#""}]}}}}"#;
+    let boundary_secret_bytes = MAX_CLEAR_BYTES - PREFIX.len() - SUFFIX.len();
+
+    let boundary_home = initialized_private_home("vault-clear-exact-bound");
+    let boundary_vault = AiConnectionVault::new(&boundary_home.path).unwrap();
+    let boundary_secret = Zeroizing::new("s".repeat(boundary_secret_bytes));
+    let committed = boundary_vault
+        .fixture_insert(0, "00000000000000000000000000000094", &boundary_secret)
+        .unwrap();
+    assert_eq!(committed.mutation_revision, 1);
+
+    let oversized_home = initialized_private_home("vault-clear-over-bound");
+    let oversized_vault = AiConnectionVault::new(&oversized_home.path).unwrap();
+    let oversized_secret = Zeroizing::new("s".repeat(boundary_secret_bytes + 1));
+    assert!(matches!(
+        oversized_vault.fixture_insert(0, "00000000000000000000000000000094", &oversized_secret,),
+        Err(VaultError::Invalid)
+    ));
+    assert!(matches!(
+        oversized_vault.load().unwrap(),
+        VaultLoadState::Missing
+    ));
+}
+
+#[test]
 fn vault_rejects_unexpected_paths_and_lock_objects() {
     let directory_home = initialized_private_home("vault-directory");
     std::fs::create_dir(directory_home.path.join("ai-connections.vault")).unwrap();
@@ -322,6 +482,71 @@ fn vault_rejects_unexpected_paths_and_lock_objects() {
     let lock_path = lock_link_home.path.join("ai-connections.vault.lock");
     std::fs::hard_link(&lock_path, lock_link_home.path.join("lock-hardlink-alias")).unwrap();
     assert!(matches!(vault.load(), Err(VaultError::Unavailable)));
+}
+
+#[test]
+fn target_and_persistent_lock_reject_named_alternate_streams() {
+    let target_home = initialized_private_home("vault-target-ads");
+    let target_vault = AiConnectionVault::new(&target_home.path).unwrap();
+    let target_secret = Zeroizing::new("target-ads-sentinel".to_owned());
+    target_vault
+        .fixture_insert(0, "00000000000000000000000000000080", &target_secret)
+        .unwrap();
+    write_named_stream(
+        &target_home.path.join("ai-connections.vault"),
+        "named",
+        b"named-stream-marker",
+    );
+    assert!(matches!(target_vault.load(), Err(VaultError::Unavailable)));
+
+    let lock_home = initialized_private_home("vault-lock-ads");
+    let lock_vault = AiConnectionVault::new(&lock_home.path).unwrap();
+    assert!(matches!(
+        lock_vault.load().unwrap(),
+        VaultLoadState::Missing
+    ));
+    write_named_stream(
+        &lock_home.path.join("ai-connections.vault.lock"),
+        "named",
+        b"named-stream-marker",
+    );
+    assert!(matches!(lock_vault.load(), Err(VaultError::Unavailable)));
+}
+
+#[test]
+fn owned_stage_rejects_a_named_alternate_stream_before_publication() {
+    let home = initialized_private_home("vault-stage-ads");
+    let vault = AiConnectionVault::new(&home.path).unwrap();
+    vault.fixture_add_staged_ads_before_publish_once();
+    let secret = Zeroizing::new("stage-ads-sentinel".to_owned());
+
+    assert!(matches!(
+        vault.fixture_insert(0, "00000000000000000000000000000081", &secret),
+        Err(VaultError::Unavailable)
+    ));
+    assert!(matches!(vault.load().unwrap(), VaultLoadState::Missing));
+    assert_no_vault_staging_files(&home.path);
+}
+
+#[test]
+fn owned_stage_cleanup_never_deletes_a_swapped_path_object() {
+    let home = initialized_private_home("vault-stage-swap");
+    let vault = AiConnectionVault::new(&home.path).unwrap();
+    vault.fixture_swap_staged_path_before_failure_once();
+    let secret = Zeroizing::new("stage-swap-sentinel".to_owned());
+
+    assert!(matches!(
+        vault.fixture_insert(0, "00000000000000000000000000000082", &secret),
+        Err(VaultError::Unavailable)
+    ));
+    assert!(matches!(vault.load().unwrap(), VaultLoadState::Missing));
+
+    let replacement_paths = vault_staging_paths(&home.path);
+    assert_eq!(replacement_paths.len(), 1);
+    assert_eq!(
+        std::fs::read(&replacement_paths[0]).unwrap(),
+        b"replacement-path-object"
+    );
 }
 
 #[test]
@@ -392,6 +617,45 @@ fn revision_overflow_and_malformed_payloads_fail_closed() {
 }
 
 #[test]
+fn mutation_callbacks_cannot_override_payload_invariants() {
+    let cases: [(
+        &str,
+        fn(&AiConnectionVault) -> Result<VaultSnapshot, VaultError>,
+    ); 4] = [
+        (
+            "vault-mutation-revision",
+            AiConnectionVault::fixture_override_revision_current,
+        ),
+        (
+            "vault-mutation-key-mismatch",
+            AiConnectionVault::fixture_insert_key_mismatch_current,
+        ),
+        (
+            "vault-mutation-invalid-record",
+            AiConnectionVault::fixture_insert_invalid_record_current,
+        ),
+        (
+            "vault-mutation-schema",
+            AiConnectionVault::fixture_override_schema_current,
+        ),
+    ];
+    for (name, invalid_mutation) in cases {
+        let home = initialized_private_home(name);
+        let vault = AiConnectionVault::new(&home.path).unwrap();
+        let secret = Zeroizing::new("mutation-boundary-sentinel".to_owned());
+        vault
+            .fixture_insert(0, "00000000000000000000000000000090", &secret)
+            .unwrap();
+        let path = home.path.join("ai-connections.vault");
+        let before = std::fs::read(&path).unwrap();
+
+        assert!(matches!(invalid_mutation(&vault), Err(VaultError::Invalid)));
+        assert_eq!(std::fs::read(path).unwrap(), before);
+        assert_eq!(vault.load().unwrap().ready().unwrap().mutation_revision, 1);
+    }
+}
+
+#[test]
 fn replace_sharing_failure_preserves_the_previous_revision() {
     let home = initialized_private_home("vault-replace-sharing");
     let vault = AiConnectionVault::new(&home.path).unwrap();
@@ -442,7 +706,11 @@ fn public_snapshots_and_errors_are_redacted() {
 }
 
 fn assert_no_vault_staging_files(application_home: &Path) {
-    let staging_count = std::fs::read_dir(application_home)
+    assert_eq!(vault_staging_paths(application_home).len(), 0);
+}
+
+fn vault_staging_paths(application_home: &Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(application_home)
         .unwrap()
         .filter_map(Result::ok)
         .filter(|entry| {
@@ -450,6 +718,11 @@ fn assert_no_vault_staging_files(application_home: &Path) {
             let name = name.to_string_lossy();
             name.starts_with(".ai-connections.vault.") && name.ends_with(".tmp")
         })
-        .count();
-    assert_eq!(staging_count, 0);
+        .map(|entry| entry.path())
+        .collect()
+}
+
+fn write_named_stream(path: &Path, stream_name: &str, bytes: &[u8]) {
+    let stream_path = std::path::PathBuf::from(format!("{}:{stream_name}", path.display()));
+    std::fs::write(stream_path, bytes).unwrap();
 }
