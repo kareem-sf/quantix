@@ -14,6 +14,7 @@ const MAX_CUSTOM_FIELDS: usize = 16;
 const MAX_CUSTOM_NAME_BYTES: usize = 128;
 const MAX_CUSTOM_VALUE_BYTES: usize = 4 * 1024;
 const MAX_MODELS: usize = 500;
+const MAX_REASONING_OPTIONS: usize = 32;
 const MAX_DESCRIPTION_BYTES: usize = 4 * 1024;
 const MAX_ENDPOINT_FINGERPRINT_BYTES: usize = 128;
 const MAX_ADAPTER_VERSION_BYTES: usize = 128;
@@ -46,6 +47,8 @@ pub enum AiContractError {
     ValueTooLarge,
     #[error("the model identifier is invalid")]
     InvalidModelId,
+    #[error("the AI reasoning selection is invalid")]
+    InvalidReasoningSelection,
     #[error("the capability catalogue is invalid")]
     InvalidCatalogue,
     #[error("the AI configuration metadata is invalid")]
@@ -178,10 +181,37 @@ pub enum CapabilitySupport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    try_from = "AiReasoningSelectionInput"
+)]
 pub enum AiReasoningSelection {
     Unsupported,
     Effort { id: String },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum AiReasoningSelectionInput {
+    Unsupported,
+    Effort { id: String },
+}
+
+impl TryFrom<AiReasoningSelectionInput> for AiReasoningSelection {
+    type Error = AiContractError;
+
+    fn try_from(value: AiReasoningSelectionInput) -> Result<Self, Self::Error> {
+        match value {
+            AiReasoningSelectionInput::Unsupported => Ok(Self::Unsupported),
+            AiReasoningSelectionInput::Effort { id } => {
+                if id.is_empty() || id.len() > MAX_MODEL_ID_BYTES {
+                    return Err(AiContractError::InvalidReasoningSelection);
+                }
+                Ok(Self::Effort { id })
+            }
+        }
+    }
 }
 
 pub fn validate_method_provider(
@@ -502,7 +532,7 @@ fn validate_catalogue_sha256(value: &str) -> Result<(), AiContractError> {
     if value.len() != 64
         || !value
             .bytes()
-            .all(|byte| byte.is_ascii_digit() || byte.is_ascii_lowercase())
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
     {
         return Err(AiContractError::InvalidMetadata);
     }
@@ -699,6 +729,9 @@ impl TryFrom<AiModelViewInput> for AiModelView {
         validate_model_id(&value.model_id)?;
         if let Some(reported_model_id) = &value.reported_model_id {
             validate_model_id(reported_model_id)?;
+        }
+        if value.reasoning_options.len() > MAX_REASONING_OPTIONS {
+            return Err(AiContractError::InvalidCatalogue);
         }
         Ok(Self {
             model_id: value.model_id,
@@ -1265,6 +1298,30 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_effort_and_options_are_bounded_at_deserialization() {
+        assert!(
+            serde_json::from_str::<AiReasoningSelection>(r#"{"kind":"effort","id":""}"#).is_err()
+        );
+        assert!(
+            serde_json::from_value::<AiReasoningSelection>(serde_json::json!({
+                "kind": "effort",
+                "id": "x".repeat(257)
+            }))
+            .is_err()
+        );
+
+        let mut value = serde_json::to_value(probe_evidence(
+            "2026-08-24T12:00:00Z",
+            "Visible model",
+            "Low",
+        ))
+        .unwrap();
+        let option = value["models"][0]["reasoning_options"][0].clone();
+        value["models"][0]["reasoning_options"] = serde_json::Value::Array(vec![option; 33]);
+        assert!(serde_json::from_value::<AiProbeEvidence>(value).is_err());
+    }
+
+    #[test]
     fn persisted_catalogue_normalizes_labels_and_enforces_bounds() {
         let mut value =
             serde_json::to_value(probe_evidence("2026-08-24T12:00:00Z", "e\u{301}", "Low"))
@@ -1308,6 +1365,10 @@ mod tests {
         });
         assert!(serde_json::from_value::<ActiveAiConfiguration>(value.clone()).is_ok());
 
+        value["catalogue_sha256"] = serde_json::Value::String("z".repeat(64));
+        assert!(serde_json::from_value::<ActiveAiConfiguration>(value.clone()).is_err());
+
+        value["catalogue_sha256"] = serde_json::Value::String("a".repeat(64));
         value["model_id"] = serde_json::Value::String("m".repeat(257));
         assert!(serde_json::from_value::<ActiveAiConfiguration>(value.clone()).is_err());
 
