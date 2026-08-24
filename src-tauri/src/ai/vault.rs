@@ -22,10 +22,10 @@ use sha2::{Digest, Sha256};
 use windows::Win32::{
     Foundation::{GENERIC_READ, HANDLE},
     Storage::FileSystem::{
-        FileDispositionInfo, FileStreamInfo, GetFileInformationByHandle,
+        FileDispositionInfo, FileIdInfo, FileStreamInfo, GetFileInformationByHandle,
         GetFileInformationByHandleEx, MoveFileExW, ReplaceFileW, SetFileInformationByHandle,
         BY_HANDLE_FILE_INFORMATION, DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO,
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_SHARE_READ,
         FILE_STREAM_INFO, MOVEFILE_WRITE_THROUGH, REPLACE_FILE_FLAGS,
     },
 };
@@ -485,7 +485,7 @@ impl AiConnectionVault {
     }
 
     fn publish_locked(&self, payload: &VaultPayload) -> Result<(), VaultError> {
-        let mut clear = CappedCleartextWriter::new();
+        let mut clear = CappedCleartextWriter::new()?;
         serde_json::to_writer(&mut clear, payload).map_err(|_| VaultError::Invalid)?;
         let clear = clear.into_bytes();
         let ciphertext = protect_for_current_user(clear).map_err(|_| VaultError::Unavailable)?;
@@ -642,9 +642,17 @@ enum TargetState {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct FileIdentity {
-    volume_serial_number: u32,
-    file_index_high: u32,
-    file_index_low: u32,
+    volume_serial_number: u64,
+    identifier: [u8; 16],
+}
+
+impl FileIdentity {
+    fn from_file_id_info(information: FILE_ID_INFO) -> Self {
+        Self {
+            volume_serial_number: information.VolumeSerialNumber,
+            identifier: information.FileId.Identifier,
+        }
+    }
 }
 
 struct OwnedStagedPath {
@@ -658,15 +666,27 @@ struct CappedCleartextWriter {
 }
 
 impl CappedCleartextWriter {
-    fn new() -> Self {
-        Self {
-            bytes: Zeroizing::new(Vec::new()),
-        }
+    fn new() -> Result<Self, VaultError> {
+        let mut bytes = Zeroizing::new(Vec::new());
+        bytes
+            .try_reserve_exact(MAX_CLEAR_BYTES)
+            .map_err(|_| VaultError::Unavailable)?;
+        Ok(Self { bytes })
     }
 
     #[cfg(test)]
     fn len(&self) -> usize {
         self.bytes.len()
+    }
+
+    #[cfg(test)]
+    fn capacity(&self) -> usize {
+        self.bytes.capacity()
+    }
+
+    #[cfg(test)]
+    fn base_pointer(&self) -> *const u8 {
+        self.bytes.as_ptr()
     }
 
     fn into_bytes(self) -> Zeroizing<Vec<u8>> {
@@ -682,10 +702,7 @@ impl Write for CappedCleartextWriter {
             .checked_add(bytes.len())
             .filter(|next_len| *next_len <= MAX_CLEAR_BYTES)
             .ok_or_else(|| io::Error::other("vault cleartext exceeds its fixed bound"))?;
-        let additional = next_len - self.bytes.len();
-        self.bytes
-            .try_reserve_exact(additional)
-            .map_err(|_| io::Error::other("vault cleartext allocation failed"))?;
+        debug_assert!(next_len <= self.bytes.capacity());
         self.bytes.extend_from_slice(bytes);
         Ok(bytes.len())
     }
@@ -814,12 +831,22 @@ fn file_information(file: &File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
 }
 
 fn file_identity(file: &File) -> io::Result<FileIdentity> {
-    let information = file_information(file)?;
-    Ok(FileIdentity {
-        volume_serial_number: information.dwVolumeSerialNumber,
-        file_index_high: information.nFileIndexHigh,
-        file_index_low: information.nFileIndexLow,
-    })
+    let mut information = FILE_ID_INFO::default();
+    let information_size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>())
+        .map_err(|_| io::Error::other("invalid file identity structure size"))?;
+    // SAFETY: FILE_ID_INFO is correctly aligned on this stack frame, the mutable pointer
+    // remains valid for its exact checked size during the synchronous call, and the file
+    // handle is borrowed from a live `File`. Failure preserves the staged object.
+    unsafe {
+        GetFileInformationByHandleEx(
+            HANDLE(file.as_raw_handle()),
+            FileIdInfo,
+            std::ptr::from_mut(&mut information).cast(),
+            information_size,
+        )
+    }
+    .map_err(|_| io::Error::other("could not inspect vault storage identity"))?;
+    Ok(FileIdentity::from_file_id_info(information))
 }
 
 fn validate_unnamed_data_stream_only(file: &File) -> io::Result<()> {
@@ -914,14 +941,13 @@ fn delete_file_if_identity_matches(path: &Path, expected_identity: FileIdentity)
     let Ok(information) = file_information(&file) else {
         return;
     };
+    let Ok(actual_identity) = file_identity(&file) else {
+        return;
+    };
     if !metadata.is_file()
         || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
         || information.nNumberOfLinks != 1
-        || (FileIdentity {
-            volume_serial_number: information.dwVolumeSerialNumber,
-            file_index_high: information.nFileIndexHigh,
-            file_index_low: information.nFileIndexLow,
-        }) != expected_identity
+        || actual_identity != expected_identity
     {
         return;
     }
@@ -1005,15 +1031,58 @@ fn wide_path(path: &Path) -> Vec<u16> {
 mod tests {
     use std::io::Write;
 
-    use super::{CappedCleartextWriter, MAX_CLEAR_BYTES};
+    use windows::Win32::Storage::FileSystem::{FILE_ID_128, FILE_ID_INFO};
+
+    use super::{CappedCleartextWriter, FileIdentity, MAX_CLEAR_BYTES};
 
     #[test]
     fn cleartext_writer_never_accepts_or_retains_bytes_past_the_cap() {
-        let mut writer = CappedCleartextWriter::new();
-        writer.write_all(&vec![b'x'; MAX_CLEAR_BYTES]).unwrap();
+        let mut writer = CappedCleartextWriter::new().unwrap();
+        let initial_capacity = writer.capacity();
+        let initial_pointer = writer.base_pointer();
+        assert!(initial_capacity >= MAX_CLEAR_BYTES);
+
+        let escaped_chunk = "\"\\".repeat(64);
+        for _ in 0..1_024 {
+            serde_json::to_writer(&mut writer, &escaped_chunk).unwrap();
+            assert_eq!(writer.capacity(), initial_capacity);
+            assert_eq!(writer.base_pointer(), initial_pointer);
+        }
+        let remaining = MAX_CLEAR_BYTES - writer.len();
+        writer.write_all(&vec![b'x'; remaining]).unwrap();
         assert_eq!(writer.len(), MAX_CLEAR_BYTES);
+        assert_eq!(writer.capacity(), initial_capacity);
+        assert_eq!(writer.base_pointer(), initial_pointer);
 
         assert!(writer.write_all(b"x").is_err());
         assert_eq!(writer.len(), MAX_CLEAR_BYTES);
+        assert_eq!(writer.capacity(), initial_capacity);
+        assert_eq!(writer.base_pointer(), initial_pointer);
+    }
+
+    #[test]
+    fn file_identity_retains_the_full_volume_and_128_bit_identifier() {
+        let first = FileIdentity::from_file_id_info(FILE_ID_INFO {
+            VolumeSerialNumber: 0x0102_0304_0506_0708,
+            FileId: FILE_ID_128 {
+                Identifier: [
+                    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
+                    0xdd, 0xee, 0xff,
+                ],
+            },
+        });
+        let second = FileIdentity::from_file_id_info(FILE_ID_INFO {
+            VolumeSerialNumber: 0x0102_0304_0506_0708,
+            FileId: FILE_ID_128 {
+                Identifier: [
+                    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
+                    0xdd, 0xee, 0xfe,
+                ],
+            },
+        });
+
+        assert_eq!(first.volume_serial_number, 0x0102_0304_0506_0708);
+        assert_eq!(first.identifier.len(), 16);
+        assert!(first != second);
     }
 }

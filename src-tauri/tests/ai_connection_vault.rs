@@ -24,6 +24,78 @@ const VAULT_HELPER_MODE_ENV: &str = "QUANTIX_TEST_VAULT_HELPER_MODE";
 const VAULT_HELPER_HOME_ENV: &str = "QUANTIX_TEST_VAULT_HELPER_HOME";
 const VAULT_HELPER_WORKER_ENV: &str = "QUANTIX_TEST_VAULT_HELPER_WORKER";
 
+struct HelperChild {
+    child: Option<Child>,
+    reaped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl HelperChild {
+    fn new(child: Child) -> Self {
+        Self {
+            child: Some(child),
+            reaped: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    fn reap_observer(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        Arc::clone(&self.reaped)
+    }
+
+    fn wait_until(&mut self, deadline: Instant) -> io::Result<std::process::ExitStatus> {
+        loop {
+            let status = self
+                .child
+                .as_mut()
+                .ok_or_else(|| io::Error::other("vault helper was already reaped"))?
+                .try_wait()?;
+            if let Some(status) = status {
+                self.child.take();
+                self.reaped
+                    .store(true, std::sync::atomic::Ordering::Release);
+                return Ok(status);
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "vault helper completion timed out",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+impl Drop for HelperChild {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            self.reaped
+                .store(true, std::sync::atomic::Ordering::Release);
+            return;
+        }
+        let _ = child.kill();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                self.reaped
+                    .store(true, std::sync::atomic::Ordering::Release);
+                return;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                if child.wait().is_ok() {
+                    self.reaped
+                        .store(true, std::sync::atomic::Ordering::Release);
+                }
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
 struct ReadySetupPlatform;
 
 impl SetupPlatform for ReadySetupPlatform {
@@ -228,8 +300,9 @@ fn separate_processes_commit_contiguous_lossless_mutations() {
     ]);
     std::fs::write(&release, b"release").unwrap();
 
+    let completion_deadline = Instant::now() + Duration::from_secs(10);
     for child in &mut children {
-        assert!(child.wait().unwrap().success());
+        assert!(child.wait_until(completion_deadline).unwrap().success());
     }
     let mut revisions = [
         read_helper_revision(&home.path.join("vault-helper-result-0")),
@@ -256,14 +329,29 @@ fn separate_processes_commit_contiguous_lossless_mutations() {
 }
 
 #[test]
+fn helper_child_guard_bounds_wait_and_terminates_an_unreleased_helper() {
+    let home = initialized_private_home("vault-helper-guard");
+    let mut child = spawn_vault_helper(&home.path, 0);
+    wait_for_helper_files(&[home.path.join("vault-helper-ready-0")]);
+
+    let error = child
+        .wait_until(Instant::now() + Duration::from_millis(20))
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    let reaped = child.reap_observer();
+    drop(child);
+    assert!(reaped.load(std::sync::atomic::Ordering::Acquire));
+}
+
+#[test]
 fn vault_helper_process_entrypoint() {
     if let Some(exit_code) = run_vault_helper_if_requested() {
         std::process::exit(exit_code);
     }
 }
 
-fn spawn_vault_helper(application_home: &Path, worker: u8) -> Child {
-    Command::new(std::env::current_exe().unwrap())
+fn spawn_vault_helper(application_home: &Path, worker: u8) -> HelperChild {
+    let child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
             "vault_helper_process_entrypoint",
@@ -276,7 +364,8 @@ fn spawn_vault_helper(application_home: &Path, worker: u8) -> Child {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .unwrap()
+        .unwrap();
+    HelperChild::new(child)
 }
 
 fn run_vault_helper_if_requested() -> Option<i32> {
