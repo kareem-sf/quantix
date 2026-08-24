@@ -1,5 +1,6 @@
 #![recursion_limit = "256"]
 mod acceptance;
+pub mod ai;
 
 #[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
 mod agent_backend;
