@@ -1322,6 +1322,20 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_option_count_limit_rejects_33_options() {
+        let mut value = serde_json::to_value(probe_evidence(
+            "2026-08-24T12:00:00Z",
+            "Visible model",
+            "Low",
+        ))
+        .unwrap();
+        let option = value["models"][0]["reasoning_options"][0].clone();
+        value["models"][0]["reasoning_options"] = serde_json::Value::Array(vec![option; 33]);
+
+        assert!(serde_json::from_value::<AiProbeEvidence>(value).is_err());
+    }
+
+    #[test]
     fn persisted_catalogue_normalizes_labels_and_enforces_bounds() {
         let mut value =
             serde_json::to_value(probe_evidence("2026-08-24T12:00:00Z", "e\u{301}", "Low"))
@@ -1374,6 +1388,33 @@ mod tests {
 
         value["model_id"] = serde_json::Value::String("m".repeat(256));
         value["unexpected"] = serde_json::Value::Bool(true);
+        assert!(serde_json::from_value::<ActiveAiConfiguration>(value).is_err());
+    }
+
+    #[test]
+    fn active_configuration_rejects_non_hex_catalogue_sha256() {
+        let value = serde_json::json!({
+            "connection_id": "0123456789abcdef0123456789abcdef",
+            "execution_revision": 1,
+            "provider": "open_ai",
+            "endpoint_fingerprint": "direct-openai",
+            "model_id": "model-1",
+            "reasoning": {"kind": "unsupported"},
+            "adapter_version": "worker-v1",
+            "catalogue_sha256": "z".repeat(64),
+            "capabilities": {
+                "streaming": "supported",
+                "tools": "supported",
+                "images": "unsupported",
+                "reasoning": "unsupported",
+                "reroute_detection": "unknown",
+                "structured_output": "unsupported",
+                "context_window_tokens": null
+            },
+            "data_destination": "quantix",
+            "activated_at": "2026-08-24T12:00:00Z"
+        });
+
         assert!(serde_json::from_value::<ActiveAiConfiguration>(value).is_err());
     }
 
