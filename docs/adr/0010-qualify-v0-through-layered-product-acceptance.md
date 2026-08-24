@@ -2,6 +2,13 @@
 
 Status: accepted on 2026-08-07 by explicit Engineer User confirmation.
 
+ADR 0017 supersedes only the direct-ChatGPT provider-evidence fields in this
+decision. Product Acceptance Runs now bind the exact connection revision,
+provider route, requested and reported model identity when available, reasoning
+state, capability-catalogue hash, adapter/runtime version, and package evidence.
+The deterministic, live-provider, Windows native-package, layered public-release,
+and non-waivable safety gates remain accepted.
+
 Quantix qualifies releases through two cumulative product gates rather than
 treating a successful build, polished AI output, or one demonstration as
 acceptance. Private v0 Qualification proves an engineer-operated Windows
@@ -22,7 +29,7 @@ Quantix's intended subscription-backed integration.
   drive interruption, malformed-message, transport-loss, and indeterminate-turn
   cases on Windows, macOS, and Linux CI.
 - A release candidate must complete five consecutive clean live runs through
-  the direct ChatGPT provider adapter and its versioned catalogue. Every run
+  the exact selected provider route and its versioned catalogue. Every run
   must recover 100% of oracle-marked critical requirements, addenda, deadlines,
   forms, and submission instructions; introduce zero unsupported critical
   requirements; account for 100% of BOQ rows; reproduce 100% of deterministic
@@ -43,17 +50,18 @@ Quantix's intended subscription-backed integration.
 - The repository exposes one deterministic verification entry point, one opted-in live-provider evaluation entry point, one native packaging-validation entry point, and one release-acceptance entry point. Their exact command syntax is fixed when the workspace is scaffolded and then recorded in `AGENTS.md`; one command cannot conceal which gate failed.
 - Each qualifying attempt emits immutable Product Acceptance Runs. An
   attributable Product Acceptance Record binds exact fixture, oracle, source,
-  application, direct ChatGPT adapter, catalogue, model, schema, binary,
+  application, connection revision, provider route, adapter/runtime, catalogue,
+  requested and reported model identity, reasoning state, schema, binary,
   dependency, platform, test, evaluation, package, finding, exception, metric,
   timing, and artifact hashes for the release candidate.
 - Provider-session and working-context state are never acceptance evidence by
   themselves. Canonical product assertions come from Quantix-owned records and
   reproducible outputs; credentials and raw provider reasoning never enter the
   Product Acceptance Record.
-- Technical acceptance of the direct ChatGPT integration may support a private
-  v0. It cannot authorize public distribution where product support or
-  applicable service terms remain unresolved; that requires OpenAI assurance or
-  a separately approved provider architecture.
+- Technical acceptance of account-backed Codex may support a private build. It
+  cannot authorize public distribution where product support, the experimental
+  protocol, filesystem isolation, or applicable service terms remain unresolved;
+  that requires written OpenAI approval for the Quantix client/integration.
 
 ## Evidence
 
@@ -61,7 +69,7 @@ Quantix's intended subscription-backed integration.
 - [Acceptance Tender fixture decision](https://github.com/kareem-sf/quantix/issues/3)
 - [Tender lifecycle](./0001-control-the-tender-lifecycle-with-eitl-gates.md)
 - [Canonical calculations](./0003-make-deterministic-calculations-canonical.md)
-- [Current ChatGPT connection decision](./0016-connect-chatgpt-through-quantix-owned-oauth.md)
+- [Current AI connection decision](./0017-run-multiple-ai-connections-through-one-active-configuration.md)
 - [Host-owned run permissions](./0006-enforce-agent-access-through-host-owned-run-grants.md)
 - [Submission Package release](./0007-release-only-manifest-bound-submission-package-versions.md)
 - [Superseded AI Provider contract](./0008-keep-codex-behind-a-quantix-owned-ai-provider-contract.md)

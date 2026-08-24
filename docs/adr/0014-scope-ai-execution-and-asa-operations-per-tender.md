@@ -4,6 +4,12 @@ status: accepted
 
 # Scope AI execution and ASA operations per Tender
 
+ADR 0017 supersedes only the AI-selection scope in this decision. Connection and
+model selection is now one optional global Active AI Configuration resolved and
+immutably captured when an Agent Run is created. Tender-scoped work, Host
+permission and persistence authority, immutable run binding, operational
+isolation, and fail-closed execution remain accepted.
+
 Quantix is a Tender-centric Agentic Super App. Every Tender owns one independent Tendering Manager Agent, AI Execution Selection, Tender Office Conversation, work state, files, Agent Runs, and operational health. The native Host remains the workflow, permission, evidence, persistence, repair, and Engineer-in-the-Loop authority. Quantix does not add a global Manager, cross-Tender memory, automatic model routing, silent fallback, or a second agent framework.
 
 This decision supersedes only ADR 0012's application-wide runtime-selection consequence and ADR 0013's selected-Tender-header menu placement. Their Provider Contract, credential isolation, fail-closed capability validation, immutable per-Run capture, safe-terminal retention boundaries, Trash, purge, and Deletion Receipt consequences continue to apply.

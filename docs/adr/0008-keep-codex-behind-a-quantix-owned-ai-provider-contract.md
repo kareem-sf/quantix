@@ -1,9 +1,16 @@
 ---
-status: superseded
-superseded_by: 0016-connect-chatgpt-through-quantix-owned-oauth
+status: accepted
 ---
 
 # Keep Codex behind a Quantix-owned AI Provider contract
+
+The Codex runtime consequences in this ADR are superseded by
+[ADR 0017](./0017-run-multiple-ai-connections-through-one-active-configuration.md#account-backed-codex):
+the account adapter now drives pinned app-server 0.149.1 per bounded operation,
+uses Host-owned vault-backed authentication, and does not maintain persistent
+Agent Profile threads. The Quantix-owned semantic provider contract, immutable
+Agent Run boundary, Host permission and tool authority, fail-closed protocol
+handling, candidate validation, and canonical-state principles remain accepted.
 
 Quantix v0 routes AI execution through one versioned, Quantix-owned semantic AI Provider Contract and one built-in Codex adapter using the Engineer User's Codex-managed ChatGPT subscription session. We chose this over exposing app-server throughout the domain or building speculative multi-provider machinery so Quantix retains workflow, permission, evidence, and EITL authority while provider protocols remain replaceable at one narrow boundary.
 

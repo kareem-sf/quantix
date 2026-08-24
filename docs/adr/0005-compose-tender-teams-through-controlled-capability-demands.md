@@ -1,5 +1,12 @@
 # Compose Tender teams through controlled Capability Demands
 
+The fixed Bootstrap Team in this ADR is superseded by the
+[controlled modular agent-platform design](../superpowers/specs/2026-08-24-controlled-modular-agent-platform-design.md),
+but it remains the implementation fact until Layer 2 replaces it. Layer 1 changes
+AI connection infrastructure only and must not create a compatibility roster.
+The capability, separation-of-duty, review, and Host-approval principles below
+remain accepted.
+
 Quantix v0 uses a host-controlled Team Composer to map exact Project Fingerprint, Capability Catalogue, and policy versions into classified Capability Demands and a versioned Work Plan Proposal. Deterministic rules own Policy-required and Tender-required coverage, Codex may propose evidence-linked Risk-recommended specialists and operational profile details, and only the Engineer User may approve the resulting team; this preserves a genuinely project-specific Tender Office without allowing an AI agent to invent expertise, permissions, reviewers, or approval authority.
 
 ## Consequences

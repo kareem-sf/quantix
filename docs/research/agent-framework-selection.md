@@ -1,5 +1,13 @@
 # Agent-framework selection for Quantix v0
 
+> **Superseded conclusion — 2026-08-24:** The historical analysis below remains
+> evidence for keeping workflow, durability, approval, and canonical state in the
+> Rust Host. Its second-provider revisit trigger is now satisfied. ADR 0017 adopts
+> `pydantic-ai-slim[anthropic,google,openai,xai]==2.33.0` only inside a disposable
+> Python 3.12.13 general-provider worker; Pydantic AI is not a Host framework or
+> durability engine. Account-backed execution uses direct Codex app-server
+> 0.149.1. See [the current runtime research](./ai-worker-runtime-selection.md).
+
 **Evidence snapshot:** 2026-08-07
 **Question:** Should Quantix adopt PydanticAI or another ready-made agent framework while keeping the accepted Tauri 2/Rust Host, Codex subscription authentication, and EITL design?
 

@@ -1,33 +1,30 @@
 ---
-status: superseded
-superseded_on: 2026-08-22
-superseded_by:
-  - 0016-connect-chatgpt-through-quantix-owned-oauth.md
-  - ../superpowers/specs/2026-08-22-codex-only-beginner-connection-design.md
+status: accepted
 ---
 
-# Superseded: Run Agent Profiles through host-controlled Codex threads
+# Run Agent Profiles through host-controlled Codex threads
 
-This ADR recorded the original app-server and externally stored thread design.
-It is historical evidence only and does not describe current Quantix behavior.
-Quantix no longer connects to an installed or bundled Codex app-server, relies
-on another Codex installation's login, or creates external Codex threads for
-Agent Profiles.
+The Codex runtime consequences in this ADR are superseded by
+[ADR 0017](./0017-run-multiple-ai-connections-through-one-active-configuration.md#account-backed-codex).
+Quantix now drives one pinned official Codex app-server per bounded operation,
+passes Host-owned vault-backed tokens only through the privately prototyped
+`chatgptAuthTokens` seam, and uses an ephemeral thread. It does not rely on
+another Codex installation, Codex-owned persistent login, or a persistent thread
+per Agent Profile.
 
-The current design is [ADR 0016](./0016-connect-chatgpt-through-quantix-owned-oauth.md)
-and the [approved beginner-connection design](../superpowers/specs/2026-08-22-codex-only-beginner-connection-design.md):
-the Rust Host owns one direct ChatGPT OAuth connection under Quantix Application
-Home and sends bounded HTTPS/SSE Provider Turns. Quantix retains workflow,
-permissions, evidence, validation, audit, and Engineer-in-the-Loop authority.
+The Host-controlled principles remain accepted: Quantix owns permission,
+minimum-disclosure inputs, tool authorization, budgets, interruption, candidate
+validation, evidence, audit, and canonical Tender state. Provider threads remain
+noncanonical and cannot expand a run's authority.
 
 ## Historical record
 
 The former design used an installed Codex app-server over stdio, one persistent
 external thread per active Agent Profile, and a single supervised app-server
-process. Its disposable-thread boundary, host validation, typed-tool control,
-and no-shared-sandbox lessons remain useful historical rationale. Its
-authentication, process, thread, protocol-version, and release consequences are
-fully superseded and must not be implemented as current product behavior.
+process. Its host validation, typed-tool control, and no-shared-sandbox lessons
+remain binding rationale. Its authentication, process-lifetime,
+persistent-thread, and protocol-version consequences are superseded and must not
+be implemented as current product behavior.
 
 The prototype result below is evidence of that former architecture, not a
 claim about the current product.
@@ -36,5 +33,5 @@ claim about the current product.
 
 - [Prototype and measured result](https://github.com/kareem-sf/quantix/blob/prototype/codex-multithread-tender-office/prototypes/codex-multithread/RESULTS.md)
 - [Decision ticket](https://github.com/kareem-sf/quantix/issues/7)
-- [Former Codex app-server documentation](https://developers.openai.com/codex/app-server/)
+- [Codex app-server documentation](https://learn.chatgpt.com/docs/app-server)
 - [OpenAI authentication documentation](https://learn.chatgpt.com/docs/auth)

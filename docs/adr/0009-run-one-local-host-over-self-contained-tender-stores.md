@@ -1,13 +1,15 @@
 # Run one local Quantix Host over self-contained Tender Stores
 
-Status: accepted; desktop runtime revised on 2026-08-07 by explicit Engineer User decision.
+Status: accepted; provider runtime revised on 2026-08-24 by ADR 0017.
 
-The former Codex authentication, credential, thread, and execution consequences
-in this decision are superseded by ADR 0016 and the [approved
-beginner-connection design](../superpowers/specs/2026-08-22-codex-only-beginner-connection-design.md).
-The whole-Tender retention and permanent-purge consequences are revised by ADR
-0013. Its remaining desktop Host, storage, local-tool process-supervision,
-recovery, update, and release-qualification consequences remain accepted.
+The direct-HTTPS ChatGPT and cross-platform provider-worker consequences in this
+decision are superseded by
+[ADR 0017](./0017-run-multiple-ai-connections-through-one-active-configuration.md).
+Layer 1 uses pinned Codex app-server on Windows for account-backed execution and
+a disposable Python worker for general providers. The whole-Tender retention and
+permanent-purge consequences are revised by ADR 0013. The Rust Host, single
+writer, Tender Store, local-tool process-supervision, recovery, update, Windows
+qualification, and layered-release consequences remain accepted.
 
 Quantix v0 is a Tauri 2 desktop application with one React/TypeScript renderer and one genuine Rust Quantix Host in Tauri's Core process. There is no Electron implementation, Node Host sidecar, local web server, runtime selector, or shared shell abstraction. The Rust Host is the only writer for the Engineer User's `~/.quantix` application home and owns domain commands, EITL enforcement, persistence, process supervision, recovery, and updates.
 

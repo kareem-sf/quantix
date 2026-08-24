@@ -1,8 +1,18 @@
 ---
-status: accepted
+status: superseded
+superseded_by: 0017-run-multiple-ai-connections-through-one-active-configuration.md
 ---
 
-# Connect ChatGPT through Quantix-owned OAuth
+# Superseded: Connect ChatGPT through Quantix-owned OAuth
+
+This ADR is superseded in full by
+[ADR 0017](./0017-run-multiple-ai-connections-through-one-active-configuration.md).
+Its Quantix-owned browser/device OAuth validation and refresh implementation
+moves behind `ai::codex_auth` at cutover. Its single-account limit, plaintext
+`auth.json`, recommended model, private ChatGPT backend, and direct HTTPS/SSE
+execution consequences are obsolete and must not remain as compatibility paths.
+
+The text below is retained as historical decision evidence only.
 
 Quantix has exactly one AI connection: the Tendering Engineer's eligible
 ChatGPT account. The trusted Rust Host owns the connection, stores its OAuth
