@@ -834,13 +834,12 @@ fn classify_ipv6(address: Ipv6Addr) -> EndpointHostClass {
     }
     let link_local = (segments[0] & 0xffc0) == 0xfe80;
     let site_local = (segments[0] & 0xffc0) == 0xfec0;
+    let ietf_special = segments[0] == 0x2001 && segments[1] <= 0x01ff;
     let documentation = segments[0] == 0x2001 && segments[1] == 0x0db8;
-    let benchmark = segments[0] == 0x2001 && segments[1] == 0x0002 && segments[2] == 0;
-    let orchid = segments[0] == 0x2001 && matches!(segments[1] & 0xfff0, 0x0010 | 0x0020);
-    let teredo = segments[0] == 0x2001 && segments[1] == 0;
     let discard_only = segments[0] == 0x0100 && segments[1..4] == [0, 0, 0];
     let nat64 = segments[0] == 0x0064 && segments[1] == 0xff9b;
     let six_to_four = segments[0] == 0x2002;
+    let iana_reserved_3f = (segments[0] & 0xff00) == 0x3f00;
     let global_unicast = (segments[0] & 0xe000) == 0x2000;
     if address.is_unspecified()
         || address.is_multicast()
@@ -848,13 +847,12 @@ fn classify_ipv6(address: Ipv6Addr) -> EndpointHostClass {
         || ipv4_compatible
         || link_local
         || site_local
+        || ietf_special
         || documentation
-        || benchmark
-        || orchid
-        || teredo
         || discard_only
         || nat64
         || six_to_four
+        || iana_reserved_3f
         || !global_unicast
     {
         EndpointHostClass::Forbidden
@@ -1635,6 +1633,15 @@ mod tests {
         assert!(public.accepts_destination_class(AiNetworkDestinationClass::Public));
         assert!(!public.accepts_destination_class(AiNetworkDestinationClass::Private));
 
+        for public_ipv6 in [
+            "https://[2001:200::1]/v1",
+            "https://[2606:4700:4700::1111]/v1",
+        ] {
+            let public = configuration(endpoint(public_ipv6));
+            assert!(public.accepts_destination_class(AiNetworkDestinationClass::Public));
+            assert!(!public.accepts_destination_class(AiNetworkDestinationClass::Private));
+        }
+
         let dns = configuration(endpoint("https://models.example/v1"));
         assert!(dns.accepts_destination_class(AiNetworkDestinationClass::Public));
         assert!(dns.accepts_destination_class(AiNetworkDestinationClass::Private));
@@ -1656,7 +1663,12 @@ mod tests {
             "https://[::]/v1",
             "https://[fe80::1]/v1",
             "https://[2001:db8::1]/v1",
+            "https://[2001:5::1]/v1",
             "https://[2002::1]/v1",
+            "https://[3f00::1]/v1",
+            "https://[3ffe::1]/v1",
+            "https://[3fff::1]/v1",
+            "https://[3fff:0fff::1]/v1",
             "https://[ff02::1]/v1",
             "https://[fd00:ec2::254]/v1",
             "https://[::ffff:127.0.0.1]/v1",
