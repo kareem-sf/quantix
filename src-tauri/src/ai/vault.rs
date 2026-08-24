@@ -14,7 +14,7 @@ use std::{
 };
 
 #[cfg(feature = "runtime-fixture")]
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 use fs4::FileExt;
 use serde::{Deserialize, Serialize};
@@ -51,6 +51,7 @@ const MAX_CONNECTIONS: usize = 32;
 const MAX_ACCOUNT_ID_BYTES: usize = 4 * 1024;
 const MAX_CREDENTIAL_BYTES: usize = 16 * 1024;
 const MAX_CUSTOM_VALUE_BYTES: usize = 4 * 1024;
+const MAX_EXPIRY_BYTES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultError {
@@ -60,6 +61,7 @@ pub enum VaultError {
     Invalid,
     RevisionConflict,
     RevisionOverflow,
+    NotFound,
 }
 
 impl fmt::Display for VaultError {
@@ -71,6 +73,7 @@ impl fmt::Display for VaultError {
             Self::Invalid => "AI connection vault mutation is invalid",
             Self::RevisionConflict => "AI connection vault revision conflict",
             Self::RevisionOverflow => "AI connection counter overflow",
+            Self::NotFound => "AI connection was not found",
         })
     }
 }
@@ -179,6 +182,15 @@ impl VaultPayload {
         self.connections.values()
     }
 
+    pub(crate) fn connection(
+        &self,
+        connection_id: &str,
+    ) -> Result<&StoredAiConnection, VaultError> {
+        self.connections
+            .get(connection_id)
+            .ok_or(VaultError::NotFound)
+    }
+
     pub(crate) fn record_probe(
         &mut self,
         evidence: AiProbeEvidence,
@@ -188,7 +200,7 @@ impl VaultPayload {
         let connection = self
             .connections
             .get_mut(evidence.connection_id.as_str())
-            .ok_or(VaultError::Invalid)?;
+            .ok_or(VaultError::NotFound)?;
         connection.record_probe(
             evidence,
             expected_endpoint_fingerprint,
@@ -237,16 +249,12 @@ impl VaultPayload {
         expected_execution_revision: u64,
         expected_credential_generation: u64,
         display_name: String,
-        expected_configuration: &AiConnectionConfiguration,
     ) -> Result<(), VaultError> {
         let connection = self.require_exact_connection_mut(
             connection_id,
             expected_execution_revision,
             expected_credential_generation,
         )?;
-        if &connection.configuration != expected_configuration {
-            return Err(VaultError::Invalid);
-        }
         connection.display_name = display_name;
         Ok(())
     }
@@ -347,13 +355,28 @@ impl VaultPayload {
         let connection = self
             .connections
             .get_mut(connection_id)
-            .ok_or(VaultError::Invalid)?;
+            .ok_or(VaultError::NotFound)?;
         if connection.execution_revision != expected_execution_revision
             || connection.credential_generation != expected_credential_generation
         {
             return Err(VaultError::RevisionConflict);
         }
         Ok(connection)
+    }
+
+    pub(crate) fn require_connection_cas(
+        &self,
+        connection_id: &str,
+        expected_execution_revision: u64,
+        expected_credential_generation: u64,
+    ) -> Result<(), VaultError> {
+        let connection = self.connection(connection_id)?;
+        if connection.execution_revision != expected_execution_revision
+            || connection.credential_generation != expected_credential_generation
+        {
+            return Err(VaultError::RevisionConflict);
+        }
+        Ok(())
     }
 
     fn finish_mutation(&mut self, original_revision: u64) -> Result<(), VaultError> {
@@ -453,7 +476,8 @@ impl StoredAiConnection {
                         .configuration
                         .endpoint_fingerprint()
                         .is_ok_and(|fingerprint| evidence.endpoint_fingerprint == fingerprint)
-                    && !evidence.models.is_empty()
+                    && evidence.validate().is_ok()
+                    && tested_model_matches_configuration(&self.configuration, evidence)
             })
     }
 
@@ -495,12 +519,15 @@ impl StoredAiConnection {
         expected_endpoint_fingerprint: &str,
         expected_adapter_version: &str,
     ) -> Result<(), VaultError> {
+        if evidence.execution_revision.get() != self.execution_revision {
+            return Err(VaultError::RevisionConflict);
+        }
         if evidence.connection_id.as_str() != self.connection_id
-            || evidence.execution_revision.get() != self.execution_revision
             || evidence.provider != self.configuration.provider()
             || evidence.endpoint_fingerprint != expected_endpoint_fingerprint
             || evidence.adapter_version != expected_adapter_version
-            || evidence.models.is_empty()
+            || evidence.validate().is_err()
+            || !tested_model_matches_configuration(&self.configuration, &evidence)
         {
             return Err(VaultError::Invalid);
         }
@@ -522,15 +549,15 @@ impl fmt::Debug for StoredCredential {
 }
 
 impl StoredCredential {
-    pub(crate) fn from_api_key(api_key: String) -> Result<Self, VaultError> {
+    pub(crate) fn from_api_key(api_key: SecretString) -> Result<Self, VaultError> {
         Self::from_values(vec![("api_key".to_owned(), api_key)])
     }
 
     pub(crate) fn from_account(
-        access_token: String,
-        refresh_token: String,
-        expires_at: String,
-        verified_account_id: String,
+        access_token: SecretString,
+        refresh_token: SecretString,
+        expires_at: SecretString,
+        verified_account_id: SecretString,
     ) -> Result<Self, VaultError> {
         Self::from_values(vec![
             ("access_token".to_owned(), access_token),
@@ -541,9 +568,9 @@ impl StoredCredential {
     }
 
     pub(crate) fn from_compatible(
-        api_key: String,
-        header_values: Vec<(String, String)>,
-        query_values: Vec<(String, String)>,
+        api_key: SecretString,
+        header_values: Vec<(String, SecretString)>,
+        query_values: Vec<(String, SecretString)>,
     ) -> Result<Self, VaultError> {
         let mut values = Vec::with_capacity(1 + header_values.len() + query_values.len());
         values.push(("api_key".to_owned(), api_key));
@@ -560,7 +587,7 @@ impl StoredCredential {
         Self::from_values(values)
     }
 
-    fn from_values(values: Vec<(String, String)>) -> Result<Self, VaultError> {
+    fn from_values(values: Vec<(String, SecretString)>) -> Result<Self, VaultError> {
         let credential = Self {
             values: values
                 .into_iter()
@@ -608,7 +635,9 @@ impl StoredCredential {
                     )
                 }) && self.named_value("access_token").is_some()
                     && self.named_value("refresh_token").is_some()
-                    && self.named_value("expires_at").is_some()
+                    && self
+                        .named_value("expires_at")
+                        .is_some_and(|expires_at| expires_at.len() <= MAX_EXPIRY_BYTES)
                     && self.named_value("verified_account_id") == Some(account_id.as_str())
             }
             AiConnectionConfiguration::DirectProviderKey { .. } => {
@@ -678,6 +707,20 @@ fn configuration_account_is_valid(configuration: &AiConnectionConfiguration) -> 
     }
 }
 
+fn tested_model_matches_configuration(
+    configuration: &AiConnectionConfiguration,
+    evidence: &AiProbeEvidence,
+) -> bool {
+    match configuration {
+        AiConnectionConfiguration::OpenAiCompatible { endpoint, .. }
+        | AiConnectionConfiguration::AnthropicCompatible { endpoint, .. } => {
+            evidence.tested_model_id == endpoint.model_id
+        }
+        AiConnectionConfiguration::AccountLogin { .. }
+        | AiConnectionConfiguration::DirectProviderKey { .. } => true,
+    }
+}
+
 #[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
 pub(crate) struct SecretName(pub(crate) String);
@@ -690,12 +733,85 @@ impl fmt::Debug for SecretName {
 
 #[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
-pub(crate) struct SecretValue(pub(crate) String);
+pub(crate) struct SecretValue(pub(crate) SecretString);
 
 impl fmt::Debug for SecretValue {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("SecretValue([REDACTED])")
     }
+}
+
+pub(crate) struct SecretString(Zeroizing<String>);
+
+impl SecretString {
+    pub(crate) fn new(value: String) -> Self {
+        Self(Zeroizing::new(value))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Serialize for SecretString {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(Self::new)
+    }
+}
+
+impl Zeroize for SecretString {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for SecretString {}
+
+impl Drop for SecretString {
+    fn drop(&mut self) {
+        self.zeroize();
+        #[cfg(feature = "runtime-fixture")]
+        SECRET_DROP_OBSERVATIONS.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+impl fmt::Debug for SecretString {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SecretString([REDACTED])")
+    }
+}
+
+#[cfg(feature = "runtime-fixture")]
+static SECRET_DROP_OBSERVATIONS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(feature = "runtime-fixture")]
+pub(crate) fn reset_secret_drop_observations() {
+    SECRET_DROP_OBSERVATIONS.store(0, Ordering::Release);
+}
+
+#[cfg(feature = "runtime-fixture")]
+pub(crate) fn secret_drop_observations() -> usize {
+    SECRET_DROP_OBSERVATIONS.load(Ordering::Acquire)
 }
 
 pub struct AiConnectionVault {
@@ -764,6 +880,22 @@ impl AiConnectionVault {
         payload.finish_mutation(original_revision)?;
         self.publish_locked(&payload)?;
         Ok(payload.secret_free_snapshot())
+    }
+
+    pub(crate) fn mutate_current_project<F, T>(&self, mutation: F) -> Result<T, VaultError>
+    where
+        F: FnOnce(&mut VaultPayload) -> Result<T, VaultError>,
+    {
+        let _process = vault_mutex().lock().map_err(|_| VaultError::Unavailable)?;
+        let lock = self.open_lock()?;
+        FileExt::lock(&lock).map_err(|_| VaultError::Unavailable)?;
+        validate_file_handle(&lock)?;
+        let mut payload = self.load_payload_locked()?;
+        let original_revision = payload.mutation_revision;
+        let projection = mutation(&mut payload)?;
+        payload.finish_mutation(original_revision)?;
+        self.publish_locked(&payload)?;
+        Ok(projection)
     }
 
     #[allow(dead_code)]
@@ -1482,7 +1614,7 @@ fn fixture_connection(
         AiConnectionConfiguration::DirectProviderKey {
             provider: AiProviderKind::OpenAi,
         },
-        StoredCredential::from_api_key(secret.to_string())?,
+        StoredCredential::from_api_key(SecretString::new(secret.to_string()))?,
     )
 }
 

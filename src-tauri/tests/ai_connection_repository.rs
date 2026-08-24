@@ -3,17 +3,19 @@
 use std::{
     io,
     path::{Path, PathBuf},
-    sync::{Arc, Barrier, Mutex},
+    sync::{Arc, Barrier, Mutex, TryLockError},
 };
 
 use quantix_lib::{
     ai::{
         connections::{
+            fixture_reset_secret_drop_observations, fixture_secret_drop_observations,
             AiAdapterVersions, AiConnectionRepository, AiCredentialInput,
             ClearActiveAiConfigurationCommand, CreateAiConnectionCommand,
             DeleteAiConnectionCommand, DisconnectAiConnectionCommand,
-            SameAccountTokenRefreshCommand, SecretNameValueInput, SetActiveAiConfigurationCommand,
-            SetAiConnectionEnabledCommand, UpdateAiConnectionCommand,
+            SameAccountTokenRefreshCommand, SecretInput, SecretNameValueInput,
+            SetActiveAiConfigurationCommand, SetAiConnectionEnabledCommand,
+            UpdateAiConnectionCommand,
         },
         contract::{
             catalogue_sha256, AiCapabilitySet, AiConnectionConfiguration, AiConnectionId,
@@ -26,14 +28,19 @@ use quantix_lib::{
     ensure_quantix_setup, QuantixHost, SetupPlatform, SetupState, StoragePermissions,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
-use rusqlite::{Connection, OptionalExtension, Transaction};
+use rusqlite::{Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
+
+fn secret(value: impl Into<String>) -> SecretInput {
+    SecretInput::new(value)
+}
 
 struct RepositoryFixture {
     _root: tempfile::TempDir,
     application_home: PathBuf,
     repo: Arc<AiConnectionRepository>,
     installation: Arc<Mutex<Connection>>,
+    tender: Arc<Mutex<Connection>>,
 }
 
 struct ReadySetupPlatform;
@@ -73,10 +80,6 @@ impl RepositoryFixture {
                    settings_json TEXT NOT NULL CHECK (json_valid(settings_json)),
                    updated_at TEXT NOT NULL
                  );
-                 CREATE TABLE future_nonterminal_references (
-                   connection_id TEXT NOT NULL,
-                   terminal INTEGER NOT NULL
-                 );
                  INSERT INTO application_settings (singleton, settings_json, updated_at)
                  VALUES (
                    1,
@@ -85,50 +88,70 @@ impl RepositoryFixture {
                  );",
             )
             .unwrap();
+        let tender = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        tender
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE future_nonterminal_references (
+                   connection_id TEXT NOT NULL,
+                   terminal INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+        let checker_installation = Arc::clone(&installation);
+        let checker_tender = Arc::clone(&tender);
         let repo = Arc::new(AiConnectionRepository::new(
             vault,
             Arc::clone(&installation),
-            AiAdapterVersions {
-                codex: "codex-v1".to_owned(),
-                general: "general-v1".to_owned(),
-            },
+            AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
             Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
-            Arc::new(future_nonterminal_reference_check),
+            Arc::new(move |connection_id: &str| {
+                if !matches!(
+                    checker_installation.try_lock(),
+                    Err(TryLockError::WouldBlock)
+                ) {
+                    return Err(quantix_lib::ai::connections::AiConnectionError::StoreUnavailable);
+                }
+                checker_tender
+                    .lock()
+                    .map_err(|_| quantix_lib::ai::connections::AiConnectionError::StoreUnavailable)?
+                    .query_row(
+                        "SELECT 1 FROM future_nonterminal_references
+                         WHERE connection_id = ?1 AND terminal = 0
+                         LIMIT 1",
+                        [connection_id],
+                        |_| Ok(()),
+                    )
+                    .optional()
+                    .map(|row| row.is_some())
+                    .map_err(|_| quantix_lib::ai::connections::AiConnectionError::StoreUnavailable)
+            }),
         ));
         Self {
             _root: root,
             application_home,
             repo,
             installation,
+            tender,
         }
     }
 }
 
-fn future_nonterminal_reference_check(
-    transaction: &Transaction<'_>,
-    connection_id: &str,
+fn no_nonterminal_reference(
+    _connection_id: &str,
 ) -> Result<bool, quantix_lib::ai::connections::AiConnectionError> {
-    transaction
-        .query_row(
-            "SELECT 1 FROM future_nonterminal_references
-             WHERE connection_id = ?1 AND terminal = 0
-             LIMIT 1",
-            [connection_id],
-            |_| Ok(()),
-        )
-        .optional()
-        .map(|row| row.is_some())
-        .map_err(|_| quantix_lib::ai::connections::AiConnectionError::StoreUnavailable)
+    Ok(false)
 }
 
-fn openai_key_command(secret: &str) -> CreateAiConnectionCommand {
+fn openai_key_command(secret_value: &str) -> CreateAiConnectionCommand {
     CreateAiConnectionCommand {
         display_name: "Engineering OpenAI".to_owned(),
         configuration: AiConnectionConfiguration::DirectProviderKey {
             provider: AiProviderKind::OpenAi,
         },
         credential: AiCredentialInput::ApiKey {
-            api_key: secret.to_owned(),
+            api_key: secret(secret_value),
             custom_header_values: Vec::new(),
             custom_query_values: Vec::new(),
         },
@@ -168,6 +191,10 @@ fn current_probe(
                 description: "Bounded low reasoning".to_owned(),
             }],
         }],
+        tested_model_id: model_id.to_owned(),
+        tested_reasoning: AiReasoningSelection::Effort {
+            id: reasoning_id.to_owned(),
+        },
         observed_at: "2026-08-24T12:10:00Z".to_owned(),
     }
 }
@@ -180,8 +207,8 @@ fn codex_account_command(access_token: &str, refresh_token: &str) -> CreateAiCon
             account_id: "account-123".to_owned(),
         },
         credential: AiCredentialInput::Account {
-            access_token: access_token.to_owned(),
-            refresh_token: Some(refresh_token.to_owned()),
+            access_token: secret(access_token),
+            refresh_token: Some(secret(refresh_token)),
             expires_at: "2026-08-24T13:00:00Z".to_owned(),
             verified_account_id: "account-123".to_owned(),
         },
@@ -271,8 +298,8 @@ fn semantic_revision_and_credential_generation_are_independent() {
                     verified_account_id: "different-account".to_owned(),
                 },
                 AiCredentialInput::Account {
-                    access_token: "wrong-access".to_owned(),
-                    refresh_token: Some("wrong-refresh".to_owned()),
+                    access_token: secret("wrong-access"),
+                    refresh_token: Some(secret("wrong-refresh")),
                     expires_at: "2026-08-24T14:00:00Z".to_owned(),
                     verified_account_id: "different-account".to_owned(),
                 },
@@ -298,8 +325,8 @@ fn semantic_revision_and_credential_generation_are_independent() {
                 verified_account_id: "account-123".to_owned(),
             },
             AiCredentialInput::Account {
-                access_token: "access-B".to_owned(),
-                refresh_token: Some("refresh-B".to_owned()),
+                access_token: secret("access-B"),
+                refresh_token: Some(secret("refresh-B")),
                 expires_at: "2026-08-24T14:00:00Z".to_owned(),
                 verified_account_id: "account-123".to_owned(),
             },
@@ -329,13 +356,13 @@ fn semantic_revision_and_credential_generation_are_independent() {
             expected_execution_revision: rotated.execution_revision,
             expected_credential_generation: rotated.credential_generation,
             display_name: "Quantix Codex".to_owned(),
-            configuration: AiConnectionConfiguration::AccountLogin {
+            configuration: Some(AiConnectionConfiguration::AccountLogin {
                 provider: AiProviderKind::Codex,
                 account_id: "account-456".to_owned(),
-            },
+            }),
             replacement_credential: Some(AiCredentialInput::Account {
-                access_token: "reauth-access".to_owned(),
-                refresh_token: Some("reauth-refresh".to_owned()),
+                access_token: secret("reauth-access"),
+                refresh_token: Some(secret("reauth-refresh")),
                 expires_at: "2026-08-24T15:00:00Z".to_owned(),
                 verified_account_id: "account-456".to_owned(),
             }),
@@ -383,11 +410,11 @@ fn semantic_revision_and_credential_generation_are_independent() {
             expected_execution_revision: openai_before.execution_revision,
             expected_credential_generation: openai_before.credential_generation,
             display_name: "Engineering OpenAI".to_owned(),
-            configuration: AiConnectionConfiguration::DirectProviderKey {
+            configuration: Some(AiConnectionConfiguration::DirectProviderKey {
                 provider: AiProviderKind::OpenAi,
-            },
+            }),
             replacement_credential: Some(AiCredentialInput::ApiKey {
-                api_key: "sk-after".to_owned(),
+                api_key: secret("sk-after"),
                 custom_header_values: Vec::new(),
                 custom_query_values: Vec::new(),
             }),
@@ -481,11 +508,11 @@ fn activation_persists_only_an_exact_explicit_configuration() {
             expected_execution_revision: state.execution_revision,
             expected_credential_generation: state.credential_generation,
             display_name: "Engineering OpenAI".to_owned(),
-            configuration: AiConnectionConfiguration::DirectProviderKey {
+            configuration: Some(AiConnectionConfiguration::DirectProviderKey {
                 provider: AiProviderKind::OpenAi,
-            },
+            }),
             replacement_credential: Some(AiCredentialInput::ApiKey {
-                api_key: "sk-replaced".to_owned(),
+                api_key: secret("sk-replaced"),
                 custom_header_values: Vec::new(),
                 custom_query_values: Vec::new(),
             }),
@@ -539,9 +566,7 @@ fn name_enable_disconnect_and_clear_preserve_their_exact_dimensions() {
             expected_execution_revision: initial.execution_revision,
             expected_credential_generation: initial.credential_generation,
             display_name: "Renamed OpenAI".to_owned(),
-            configuration: AiConnectionConfiguration::DirectProviderKey {
-                provider: AiProviderKind::OpenAi,
-            },
+            configuration: None,
             replacement_credential: None,
         })
         .unwrap();
@@ -660,6 +685,17 @@ fn delete_rejects_active_and_nonterminal_references() {
     assert_eq!(
         fixture
             .repo
+            .delete_connection(DeleteAiConnectionCommand {
+                connection_id: connection.connection_id.clone(),
+                expected_execution_revision: state.execution_revision + 1,
+                expected_credential_generation: state.credential_generation,
+            })
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::Conflict
+    );
+    assert_eq!(
+        fixture
+            .repo
             .delete_connection(delete_command())
             .unwrap_err(),
         quantix_lib::ai::connections::AiConnectionError::ActiveConnection
@@ -670,7 +706,7 @@ fn delete_rejects_active_and_nonterminal_references() {
         .clear_active(ClearActiveAiConfigurationCommand {})
         .unwrap();
     fixture
-        .installation
+        .tender
         .lock()
         .unwrap()
         .execute(
@@ -688,13 +724,128 @@ fn delete_rejects_active_and_nonterminal_references() {
     );
 
     fixture
-        .installation
+        .tender
         .lock()
         .unwrap()
         .execute("UPDATE future_nonterminal_references SET terminal = 1", [])
         .unwrap();
     fixture.repo.delete_connection(delete_command()).unwrap();
     assert!(fixture.repo.inspect().unwrap().connections.is_empty());
+}
+
+#[test]
+fn missing_targets_and_checker_failures_are_precise_and_nonpublishing() {
+    let fixture = RepositoryFixture::new();
+    let missing_id = "ffffffffffffffffffffffffffffffff";
+    let missing_probe = current_probe(missing_id, 1, "missing-model", "low");
+    assert_eq!(
+        fixture.repo.record_probe(missing_probe).unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::NotFound
+    );
+    assert_eq!(
+        fixture
+            .repo
+            .delete_connection(DeleteAiConnectionCommand {
+                connection_id: missing_id.to_owned(),
+                expected_execution_revision: 1,
+                expected_credential_generation: 1,
+            })
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::NotFound
+    );
+
+    let connection = fixture
+        .repo
+        .create_connection(openai_key_command("checker-error"))
+        .unwrap();
+    let failing_repo = AiConnectionRepository::new(
+        AiConnectionVault::new(&fixture.application_home).unwrap(),
+        Arc::clone(&fixture.installation),
+        AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
+        Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
+        Arc::new(|_| Err(quantix_lib::ai::connections::AiConnectionError::StoreUnavailable)),
+    );
+    assert_eq!(
+        failing_repo
+            .delete_connection(DeleteAiConnectionCommand {
+                connection_id: connection.connection_id.clone(),
+                expected_execution_revision: connection.execution_revision,
+                expected_credential_generation: connection.credential_generation,
+            })
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreUnavailable
+    );
+    assert_eq!(fixture.repo.inspect().unwrap().connections.len(), 1);
+}
+
+#[test]
+fn competing_run_insertion_is_observed_under_installation_then_tender_order() {
+    let fixture = RepositoryFixture::new();
+    let connection = fixture
+        .repo
+        .create_connection(openai_key_command("ordered-delete"))
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let insertion_barrier = Arc::clone(&barrier);
+    let insertion_tender = Arc::clone(&fixture.tender);
+    let inserted_connection_id = connection.connection_id.clone();
+    let inserter = std::thread::spawn(move || {
+        insertion_barrier.wait();
+        insertion_tender
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO future_nonterminal_references (connection_id, terminal)
+                 VALUES (?1, 0)",
+                [&inserted_connection_id],
+            )
+            .unwrap();
+        insertion_barrier.wait();
+    });
+
+    let checker_installation = Arc::clone(&fixture.installation);
+    let checker_tender = Arc::clone(&fixture.tender);
+    let checker_barrier = Arc::clone(&barrier);
+    let ordered_repo = AiConnectionRepository::new(
+        AiConnectionVault::new(&fixture.application_home).unwrap(),
+        Arc::clone(&fixture.installation),
+        AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
+        Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
+        Arc::new(move |connection_id: &str| {
+            if !matches!(
+                checker_installation.try_lock(),
+                Err(TryLockError::WouldBlock)
+            ) {
+                return Err(quantix_lib::ai::connections::AiConnectionError::StoreUnavailable);
+            }
+            checker_barrier.wait();
+            checker_barrier.wait();
+            checker_tender
+                .lock()
+                .map_err(|_| quantix_lib::ai::connections::AiConnectionError::StoreUnavailable)?
+                .query_row(
+                    "SELECT 1 FROM future_nonterminal_references
+                     WHERE connection_id = ?1 AND terminal = 0 LIMIT 1",
+                    [connection_id],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map(|row| row.is_some())
+                .map_err(|_| quantix_lib::ai::connections::AiConnectionError::StoreUnavailable)
+        }),
+    );
+    assert_eq!(
+        ordered_repo
+            .delete_connection(DeleteAiConnectionCommand {
+                connection_id: connection.connection_id.clone(),
+                expected_execution_revision: connection.execution_revision,
+                expected_credential_generation: connection.credential_generation,
+            })
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::ReferencedByNonterminalRun
+    );
+    inserter.join().unwrap();
+    assert_eq!(fixture.repo.inspect().unwrap().connections.len(), 1);
 }
 
 #[test]
@@ -753,12 +904,9 @@ fn readiness_fails_closed_for_destination_adapter_and_catalogue_drift() {
     let drifted_adapter_repo = AiConnectionRepository::new(
         AiConnectionVault::new(&adapter_fixture.application_home).unwrap(),
         Arc::clone(&adapter_fixture.installation),
-        AiAdapterVersions {
-            codex: "codex-v1".to_owned(),
-            general: "general-v2".to_owned(),
-        },
+        AiAdapterVersions::new("codex-v1", "general-v2").unwrap(),
         Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
-        Arc::new(future_nonterminal_reference_check),
+        Arc::new(no_nonterminal_reference),
     );
     assert_eq!(
         drifted_adapter_repo.inspect().unwrap().readiness,
@@ -786,6 +934,28 @@ fn ready_active_openai(
     fixture: &RepositoryFixture,
     suffix: &str,
 ) -> (quantix_lib::ai::contract::AiConnectionView, AiProbeEvidence) {
+    let (connection, evidence) = ready_unactivated_openai(fixture, suffix);
+    fixture
+        .repo
+        .activate(SetActiveAiConfigurationCommand {
+            connection_id: connection.connection_id.clone(),
+            expected_execution_revision: connection.execution_revision,
+            provider: connection.provider,
+            endpoint_fingerprint: connection.endpoint_fingerprint.clone(),
+            model_id: connection.tested_model_id.clone().unwrap(),
+            reasoning: connection.tested_reasoning.clone().unwrap(),
+            adapter_version: connection.adapter_version.clone().unwrap(),
+            catalogue_sha256: connection.catalogue_sha256.clone().unwrap(),
+            confirmed_data_destination: connection.data_destination.clone(),
+        })
+        .unwrap();
+    (connection, evidence)
+}
+
+fn ready_unactivated_openai(
+    fixture: &RepositoryFixture,
+    suffix: &str,
+) -> (quantix_lib::ai::contract::AiConnectionView, AiProbeEvidence) {
     let connection = fixture
         .repo
         .create_connection(openai_key_command(&format!("sk-{suffix}")))
@@ -796,31 +966,15 @@ fn ready_active_openai(
         &format!("gpt-{suffix}"),
         "low",
     );
-    fixture.repo.record_probe(evidence.clone()).unwrap();
-    fixture
-        .repo
-        .activate(SetActiveAiConfigurationCommand {
-            connection_id: connection.connection_id.clone(),
-            expected_execution_revision: connection.execution_revision,
-            provider: AiProviderKind::OpenAi,
-            endpoint_fingerprint: hex_sha256("https://api.openai.com"),
-            model_id: format!("gpt-{suffix}"),
-            reasoning: AiReasoningSelection::Effort {
-                id: "low".to_owned(),
-            },
-            adapter_version: "general-v1".to_owned(),
-            catalogue_sha256: catalogue_sha256(&evidence).unwrap(),
-            confirmed_data_destination: "https://api.openai.com".to_owned(),
-        })
-        .unwrap();
-    (connection, evidence)
+    let tested = fixture.repo.record_probe(evidence.clone()).unwrap();
+    (tested, evidence)
 }
 
 #[test]
 fn all_seven_routes_are_saved_without_secret_projection() {
     let fixture = RepositoryFixture::new();
     let mut commands = vec![codex_account_command("route-access", "route-refresh")];
-    for (name, provider, secret) in [
+    for (name, provider, secret_value) in [
         ("OpenAI", AiProviderKind::OpenAi, "openai-route-secret"),
         (
             "Anthropic",
@@ -838,7 +992,7 @@ fn all_seven_routes_are_saved_without_secret_projection() {
             display_name: name.to_owned(),
             configuration: AiConnectionConfiguration::DirectProviderKey { provider },
             credential: AiCredentialInput::ApiKey {
-                api_key: secret.to_owned(),
+                api_key: secret(secret_value),
                 custom_header_values: Vec::new(),
                 custom_query_values: Vec::new(),
             },
@@ -880,14 +1034,14 @@ fn all_seven_routes_are_saved_without_secret_projection() {
             display_name: name.to_owned(),
             configuration,
             credential: AiCredentialInput::ApiKey {
-                api_key: "compatible-route-secret".to_owned(),
+                api_key: secret("compatible-route-secret"),
                 custom_header_values: vec![SecretNameValueInput {
                     name: if name.starts_with("OpenAI") {
                         "x-tenant".to_owned()
                     } else {
                         "x-workspace".to_owned()
                     },
-                    value: "header-route-secret".to_owned(),
+                    value: secret("header-route-secret"),
                 }],
                 custom_query_values: vec![SecretNameValueInput {
                     name: if name.starts_with("OpenAI") {
@@ -895,7 +1049,7 @@ fn all_seven_routes_are_saved_without_secret_projection() {
                     } else {
                         "revision".to_owned()
                     },
-                    value: "query-route-secret".to_owned(),
+                    value: secret("query-route-secret"),
                 }],
             },
         });
@@ -945,7 +1099,7 @@ fn fixed_connection_and_secret_bounds_are_enforced() {
                     provider: AiProviderKind::OpenAi,
                 },
                 credential: AiCredentialInput::ApiKey {
-                    api_key: format!("secret-{index}"),
+                    api_key: secret(format!("secret-{index}")),
                     custom_header_values: Vec::new(),
                     custom_query_values: Vec::new(),
                 },
@@ -972,8 +1126,8 @@ fn fixed_connection_and_secret_bounds_are_enforced() {
                     account_id: oversized_account.clone(),
                 },
                 credential: AiCredentialInput::Account {
-                    access_token: "access".to_owned(),
-                    refresh_token: Some("refresh".to_owned()),
+                    access_token: secret("access"),
+                    refresh_token: Some(secret("refresh")),
                     expires_at: "2026-08-24T13:00:00Z".to_owned(),
                     verified_account_id: oversized_account,
                 },
@@ -1000,10 +1154,10 @@ fn fixed_connection_and_secret_bounds_are_enforced() {
                     .unwrap(),
                 },
                 credential: AiCredentialInput::ApiKey {
-                    api_key: "key".to_owned(),
+                    api_key: secret("key"),
                     custom_header_values: vec![SecretNameValueInput {
                         name: "x-tenant".to_owned(),
-                        value: "v".repeat(4_097),
+                        value: secret("v".repeat(4_097)),
                     }],
                     custom_query_values: Vec::new(),
                 },
@@ -1055,22 +1209,35 @@ fn probe_and_activation_require_exact_nonrerouted_evidence() {
 
     let mut rerouted = exact.clone();
     rerouted.models[0].reported_model_id = Some("provider-reroute".to_owned());
-    fixture.repo.record_probe(rerouted.clone()).unwrap();
-    let rerouted_command = SetActiveAiConfigurationCommand {
+    assert_eq!(
+        fixture.repo.record_probe(rerouted).unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::InvalidCommand
+    );
+
+    let mut with_sibling = exact.clone();
+    let mut sibling = with_sibling.models[0].clone();
+    sibling.model_id = "gpt-sibling".to_owned();
+    sibling.reported_model_id = Some("gpt-sibling".to_owned());
+    sibling.reasoning_options[0].selection = AiReasoningSelection::Effort {
+        id: "high".to_owned(),
+    };
+    with_sibling.models.push(sibling);
+    fixture.repo.record_probe(with_sibling.clone()).unwrap();
+    let sibling_command = SetActiveAiConfigurationCommand {
         connection_id: connection.connection_id.clone(),
         expected_execution_revision: connection.execution_revision,
         provider: AiProviderKind::OpenAi,
         endpoint_fingerprint: hex_sha256("https://api.openai.com"),
-        model_id: "gpt-exact".to_owned(),
+        model_id: "gpt-sibling".to_owned(),
         reasoning: AiReasoningSelection::Effort {
-            id: "low".to_owned(),
+            id: "high".to_owned(),
         },
         adapter_version: "general-v1".to_owned(),
-        catalogue_sha256: catalogue_sha256(&rerouted).unwrap(),
+        catalogue_sha256: catalogue_sha256(&with_sibling).unwrap(),
         confirmed_data_destination: "https://api.openai.com".to_owned(),
     };
     assert_eq!(
-        fixture.repo.activate(rerouted_command).unwrap_err(),
+        fixture.repo.activate(sibling_command).unwrap_err(),
         quantix_lib::ai::connections::AiConnectionError::CapabilityChanged
     );
 
@@ -1121,6 +1288,46 @@ fn probe_and_activation_require_exact_nonrerouted_evidence() {
 }
 
 #[test]
+fn compatible_probe_must_test_the_configured_explicit_model() {
+    let fixture = RepositoryFixture::new();
+    let endpoint = CompatibleEndpointConfiguration::parse(
+        "https://compatible-model.example/v1",
+        CompatibleCredentialKind::Bearer,
+        Vec::new(),
+        Vec::new(),
+        "configured-model",
+    )
+    .unwrap();
+    let connection = fixture
+        .repo
+        .create_connection(CreateAiConnectionCommand {
+            display_name: "Compatible model".to_owned(),
+            configuration: AiConnectionConfiguration::OpenAiCompatible {
+                provider: AiProviderKind::OpenAiCompatible,
+                endpoint: endpoint.clone(),
+            },
+            credential: AiCredentialInput::ApiKey {
+                api_key: secret("compatible-secret"),
+                custom_header_values: Vec::new(),
+                custom_query_values: Vec::new(),
+            },
+        })
+        .unwrap();
+    let mut wrong = current_probe(
+        &connection.connection_id,
+        connection.execution_revision,
+        "different-model",
+        "low",
+    );
+    wrong.provider = AiProviderKind::OpenAiCompatible;
+    wrong.endpoint_fingerprint = hex_sha256(&endpoint.base_url);
+    assert_eq!(
+        fixture.repo.record_probe(wrong).unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::InvalidCommand
+    );
+}
+
+#[test]
 fn stale_cas_and_counter_overflow_never_publish() {
     let fixture = RepositoryFixture::new();
     let connection = fixture
@@ -1136,9 +1343,9 @@ fn stale_cas_and_counter_overflow_never_publish() {
         expected_execution_revision: state.execution_revision,
         expected_credential_generation: state.credential_generation,
         display_name: name.to_owned(),
-        configuration: AiConnectionConfiguration::DirectProviderKey {
+        configuration: Some(AiConnectionConfiguration::DirectProviderKey {
             provider: AiProviderKind::Anthropic,
-        },
+        }),
         replacement_credential: None,
     };
     fixture
@@ -1156,6 +1363,18 @@ fn stale_cas_and_counter_overflow_never_publish() {
         fixture.repo.inspect().unwrap().connections[0].display_name,
         "First material update"
     );
+    let mut stale_probe = current_probe(
+        &connection.connection_id,
+        state.execution_revision,
+        "stale-model",
+        "low",
+    );
+    stale_probe.provider = AiProviderKind::Anthropic;
+    stale_probe.endpoint_fingerprint = hex_sha256("https://api.anthropic.com");
+    assert_eq!(
+        fixture.repo.record_probe(stale_probe).unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::Conflict
+    );
 
     let vault = AiConnectionVault::new(&fixture.application_home).unwrap();
     vault
@@ -1169,9 +1388,9 @@ fn stale_cas_and_counter_overflow_never_publish() {
                 expected_execution_revision: u64::MAX,
                 expected_credential_generation: 1,
                 display_name: "Overflow rejected".to_owned(),
-                configuration: AiConnectionConfiguration::DirectProviderKey {
+                configuration: Some(AiConnectionConfiguration::DirectProviderKey {
                     provider: AiProviderKind::OpenAi,
-                },
+                }),
                 replacement_credential: None,
             })
             .unwrap_err(),
@@ -1204,8 +1423,8 @@ fn stale_cas_and_counter_overflow_never_publish() {
                     verified_account_id: "account-123".to_owned(),
                 },
                 AiCredentialInput::Account {
-                    access_token: "rotated-access".to_owned(),
-                    refresh_token: Some("rotated-refresh".to_owned()),
+                    access_token: secret("rotated-access"),
+                    refresh_token: Some(secret("rotated-refresh")),
                     expires_at: "2026-08-24T15:00:00Z".to_owned(),
                     verified_account_id: "account-123".to_owned(),
                 }
@@ -1231,7 +1450,7 @@ fn account_credentials_require_refresh_and_are_always_redacted() {
             account_id: "account-refresh".to_owned(),
         },
         credential: AiCredentialInput::Account {
-            access_token: "access-secret-sentinel".to_owned(),
+            access_token: secret("access-secret-sentinel"),
             refresh_token: None,
             expires_at: "2026-08-24T13:00:00Z".to_owned(),
             verified_account_id: "account-refresh".to_owned(),
@@ -1251,8 +1470,8 @@ fn account_credentials_require_refresh_and_are_always_redacted() {
             account_id: "account-refresh".to_owned(),
         },
         credential: AiCredentialInput::Account {
-            access_token: "access-secret-sentinel".to_owned(),
-            refresh_token: Some(String::new()),
+            access_token: secret("access-secret-sentinel"),
+            refresh_token: Some(secret(String::new())),
             expires_at: "2026-08-24T13:00:00Z".to_owned(),
             verified_account_id: "account-refresh".to_owned(),
         },
@@ -1278,12 +1497,9 @@ fn concurrent_repository_handles_serialize_material_cas() {
     let second_repo = Arc::new(AiConnectionRepository::new(
         AiConnectionVault::new(&fixture.application_home).unwrap(),
         Arc::clone(&fixture.installation),
-        AiAdapterVersions {
-            codex: "codex-v1".to_owned(),
-            general: "general-v1".to_owned(),
-        },
+        AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
         Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
-        Arc::new(future_nonterminal_reference_check),
+        Arc::new(no_nonterminal_reference),
     ));
     let barrier = Arc::new(Barrier::new(3));
     let mut workers = Vec::new();
@@ -1304,7 +1520,7 @@ fn concurrent_repository_handles_serialize_material_cas() {
                 expected_execution_revision: state.execution_revision,
                 expected_credential_generation: state.credential_generation,
                 display_name: name.to_owned(),
-                configuration: AiConnectionConfiguration::DirectProviderKey { provider },
+                configuration: Some(AiConnectionConfiguration::DirectProviderKey { provider }),
                 replacement_credential: None,
             })
         }));
@@ -1385,6 +1601,238 @@ fn sqlite_immediate_failure_preserves_the_prior_active_reference() {
 }
 
 #[test]
+fn prior_active_clear_delete_and_disconnect_failures_preserve_state() {
+    let fixture = RepositoryFixture::new();
+    let (prior, _) = ready_active_openai(&fixture, "prior-active");
+    let (replacement, replacement_evidence) = ready_unactivated_openai(&fixture, "replacement");
+    fixture
+        .installation
+        .lock()
+        .unwrap()
+        .execute_batch("BEGIN IMMEDIATE")
+        .unwrap();
+    assert_eq!(
+        fixture
+            .repo
+            .activate(SetActiveAiConfigurationCommand {
+                connection_id: replacement.connection_id,
+                expected_execution_revision: replacement.execution_revision,
+                provider: replacement.provider,
+                endpoint_fingerprint: replacement.endpoint_fingerprint,
+                model_id: replacement.tested_model_id.unwrap(),
+                reasoning: replacement.tested_reasoning.unwrap(),
+                adapter_version: replacement.adapter_version.unwrap(),
+                catalogue_sha256: catalogue_sha256(&replacement_evidence).unwrap(),
+                confirmed_data_destination: replacement.data_destination,
+            })
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreUnavailable
+    );
+    fixture
+        .installation
+        .lock()
+        .unwrap()
+        .execute_batch("ROLLBACK")
+        .unwrap();
+    assert_eq!(
+        fixture
+            .repo
+            .inspect()
+            .unwrap()
+            .active_configuration
+            .unwrap()
+            .connection_id,
+        prior.connection_id
+    );
+
+    fixture
+        .installation
+        .lock()
+        .unwrap()
+        .execute_batch("BEGIN IMMEDIATE")
+        .unwrap();
+    assert_eq!(
+        fixture
+            .repo
+            .clear_active(ClearActiveAiConfigurationCommand {})
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreUnavailable
+    );
+    fixture
+        .installation
+        .lock()
+        .unwrap()
+        .execute_batch("ROLLBACK")
+        .unwrap();
+    assert!(fixture
+        .repo
+        .inspect()
+        .unwrap()
+        .active_configuration
+        .is_some());
+
+    let delete_fixture = RepositoryFixture::new();
+    let deleting = delete_fixture
+        .repo
+        .create_connection(openai_key_command("delete-rollback"))
+        .unwrap();
+    delete_fixture
+        .installation
+        .lock()
+        .unwrap()
+        .execute_batch("BEGIN IMMEDIATE")
+        .unwrap();
+    assert_eq!(
+        delete_fixture
+            .repo
+            .delete_connection(DeleteAiConnectionCommand {
+                connection_id: deleting.connection_id.clone(),
+                expected_execution_revision: deleting.execution_revision,
+                expected_credential_generation: deleting.credential_generation,
+            })
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreUnavailable
+    );
+    delete_fixture
+        .installation
+        .lock()
+        .unwrap()
+        .execute_batch("ROLLBACK")
+        .unwrap();
+    assert_eq!(delete_fixture.repo.inspect().unwrap().connections.len(), 1);
+
+    AiConnectionVault::new(&delete_fixture.application_home)
+        .unwrap()
+        .fixture_set_connection_counters(&deleting.connection_id, 1, u64::MAX)
+        .unwrap();
+    assert_eq!(
+        delete_fixture
+            .repo
+            .disconnect(DisconnectAiConnectionCommand {
+                connection_id: deleting.connection_id.clone(),
+                expected_execution_revision: 1,
+                expected_credential_generation: u64::MAX,
+            })
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::RevisionOverflow
+    );
+    assert!(delete_fixture.repo.inspect().unwrap().connections[0].secret_configured);
+}
+
+#[test]
+fn settings_writes_preserve_preferences_and_return_exact_snapshots() {
+    let fixture = RepositoryFixture::new();
+    fixture
+        .installation
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE application_settings
+             SET settings_json = '{\"general_preferences\":{\"appearance\":\"dark\",\"reduced_motion\":true,\"larger_text\":true,\"notify_when_attention_needed\":true},\"active_ai_configuration\":null}'
+             WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
+    ready_active_openai(&fixture, "preferences");
+    let after_activation: serde_json::Value = serde_json::from_str(
+        &fixture
+            .installation
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT settings_json FROM application_settings WHERE singleton = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        after_activation["general_preferences"]["appearance"],
+        "dark"
+    );
+    assert_eq!(
+        after_activation["general_preferences"]["reduced_motion"],
+        true
+    );
+    fixture
+        .repo
+        .clear_active(ClearActiveAiConfigurationCommand {})
+        .unwrap();
+    let after_clear: serde_json::Value = serde_json::from_str(
+        &fixture
+            .installation
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT settings_json FROM application_settings WHERE singleton = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        after_clear["general_preferences"],
+        after_activation["general_preferences"]
+    );
+
+    let response_fixture = RepositoryFixture::new();
+    let created = response_fixture
+        .repo
+        .create_connection(openai_key_command("exact-response"))
+        .unwrap();
+    let competing_repo = AiConnectionRepository::new(
+        AiConnectionVault::new(&response_fixture.application_home).unwrap(),
+        Arc::clone(&response_fixture.installation),
+        AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
+        Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
+        Arc::new(no_nonterminal_reference),
+    );
+    competing_repo
+        .replace_connection_configuration(UpdateAiConnectionCommand {
+            connection_id: created.connection_id.clone(),
+            expected_execution_revision: created.execution_revision,
+            expected_credential_generation: created.credential_generation,
+            display_name: "Competing mutation".to_owned(),
+            configuration: Some(AiConnectionConfiguration::DirectProviderKey {
+                provider: AiProviderKind::Anthropic,
+            }),
+            replacement_credential: None,
+        })
+        .unwrap();
+    assert_eq!(created.provider, AiProviderKind::OpenAi);
+    assert_eq!(
+        response_fixture.repo.inspect().unwrap().connections[0].provider,
+        AiProviderKind::Anthropic
+    );
+
+    let clear_fixture = RepositoryFixture::new();
+    ready_active_openai(&clear_fixture, "clear-snapshot");
+    clear_fixture
+        .installation
+        .lock()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER corrupt_after_clear
+             AFTER UPDATE ON application_settings
+             BEGIN
+               UPDATE application_settings SET settings_json = '{}' WHERE singleton = 1;
+             END;",
+        )
+        .unwrap();
+    let cleared = clear_fixture
+        .repo
+        .clear_active(ClearActiveAiConfigurationCommand {})
+        .unwrap();
+    assert!(cleared.active_configuration.is_none());
+    assert_eq!(
+        cleared.readiness,
+        quantix_lib::ai::contract::ActiveAiReadiness::NotConfigured
+    );
+}
+
+#[test]
 fn views_sort_by_normalized_name_then_connection_id() {
     let fixture = RepositoryFixture::new();
     for name in ["é", "Alpha", "e\u{301}"] {
@@ -1396,7 +1844,7 @@ fn views_sort_by_normalized_name_then_connection_id() {
                     provider: AiProviderKind::OpenAi,
                 },
                 credential: AiCredentialInput::ApiKey {
-                    api_key: format!("secret-{name}"),
+                    api_key: secret(format!("secret-{name}")),
                     custom_header_values: Vec::new(),
                     custom_query_values: Vec::new(),
                 },
@@ -1451,6 +1899,176 @@ fn public_results_errors_and_settings_have_no_secret_or_default_surface() {
             );
         }
     }
+}
+
+#[test]
+fn public_view_round_trip_reaches_every_final_command() {
+    let fixture = RepositoryFixture::new();
+    ready_active_openai(&fixture, "public-command");
+    let serialized = serde_json::to_string(&fixture.repo.inspect().unwrap()).unwrap();
+    let round_trip: quantix_lib::ai::connections::ApplicationAiSettingsView =
+        serde_json::from_str(&serialized).unwrap();
+    let connection = &round_trip.connections[0];
+    assert_eq!(connection.credential_generation, 1);
+    assert_eq!(connection.data_destination, "https://api.openai.com");
+    assert_eq!(
+        connection.endpoint_fingerprint,
+        hex_sha256("https://api.openai.com")
+    );
+    assert!(connection.adapter_version.is_some());
+    assert!(connection.catalogue_sha256.is_some());
+    assert!(connection.tested_model_id.is_some());
+    assert!(connection.tested_reasoning.is_some());
+
+    let rename: UpdateAiConnectionCommand = serde_json::from_value(serde_json::json!({
+        "connection_id": connection.connection_id,
+        "expected_execution_revision": connection.execution_revision,
+        "expected_credential_generation": connection.credential_generation,
+        "display_name": "Renamed from public view",
+        "configuration": null,
+        "replacement_credential": null
+    }))
+    .unwrap();
+    let update: UpdateAiConnectionCommand = serde_json::from_value(serde_json::json!({
+        "connection_id": connection.connection_id,
+        "expected_execution_revision": connection.execution_revision,
+        "expected_credential_generation": connection.credential_generation,
+        "display_name": connection.display_name,
+        "configuration": connection.configuration,
+        "replacement_credential": {
+            "kind": "api_key",
+            "api_key": "newly-typed-secret",
+            "custom_header_values": [],
+            "custom_query_values": []
+        }
+    }))
+    .unwrap();
+    let enabled: SetAiConnectionEnabledCommand = serde_json::from_value(serde_json::json!({
+        "connection_id": connection.connection_id,
+        "expected_execution_revision": connection.execution_revision,
+        "expected_credential_generation": connection.credential_generation,
+        "enabled": false
+    }))
+    .unwrap();
+    let disconnect: DisconnectAiConnectionCommand = serde_json::from_value(serde_json::json!({
+        "connection_id": connection.connection_id,
+        "expected_execution_revision": connection.execution_revision,
+        "expected_credential_generation": connection.credential_generation
+    }))
+    .unwrap();
+    let delete: DeleteAiConnectionCommand = serde_json::from_value(serde_json::json!({
+        "connection_id": connection.connection_id,
+        "expected_execution_revision": connection.execution_revision,
+        "expected_credential_generation": connection.credential_generation
+    }))
+    .unwrap();
+    let activate: SetActiveAiConfigurationCommand = serde_json::from_value(serde_json::json!({
+        "connection_id": connection.connection_id,
+        "expected_execution_revision": connection.execution_revision,
+        "provider": connection.provider,
+        "endpoint_fingerprint": connection.endpoint_fingerprint,
+        "model_id": connection.tested_model_id,
+        "reasoning": connection.tested_reasoning,
+        "adapter_version": connection.adapter_version,
+        "catalogue_sha256": connection.catalogue_sha256,
+        "confirmed_data_destination": connection.data_destination
+    }))
+    .unwrap();
+    drop((rename, update, enabled, disconnect, delete, activate));
+}
+
+#[test]
+fn vault_only_mutations_ignore_unavailable_installation_projection() {
+    let fixture = RepositoryFixture::new();
+    fixture
+        .installation
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE application_settings SET settings_json = '{}' WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
+
+    let created = fixture
+        .repo
+        .create_connection(openai_key_command("projection-secret"))
+        .unwrap();
+    assert_eq!(created.execution_revision, 1);
+    assert_eq!(created.credential_generation, 1);
+    let renamed = fixture
+        .repo
+        .rename_connection(UpdateAiConnectionCommand {
+            connection_id: created.connection_id.clone(),
+            expected_execution_revision: created.execution_revision,
+            expected_credential_generation: created.credential_generation,
+            display_name: "Projection-safe rename".to_owned(),
+            configuration: None,
+            replacement_credential: None,
+        })
+        .unwrap();
+    assert_eq!(renamed.display_name, "Projection-safe rename");
+
+    fixture
+        .installation
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE application_settings
+             SET settings_json = '{\"general_preferences\":{\"appearance\":\"system\",\"reduced_motion\":false,\"larger_text\":false,\"notify_when_attention_needed\":false},\"active_ai_configuration\":null}'
+             WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
+    assert_eq!(fixture.repo.inspect().unwrap().connections.len(), 1);
+}
+
+#[test]
+fn activation_returns_the_committed_in_memory_snapshot_without_reread() {
+    let fixture = RepositoryFixture::new();
+    let connection = fixture
+        .repo
+        .create_connection(openai_key_command("activation-projection"))
+        .unwrap();
+    let evidence = current_probe(
+        &connection.connection_id,
+        connection.execution_revision,
+        "gpt-projection",
+        "low",
+    );
+    let tested = fixture.repo.record_probe(evidence.clone()).unwrap();
+    fixture
+        .installation
+        .lock()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER corrupt_settings_after_update
+             AFTER UPDATE ON application_settings
+             BEGIN
+               UPDATE application_settings SET settings_json = '{}' WHERE singleton = 1;
+             END;",
+        )
+        .unwrap();
+
+    let result = fixture
+        .repo
+        .activate(SetActiveAiConfigurationCommand {
+            connection_id: tested.connection_id,
+            expected_execution_revision: tested.execution_revision,
+            provider: tested.provider,
+            endpoint_fingerprint: tested.endpoint_fingerprint,
+            model_id: tested.tested_model_id.unwrap(),
+            reasoning: tested.tested_reasoning.unwrap(),
+            adapter_version: tested.adapter_version.unwrap(),
+            catalogue_sha256: tested.catalogue_sha256.unwrap(),
+            confirmed_data_destination: tested.data_destination,
+        })
+        .unwrap();
+    assert!(result.active_configuration.is_some());
+    assert_eq!(
+        result.readiness,
+        quantix_lib::ai::contract::ActiveAiReadiness::Ready
+    );
 }
 
 #[test]
@@ -1512,37 +2130,64 @@ fn material_change_matrix_advances_only_the_required_counters() {
         None,
         0,
     );
-    let renamed_fields = CompatibleEndpointConfiguration::parse(
-        &base.base_url,
-        CompatibleCredentialKind::Bearer,
-        vec!["x-workspace".to_owned()],
-        vec!["version".to_owned()],
-        "material-model",
-    )
-    .unwrap();
     assert_material_update(
-        compatible_create_command("Names", base.clone(), "header-A", "query-A"),
+        compatible_create_command("Header name", base.clone(), "header-A", "query-A"),
         AiProviderKind::OpenAiCompatible,
         &base.base_url,
         AiConnectionConfiguration::OpenAiCompatible {
             provider: AiProviderKind::OpenAiCompatible,
-            endpoint: renamed_fields,
+            endpoint: CompatibleEndpointConfiguration::parse(
+                &base.base_url,
+                CompatibleCredentialKind::Bearer,
+                vec!["x-workspace".to_owned()],
+                vec!["revision".to_owned()],
+                "material-model",
+            )
+            .unwrap(),
         },
         Some(AiCredentialInput::ApiKey {
-            api_key: "replacement-key".to_owned(),
+            api_key: secret("compatible-key"),
             custom_header_values: vec![SecretNameValueInput {
                 name: "x-workspace".to_owned(),
-                value: "header-B".to_owned(),
+                value: secret("header-A"),
             }],
             custom_query_values: vec![SecretNameValueInput {
-                name: "version".to_owned(),
-                value: "query-B".to_owned(),
+                name: "revision".to_owned(),
+                value: secret("query-A"),
             }],
         }),
         1,
     );
     assert_material_update(
-        compatible_create_command("Values", base.clone(), "header-A", "query-A"),
+        compatible_create_command("Query name", base.clone(), "header-A", "query-A"),
+        AiProviderKind::OpenAiCompatible,
+        &base.base_url,
+        AiConnectionConfiguration::OpenAiCompatible {
+            provider: AiProviderKind::OpenAiCompatible,
+            endpoint: CompatibleEndpointConfiguration::parse(
+                &base.base_url,
+                CompatibleCredentialKind::Bearer,
+                vec!["x-tenant".to_owned()],
+                vec!["version".to_owned()],
+                "material-model",
+            )
+            .unwrap(),
+        },
+        Some(AiCredentialInput::ApiKey {
+            api_key: secret("compatible-key"),
+            custom_header_values: vec![SecretNameValueInput {
+                name: "x-tenant".to_owned(),
+                value: secret("header-A"),
+            }],
+            custom_query_values: vec![SecretNameValueInput {
+                name: "version".to_owned(),
+                value: secret("query-A"),
+            }],
+        }),
+        1,
+    );
+    assert_material_update(
+        compatible_create_command("Header value", base.clone(), "header-A", "query-A"),
         AiProviderKind::OpenAiCompatible,
         &base.base_url,
         AiConnectionConfiguration::OpenAiCompatible {
@@ -1550,14 +2195,35 @@ fn material_change_matrix_advances_only_the_required_counters() {
             endpoint: base.clone(),
         },
         Some(AiCredentialInput::ApiKey {
-            api_key: "replacement-key".to_owned(),
+            api_key: secret("compatible-key"),
             custom_header_values: vec![SecretNameValueInput {
                 name: "x-tenant".to_owned(),
-                value: "header-value-B".to_owned(),
+                value: secret("header-B"),
             }],
             custom_query_values: vec![SecretNameValueInput {
                 name: "revision".to_owned(),
-                value: "query-value-B".to_owned(),
+                value: secret("query-A"),
+            }],
+        }),
+        1,
+    );
+    assert_material_update(
+        compatible_create_command("Query value", base.clone(), "header-A", "query-A"),
+        AiProviderKind::OpenAiCompatible,
+        &base.base_url,
+        AiConnectionConfiguration::OpenAiCompatible {
+            provider: AiProviderKind::OpenAiCompatible,
+            endpoint: base.clone(),
+        },
+        Some(AiCredentialInput::ApiKey {
+            api_key: secret("compatible-key"),
+            custom_header_values: vec![SecretNameValueInput {
+                name: "x-tenant".to_owned(),
+                value: secret("header-A"),
+            }],
+            custom_query_values: vec![SecretNameValueInput {
+                name: "revision".to_owned(),
+                value: secret("query-B"),
             }],
         }),
         1,
@@ -1579,6 +2245,7 @@ fn activation_requires_enabled_credentials_and_explicit_unsupported_reasoning() 
     );
     evidence.models[0].capabilities.reasoning = CapabilitySupport::Unsupported;
     evidence.models[0].reasoning_options.clear();
+    evidence.tested_reasoning = AiReasoningSelection::Unsupported;
     fixture.repo.record_probe(evidence.clone()).unwrap();
     let state = fixture
         .repo
@@ -1658,7 +2325,7 @@ fn activation_requires_enabled_credentials_and_explicit_unsupported_reasoning() 
 fn invalid_identifiers_and_zero_cas_fail_before_reference_checks() {
     let fixture = RepositoryFixture::new();
     fixture
-        .installation
+        .tender
         .lock()
         .unwrap()
         .execute(
@@ -1697,6 +2364,171 @@ fn invalid_identifiers_and_zero_cas_fail_before_reference_checks() {
     );
 }
 
+#[test]
+fn adapter_activation_and_account_expiry_inputs_are_strictly_bounded() {
+    assert!(AiAdapterVersions::new("", "general-v1").is_err());
+    assert!(AiAdapterVersions::new("codex-v1", "g".repeat(129)).is_err());
+
+    let base = serde_json::json!({
+        "connection_id":"0123456789abcdef0123456789abcdef",
+        "expected_execution_revision":1,
+        "provider":"open_ai",
+        "endpoint_fingerprint":"a".repeat(64),
+        "model_id":"model",
+        "reasoning":{"kind":"unsupported"},
+        "adapter_version":"general-v1",
+        "catalogue_sha256":"b".repeat(64),
+        "confirmed_data_destination":"https://api.openai.com"
+    });
+    assert!(serde_json::from_value::<SetActiveAiConfigurationCommand>(base.clone()).is_ok());
+    for (field, bad) in [
+        ("endpoint_fingerprint", serde_json::json!("a".repeat(63))),
+        ("model_id", serde_json::json!("m".repeat(257))),
+        ("adapter_version", serde_json::json!("v".repeat(129))),
+        ("catalogue_sha256", serde_json::json!("z".repeat(64))),
+        (
+            "confirmed_data_destination",
+            serde_json::json!("d".repeat(2_049)),
+        ),
+    ] {
+        let mut invalid = base.clone();
+        invalid[field] = bad;
+        assert!(serde_json::from_value::<SetActiveAiConfigurationCommand>(invalid).is_err());
+    }
+
+    let fixture = RepositoryFixture::new();
+    let mut account = codex_account_command("access", "refresh");
+    let AiCredentialInput::Account { expires_at, .. } = &mut account.credential else {
+        unreachable!()
+    };
+    *expires_at = "t".repeat(129);
+    assert_eq!(
+        fixture.repo.create_connection(account).unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::InvalidCommand
+    );
+}
+
+#[test]
+fn exact_bound_compatible_destination_activates_and_bad_clock_cannot_write() {
+    let fixture = RepositoryFixture::new();
+    let prefix = "https://long-destination.example/";
+    let destination = format!("{prefix}{}", "p".repeat(2_048 - prefix.len()));
+    assert_eq!(destination.len(), 2_048);
+    let endpoint = CompatibleEndpointConfiguration::parse(
+        &destination,
+        CompatibleCredentialKind::Bearer,
+        Vec::new(),
+        Vec::new(),
+        "long-model",
+    )
+    .unwrap();
+    let connection = fixture
+        .repo
+        .create_connection(CreateAiConnectionCommand {
+            display_name: "Long destination".to_owned(),
+            configuration: AiConnectionConfiguration::OpenAiCompatible {
+                provider: AiProviderKind::OpenAiCompatible,
+                endpoint: endpoint.clone(),
+            },
+            credential: AiCredentialInput::ApiKey {
+                api_key: secret("long-secret"),
+                custom_header_values: Vec::new(),
+                custom_query_values: Vec::new(),
+            },
+        })
+        .unwrap();
+    let mut evidence = current_probe(
+        &connection.connection_id,
+        connection.execution_revision,
+        "long-model",
+        "low",
+    );
+    evidence.provider = AiProviderKind::OpenAiCompatible;
+    evidence.endpoint_fingerprint = hex_sha256(&endpoint.base_url);
+    let tested = fixture.repo.record_probe(evidence).unwrap();
+    let view = fixture
+        .repo
+        .activate(SetActiveAiConfigurationCommand {
+            connection_id: tested.connection_id,
+            expected_execution_revision: tested.execution_revision,
+            provider: tested.provider,
+            endpoint_fingerprint: tested.endpoint_fingerprint,
+            model_id: tested.tested_model_id.unwrap(),
+            reasoning: tested.tested_reasoning.unwrap(),
+            adapter_version: tested.adapter_version.unwrap(),
+            catalogue_sha256: tested.catalogue_sha256.unwrap(),
+            confirmed_data_destination: tested.data_destination,
+        })
+        .unwrap();
+    assert_eq!(
+        view.active_configuration.unwrap().data_destination.len(),
+        2_048
+    );
+
+    let invalid_clock_fixture = RepositoryFixture::new();
+    let (invalid_connection, invalid_evidence) =
+        ready_unactivated_openai(&invalid_clock_fixture, "clock");
+    let invalid_clock_repo = AiConnectionRepository::new(
+        AiConnectionVault::new(&invalid_clock_fixture.application_home).unwrap(),
+        Arc::clone(&invalid_clock_fixture.installation),
+        AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
+        Arc::new(String::new),
+        Arc::new(no_nonterminal_reference),
+    );
+    assert_eq!(
+        invalid_clock_repo
+            .activate(SetActiveAiConfigurationCommand {
+                connection_id: invalid_connection.connection_id,
+                expected_execution_revision: invalid_connection.execution_revision,
+                provider: invalid_connection.provider,
+                endpoint_fingerprint: invalid_connection.endpoint_fingerprint,
+                model_id: invalid_connection.tested_model_id.unwrap(),
+                reasoning: invalid_connection.tested_reasoning.unwrap(),
+                adapter_version: invalid_connection.adapter_version.unwrap(),
+                catalogue_sha256: catalogue_sha256(&invalid_evidence).unwrap(),
+                confirmed_data_destination: invalid_connection.data_destination,
+            })
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::InvalidCommand
+    );
+    assert!(invalid_clock_fixture
+        .repo
+        .inspect()
+        .unwrap()
+        .active_configuration
+        .is_none());
+}
+
+#[test]
+fn secret_owners_drop_on_partial_deserialization_and_staged_transfer_failure() {
+    fixture_reset_secret_drop_observations();
+    let partial = r#"{
+      "display_name":"Partial secret",
+      "configuration":{"method":"direct_provider_key","provider":"open_ai"},
+      "credential":{
+        "kind":"api_key",
+        "api_key":"partial-secret",
+        "custom_header_values":[],
+        "custom_query_values":[]
+      },
+      "unexpected":true
+    }"#;
+    assert!(serde_json::from_str::<CreateAiConnectionCommand>(partial).is_err());
+    assert!(fixture_secret_drop_observations() >= 1);
+
+    fixture_reset_secret_drop_observations();
+    let fixture = RepositoryFixture::new();
+    assert_eq!(
+        fixture
+            .repo
+            .fixture_reject_after_secret_transfer(openai_key_command("staged-secret"))
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::InvalidCommand
+    );
+    assert!(fixture_secret_drop_observations() >= 1);
+    assert!(fixture.repo.inspect().unwrap().connections.is_empty());
+}
+
 fn compatible_create_command(
     display_name: &str,
     endpoint: CompatibleEndpointConfiguration,
@@ -1710,14 +2542,14 @@ fn compatible_create_command(
             endpoint,
         },
         credential: AiCredentialInput::ApiKey {
-            api_key: "compatible-key".to_owned(),
+            api_key: secret("compatible-key"),
             custom_header_values: vec![SecretNameValueInput {
                 name: "x-tenant".to_owned(),
-                value: header_value.to_owned(),
+                value: secret(header_value),
             }],
             custom_query_values: vec![SecretNameValueInput {
                 name: "revision".to_owned(),
-                value: query_value.to_owned(),
+                value: secret(query_value),
             }],
         },
     }
@@ -1753,7 +2585,7 @@ fn assert_material_update(
             expected_execution_revision: before.execution_revision,
             expected_credential_generation: before.credential_generation,
             display_name: "Material update".to_owned(),
-            configuration: new_configuration,
+            configuration: Some(new_configuration),
             replacement_credential,
         })
         .unwrap();

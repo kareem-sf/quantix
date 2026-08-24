@@ -15,7 +15,10 @@ use super::{
         AiConnectionRevision, AiConnectionStatus, AiConnectionView, AiModelView, AiProbeEvidence,
         AiProviderKind, AiReasoningSelection, CapabilitySupport, CredentialGeneration,
     },
-    vault::{AiConnectionVault, StoredAiConnection, StoredCredential, VaultError, VaultPayload},
+    vault::{
+        AiConnectionVault, SecretString, StoredAiConnection, StoredCredential, VaultError,
+        VaultPayload,
+    },
 };
 use crate::application_settings::GeneralApplicationPreferences;
 
@@ -29,19 +32,84 @@ const MAX_MODEL_ID_BYTES: usize = 256;
 const MAX_PROBE_LABEL_BYTES: usize = 120;
 const MAX_PROBE_DESCRIPTION_BYTES: usize = 4 * 1024;
 const MAX_PROBE_METADATA_BYTES: usize = 128;
+const SHA256_HEX_BYTES: usize = 64;
+const MAX_DATA_DESTINATION_BYTES: usize = 2_048;
+
+pub struct SecretInput(Option<SecretString>);
+
+impl SecretInput {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(Some(SecretString::new(value.into())))
+    }
+
+    fn as_str(&self) -> &str {
+        self.0.as_ref().map_or("", SecretString::as_str)
+    }
+
+    fn len(&self) -> usize {
+        self.as_str().len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.as_str().is_empty()
+    }
+
+    fn take(&mut self) -> Result<SecretString, AiConnectionError> {
+        self.0.take().ok_or(AiConnectionError::InvalidCommand)
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(Self::new)
+    }
+}
+
+impl Zeroize for SecretInput {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for SecretInput {}
+
+impl Drop for SecretInput {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl fmt::Debug for SecretInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SecretInput([REDACTED])")
+    }
+}
 
 type Clock = dyn Fn() -> String + Send + Sync;
-type NonterminalReferenceCheck = dyn for<'transaction> Fn(&Transaction<'transaction>, &str) -> Result<bool, AiConnectionError>
-    + Send
-    + Sync;
+type NonterminalReferenceCheck = dyn Fn(&str) -> Result<bool, AiConnectionError> + Send + Sync;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AiAdapterVersions {
-    pub codex: String,
-    pub general: String,
+    codex: String,
+    general: String,
 }
 
 impl AiAdapterVersions {
+    pub fn new(
+        codex: impl Into<String>,
+        general: impl Into<String>,
+    ) -> Result<Self, AiConnectionError> {
+        let versions = Self {
+            codex: codex.into(),
+            general: general.into(),
+        };
+        versions.validate()?;
+        Ok(versions)
+    }
+
     fn validate(&self) -> Result<(), AiConnectionError> {
         if [self.codex.as_str(), self.general.as_str()]
             .into_iter()
@@ -65,7 +133,8 @@ impl AiAdapterVersions {
 #[serde(deny_unknown_fields)]
 pub struct SecretNameValueInput {
     pub name: String,
-    pub value: String,
+    #[ts(type = "string")]
+    pub value: SecretInput,
 }
 
 impl fmt::Debug for SecretNameValueInput {
@@ -78,13 +147,16 @@ impl fmt::Debug for SecretNameValueInput {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AiCredentialInput {
     Account {
-        access_token: String,
-        refresh_token: Option<String>,
+        #[ts(type = "string")]
+        access_token: SecretInput,
+        #[ts(type = "string | null")]
+        refresh_token: Option<SecretInput>,
         expires_at: String,
         verified_account_id: String,
     },
     ApiKey {
-        api_key: String,
+        #[ts(type = "string")]
+        api_key: SecretInput,
         custom_header_values: Vec<SecretNameValueInput>,
         custom_query_values: Vec<SecretNameValueInput>,
     },
@@ -167,7 +239,7 @@ pub struct UpdateAiConnectionCommand {
     pub expected_execution_revision: u64,
     pub expected_credential_generation: u64,
     pub display_name: String,
-    pub configuration: AiConnectionConfiguration,
+    pub configuration: Option<AiConnectionConfiguration>,
     pub replacement_credential: Option<AiCredentialInput>,
 }
 
@@ -192,8 +264,6 @@ impl fmt::Debug for UpdateAiConnectionCommand {
     }
 }
 
-#[derive(Deserialize, TS)]
-#[serde(deny_unknown_fields)]
 pub struct SameAccountTokenRefreshCommand {
     pub connection_id: String,
     pub expected_execution_revision: u64,
@@ -202,7 +272,7 @@ pub struct SameAccountTokenRefreshCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "SetActiveAiConfigurationCommandInput")]
 pub struct SetActiveAiConfigurationCommand {
     pub connection_id: String,
     pub expected_execution_revision: u64,
@@ -213,6 +283,62 @@ pub struct SetActiveAiConfigurationCommand {
     pub adapter_version: String,
     pub catalogue_sha256: String,
     pub confirmed_data_destination: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetActiveAiConfigurationCommandInput {
+    connection_id: String,
+    expected_execution_revision: u64,
+    provider: AiProviderKind,
+    endpoint_fingerprint: String,
+    model_id: String,
+    reasoning: AiReasoningSelection,
+    adapter_version: String,
+    catalogue_sha256: String,
+    confirmed_data_destination: String,
+}
+
+impl TryFrom<SetActiveAiConfigurationCommandInput> for SetActiveAiConfigurationCommand {
+    type Error = AiConnectionError;
+
+    fn try_from(value: SetActiveAiConfigurationCommandInput) -> Result<Self, Self::Error> {
+        let command = Self {
+            connection_id: value.connection_id,
+            expected_execution_revision: value.expected_execution_revision,
+            provider: value.provider,
+            endpoint_fingerprint: value.endpoint_fingerprint,
+            model_id: value.model_id,
+            reasoning: value.reasoning,
+            adapter_version: value.adapter_version,
+            catalogue_sha256: value.catalogue_sha256,
+            confirmed_data_destination: value.confirmed_data_destination,
+        };
+        command.validate()?;
+        Ok(command)
+    }
+}
+
+impl SetActiveAiConfigurationCommand {
+    fn validate(&self) -> Result<(), AiConnectionError> {
+        AiConnectionId::parse(self.connection_id.clone())
+            .map_err(|_| AiConnectionError::InvalidCommand)?;
+        AiConnectionRevision::new(self.expected_execution_revision)
+            .map_err(|_| AiConnectionError::InvalidCommand)?;
+        if !is_lower_sha256(&self.endpoint_fingerprint)
+            || self.model_id.is_empty()
+            || self.model_id.len() > MAX_MODEL_ID_BYTES
+            || !reasoning_selection_is_bounded(&self.reasoning)
+            || self.adapter_version.is_empty()
+            || self.adapter_version.len() > MAX_ADAPTER_VERSION_BYTES
+            || !is_lower_sha256(&self.catalogue_sha256)
+            || self.confirmed_data_destination.is_empty()
+            || self.confirmed_data_destination.len() > MAX_DATA_DESTINATION_BYTES
+        {
+            return Err(AiConnectionError::InvalidCommand);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
@@ -295,7 +421,7 @@ pub enum AiConnectionError {
     ReferencedByNonterminalRun,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ApplicationAiSettingsView {
     pub connections: Vec<AiConnectionView>,
@@ -380,9 +506,11 @@ impl AiConnectionRepository {
             .lock()
             .map_err(|_| AiConnectionError::VaultUnavailable)?;
         self.vault
-            .mutate_current(|payload| payload.insert(stored))
-            .map_err(map_vault_error)?;
-        self.connection_view_under_gate(&connection_id)
+            .mutate_current_project(|payload| {
+                payload.insert(stored)?;
+                self.connection_view_vault(payload, &connection_id)
+            })
+            .map_err(map_vault_error)
     }
 
     pub fn replace_connection_configuration(
@@ -396,22 +524,24 @@ impl AiConnectionRepository {
         )?;
         let display_name = normalize_label(&command.display_name)
             .map_err(|_| AiConnectionError::InvalidCommand)?;
-        command
+        let configuration = command
             .configuration
+            .clone()
+            .ok_or(AiConnectionError::InvalidCommand)?;
+        configuration
             .validate()
             .map_err(|_| AiConnectionError::InvalidCommand)?;
         let replacement = command
             .replacement_credential
             .as_mut()
-            .map(|credential| take_credential(&command.configuration, credential))
+            .map(|credential| take_credential(&configuration, credential))
             .transpose()?;
         let connection_id = command.connection_id.clone();
-        let configuration = command.configuration.clone();
         let _gate = connection_gate()
             .lock()
             .map_err(|_| AiConnectionError::VaultUnavailable)?;
         self.vault
-            .mutate_current(|payload| {
+            .mutate_current_project(|payload| {
                 payload.replace_connection_configuration(
                     &connection_id,
                     command.expected_execution_revision,
@@ -419,10 +549,10 @@ impl AiConnectionRepository {
                     display_name,
                     configuration,
                     replacement,
-                )
+                )?;
+                self.connection_view_vault(payload, &connection_id)
             })
-            .map_err(map_vault_error)?;
-        self.connection_view_under_gate(&connection_id)
+            .map_err(map_vault_error)
     }
 
     pub fn rename_connection(
@@ -434,33 +564,27 @@ impl AiConnectionRepository {
             command.expected_execution_revision,
             command.expected_credential_generation,
         )?;
-        if command.replacement_credential.is_some() {
+        if command.configuration.is_some() || command.replacement_credential.is_some() {
             return Err(AiConnectionError::InvalidCommand);
         }
         let display_name = normalize_label(&command.display_name)
             .map_err(|_| AiConnectionError::InvalidCommand)?;
-        command
-            .configuration
-            .validate()
-            .map_err(|_| AiConnectionError::InvalidCommand)?;
         let connection_id = command.connection_id.clone();
-        let configuration = command.configuration.clone();
         command.display_name.zeroize();
         let _gate = connection_gate()
             .lock()
             .map_err(|_| AiConnectionError::VaultUnavailable)?;
         self.vault
-            .mutate_current(|payload| {
+            .mutate_current_project(|payload| {
                 payload.rename_connection(
                     &connection_id,
                     command.expected_execution_revision,
                     command.expected_credential_generation,
                     display_name,
-                    &configuration,
-                )
+                )?;
+                self.connection_view_vault(payload, &connection_id)
             })
-            .map_err(map_vault_error)?;
-        self.connection_view_under_gate(&connection_id)
+            .map_err(map_vault_error)
     }
 
     pub fn rotate_same_account_tokens(
@@ -495,17 +619,17 @@ impl AiConnectionRepository {
             .lock()
             .map_err(|_| AiConnectionError::VaultUnavailable)?;
         self.vault
-            .mutate_current(|payload| {
+            .mutate_current_project(|payload| {
                 payload.rotate_same_account_tokens(
                     &connection_id,
                     command.expected_execution_revision,
                     command.expected_credential_generation,
                     &verified_account_id,
                     replacement,
-                )
+                )?;
+                self.connection_view_vault(payload, &connection_id)
             })
-            .map_err(map_vault_error)?;
-        self.connection_view_under_gate(&connection_id)
+            .map_err(map_vault_error)
     }
 
     pub fn set_enabled(
@@ -522,16 +646,16 @@ impl AiConnectionRepository {
             .lock()
             .map_err(|_| AiConnectionError::VaultUnavailable)?;
         self.vault
-            .mutate_current(|payload| {
+            .mutate_current_project(|payload| {
                 payload.set_enabled(
                     &connection_id,
                     command.expected_execution_revision,
                     command.expected_credential_generation,
                     command.enabled,
-                )
+                )?;
+                self.connection_view_vault(payload, &connection_id)
             })
-            .map_err(map_vault_error)?;
-        self.connection_view_under_gate(&connection_id)
+            .map_err(map_vault_error)
     }
 
     pub fn disconnect(
@@ -548,15 +672,15 @@ impl AiConnectionRepository {
             .lock()
             .map_err(|_| AiConnectionError::VaultUnavailable)?;
         self.vault
-            .mutate_current(|payload| {
+            .mutate_current_project(|payload| {
                 payload.disconnect(
                     &connection_id,
                     command.expected_execution_revision,
                     command.expected_credential_generation,
-                )
+                )?;
+                self.connection_view_vault(payload, &connection_id)
             })
-            .map_err(map_vault_error)?;
-        self.connection_view_under_gate(&connection_id)
+            .map_err(map_vault_error)
     }
 
     pub fn delete_connection(
@@ -594,18 +718,14 @@ impl AiConnectionRepository {
         &self,
         command: SetActiveAiConfigurationCommand,
     ) -> Result<ApplicationAiSettingsView, AiConnectionError> {
-        AiConnectionId::parse(command.connection_id.clone())
-            .map_err(|_| AiConnectionError::InvalidCommand)?;
-        AiConnectionRevision::new(command.expected_execution_revision)
-            .map_err(|_| AiConnectionError::InvalidCommand)?;
+        command.validate()?;
         self.adapter_versions.validate()?;
         let _gate = connection_gate()
             .lock()
             .map_err(|_| AiConnectionError::VaultUnavailable)?;
         self.vault
             .with_locked_payload(|payload| Ok(self.activate_payload(payload, &command)))
-            .map_err(map_vault_error)??;
-        self.inspect_under_gate()
+            .map_err(map_vault_error)?
     }
 
     pub fn clear_active(
@@ -616,9 +736,8 @@ impl AiConnectionRepository {
             .lock()
             .map_err(|_| AiConnectionError::VaultUnavailable)?;
         self.vault
-            .with_locked_payload(|_| Ok(self.clear_active_under_vault_lock()))
-            .map_err(map_vault_error)??;
-        self.inspect_under_gate()
+            .with_locked_payload(|payload| Ok(self.clear_active_under_vault_lock(payload)))
+            .map_err(map_vault_error)?
     }
 
     pub fn record_probe(
@@ -631,28 +750,22 @@ impl AiConnectionRepository {
         let _gate = connection_gate()
             .lock()
             .map_err(|_| AiConnectionError::VaultUnavailable)?;
-        let identity = self.vault.with_locked_payload(|payload| {
-            let connection = payload
-                .connections()
-                .find(|connection| connection.connection_id() == connection_id)
-                .ok_or(VaultError::Invalid)?;
-            let configuration = connection.configuration();
-            Ok((
-                configuration
-                    .endpoint_fingerprint()
-                    .map_err(|_| VaultError::Invalid)?,
-                self.adapter_versions
-                    .for_provider(configuration.provider())
-                    .to_owned(),
-            ))
-        });
-        let (endpoint_fingerprint, adapter_version) = identity.map_err(map_vault_error)?;
         self.vault
-            .mutate_current(|payload| {
-                payload.record_probe(evidence, &endpoint_fingerprint, &adapter_version)
+            .mutate_current_project(|payload| {
+                let connection = payload.connection(&connection_id)?;
+                let configuration = connection.configuration();
+                let (endpoint_fingerprint, adapter_version) = (
+                    configuration
+                        .endpoint_fingerprint()
+                        .map_err(|_| VaultError::Invalid)?,
+                    self.adapter_versions
+                        .for_provider(configuration.provider())
+                        .to_owned(),
+                );
+                payload.record_probe(evidence, &endpoint_fingerprint, &adapter_version)?;
+                self.connection_view_vault(payload, &connection_id)
             })
-            .map_err(map_vault_error)?;
-        self.connection_view_under_gate(&connection_id)
+            .map_err(map_vault_error)
     }
 
     pub fn inspect(&self) -> Result<ApplicationAiSettingsView, AiConnectionError> {
@@ -685,15 +798,18 @@ impl AiConnectionRepository {
             .map_err(map_vault_error)
     }
 
-    fn connection_view_under_gate(
+    #[cfg(feature = "runtime-fixture")]
+    pub fn fixture_reject_after_secret_transfer(
         &self,
-        connection_id: &str,
-    ) -> Result<AiConnectionView, AiConnectionError> {
-        self.inspect_under_gate()?
-            .connections
-            .into_iter()
-            .find(|connection| connection.connection_id == connection_id)
-            .ok_or(AiConnectionError::NotFound)
+        mut command: CreateAiConnectionCommand,
+    ) -> Result<(), AiConnectionError> {
+        command
+            .configuration
+            .validate()
+            .map_err(|_| AiConnectionError::InvalidCommand)?;
+        let credential = take_credential(&command.configuration, &mut command.credential)?;
+        drop(credential);
+        Err(AiConnectionError::InvalidCommand)
     }
 
     fn inspect_under_gate(&self) -> Result<ApplicationAiSettingsView, AiConnectionError> {
@@ -732,10 +848,18 @@ impl AiConnectionRepository {
             .lock()
             .map_err(|_| AiConnectionError::StoreUnavailable)?;
         let settings = load_final_settings(&installation)?;
+        self.application_view(payload, &settings)
+    }
+
+    fn application_view(
+        &self,
+        payload: &VaultPayload,
+        settings: &StoredFinalApplicationSettings,
+    ) -> Result<ApplicationAiSettingsView, AiConnectionError> {
         let mut connections = payload
             .connections()
             .map(|connection| self.connection_view(connection))
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()?;
         connections.sort_by(|left, right| {
             left.display_name
                 .cmp(&right.display_name)
@@ -757,7 +881,7 @@ impl AiConnectionRepository {
         &self,
         payload: &VaultPayload,
         command: &SetActiveAiConfigurationCommand,
-    ) -> Result<(), AiConnectionError> {
+    ) -> Result<ApplicationAiSettingsView, AiConnectionError> {
         let connection = payload
             .connections()
             .find(|connection| connection.connection_id() == command.connection_id)
@@ -800,6 +924,11 @@ impl AiConnectionRepository {
         if command.catalogue_sha256 != catalogue {
             return Err(AiConnectionError::CapabilityChanged);
         }
+        if command.model_id != evidence.tested_model_id
+            || command.reasoning != evidence.tested_reasoning
+        {
+            return Err(AiConnectionError::CapabilityChanged);
+        }
         let model = evidence
             .models
             .iter()
@@ -808,7 +937,7 @@ impl AiConnectionRepository {
         if !reasoning_is_activatable(model, &command.reasoning) {
             return Err(AiConnectionError::CapabilityChanged);
         }
-        let activated_at = (self.clock)();
+        let activated_at = self.current_timestamp()?;
         let active = ActiveAiConfiguration {
             connection_id: super::contract::AiConnectionId::parse(command.connection_id.clone())
                 .map_err(|_| AiConnectionError::InvalidCommand)?,
@@ -843,14 +972,15 @@ impl AiConnectionRepository {
         store_final_settings(&transaction, &settings, &activated_at)?;
         transaction
             .commit()
-            .map_err(|_| AiConnectionError::StoreUnavailable)
+            .map_err(|_| AiConnectionError::StoreUnavailable)?;
+        self.application_view(payload, &settings)
     }
 
-    fn clear_active_under_vault_lock(&self) -> Result<(), AiConnectionError> {
-        let updated_at = (self.clock)();
-        if updated_at.is_empty() || updated_at.len() > 128 {
-            return Err(AiConnectionError::InvalidCommand);
-        }
+    fn clear_active_under_vault_lock(
+        &self,
+        payload: &VaultPayload,
+    ) -> Result<ApplicationAiSettingsView, AiConnectionError> {
+        let updated_at = self.current_timestamp()?;
         let mut installation = self
             .installation
             .lock()
@@ -863,7 +993,16 @@ impl AiConnectionRepository {
         store_final_settings(&transaction, &settings, &updated_at)?;
         transaction
             .commit()
-            .map_err(|_| AiConnectionError::StoreUnavailable)
+            .map_err(|_| AiConnectionError::StoreUnavailable)?;
+        self.application_view(payload, &settings)
+    }
+
+    fn current_timestamp(&self) -> Result<String, AiConnectionError> {
+        let timestamp = (self.clock)();
+        if timestamp.is_empty() || timestamp.len() > MAX_PROBE_METADATA_BYTES {
+            return Err(AiConnectionError::InvalidCommand);
+        }
+        Ok(timestamp)
     }
 
     fn delete_payload(
@@ -871,6 +1010,13 @@ impl AiConnectionRepository {
         payload: &mut VaultPayload,
         command: &DeleteAiConnectionCommand,
     ) -> Result<(), AiConnectionError> {
+        payload
+            .require_connection_cas(
+                &command.connection_id,
+                command.expected_execution_revision,
+                command.expected_credential_generation,
+            )
+            .map_err(map_vault_error)?;
         let mut installation = self
             .installation
             .lock()
@@ -886,7 +1032,7 @@ impl AiConnectionRepository {
         {
             return Err(AiConnectionError::ActiveConnection);
         }
-        if (self.nonterminal_reference_check)(&transaction, &command.connection_id)? {
+        if (self.nonterminal_reference_check)(&command.connection_id)? {
             return Err(AiConnectionError::ReferencedByNonterminalRun);
         }
         payload
@@ -956,6 +1102,8 @@ impl AiConnectionRepository {
             return ActiveAiReadiness::CapabilityChanged;
         };
         if catalogue != active.catalogue_sha256
+            || evidence.tested_model_id != active.model_id
+            || evidence.tested_reasoning != active.reasoning
             || model.capabilities != active.capabilities
             || !reasoning_is_activatable(model, &active.reasoning)
         {
@@ -964,9 +1112,24 @@ impl AiConnectionRepository {
         ActiveAiReadiness::Ready
     }
 
-    fn connection_view(&self, connection: &StoredAiConnection) -> AiConnectionView {
+    fn connection_view(
+        &self,
+        connection: &StoredAiConnection,
+    ) -> Result<AiConnectionView, AiConnectionError> {
         let configuration = connection.configuration();
         let provider = configuration.provider();
+        let data_destination = configuration
+            .data_destination()
+            .map_err(|_| AiConnectionError::VaultUnavailable)?
+            .to_owned();
+        let endpoint_fingerprint = configuration
+            .endpoint_fingerprint()
+            .map_err(|_| AiConnectionError::VaultUnavailable)?;
+        let evidence = connection.probe_evidence();
+        let catalogue_sha256 = evidence
+            .map(catalogue_sha256)
+            .transpose()
+            .map_err(|_| AiConnectionError::VaultUnavailable)?;
         let status = if !connection.enabled() {
             AiConnectionStatus::Disabled
         } else if !connection.has_credential() {
@@ -978,20 +1141,35 @@ impl AiConnectionRepository {
         } else {
             AiConnectionStatus::Untested
         };
-        AiConnectionView {
+        Ok(AiConnectionView {
             connection_id: connection.connection_id().to_owned(),
             execution_revision: connection.execution_revision(),
+            credential_generation: connection.credential_generation(),
             method: configuration.method(),
             provider,
             display_name: connection.display_name().to_owned(),
+            configuration: configuration.clone(),
+            data_destination,
+            endpoint_fingerprint,
             enabled: connection.enabled(),
             status,
             secret_configured: connection.has_credential(),
-            models: connection
-                .probe_evidence()
-                .map_or_else(Vec::new, |evidence| evidence.models.clone()),
+            models: evidence.map_or_else(Vec::new, |evidence| evidence.models.clone()),
+            adapter_version: evidence.map(|evidence| evidence.adapter_version.clone()),
+            catalogue_sha256,
+            tested_model_id: evidence.map(|evidence| evidence.tested_model_id.clone()),
+            tested_reasoning: evidence.map(|evidence| evidence.tested_reasoning.clone()),
             status_summary: status_summary(status).to_owned(),
-        }
+        })
+    }
+
+    fn connection_view_vault(
+        &self,
+        payload: &VaultPayload,
+        connection_id: &str,
+    ) -> Result<AiConnectionView, VaultError> {
+        self.connection_view(payload.connection(connection_id)?)
+            .map_err(|_| VaultError::Invalid)
     }
 }
 
@@ -1026,7 +1204,7 @@ fn take_credential(
             {
                 return Err(AiConnectionError::InvalidCommand);
             }
-            StoredCredential::from_api_key(std::mem::take(api_key)).map_err(map_vault_error)
+            StoredCredential::from_api_key(api_key.take()?).map_err(map_vault_error)
         }
         (
             AiConnectionConfiguration::OpenAiCompatible { endpoint, .. }
@@ -1048,7 +1226,7 @@ fn take_credential(
 }
 
 fn take_compatible_credential(
-    api_key: &mut String,
+    api_key: &mut SecretInput,
     custom_header_values: &mut [SecretNameValueInput],
     custom_query_values: &mut [SecretNameValueInput],
     expected_header_names: &[String],
@@ -1072,9 +1250,11 @@ fn take_compatible_credential(
         return Err(AiConnectionError::InvalidCommand);
     }
 
-    let api_key = std::mem::take(api_key);
-    let mut header_values = Vec::with_capacity(expected_header_names.len());
-    let mut query_values = Vec::with_capacity(expected_query_names.len());
+    let api_key = api_key.take()?;
+    let mut header_values: Vec<(String, SecretString)> =
+        Vec::with_capacity(expected_header_names.len());
+    let mut query_values: Vec<(String, SecretString)> =
+        Vec::with_capacity(expected_query_names.len());
     move_secret_fields(
         expected_header_names,
         custom_header_values,
@@ -1128,7 +1308,7 @@ fn move_secret_fields(
     expected_names: &[String],
     fields: &mut [SecretNameValueInput],
     case_insensitive: bool,
-    output: &mut Vec<(String, String)>,
+    output: &mut Vec<(String, SecretString)>,
 ) -> Result<(), AiConnectionError> {
     for expected in expected_names {
         let field = fields
@@ -1141,39 +1321,42 @@ fn move_secret_fields(
                 }
             })
             .ok_or(AiConnectionError::InvalidCommand)?;
-        output.push((expected.clone(), std::mem::take(&mut field.value)));
+        output.push((expected.clone(), field.value.take()?));
     }
     Ok(())
 }
 
 fn take_account_credential(
     verified_account_id: &str,
-    access_token: &mut String,
-    refresh_token: &mut Option<String>,
+    access_token: &mut SecretInput,
+    refresh_token: &mut Option<SecretInput>,
     expires_at: &mut String,
 ) -> Result<StoredCredential, AiConnectionError> {
     let total_bytes = verified_account_id
         .len()
         .checked_add(access_token.len())
-        .and_then(|length| length.checked_add(refresh_token.as_ref().map_or(0, String::len)))
+        .and_then(|length| length.checked_add(refresh_token.as_ref().map_or(0, SecretInput::len)))
         .and_then(|length| length.checked_add(expires_at.len()))
         .ok_or(AiConnectionError::InvalidCommand)?;
     if verified_account_id.is_empty()
         || verified_account_id.len() > MAX_ACCOUNT_ID_BYTES
         || access_token.is_empty()
         || expires_at.is_empty()
+        || expires_at.len() > MAX_PROBE_METADATA_BYTES
         || total_bytes > MAX_CREDENTIAL_BYTES
-        || refresh_token.as_ref().is_none_or(String::is_empty)
+        || refresh_token.as_ref().is_none_or(SecretInput::is_empty)
     {
         return Err(AiConnectionError::InvalidCommand);
     }
+    let refresh_token = refresh_token
+        .as_mut()
+        .ok_or(AiConnectionError::InvalidCommand)?
+        .take()?;
     StoredCredential::from_account(
-        std::mem::take(access_token),
-        refresh_token
-            .take()
-            .ok_or(AiConnectionError::InvalidCommand)?,
-        std::mem::take(expires_at),
-        verified_account_id.to_owned(),
+        access_token.take()?,
+        refresh_token,
+        SecretString::new(std::mem::take(expires_at)),
+        SecretString::new(verified_account_id.to_owned()),
     )
     .map_err(map_vault_error)
 }
@@ -1325,6 +1508,7 @@ fn map_vault_error(error: VaultError) -> AiConnectionError {
         VaultError::Invalid => AiConnectionError::InvalidCommand,
         VaultError::RevisionConflict => AiConnectionError::Conflict,
         VaultError::RevisionOverflow => AiConnectionError::RevisionOverflow,
+        VaultError::NotFound => AiConnectionError::NotFound,
         VaultError::Unavailable | VaultError::Corrupt | VaultError::Unsupported => {
             AiConnectionError::VaultUnavailable
         }
@@ -1344,7 +1528,31 @@ fn validate_connection_cas(
     Ok(())
 }
 
+fn is_lower_sha256(value: &str) -> bool {
+    value.len() == SHA256_HEX_BYTES
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn reasoning_selection_is_bounded(selection: &AiReasoningSelection) -> bool {
+    match selection {
+        AiReasoningSelection::Unsupported => true,
+        AiReasoningSelection::Effort { id } => !id.is_empty() && id.len() <= MAX_MODEL_ID_BYTES,
+    }
+}
+
 fn connection_gate() -> &'static Mutex<()> {
     static CONNECTION_GATE: OnceLock<Mutex<()>> = OnceLock::new();
     CONNECTION_GATE.get_or_init(|| Mutex::new(()))
+}
+
+#[cfg(feature = "runtime-fixture")]
+pub fn fixture_reset_secret_drop_observations() {
+    super::vault::reset_secret_drop_observations();
+}
+
+#[cfg(feature = "runtime-fixture")]
+pub fn fixture_secret_drop_observations() -> usize {
+    super::vault::secret_drop_observations()
 }

@@ -18,8 +18,9 @@ const MAX_REASONING_OPTIONS: usize = 32;
 const MAX_DESCRIPTION_BYTES: usize = 4 * 1024;
 const MAX_ENDPOINT_FINGERPRINT_BYTES: usize = 128;
 const MAX_ADAPTER_VERSION_BYTES: usize = 128;
-const MAX_DATA_DESTINATION_BYTES: usize = 256;
+const MAX_DATA_DESTINATION_BYTES: usize = 2_048;
 const MAX_TIMESTAMP_BYTES: usize = 128;
+const MAX_ACCOUNT_ID_BYTES: usize = 4 * 1024;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum AiContractError {
@@ -338,6 +339,13 @@ impl CompatibleEndpointConfiguration {
         validate_collection(&query, validate_custom_query_name)?;
         reject_duplicate_names(&headers, true)?;
         reject_duplicate_names(&query, false)?;
+        if matches!(
+            &credential,
+            CompatibleCredentialKind::ApiKeyHeader { name }
+                if headers.iter().any(|header| header.eq_ignore_ascii_case(name))
+        ) {
+            return Err(AiContractError::InvalidCredentialPlacement);
+        }
 
         let mut url =
             reqwest::Url::parse(base_url).map_err(|_| AiContractError::InvalidEndpoint)?;
@@ -620,32 +628,45 @@ impl TryFrom<AiConnectionConfigurationInput> for AiConnectionConfiguration {
 impl AiConnectionConfiguration {
     pub fn validate(&self) -> Result<(), AiContractError> {
         match self {
-            Self::AccountLogin { provider, .. } => {
-                validate_method_provider(AiConnectionMethod::AccountLogin, *provider)
+            Self::AccountLogin {
+                provider,
+                account_id,
+            } => {
+                validate_method_provider(AiConnectionMethod::AccountLogin, *provider)?;
+                if account_id.is_empty() || account_id.len() > MAX_ACCOUNT_ID_BYTES {
+                    return Err(AiContractError::InvalidMetadata);
+                }
+                Ok(())
             }
             Self::DirectProviderKey { provider } => {
                 validate_method_provider(AiConnectionMethod::DirectProviderKey, *provider)
             }
             Self::OpenAiCompatible { provider, endpoint } => {
                 validate_method_provider(AiConnectionMethod::OpenAiCompatible, *provider)?;
-                CompatibleEndpointConfiguration::parse(
+                let canonical = CompatibleEndpointConfiguration::parse(
                     &endpoint.base_url,
                     endpoint.credential.clone(),
                     endpoint.custom_header_names.clone(),
                     endpoint.custom_query_names.clone(),
                     &endpoint.model_id,
                 )?;
+                if &canonical != endpoint {
+                    return Err(AiContractError::InvalidEndpoint);
+                }
                 Ok(())
             }
             Self::AnthropicCompatible { provider, endpoint } => {
                 validate_method_provider(AiConnectionMethod::AnthropicCompatible, *provider)?;
-                CompatibleEndpointConfiguration::parse(
+                let canonical = CompatibleEndpointConfiguration::parse(
                     &endpoint.base_url,
                     endpoint.credential.clone(),
                     endpoint.custom_header_names.clone(),
                     endpoint.custom_query_names.clone(),
                     &endpoint.model_id,
                 )?;
+                if &canonical != endpoint {
+                    return Err(AiContractError::InvalidEndpoint);
+                }
                 Ok(())
             }
         }
@@ -770,16 +791,58 @@ impl TryFrom<AiModelViewInput> for AiModelView {
         if let Some(reported_model_id) = &value.reported_model_id {
             validate_model_id(reported_model_id)?;
         }
-        if value.reasoning_options.len() > MAX_REASONING_OPTIONS {
-            return Err(AiContractError::InvalidCatalogue);
-        }
-        Ok(Self {
+        let model = Self {
             model_id: value.model_id,
             reported_model_id: value.reported_model_id,
             display_name: normalize_label(&value.display_name)?,
             capabilities: value.capabilities,
             reasoning_options: value.reasoning_options,
-        })
+        };
+        model.validate()?;
+        Ok(model)
+    }
+}
+
+impl AiModelView {
+    fn validate(&self) -> Result<(), AiContractError> {
+        validate_model_id(&self.model_id)?;
+        if let Some(reported_model_id) = &self.reported_model_id {
+            validate_model_id(reported_model_id)?;
+            if reported_model_id != &self.model_id {
+                return Err(AiContractError::InvalidCatalogue);
+            }
+        } else if self.capabilities.reroute_detection == CapabilitySupport::Supported {
+            return Err(AiContractError::InvalidCatalogue);
+        }
+        if normalize_label(&self.display_name)? != self.display_name
+            || self.reasoning_options.len() > MAX_REASONING_OPTIONS
+        {
+            return Err(AiContractError::InvalidCatalogue);
+        }
+        for (index, option) in self.reasoning_options.iter().enumerate() {
+            if normalize_label(&option.label)? != option.label
+                || normalize_description(&option.description)? != option.description
+                || self.reasoning_options[..index]
+                    .iter()
+                    .any(|prior| prior.selection == option.selection)
+            {
+                return Err(AiContractError::InvalidCatalogue);
+            }
+        }
+        if self.capabilities.reasoning == CapabilitySupport::Unsupported
+            && !self.reasoning_options.is_empty()
+        {
+            return Err(AiContractError::InvalidCatalogue);
+        }
+        if self.capabilities.reasoning == CapabilitySupport::Supported
+            && self
+                .reasoning_options
+                .iter()
+                .any(|option| option.selection == AiReasoningSelection::Unsupported)
+        {
+            return Err(AiContractError::InvalidCatalogue);
+        }
+        Ok(())
     }
 }
 
@@ -793,6 +856,8 @@ pub struct AiProbeEvidence {
     pub endpoint_fingerprint: String,
     pub adapter_version: String,
     pub models: Vec<AiModelView>,
+    pub tested_model_id: String,
+    pub tested_reasoning: AiReasoningSelection,
     pub observed_at: String,
 }
 
@@ -805,6 +870,8 @@ struct AiProbeEvidenceInput {
     endpoint_fingerprint: String,
     adapter_version: String,
     models: Vec<AiModelView>,
+    tested_model_id: String,
+    tested_reasoning: AiReasoningSelection,
     observed_at: String,
 }
 
@@ -812,46 +879,99 @@ impl TryFrom<AiProbeEvidenceInput> for AiProbeEvidence {
     type Error = AiContractError;
 
     fn try_from(value: AiProbeEvidenceInput) -> Result<Self, Self::Error> {
-        if value.models.len() > MAX_MODELS {
-            return Err(AiContractError::InvalidCatalogue);
-        }
-        validate_bounded_metadata(&value.endpoint_fingerprint, MAX_ENDPOINT_FINGERPRINT_BYTES)?;
-        validate_bounded_metadata(&value.adapter_version, MAX_ADAPTER_VERSION_BYTES)?;
-        validate_bounded_metadata(&value.observed_at, MAX_TIMESTAMP_BYTES)?;
-        Ok(Self {
+        let evidence = Self {
             connection_id: value.connection_id,
             execution_revision: value.execution_revision,
             provider: value.provider,
             endpoint_fingerprint: value.endpoint_fingerprint,
             adapter_version: value.adapter_version,
             models: value.models,
+            tested_model_id: value.tested_model_id,
+            tested_reasoning: value.tested_reasoning,
             observed_at: value.observed_at,
-        })
+        };
+        evidence.validate()?;
+        Ok(evidence)
     }
 }
 
 impl AiProbeEvidence {
+    pub fn validate(&self) -> Result<(), AiContractError> {
+        if self.models.is_empty() || self.models.len() > MAX_MODELS {
+            return Err(AiContractError::InvalidCatalogue);
+        }
+        validate_bounded_metadata(&self.endpoint_fingerprint, MAX_ENDPOINT_FINGERPRINT_BYTES)?;
+        validate_bounded_metadata(&self.adapter_version, MAX_ADAPTER_VERSION_BYTES)?;
+        validate_bounded_metadata(&self.observed_at, MAX_TIMESTAMP_BYTES)?;
+        validate_model_id(&self.tested_model_id)?;
+        for (index, model) in self.models.iter().enumerate() {
+            model.validate()?;
+            if self.models[..index]
+                .iter()
+                .any(|prior| prior.model_id == model.model_id)
+            {
+                return Err(AiContractError::InvalidCatalogue);
+            }
+        }
+        let tested_model = self
+            .models
+            .iter()
+            .find(|model| model.model_id == self.tested_model_id)
+            .ok_or(AiContractError::InvalidCatalogue)?;
+        match tested_model.capabilities.reasoning {
+            CapabilitySupport::Supported => {
+                if !matches!(self.tested_reasoning, AiReasoningSelection::Effort { .. })
+                    || !tested_model
+                        .reasoning_options
+                        .iter()
+                        .any(|option| option.selection == self.tested_reasoning)
+                {
+                    return Err(AiContractError::InvalidCatalogue);
+                }
+            }
+            CapabilitySupport::Unsupported => {
+                if self.tested_reasoning != AiReasoningSelection::Unsupported
+                    || !tested_model.reasoning_options.is_empty()
+                {
+                    return Err(AiContractError::InvalidCatalogue);
+                }
+            }
+            CapabilitySupport::Unknown => return Err(AiContractError::InvalidCatalogue),
+        }
+        Ok(())
+    }
+
     pub fn semantic_projection(&self) -> AiProbeSemanticProjection<'_> {
+        let mut models = self
+            .models
+            .iter()
+            .map(|model| {
+                let mut reasoning = model
+                    .reasoning_options
+                    .iter()
+                    .map(|option| &option.selection)
+                    .collect::<Vec<_>>();
+                reasoning.sort_by(|left, right| {
+                    reasoning_sort_key(left).cmp(&reasoning_sort_key(right))
+                });
+                AiModelSemanticProjection {
+                    model_id: &model.model_id,
+                    reported_model_id: model.reported_model_id.as_deref(),
+                    capabilities: &model.capabilities,
+                    reasoning,
+                }
+            })
+            .collect::<Vec<_>>();
+        models.sort_by(|left, right| left.model_id.cmp(right.model_id));
         AiProbeSemanticProjection {
             connection_id: self.connection_id.as_str(),
             execution_revision: self.execution_revision.get(),
             provider: self.provider,
             endpoint_fingerprint: &self.endpoint_fingerprint,
             adapter_version: &self.adapter_version,
-            models: self
-                .models
-                .iter()
-                .map(|model| AiModelSemanticProjection {
-                    model_id: &model.model_id,
-                    reported_model_id: model.reported_model_id.as_deref(),
-                    capabilities: &model.capabilities,
-                    reasoning: model
-                        .reasoning_options
-                        .iter()
-                        .map(|option| &option.selection)
-                        .collect(),
-                })
-                .collect(),
+            tested_model_id: &self.tested_model_id,
+            tested_reasoning: &self.tested_reasoning,
+            models,
         }
     }
 }
@@ -863,6 +983,8 @@ pub struct AiProbeSemanticProjection<'a> {
     provider: AiProviderKind,
     endpoint_fingerprint: &'a str,
     adapter_version: &'a str,
+    tested_model_id: &'a str,
+    tested_reasoning: &'a AiReasoningSelection,
     models: Vec<AiModelSemanticProjection<'a>>,
 }
 
@@ -875,18 +997,17 @@ struct AiModelSemanticProjection<'a> {
 }
 
 pub fn catalogue_sha256(evidence: &AiProbeEvidence) -> Result<String, AiContractError> {
-    if evidence.models.len() > MAX_MODELS {
-        return Err(AiContractError::InvalidCatalogue);
-    }
-    for model in &evidence.models {
-        validate_model_id(&model.model_id)?;
-        if let Some(reported_model_id) = &model.reported_model_id {
-            validate_model_id(reported_model_id)?;
-        }
-    }
+    evidence.validate()?;
     let bytes = serde_json_canonicalizer::to_vec(&evidence.semantic_projection())
         .map_err(|_| AiContractError::InvalidCatalogue)?;
     Ok(sha256_hex(&bytes))
+}
+
+fn reasoning_sort_key(selection: &AiReasoningSelection) -> (u8, &str) {
+    match selection {
+        AiReasoningSelection::Unsupported => (0, ""),
+        AiReasoningSelection::Effort { id } => (1, id),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -906,13 +1027,21 @@ pub enum AiConnectionStatus {
 pub struct AiConnectionView {
     pub connection_id: String,
     pub execution_revision: u64,
+    pub credential_generation: u64,
     pub method: AiConnectionMethod,
     pub provider: AiProviderKind,
     pub display_name: String,
+    pub configuration: AiConnectionConfiguration,
+    pub data_destination: String,
+    pub endpoint_fingerprint: String,
     pub enabled: bool,
     pub status: AiConnectionStatus,
     pub secret_configured: bool,
     pub models: Vec<AiModelView>,
+    pub adapter_version: Option<String>,
+    pub catalogue_sha256: Option<String>,
+    pub tested_model_id: Option<String>,
+    pub tested_reasoning: Option<AiReasoningSelection>,
     pub status_summary: String,
 }
 
@@ -1265,6 +1394,45 @@ mod tests {
     }
 
     #[test]
+    fn configuration_validation_rejects_auth_overlap_noncanonical_endpoints_and_bad_accounts() {
+        assert!(CompatibleEndpointConfiguration::parse(
+            "https://example.com/v1",
+            CompatibleCredentialKind::ApiKeyHeader {
+                name: "x-api-key".to_owned(),
+            },
+            vec!["X-API-KEY".to_owned()],
+            Vec::new(),
+            "model",
+        )
+        .is_err());
+
+        let mut endpoint = CompatibleEndpointConfiguration::parse(
+            "https://example.com/v1",
+            CompatibleCredentialKind::Bearer,
+            Vec::new(),
+            Vec::new(),
+            "model",
+        )
+        .unwrap();
+        endpoint.base_url.push('/');
+        assert!(AiConnectionConfiguration::OpenAiCompatible {
+            provider: AiProviderKind::OpenAiCompatible,
+            endpoint,
+        }
+        .validate()
+        .is_err());
+
+        for account_id in [String::new(), "a".repeat(4_097)] {
+            assert!(AiConnectionConfiguration::AccountLogin {
+                provider: AiProviderKind::Codex,
+                account_id,
+            }
+            .validate()
+            .is_err());
+        }
+    }
+
+    #[test]
     fn catalogue_hash_excludes_observation_time_and_presentation_labels() {
         let mut evidence = probe_evidence("2026-08-24T12:00:00Z", "Visible model", "Low");
         let first = catalogue_sha256(&evidence).unwrap();
@@ -1273,6 +1441,94 @@ mod tests {
         evidence.models[0].reasoning_options[0].label = "Economical".to_owned();
 
         assert_eq!(catalogue_sha256(&evidence).unwrap(), first);
+    }
+
+    #[test]
+    fn catalogue_hash_canonicalizes_order_and_includes_the_tested_pair() {
+        let mut value = serde_json::to_value(probe_evidence(
+            "2026-08-24T12:00:00Z",
+            "Visible model",
+            "Low",
+        ))
+        .unwrap();
+        value["tested_model_id"] = serde_json::json!("gpt-test");
+        value["tested_reasoning"] = serde_json::json!({"kind":"effort","id":"low"});
+        let mut sibling = value["models"][0].clone();
+        sibling["model_id"] = serde_json::json!("gpt-sibling");
+        sibling["reported_model_id"] = serde_json::json!("gpt-sibling");
+        sibling["reasoning_options"] = serde_json::json!([
+            {
+                "selection":{"kind":"effort","id":"high"},
+                "label":"High",
+                "description":"High effort"
+            },
+            {
+                "selection":{"kind":"effort","id":"medium"},
+                "label":"Medium",
+                "description":"Medium effort"
+            }
+        ]);
+        value["models"].as_array_mut().unwrap().push(sibling);
+        let first: AiProbeEvidence = serde_json::from_value(value.clone()).unwrap();
+
+        value["models"].as_array_mut().unwrap().reverse();
+        value["models"][0]["reasoning_options"]
+            .as_array_mut()
+            .unwrap()
+            .reverse();
+        let reordered: AiProbeEvidence = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            catalogue_sha256(&first).unwrap(),
+            catalogue_sha256(&reordered).unwrap()
+        );
+
+        let mut different_pair = first;
+        different_pair.tested_model_id = "gpt-sibling".to_owned();
+        different_pair.tested_reasoning = AiReasoningSelection::Effort {
+            id: "medium".to_owned(),
+        };
+        assert_ne!(
+            catalogue_sha256(&different_pair).unwrap(),
+            catalogue_sha256(&reordered).unwrap()
+        );
+    }
+
+    #[test]
+    fn probe_evidence_rejects_duplicates_incoherence_and_false_reroute_proof() {
+        let base = serde_json::to_value(probe_evidence(
+            "2026-08-24T12:00:00Z",
+            "Visible model",
+            "Low",
+        ))
+        .unwrap();
+
+        let mut duplicate_model = base.clone();
+        let model = duplicate_model["models"][0].clone();
+        duplicate_model["models"]
+            .as_array_mut()
+            .unwrap()
+            .push(model);
+        assert!(serde_json::from_value::<AiProbeEvidence>(duplicate_model).is_err());
+
+        let mut duplicate_reasoning = base.clone();
+        let option = duplicate_reasoning["models"][0]["reasoning_options"][0].clone();
+        duplicate_reasoning["models"][0]["reasoning_options"]
+            .as_array_mut()
+            .unwrap()
+            .push(option);
+        assert!(serde_json::from_value::<AiProbeEvidence>(duplicate_reasoning).is_err());
+
+        let mut supported_unsupported = base.clone();
+        supported_unsupported["tested_reasoning"] = serde_json::json!({"kind":"unsupported"});
+        assert!(serde_json::from_value::<AiProbeEvidence>(supported_unsupported).is_err());
+
+        let mut missing_reported = base.clone();
+        missing_reported["models"][0]["reported_model_id"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<AiProbeEvidence>(missing_reported).is_err());
+
+        let mut rerouted = base;
+        rerouted["models"][0]["reported_model_id"] = serde_json::json!("different-model");
+        assert!(serde_json::from_value::<AiProbeEvidence>(rerouted).is_err());
     }
 
     #[test]
@@ -1514,13 +1770,25 @@ mod tests {
         AiConnectionView {
             connection_id: "0123456789abcdef0123456789abcdef".to_owned(),
             execution_revision: 1,
+            credential_generation: 1,
             method: AiConnectionMethod::DirectProviderKey,
             provider: AiProviderKind::OpenAi,
             display_name: "Engineering OpenAI".to_owned(),
+            configuration: AiConnectionConfiguration::DirectProviderKey {
+                provider: AiProviderKind::OpenAi,
+            },
+            data_destination: "https://api.openai.com".to_owned(),
+            endpoint_fingerprint: sha256_hex(b"https://api.openai.com"),
             enabled: true,
             status: AiConnectionStatus::Ready,
             secret_configured: true,
             models: probe_evidence("2026-08-24T12:00:00Z", "Visible model", "Low").models,
+            adapter_version: Some("worker-v1".to_owned()),
+            catalogue_sha256: Some("a".repeat(64)),
+            tested_model_id: Some("gpt-test".to_owned()),
+            tested_reasoning: Some(AiReasoningSelection::Effort {
+                id: "low".to_owned(),
+            }),
             status_summary: "Tested and ready.".to_owned(),
         }
     }
@@ -1557,6 +1825,10 @@ mod tests {
                     description: "A bounded low-effort option.".to_owned(),
                 }],
             }],
+            tested_model_id: "gpt-test".to_owned(),
+            tested_reasoning: AiReasoningSelection::Effort {
+                id: "low".to_owned(),
+            },
             observed_at: observed_at.to_owned(),
         }
     }
