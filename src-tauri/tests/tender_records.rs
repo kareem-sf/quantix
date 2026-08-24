@@ -400,7 +400,7 @@ fn reopen_runtime_host(application_home: &Path, resources: &Path) -> QuantixHost
     let host = QuantixHost::with_setup_platform_and_runtime(
         application_home,
         Arc::new(ReadySetupPlatform),
-        RuntimeLayout::bundled(resources.to_path_buf()),
+        RuntimeLayout::bundled(resources),
     );
     host.accept_runtime_fixture();
     assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
@@ -542,9 +542,7 @@ async fn byte_batch_plan_is_deterministic_at_boundaries() {
         flattened.iter().collect::<HashSet<_>>().len(),
         flattened.len()
     );
-    assert!(overflow_plan
-        .iter()
-        .all(|batch| batch.3 <= exact_budget - 1));
+    assert!(overflow_plan.iter().all(|batch| batch.3 < exact_budget));
     assert_eq!(
         overflow_plan
             .iter()

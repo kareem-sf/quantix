@@ -684,10 +684,9 @@ fn revision_overflow_and_malformed_payloads_fail_closed() {
 
 #[test]
 fn mutation_callbacks_cannot_override_payload_invariants() {
-    let cases: [(
-        &str,
-        fn(&AiConnectionVault) -> Result<VaultSnapshot, VaultError>,
-    ); 4] = [
+    type VaultMutation = fn(&AiConnectionVault) -> Result<VaultSnapshot, VaultError>;
+
+    let cases: [(&str, VaultMutation); 4] = [
         (
             "vault-mutation-revision",
             AiConnectionVault::fixture_override_revision_current,
