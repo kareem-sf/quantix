@@ -1,6 +1,9 @@
 use std::{
     fmt::{self, Write},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicBool, AtomicU8, Ordering},
+        Arc, Mutex, OnceLock,
+    },
 };
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
@@ -12,8 +15,9 @@ use super::{
     contract::{
         catalogue_sha256, normalize_label, AccountLoginProgress, ActiveAiConfiguration,
         ActiveAiConfigurationView, ActiveAiReadiness, AiConnectionConfiguration, AiConnectionId,
-        AiConnectionRevision, AiConnectionStatus, AiConnectionView, AiModelView, AiProbeEvidence,
-        AiProviderKind, AiReasoningSelection, CapabilitySupport, CredentialGeneration,
+        AiConnectionRevision, AiConnectionStatus, AiConnectionView, AiModelView,
+        AiNetworkDestinationClass, AiProbeEvidence, AiProviderKind, AiReasoningSelection,
+        CapabilitySupport, CredentialGeneration,
     },
     vault::{
         AiConnectionVault, SecretString, StoredAiConnection, StoredCredential, VaultError,
@@ -282,6 +286,7 @@ pub struct SetActiveAiConfigurationCommand {
     pub reasoning: AiReasoningSelection,
     pub adapter_version: String,
     pub catalogue_sha256: String,
+    pub destination_class: AiNetworkDestinationClass,
     pub confirmed_data_destination: String,
 }
 
@@ -296,6 +301,7 @@ struct SetActiveAiConfigurationCommandInput {
     reasoning: AiReasoningSelection,
     adapter_version: String,
     catalogue_sha256: String,
+    destination_class: AiNetworkDestinationClass,
     confirmed_data_destination: String,
 }
 
@@ -312,6 +318,7 @@ impl TryFrom<SetActiveAiConfigurationCommandInput> for SetActiveAiConfigurationC
             reasoning: value.reasoning,
             adapter_version: value.adapter_version,
             catalogue_sha256: value.catalogue_sha256,
+            destination_class: value.destination_class,
             confirmed_data_destination: value.confirmed_data_destination,
         };
         command.validate()?;
@@ -405,6 +412,8 @@ pub enum AiConnectionError {
     VaultUnavailable,
     #[error("the AI application settings store is unavailable")]
     StoreUnavailable,
+    #[error("the AI application settings commit outcome is indeterminate")]
+    StoreIndeterminate,
     #[error("the AI connection is disabled")]
     Disabled,
     #[error("the AI connection requires authentication")]
@@ -438,12 +447,34 @@ pub struct AiConnectionRecordFixtureView {
     pub has_probe_evidence: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[cfg(feature = "runtime-fixture")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum FixtureSettingsCommitOutcome {
+    ErrorAfterCommit = 1,
+    ErrorBeforeCommit = 2,
+    IndeterminateReread = 3,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredFinalApplicationSettings {
     general_preferences: GeneralApplicationPreferences,
     #[serde(deserialize_with = "deserialize_required_active_configuration")]
     active_ai_configuration: Option<ActiveAiConfiguration>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct StoredFinalApplicationSettingsRow {
+    settings: StoredFinalApplicationSettings,
+    settings_json: String,
+    updated_at: String,
+}
+
+enum SettingsCommitDisposition {
+    Success,
+    Reconcile,
+    Indeterminate,
 }
 
 fn deserialize_required_active_configuration<'de, D>(
@@ -461,6 +492,9 @@ pub struct AiConnectionRepository {
     adapter_versions: AiAdapterVersions,
     clock: Arc<Clock>,
     nonterminal_reference_check: Arc<NonterminalReferenceCheck>,
+    store_indeterminate: AtomicBool,
+    #[cfg(feature = "runtime-fixture")]
+    next_settings_commit_outcome: AtomicU8,
 }
 
 impl AiConnectionRepository {
@@ -477,6 +511,9 @@ impl AiConnectionRepository {
             adapter_versions,
             clock,
             nonterminal_reference_check,
+            store_indeterminate: AtomicBool::new(false),
+            #[cfg(feature = "runtime-fixture")]
+            next_settings_commit_outcome: AtomicU8::new(0),
         }
     }
 
@@ -695,6 +732,7 @@ impl AiConnectionRepository {
         let _gate = connection_gate()
             .lock()
             .map_err(|_| AiConnectionError::VaultUnavailable)?;
+        self.require_store_determinate()?;
         let mut operation_error = None;
         let result =
             self.vault
@@ -723,6 +761,7 @@ impl AiConnectionRepository {
         let _gate = connection_gate()
             .lock()
             .map_err(|_| AiConnectionError::VaultUnavailable)?;
+        self.require_store_determinate()?;
         self.vault
             .with_locked_payload(|payload| Ok(self.activate_payload(payload, &command)))
             .map_err(map_vault_error)?
@@ -735,6 +774,7 @@ impl AiConnectionRepository {
         let _gate = connection_gate()
             .lock()
             .map_err(|_| AiConnectionError::VaultUnavailable)?;
+        self.require_store_determinate()?;
         self.vault
             .with_locked_payload(|payload| Ok(self.clear_active_under_vault_lock(payload)))
             .map_err(map_vault_error)?
@@ -772,6 +812,7 @@ impl AiConnectionRepository {
         let _gate = connection_gate()
             .lock()
             .map_err(|_| AiConnectionError::VaultUnavailable)?;
+        self.require_store_determinate()?;
         self.inspect_under_gate()
     }
 
@@ -826,6 +867,7 @@ impl AiConnectionRepository {
         let _gate = connection_gate()
             .lock()
             .map_err(|_| AiConnectionError::VaultUnavailable)?;
+        self.require_store_determinate()?;
         self.vault
             .with_locked_payload(|payload| {
                 Ok((|| {
@@ -844,6 +886,12 @@ impl AiConnectionRepository {
                 })())
             })
             .map_err(map_vault_error)?
+    }
+
+    #[cfg(feature = "runtime-fixture")]
+    pub fn fixture_set_next_settings_commit_outcome(&self, outcome: FixtureSettingsCommitOutcome) {
+        self.next_settings_commit_outcome
+            .store(outcome as u8, Ordering::Release);
     }
 
     fn inspect_under_gate(&self) -> Result<ApplicationAiSettingsView, AiConnectionError> {
@@ -943,6 +991,7 @@ impl AiConnectionRepository {
         }
         if command.provider != provider
             || command.endpoint_fingerprint != endpoint_fingerprint
+            || !configuration.accepts_destination_class(command.destination_class)
             || command.confirmed_data_destination != data_destination
         {
             return Err(AiConnectionError::InvalidCommand);
@@ -960,6 +1009,7 @@ impl AiConnectionRepository {
         }
         if command.model_id != evidence.tested_model_id
             || command.reasoning != evidence.tested_reasoning
+            || command.destination_class != evidence.destination_class
         {
             return Err(AiConnectionError::CapabilityChanged);
         }
@@ -985,6 +1035,7 @@ impl AiConnectionRepository {
             reasoning: command.reasoning.clone(),
             adapter_version: adapter_version.to_owned(),
             catalogue_sha256: catalogue,
+            destination_class: evidence.destination_class,
             capabilities: model.capabilities.clone(),
             data_destination: data_destination.to_owned(),
             activated_at: activated_at.clone(),
@@ -1001,13 +1052,14 @@ impl AiConnectionRepository {
         let transaction = installation
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| AiConnectionError::StoreUnavailable)?;
-        let mut settings = load_final_settings(&transaction)?;
+        let prior = load_final_settings_row(&transaction)?;
+        let mut settings = prior.settings.clone();
         settings.active_ai_configuration = Some(active);
-        store_final_settings(&transaction, &settings, &activated_at)?;
-        transaction
-            .commit()
-            .map_err(|_| AiConnectionError::StoreUnavailable)?;
-        self.application_view(payload, &settings)
+        let intended = final_settings_row(settings, activated_at)?;
+        let view = self.application_view(payload, &intended.settings)?;
+        store_final_settings_row(&transaction, &intended)?;
+        let disposition = self.finish_settings_transaction(transaction);
+        self.reconcile_settings_commit(disposition, &installation, &prior, &intended, view)
     }
 
     fn clear_active_under_vault_lock(
@@ -1022,13 +1074,14 @@ impl AiConnectionRepository {
         let transaction = installation
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| AiConnectionError::StoreUnavailable)?;
-        let mut settings = load_final_settings(&transaction)?;
+        let prior = load_final_settings_row(&transaction)?;
+        let mut settings = prior.settings.clone();
         settings.active_ai_configuration = None;
-        store_final_settings(&transaction, &settings, &updated_at)?;
-        transaction
-            .commit()
-            .map_err(|_| AiConnectionError::StoreUnavailable)?;
-        self.application_view(payload, &settings)
+        let intended = final_settings_row(settings, updated_at)?;
+        let view = self.application_view(payload, &intended.settings)?;
+        store_final_settings_row(&transaction, &intended)?;
+        let disposition = self.finish_settings_transaction(transaction);
+        self.reconcile_settings_commit(disposition, &installation, &prior, &intended, view)
     }
 
     fn current_timestamp(&self) -> Result<String, AiConnectionError> {
@@ -1037,6 +1090,85 @@ impl AiConnectionRepository {
             return Err(AiConnectionError::InvalidCommand);
         }
         Ok(timestamp)
+    }
+
+    fn finish_settings_transaction(
+        &self,
+        transaction: Transaction<'_>,
+    ) -> SettingsCommitDisposition {
+        let outcome = self.take_settings_commit_outcome();
+        if outcome == 0 {
+            return if transaction.commit().is_ok() {
+                SettingsCommitDisposition::Success
+            } else {
+                SettingsCommitDisposition::Reconcile
+            };
+        }
+        match outcome {
+            1 | 3 => {
+                let _ = transaction.commit();
+                if outcome == 3 {
+                    SettingsCommitDisposition::Indeterminate
+                } else {
+                    SettingsCommitDisposition::Reconcile
+                }
+            }
+            2 => {
+                let _ = transaction.rollback();
+                SettingsCommitDisposition::Reconcile
+            }
+            _ => {
+                let _ = transaction.rollback();
+                SettingsCommitDisposition::Indeterminate
+            }
+        }
+    }
+
+    fn reconcile_settings_commit(
+        &self,
+        disposition: SettingsCommitDisposition,
+        installation: &Connection,
+        prior: &StoredFinalApplicationSettingsRow,
+        intended: &StoredFinalApplicationSettingsRow,
+        intended_view: ApplicationAiSettingsView,
+    ) -> Result<ApplicationAiSettingsView, AiConnectionError> {
+        if matches!(disposition, SettingsCommitDisposition::Success) {
+            return Ok(intended_view);
+        }
+        if matches!(disposition, SettingsCommitDisposition::Indeterminate) {
+            self.latch_store_indeterminate();
+            return Err(AiConnectionError::StoreIndeterminate);
+        }
+        match load_final_settings_row(installation) {
+            Ok(actual) if actual == *intended => Ok(intended_view),
+            Ok(actual) if actual == *prior => Err(AiConnectionError::StoreUnavailable),
+            Ok(_) | Err(_) => {
+                self.latch_store_indeterminate();
+                Err(AiConnectionError::StoreIndeterminate)
+            }
+        }
+    }
+
+    fn require_store_determinate(&self) -> Result<(), AiConnectionError> {
+        if self.store_indeterminate.load(Ordering::Acquire) {
+            return Err(AiConnectionError::StoreIndeterminate);
+        }
+        Ok(())
+    }
+
+    fn latch_store_indeterminate(&self) {
+        self.store_indeterminate.store(true, Ordering::Release);
+    }
+
+    fn take_settings_commit_outcome(&self) -> u8 {
+        #[cfg(feature = "runtime-fixture")]
+        {
+            self.next_settings_commit_outcome.swap(0, Ordering::AcqRel)
+        }
+        #[cfg(not(feature = "runtime-fixture"))]
+        {
+            0
+        }
     }
 
     fn delete_payload(
@@ -1138,6 +1270,7 @@ impl AiConnectionRepository {
         if catalogue != active.catalogue_sha256
             || evidence.tested_model_id != active.model_id
             || evidence.tested_reasoning != active.reasoning
+            || evidence.destination_class != active.destination_class
             || model.capabilities != active.capabilities
             || !reasoning_is_activatable(model, &active.reasoning)
         {
@@ -1191,6 +1324,7 @@ impl AiConnectionRepository {
             models: evidence.map_or_else(Vec::new, |evidence| evidence.models.clone()),
             adapter_version: evidence.map(|evidence| evidence.adapter_version.clone()),
             catalogue_sha256,
+            destination_class: evidence.map(|evidence| evidence.destination_class),
             tested_model_id: evidence.map(|evidence| evidence.tested_model_id.clone()),
             tested_reasoning: evidence.map(|evidence| evidence.tested_reasoning.clone()),
             status_summary: status_summary(status).to_owned(),
@@ -1275,9 +1409,7 @@ fn take_compatible_credential(
         .iter()
         .chain(custom_query_values.iter())
         .try_fold(api_key.len(), |total, field| {
-            total
-                .checked_add(field.name.len())?
-                .checked_add(field.value.len())
+            total.checked_add(field.value.len())
         })
         .ok_or(AiConnectionError::InvalidCommand)?;
     if total_bytes > MAX_CREDENTIAL_BYTES {
@@ -1442,30 +1574,54 @@ fn validate_probe_evidence(
 fn load_final_settings(
     connection: &Connection,
 ) -> Result<StoredFinalApplicationSettings, AiConnectionError> {
-    let raw = connection
+    Ok(load_final_settings_row(connection)?.settings)
+}
+
+fn load_final_settings_row(
+    connection: &Connection,
+) -> Result<StoredFinalApplicationSettingsRow, AiConnectionError> {
+    let (settings_json, updated_at) = connection
         .query_row(
-            "SELECT settings_json FROM application_settings WHERE singleton = 1",
+            "SELECT settings_json, updated_at
+             FROM application_settings WHERE singleton = 1",
             [],
-            |row| row.get::<_, String>(0),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()
         .map_err(|_| AiConnectionError::StoreUnavailable)?
         .ok_or(AiConnectionError::StoreUnavailable)?;
-    serde_json::from_str(&raw).map_err(|_| AiConnectionError::StoreUnavailable)
+    let settings =
+        serde_json::from_str(&settings_json).map_err(|_| AiConnectionError::StoreUnavailable)?;
+    Ok(StoredFinalApplicationSettingsRow {
+        settings,
+        settings_json,
+        updated_at,
+    })
 }
 
-fn store_final_settings(
+fn final_settings_row(
+    settings: StoredFinalApplicationSettings,
+    updated_at: String,
+) -> Result<StoredFinalApplicationSettingsRow, AiConnectionError> {
+    let settings_json =
+        serde_json::to_string(&settings).map_err(|_| AiConnectionError::StoreUnavailable)?;
+    Ok(StoredFinalApplicationSettingsRow {
+        settings,
+        settings_json,
+        updated_at,
+    })
+}
+
+fn store_final_settings_row(
     transaction: &Transaction<'_>,
-    settings: &StoredFinalApplicationSettings,
-    updated_at: &str,
+    row: &StoredFinalApplicationSettingsRow,
 ) -> Result<(), AiConnectionError> {
-    let json = serde_json::to_string(settings).map_err(|_| AiConnectionError::StoreUnavailable)?;
     let changed = transaction
         .execute(
             "UPDATE application_settings
              SET settings_json = ?1, updated_at = ?2
              WHERE singleton = 1",
-            (&json, updated_at),
+            (&row.settings_json, &row.updated_at),
         )
         .map_err(|_| AiConnectionError::StoreUnavailable)?;
     if changed != 1 {
@@ -1505,6 +1661,7 @@ fn active_configuration_view(active: &ActiveAiConfiguration) -> ActiveAiConfigur
         reasoning: active.reasoning.clone(),
         adapter_version: active.adapter_version.clone(),
         catalogue_sha256: active.catalogue_sha256.clone(),
+        destination_class: active.destination_class,
         capabilities: active.capabilities.clone(),
         data_destination: active.data_destination.clone(),
         activated_at: active.activated_at.clone(),

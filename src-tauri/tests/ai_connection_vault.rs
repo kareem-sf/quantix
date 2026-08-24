@@ -659,7 +659,7 @@ fn revision_overflow_and_malformed_payloads_fail_closed() {
     let secret = Zeroizing::new("overflow-sentinel".to_owned());
     assert!(matches!(
         overflow_vault.fixture_insert_current("00000000000000000000000000000050", &secret),
-        Err(VaultError::Invalid)
+        Err(VaultError::RevisionOverflow)
     ));
     assert_eq!(
         std::fs::read(overflow_home.path.join("ai-connections.vault")).unwrap(),

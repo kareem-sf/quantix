@@ -388,7 +388,7 @@ impl VaultPayload {
         self.validate().map_err(|_| VaultError::Invalid)?;
         self.mutation_revision = original_revision
             .checked_add(1)
-            .ok_or(VaultError::Invalid)?;
+            .ok_or(VaultError::RevisionOverflow)?;
         Ok(())
     }
 
@@ -477,6 +477,9 @@ impl StoredAiConnection {
                         .endpoint_fingerprint()
                         .is_ok_and(|fingerprint| evidence.endpoint_fingerprint == fingerprint)
                     && evidence.validate().is_ok()
+                    && self
+                        .configuration
+                        .accepts_destination_class(evidence.destination_class)
                     && tested_model_matches_configuration(&self.configuration, evidence)
             })
     }
@@ -527,6 +530,9 @@ impl StoredAiConnection {
             || evidence.endpoint_fingerprint != expected_endpoint_fingerprint
             || evidence.adapter_version != expected_adapter_version
             || evidence.validate().is_err()
+            || !self
+                .configuration
+                .accepts_destination_class(evidence.destination_class)
             || !tested_model_matches_configuration(&self.configuration, &evidence)
         {
             return Err(VaultError::Invalid);
@@ -615,9 +621,7 @@ impl StoredCredential {
                 .values
                 .iter()
                 .try_fold(0usize, |total, value| {
-                    total
-                        .checked_add(value.name.0.len())?
-                        .checked_add(value.value.0.len())
+                    total.checked_add(value.value.0.len())
                 })
                 .is_some_and(|total| total <= MAX_CREDENTIAL_BYTES)
     }

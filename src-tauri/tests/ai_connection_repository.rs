@@ -12,16 +12,16 @@ use quantix_lib::{
             fixture_reset_secret_drop_observations, fixture_secret_drop_observations,
             AiAdapterVersions, AiConnectionRepository, AiCredentialInput,
             ClearActiveAiConfigurationCommand, CreateAiConnectionCommand,
-            DeleteAiConnectionCommand, DisconnectAiConnectionCommand,
+            DeleteAiConnectionCommand, DisconnectAiConnectionCommand, FixtureSettingsCommitOutcome,
             SameAccountTokenRefreshCommand, SecretInput, SecretNameValueInput,
             SetActiveAiConfigurationCommand, SetAiConnectionEnabledCommand,
             UpdateAiConnectionCommand,
         },
         contract::{
             catalogue_sha256, AiCapabilitySet, AiConnectionConfiguration, AiConnectionId,
-            AiConnectionRevision, AiModelView, AiProbeEvidence, AiProviderKind, AiReasoningOption,
-            AiReasoningSelection, AiStructuredOutputMode, CapabilitySupport,
-            CompatibleCredentialKind, CompatibleEndpointConfiguration,
+            AiConnectionRevision, AiModelView, AiNetworkDestinationClass, AiProbeEvidence,
+            AiProviderKind, AiReasoningOption, AiReasoningSelection, AiStructuredOutputMode,
+            CapabilitySupport, CompatibleCredentialKind, CompatibleEndpointConfiguration,
         },
         vault::AiConnectionVault,
     },
@@ -176,6 +176,18 @@ fn remove_authorizer(installation: &Arc<Mutex<Connection>>) {
         .unwrap();
 }
 
+fn raw_settings_row(installation: &Arc<Mutex<Connection>>) -> (String, String) {
+    installation
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT settings_json, updated_at FROM application_settings WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
+}
+
 fn openai_key_command(secret_value: &str) -> CreateAiConnectionCommand {
     CreateAiConnectionCommand {
         display_name: "Engineering OpenAI".to_owned(),
@@ -202,6 +214,7 @@ fn current_probe(
         provider: AiProviderKind::OpenAi,
         endpoint_fingerprint: hex_sha256("https://api.openai.com"),
         adapter_version: "general-v1".to_owned(),
+        destination_class: AiNetworkDestinationClass::Public,
         models: vec![AiModelView {
             model_id: model_id.to_owned(),
             reported_model_id: Some(model_id.to_owned()),
@@ -311,6 +324,7 @@ fn semantic_revision_and_credential_generation_are_independent() {
             },
             adapter_version: "codex-v1".to_owned(),
             catalogue_sha256: catalogue_sha256(&codex_evidence).unwrap(),
+            destination_class: AiNetworkDestinationClass::Public,
             confirmed_data_destination: "https://chatgpt.com".to_owned(),
         })
         .unwrap();
@@ -496,6 +510,7 @@ fn activation_persists_only_an_exact_explicit_configuration() {
             },
             adapter_version: "general-v1".to_owned(),
             catalogue_sha256,
+            destination_class: AiNetworkDestinationClass::Public,
             confirmed_data_destination: "https://api.openai.com".to_owned(),
         })
         .unwrap();
@@ -583,6 +598,7 @@ fn name_enable_disconnect_and_clear_preserve_their_exact_dimensions() {
             },
             adapter_version: "general-v1".to_owned(),
             catalogue_sha256: catalogue_sha256(&evidence).unwrap(),
+            destination_class: AiNetworkDestinationClass::Public,
             confirmed_data_destination: "https://api.openai.com".to_owned(),
         })
         .unwrap();
@@ -702,6 +718,7 @@ fn delete_rejects_active_and_nonterminal_references() {
             },
             adapter_version: "general-v1".to_owned(),
             catalogue_sha256: catalogue_sha256(&evidence).unwrap(),
+            destination_class: AiNetworkDestinationClass::Public,
             confirmed_data_destination: "https://api.openai.com".to_owned(),
         })
         .unwrap();
@@ -1050,6 +1067,7 @@ fn ready_active_openai(
             reasoning: connection.tested_reasoning.clone().unwrap(),
             adapter_version: connection.adapter_version.clone().unwrap(),
             catalogue_sha256: connection.catalogue_sha256.clone().unwrap(),
+            destination_class: connection.destination_class.unwrap(),
             confirmed_data_destination: connection.data_destination.clone(),
         })
         .unwrap();
@@ -1272,6 +1290,81 @@ fn fixed_connection_and_secret_bounds_are_enforced() {
 }
 
 #[test]
+fn credential_aggregate_bound_counts_only_secret_value_bytes() {
+    let direct_fixture = RepositoryFixture::new();
+    let exact = direct_fixture
+        .repo
+        .create_connection(openai_key_command(&"k".repeat(16_384)))
+        .unwrap();
+    assert!(exact.secret_configured);
+
+    let oversized_fixture = RepositoryFixture::new();
+    assert_eq!(
+        oversized_fixture
+            .repo
+            .create_connection(openai_key_command(&"k".repeat(16_385)))
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::InvalidCommand
+    );
+    assert!(oversized_fixture
+        .repo
+        .inspect()
+        .unwrap()
+        .connections
+        .is_empty());
+
+    let endpoint = CompatibleEndpointConfiguration::parse(
+        "https://credential-bound.example/v1",
+        CompatibleCredentialKind::Bearer,
+        vec!["x-bound".to_owned()],
+        Vec::new(),
+        "model",
+    )
+    .unwrap();
+    let compatible_fixture = RepositoryFixture::new();
+    assert!(compatible_fixture
+        .repo
+        .create_connection(CreateAiConnectionCommand {
+            display_name: "Exact compatible credential".to_owned(),
+            configuration: AiConnectionConfiguration::OpenAiCompatible {
+                provider: AiProviderKind::OpenAiCompatible,
+                endpoint: endpoint.clone(),
+            },
+            credential: AiCredentialInput::ApiKey {
+                api_key: secret("a".repeat(12_288)),
+                custom_header_values: vec![SecretNameValueInput {
+                    name: "x-bound".to_owned(),
+                    value: secret("h".repeat(4_096)),
+                }],
+                custom_query_values: Vec::new(),
+            },
+        })
+        .is_ok());
+    let compatible_oversized = RepositoryFixture::new();
+    assert_eq!(
+        compatible_oversized
+            .repo
+            .create_connection(CreateAiConnectionCommand {
+                display_name: "Oversized compatible credential".to_owned(),
+                configuration: AiConnectionConfiguration::OpenAiCompatible {
+                    provider: AiProviderKind::OpenAiCompatible,
+                    endpoint,
+                },
+                credential: AiCredentialInput::ApiKey {
+                    api_key: secret("a".repeat(12_289)),
+                    custom_header_values: vec![SecretNameValueInput {
+                        name: "x-bound".to_owned(),
+                        value: secret("h".repeat(4_096)),
+                    }],
+                    custom_query_values: Vec::new(),
+                },
+            })
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::InvalidCommand
+    );
+}
+
+#[test]
 fn probe_and_activation_require_exact_nonrerouted_evidence() {
     let fixture = RepositoryFixture::new();
     let connection = fixture
@@ -1338,6 +1431,7 @@ fn probe_and_activation_require_exact_nonrerouted_evidence() {
         },
         adapter_version: "general-v1".to_owned(),
         catalogue_sha256: catalogue_sha256(&with_sibling).unwrap(),
+        destination_class: AiNetworkDestinationClass::Public,
         confirmed_data_destination: "https://api.openai.com".to_owned(),
     };
     assert_eq!(
@@ -1357,6 +1451,7 @@ fn probe_and_activation_require_exact_nonrerouted_evidence() {
         },
         adapter_version: "general-v1".to_owned(),
         catalogue_sha256: catalogue_sha256(&exact).unwrap(),
+        destination_class: AiNetworkDestinationClass::Public,
         confirmed_data_destination: "https://api.openai.com".to_owned(),
     };
     let mut wrong_model = exact_command.clone();
@@ -1423,6 +1518,7 @@ fn untested_sibling_reasoning_effort_is_not_activatable() {
         reasoning,
         adapter_version: tested.adapter_version.clone().unwrap(),
         catalogue_sha256: tested.catalogue_sha256.clone().unwrap(),
+        destination_class: tested.destination_class.unwrap(),
         confirmed_data_destination: tested.data_destination.clone(),
     };
     assert_eq!(
@@ -1483,6 +1579,131 @@ fn compatible_probe_must_test_the_configured_explicit_model() {
     assert_eq!(
         fixture.repo.record_probe(wrong).unwrap_err(),
         quantix_lib::ai::connections::AiConnectionError::InvalidCommand
+    );
+}
+
+#[test]
+fn network_destination_class_is_pinned_through_probe_activation_and_readiness() {
+    let fixture = RepositoryFixture::new();
+    let endpoint = CompatibleEndpointConfiguration::parse(
+        "https://destination-class.example/v1",
+        CompatibleCredentialKind::Bearer,
+        Vec::new(),
+        Vec::new(),
+        "class-model",
+    )
+    .unwrap();
+    let connection = fixture
+        .repo
+        .create_connection(CreateAiConnectionCommand {
+            display_name: "Private destination".to_owned(),
+            configuration: AiConnectionConfiguration::OpenAiCompatible {
+                provider: AiProviderKind::OpenAiCompatible,
+                endpoint: endpoint.clone(),
+            },
+            credential: AiCredentialInput::ApiKey {
+                api_key: secret("class-secret"),
+                custom_header_values: Vec::new(),
+                custom_query_values: Vec::new(),
+            },
+        })
+        .unwrap();
+    let mut private_evidence = current_probe(
+        &connection.connection_id,
+        connection.execution_revision,
+        "class-model",
+        "low",
+    );
+    private_evidence.provider = AiProviderKind::OpenAiCompatible;
+    private_evidence.endpoint_fingerprint = hex_sha256(&endpoint.base_url);
+    private_evidence.destination_class = AiNetworkDestinationClass::Private;
+    let tested = fixture.repo.record_probe(private_evidence.clone()).unwrap();
+    assert_eq!(
+        tested.destination_class,
+        Some(AiNetworkDestinationClass::Private)
+    );
+    let command = |destination_class| SetActiveAiConfigurationCommand {
+        connection_id: tested.connection_id.clone(),
+        expected_execution_revision: tested.execution_revision,
+        provider: tested.provider,
+        endpoint_fingerprint: tested.endpoint_fingerprint.clone(),
+        model_id: tested.tested_model_id.clone().unwrap(),
+        reasoning: tested.tested_reasoning.clone().unwrap(),
+        adapter_version: tested.adapter_version.clone().unwrap(),
+        catalogue_sha256: tested.catalogue_sha256.clone().unwrap(),
+        destination_class,
+        confirmed_data_destination: tested.data_destination.clone(),
+    };
+    assert_eq!(
+        fixture
+            .repo
+            .activate(command(AiNetworkDestinationClass::Public))
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::CapabilityChanged
+    );
+    assert_eq!(
+        fixture
+            .repo
+            .activate(command(AiNetworkDestinationClass::Private))
+            .unwrap()
+            .readiness,
+        quantix_lib::ai::contract::ActiveAiReadiness::Ready
+    );
+    let mut public_evidence = private_evidence;
+    public_evidence.destination_class = AiNetworkDestinationClass::Public;
+    fixture.repo.record_probe(public_evidence).unwrap();
+    assert_eq!(
+        fixture.repo.inspect().unwrap().readiness,
+        quantix_lib::ai::contract::ActiveAiReadiness::CapabilityChanged
+    );
+
+    let loopback_fixture = RepositoryFixture::new();
+    let loopback_endpoint = CompatibleEndpointConfiguration::parse(
+        "http://127.0.0.1:11434/v1",
+        CompatibleCredentialKind::Bearer,
+        Vec::new(),
+        Vec::new(),
+        "loopback-model",
+    )
+    .unwrap();
+    let loopback = loopback_fixture
+        .repo
+        .create_connection(CreateAiConnectionCommand {
+            display_name: "Loopback".to_owned(),
+            configuration: AiConnectionConfiguration::OpenAiCompatible {
+                provider: AiProviderKind::OpenAiCompatible,
+                endpoint: loopback_endpoint.clone(),
+            },
+            credential: AiCredentialInput::ApiKey {
+                api_key: secret("loopback-secret"),
+                custom_header_values: Vec::new(),
+                custom_query_values: Vec::new(),
+            },
+        })
+        .unwrap();
+    let mut loopback_evidence = current_probe(
+        &loopback.connection_id,
+        loopback.execution_revision,
+        "loopback-model",
+        "low",
+    );
+    loopback_evidence.provider = AiProviderKind::OpenAiCompatible;
+    loopback_evidence.endpoint_fingerprint = hex_sha256(&loopback_endpoint.base_url);
+    assert_eq!(
+        loopback_fixture
+            .repo
+            .record_probe(loopback_evidence.clone())
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::InvalidCommand
+    );
+    loopback_evidence.destination_class = AiNetworkDestinationClass::Loopback;
+    assert_eq!(
+        loopback_fixture
+            .repo
+            .record_probe(loopback_evidence)
+            .unwrap()
+            .destination_class,
+        Some(AiNetworkDestinationClass::Loopback)
     );
 }
 
@@ -1739,6 +1960,7 @@ fn sqlite_immediate_failure_preserves_the_prior_active_reference() {
         },
         adapter_version: "general-v1".to_owned(),
         catalogue_sha256: catalogue_sha256(&evidence).unwrap(),
+        destination_class: AiNetworkDestinationClass::Public,
         confirmed_data_destination: "https://api.openai.com".to_owned(),
     });
     assert_eq!(
@@ -1757,6 +1979,181 @@ fn sqlite_immediate_failure_preserves_the_prior_active_reference() {
         .unwrap()
         .active_configuration
         .is_none());
+}
+
+#[test]
+fn committed_settings_errors_reconcile_activation_and_clear_to_success() {
+    let activation_fixture = RepositoryFixture::new();
+    let (tested, _) = ready_unactivated_openai(&activation_fixture, "commit-after");
+    activation_fixture
+        .repo
+        .fixture_set_next_settings_commit_outcome(FixtureSettingsCommitOutcome::ErrorAfterCommit);
+    let activated = activation_fixture
+        .repo
+        .activate(SetActiveAiConfigurationCommand {
+            connection_id: tested.connection_id,
+            expected_execution_revision: tested.execution_revision,
+            provider: tested.provider,
+            endpoint_fingerprint: tested.endpoint_fingerprint,
+            model_id: tested.tested_model_id.unwrap(),
+            reasoning: tested.tested_reasoning.unwrap(),
+            adapter_version: tested.adapter_version.unwrap(),
+            catalogue_sha256: tested.catalogue_sha256.unwrap(),
+            destination_class: tested.destination_class.unwrap(),
+            confirmed_data_destination: tested.data_destination,
+        })
+        .unwrap();
+    let (activation_json, activation_updated_at) =
+        raw_settings_row(&activation_fixture.installation);
+    let activation_stored: serde_json::Value = serde_json::from_str(&activation_json).unwrap();
+    assert_eq!(activation_updated_at, "2026-08-24T12:34:56Z");
+    assert_eq!(
+        activation_stored["active_ai_configuration"],
+        serde_json::to_value(activated.active_configuration.unwrap()).unwrap()
+    );
+
+    let clear_fixture = RepositoryFixture::new();
+    ready_active_openai(&clear_fixture, "clear-after-commit");
+    clear_fixture
+        .repo
+        .fixture_set_next_settings_commit_outcome(FixtureSettingsCommitOutcome::ErrorAfterCommit);
+    let cleared = clear_fixture
+        .repo
+        .clear_active(ClearActiveAiConfigurationCommand {})
+        .unwrap();
+    let (clear_json, clear_updated_at) = raw_settings_row(&clear_fixture.installation);
+    let clear_stored: serde_json::Value = serde_json::from_str(&clear_json).unwrap();
+    assert_eq!(clear_updated_at, "2026-08-24T12:34:56Z");
+    assert!(clear_stored["active_ai_configuration"].is_null());
+    assert!(cleared.active_configuration.is_none());
+    assert_eq!(
+        cleared.readiness,
+        quantix_lib::ai::contract::ActiveAiReadiness::NotConfigured
+    );
+}
+
+#[test]
+fn rolled_back_settings_errors_preserve_exact_prior_rows() {
+    let activation_fixture = RepositoryFixture::new();
+    let (tested, _) = ready_unactivated_openai(&activation_fixture, "commit-before");
+    let activation_prior = raw_settings_row(&activation_fixture.installation);
+    activation_fixture
+        .repo
+        .fixture_set_next_settings_commit_outcome(FixtureSettingsCommitOutcome::ErrorBeforeCommit);
+    assert_eq!(
+        activation_fixture
+            .repo
+            .activate(SetActiveAiConfigurationCommand {
+                connection_id: tested.connection_id,
+                expected_execution_revision: tested.execution_revision,
+                provider: tested.provider,
+                endpoint_fingerprint: tested.endpoint_fingerprint,
+                model_id: tested.tested_model_id.unwrap(),
+                reasoning: tested.tested_reasoning.unwrap(),
+                adapter_version: tested.adapter_version.unwrap(),
+                catalogue_sha256: tested.catalogue_sha256.unwrap(),
+                destination_class: tested.destination_class.unwrap(),
+                confirmed_data_destination: tested.data_destination,
+            })
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreUnavailable
+    );
+    assert_eq!(
+        raw_settings_row(&activation_fixture.installation),
+        activation_prior
+    );
+
+    let clear_fixture = RepositoryFixture::new();
+    ready_active_openai(&clear_fixture, "clear-before-commit");
+    let clear_prior = raw_settings_row(&clear_fixture.installation);
+    clear_fixture
+        .repo
+        .fixture_set_next_settings_commit_outcome(FixtureSettingsCommitOutcome::ErrorBeforeCommit);
+    assert_eq!(
+        clear_fixture
+            .repo
+            .clear_active(ClearActiveAiConfigurationCommand {})
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreUnavailable
+    );
+    assert_eq!(raw_settings_row(&clear_fixture.installation), clear_prior);
+}
+
+#[test]
+fn indeterminate_settings_latch_blocks_current_repository_until_restart() {
+    let fixture = RepositoryFixture::new();
+    let (tested, _) = ready_unactivated_openai(&fixture, "indeterminate");
+    fixture.repo.fixture_set_next_settings_commit_outcome(
+        FixtureSettingsCommitOutcome::IndeterminateReread,
+    );
+    let connection_id = tested.connection_id.clone();
+    let credential_generation = tested.credential_generation;
+    let activation_command = SetActiveAiConfigurationCommand {
+        connection_id: connection_id.clone(),
+        expected_execution_revision: tested.execution_revision,
+        provider: tested.provider,
+        endpoint_fingerprint: tested.endpoint_fingerprint,
+        model_id: tested.tested_model_id.unwrap(),
+        reasoning: tested.tested_reasoning.unwrap(),
+        adapter_version: tested.adapter_version.unwrap(),
+        catalogue_sha256: tested.catalogue_sha256.unwrap(),
+        destination_class: tested.destination_class.unwrap(),
+        confirmed_data_destination: tested.data_destination,
+    };
+    assert_eq!(
+        fixture
+            .repo
+            .activate(activation_command.clone())
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreIndeterminate
+    );
+    assert_eq!(
+        fixture.repo.inspect().unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreIndeterminate
+    );
+    assert_eq!(
+        fixture.repo.activate(activation_command).unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreIndeterminate
+    );
+    assert_eq!(
+        fixture
+            .repo
+            .clear_active(ClearActiveAiConfigurationCommand {})
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreIndeterminate
+    );
+    assert_eq!(
+        fixture
+            .repo
+            .delete_connection(DeleteAiConnectionCommand {
+                connection_id: connection_id.clone(),
+                expected_execution_revision: tested.execution_revision,
+                expected_credential_generation: credential_generation,
+            })
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreIndeterminate
+    );
+    assert_eq!(
+        fixture
+            .repo
+            .fixture_create_future_run(&connection_id, || {
+                panic!("latched repository must not resolve a future run")
+            })
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreIndeterminate
+    );
+
+    let restarted = AiConnectionRepository::new(
+        AiConnectionVault::new(&fixture.application_home).unwrap(),
+        Arc::clone(&fixture.installation),
+        AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
+        Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
+        Arc::new(no_nonterminal_reference),
+    );
+    assert_eq!(
+        restarted.inspect().unwrap().readiness,
+        quantix_lib::ai::contract::ActiveAiReadiness::Ready
+    );
 }
 
 #[test]
@@ -1782,6 +2179,7 @@ fn prior_active_clear_delete_and_disconnect_failures_preserve_state() {
                 reasoning: replacement.tested_reasoning.unwrap(),
                 adapter_version: replacement.adapter_version.unwrap(),
                 catalogue_sha256: catalogue_sha256(&replacement_evidence).unwrap(),
+                destination_class: replacement.destination_class.unwrap(),
                 confirmed_data_destination: replacement.data_destination,
             })
             .unwrap_err(),
@@ -2139,6 +2537,7 @@ fn public_view_round_trip_reaches_every_final_command() {
         "reasoning": connection.tested_reasoning,
         "adapter_version": connection.adapter_version,
         "catalogue_sha256": connection.catalogue_sha256,
+        "destination_class": connection.destination_class,
         "confirmed_data_destination": connection.data_destination
     }))
     .unwrap();
@@ -2218,6 +2617,7 @@ fn activation_returns_the_committed_in_memory_snapshot_without_reread() {
             reasoning: tested.tested_reasoning.unwrap(),
             adapter_version: tested.adapter_version.unwrap(),
             catalogue_sha256: tested.catalogue_sha256.unwrap(),
+            destination_class: tested.destination_class.unwrap(),
             confirmed_data_destination: tested.data_destination,
         })
         .unwrap();
@@ -2444,6 +2844,7 @@ fn activation_requires_enabled_credentials_and_explicit_unsupported_reasoning() 
         reasoning,
         adapter_version: "general-v1".to_owned(),
         catalogue_sha256: catalogue_sha256(&evidence).unwrap(),
+        destination_class: AiNetworkDestinationClass::Public,
         confirmed_data_destination: "https://api.openai.com".to_owned(),
     };
     fixture
@@ -2562,6 +2963,7 @@ fn adapter_activation_and_account_expiry_inputs_are_strictly_bounded() {
         "reasoning":{"kind":"unsupported"},
         "adapter_version":"general-v1",
         "catalogue_sha256":"b".repeat(64),
+        "destination_class":"public",
         "confirmed_data_destination":"https://api.openai.com"
     });
     assert!(serde_json::from_value::<SetActiveAiConfigurationCommand>(base.clone()).is_ok());
@@ -2641,6 +3043,7 @@ fn exact_bound_compatible_destination_activates_and_bad_clock_cannot_write() {
             reasoning: tested.tested_reasoning.unwrap(),
             adapter_version: tested.adapter_version.unwrap(),
             catalogue_sha256: tested.catalogue_sha256.unwrap(),
+            destination_class: tested.destination_class.unwrap(),
             confirmed_data_destination: tested.data_destination,
         })
         .unwrap();
@@ -2670,6 +3073,7 @@ fn exact_bound_compatible_destination_activates_and_bad_clock_cannot_write() {
                 reasoning: invalid_connection.tested_reasoning.unwrap(),
                 adapter_version: invalid_connection.adapter_version.unwrap(),
                 catalogue_sha256: catalogue_sha256(&invalid_evidence).unwrap(),
+                destination_class: invalid_connection.destination_class.unwrap(),
                 confirmed_data_destination: invalid_connection.data_destination,
             })
             .unwrap_err(),

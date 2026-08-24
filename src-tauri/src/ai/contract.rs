@@ -175,6 +175,14 @@ pub enum AiProviderKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+pub enum AiNetworkDestinationClass {
+    Public,
+    Private,
+    Loopback,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
 pub enum CapabilitySupport {
     Supported,
     Unsupported,
@@ -716,6 +724,29 @@ impl AiConnectionConfiguration {
     pub fn endpoint_fingerprint(&self) -> Result<String, AiContractError> {
         Ok(sha256_hex(self.data_destination()?.as_bytes()))
     }
+
+    pub fn accepts_destination_class(&self, destination_class: AiNetworkDestinationClass) -> bool {
+        match self {
+            Self::AccountLogin { .. } | Self::DirectProviderKey { .. } => {
+                destination_class == AiNetworkDestinationClass::Public
+            }
+            Self::OpenAiCompatible { endpoint, .. }
+            | Self::AnthropicCompatible { endpoint, .. } => {
+                let is_literal_loopback = reqwest::Url::parse(&endpoint.base_url)
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_owned))
+                    .is_some_and(|host| matches!(host.as_str(), "127.0.0.1" | "::1"));
+                if is_literal_loopback {
+                    destination_class == AiNetworkDestinationClass::Loopback
+                } else {
+                    matches!(
+                        destination_class,
+                        AiNetworkDestinationClass::Public | AiNetworkDestinationClass::Private
+                    )
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -860,6 +891,7 @@ pub struct AiProbeEvidence {
     pub provider: AiProviderKind,
     pub endpoint_fingerprint: String,
     pub adapter_version: String,
+    pub destination_class: AiNetworkDestinationClass,
     pub models: Vec<AiModelView>,
     pub tested_model_id: String,
     pub tested_reasoning: AiReasoningSelection,
@@ -874,6 +906,7 @@ struct AiProbeEvidenceInput {
     provider: AiProviderKind,
     endpoint_fingerprint: String,
     adapter_version: String,
+    destination_class: AiNetworkDestinationClass,
     models: Vec<AiModelView>,
     tested_model_id: String,
     tested_reasoning: AiReasoningSelection,
@@ -890,6 +923,7 @@ impl TryFrom<AiProbeEvidenceInput> for AiProbeEvidence {
             provider: value.provider,
             endpoint_fingerprint: value.endpoint_fingerprint,
             adapter_version: value.adapter_version,
+            destination_class: value.destination_class,
             models: value.models,
             tested_model_id: value.tested_model_id,
             tested_reasoning: value.tested_reasoning,
@@ -974,6 +1008,7 @@ impl AiProbeEvidence {
             provider: self.provider,
             endpoint_fingerprint: &self.endpoint_fingerprint,
             adapter_version: &self.adapter_version,
+            destination_class: self.destination_class,
             tested_model_id: &self.tested_model_id,
             tested_reasoning: &self.tested_reasoning,
             models,
@@ -988,6 +1023,7 @@ pub struct AiProbeSemanticProjection<'a> {
     provider: AiProviderKind,
     endpoint_fingerprint: &'a str,
     adapter_version: &'a str,
+    destination_class: AiNetworkDestinationClass,
     tested_model_id: &'a str,
     tested_reasoning: &'a AiReasoningSelection,
     models: Vec<AiModelSemanticProjection<'a>>,
@@ -1045,6 +1081,7 @@ pub struct AiConnectionView {
     pub models: Vec<AiModelView>,
     pub adapter_version: Option<String>,
     pub catalogue_sha256: Option<String>,
+    pub destination_class: Option<AiNetworkDestinationClass>,
     pub tested_model_id: Option<String>,
     pub tested_reasoning: Option<AiReasoningSelection>,
     pub status_summary: String,
@@ -1074,6 +1111,7 @@ pub struct ActiveAiConfigurationView {
     pub reasoning: AiReasoningSelection,
     pub adapter_version: String,
     pub catalogue_sha256: String,
+    pub destination_class: AiNetworkDestinationClass,
     pub capabilities: AiCapabilitySet,
     pub data_destination: String,
     pub activated_at: String,
@@ -1105,6 +1143,7 @@ pub struct ActiveAiConfiguration {
     pub reasoning: AiReasoningSelection,
     pub adapter_version: String,
     pub catalogue_sha256: String,
+    pub destination_class: AiNetworkDestinationClass,
     pub capabilities: AiCapabilitySet,
     pub data_destination: String,
     pub activated_at: String,
@@ -1121,6 +1160,7 @@ struct ActiveAiConfigurationInput {
     reasoning: AiReasoningSelection,
     adapter_version: String,
     catalogue_sha256: String,
+    destination_class: AiNetworkDestinationClass,
     capabilities: AiCapabilitySet,
     data_destination: String,
     activated_at: String,
@@ -1145,6 +1185,7 @@ impl TryFrom<ActiveAiConfigurationInput> for ActiveAiConfiguration {
             reasoning: value.reasoning,
             adapter_version: value.adapter_version,
             catalogue_sha256: value.catalogue_sha256,
+            destination_class: value.destination_class,
             capabilities: value.capabilities,
             data_destination: value.data_destination,
             activated_at: value.activated_at,
@@ -1510,6 +1551,19 @@ mod tests {
             catalogue_sha256(&different_pair).unwrap(),
             catalogue_sha256(&reordered).unwrap()
         );
+
+        let mut private_destination = reordered.clone();
+        private_destination.destination_class = AiNetworkDestinationClass::Private;
+        assert_ne!(
+            catalogue_sha256(&private_destination).unwrap(),
+            catalogue_sha256(&reordered).unwrap()
+        );
+        let round_trip: AiProbeEvidence =
+            serde_json::from_str(&serde_json::to_string(&private_destination).unwrap()).unwrap();
+        assert_eq!(
+            round_trip.destination_class,
+            AiNetworkDestinationClass::Private
+        );
     }
 
     #[test]
@@ -1680,6 +1734,7 @@ mod tests {
             "reasoning": {"kind": "unsupported"},
             "adapter_version": "worker-v1",
             "catalogue_sha256": "a".repeat(64),
+            "destination_class": "public",
             "capabilities": {
                 "streaming": "supported",
                 "tools": "supported",
@@ -1717,6 +1772,7 @@ mod tests {
             "reasoning": {"kind": "unsupported"},
             "adapter_version": "worker-v1",
             "catalogue_sha256": "z".repeat(64),
+            "destination_class": "public",
             "capabilities": {
                 "streaming": "supported",
                 "tools": "supported",
@@ -1804,6 +1860,7 @@ mod tests {
             models: probe_evidence("2026-08-24T12:00:00Z", "Visible model", "Low").models,
             adapter_version: Some("worker-v1".to_owned()),
             catalogue_sha256: Some("a".repeat(64)),
+            destination_class: Some(AiNetworkDestinationClass::Public),
             tested_model_id: Some("gpt-test".to_owned()),
             tested_reasoning: Some(AiReasoningSelection::Effort {
                 id: "low".to_owned(),
@@ -1823,6 +1880,7 @@ mod tests {
             provider: AiProviderKind::OpenAi,
             endpoint_fingerprint: "direct-openai".to_owned(),
             adapter_version: "worker-v1".to_owned(),
+            destination_class: AiNetworkDestinationClass::Public,
             models: vec![AiModelView {
                 model_id: "gpt-test".to_owned(),
                 reported_model_id: Some("gpt-test".to_owned()),
