@@ -141,8 +141,9 @@ No prompt, provider setting, skill, tool, or agent message can expand Host autho
 ### 4.3 AI Runtime Workers
 
 Provider protocols run in replaceable, supervised local workers behind one
-Quantix-owned AI Runtime Contract. The Host does not reimplement provider SDKs. It
-uses official SDKs or maintained compatibility libraries in isolated workers.
+Quantix-owned AI Runtime Contract. The Host does not reimplement model wire
+protocols. It uses the official Codex app-server harness or maintained provider
+libraries in isolated workers.
 
 The contract normalizes:
 
@@ -154,10 +155,18 @@ The contract normalizes:
 - declared capabilities such as tools, images, reasoning, structured output,
   context size, and streaming.
 
-One Codex worker uses the official Codex SDK for account-backed Codex execution. A
-general provider worker handles direct API-key and compatible endpoint protocols.
-Different run grants use isolated worker scopes; workers may be pooled only when
-their user, connection, tools, skills, workspace, and sandbox policy are identical.
+The Host drives the official Codex app-server directly for account-backed Codex
+execution because OpenAI positions app-server for agents embedded inside products.
+A separate Pydantic AI worker handles direct API-key and compatible endpoint
+protocols without becoming a workflow authority. Different run grants use isolated
+worker scopes; workers may be pooled only when their user, connection, tools,
+skills, workspace, and sandbox policy are identical.
+
+Codex's host-managed token and client-executed dynamic-tool surfaces are unstable,
+internal-only protocol seams in the pinned runtime. They may be exercised only in
+private development behind exact contract tests and cannot ship without written
+OpenAI approval. Loss or drift makes the account connector incompatible and never
+falls back to a private ChatGPT endpoint or another provider.
 
 ### 4.4 Capability Workers
 
@@ -555,7 +564,9 @@ Each layer receives a focused specification, implementation plan, review, and
 end-to-end acceptance before the next begins:
 
 1. **AI connection foundation:** four methods, user-selected active configuration,
-   encrypted vault, capability probing, normalized events, no fallback.
+   encrypted vault, capability probing, normalized events, no fallback. The focused
+   design is
+   [`2026-08-24-layer-1-ai-connection-foundation-design.md`](./2026-08-24-layer-1-ai-connection-foundation-design.md).
 2. **Dynamic AI team:** Manager, Egyptian employee personas, grants, messaging,
    lifecycle, smart parallelism, Loop Guard, Manager-first UX.
 3. **Memory and evidence:** layered memory, hybrid retrieval, source-linked facts,
@@ -576,8 +587,11 @@ verification.
 
 The design selectively adopts ideas rather than whole systems:
 
-- [OpenAI Codex SDK](https://learn.chatgpt.com/docs/codex-sdk) for supported embedded
-  Codex control.
+- [OpenAI Codex app-server](https://learn.chatgpt.com/docs/app-server) for the
+  account-backed harness, lifecycle, events, interruption, and client tool boundary.
+- [Pydantic AI model providers](https://pydantic.dev/docs/ai/models/overview/) and
+  [deferred tools](https://pydantic.dev/docs/ai/tools-toolsets/deferred-tools/) for
+  direct/compatible provider normalization behind the Rust Host.
 - [Vercel AI SDK provider architecture](https://ai-sdk.dev/docs/foundations/providers-and-models)
   for direct and compatible provider normalization patterns.
 - [OpenClaw embedding and multi-agent design](https://docs.openclaw.ai/gateway/embedding)
@@ -611,8 +625,12 @@ The architecture is realized only when:
 1. A beginner can configure any of the four connection methods, test it, and choose
    one active provider/model without developer concepts or a product-selected
    default.
-2. Secrets exist only in the user-scoped encrypted vault and never cross the
-   credential-free renderer, Tender, log, diagnostic, backup, or export boundaries.
+2. Persistent provider credentials at rest exist only in the user-scoped encrypted
+   vault. A newly entered secret may transit the active renderer form and write-only
+   IPC once; during execution only the Host and assigned worker hold the selected
+   credential in memory/private IPC. Existing credentials are never returned or
+   persisted in a Tender, log, diagnostic, backup, export, process argument, or
+   process environment.
 3. A Tender Manager dynamically creates a minimal Egyptian Arabic team whose powers,
    data, tools, memory, budgets, and messages are Host-enforced and inspectable.
 4. Agents collaborate and recover without uncontrolled spawning, usage loops,
