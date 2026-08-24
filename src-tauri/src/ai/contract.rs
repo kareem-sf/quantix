@@ -14,6 +14,11 @@ const MAX_CUSTOM_FIELDS: usize = 16;
 const MAX_CUSTOM_NAME_BYTES: usize = 128;
 const MAX_CUSTOM_VALUE_BYTES: usize = 4 * 1024;
 const MAX_MODELS: usize = 500;
+const MAX_DESCRIPTION_BYTES: usize = 4 * 1024;
+const MAX_ENDPOINT_FINGERPRINT_BYTES: usize = 128;
+const MAX_ADAPTER_VERSION_BYTES: usize = 128;
+const MAX_DATA_DESTINATION_BYTES: usize = 256;
+const MAX_TIMESTAMP_BYTES: usize = 128;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum AiContractError {
@@ -43,10 +48,12 @@ pub enum AiContractError {
     InvalidModelId,
     #[error("the capability catalogue is invalid")]
     InvalidCatalogue,
+    #[error("the AI configuration metadata is invalid")]
+    InvalidMetadata,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
-#[serde(transparent)]
+#[serde(try_from = "String", into = "String")]
 pub struct AiConnectionId(String);
 
 impl AiConnectionId {
@@ -67,8 +74,22 @@ impl AiConnectionId {
     }
 }
 
+impl TryFrom<String> for AiConnectionId {
+    type Error = AiContractError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::parse(value)
+    }
+}
+
+impl From<AiConnectionId> for String {
+    fn from(value: AiConnectionId) -> Self {
+        value.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
-#[serde(transparent)]
+#[serde(try_from = "u64", into = "u64")]
 pub struct AiConnectionRevision(u64);
 
 impl AiConnectionRevision {
@@ -83,8 +104,22 @@ impl AiConnectionRevision {
     }
 }
 
+impl TryFrom<u64> for AiConnectionRevision {
+    type Error = AiContractError;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<AiConnectionRevision> for u64 {
+    fn from(value: AiConnectionRevision) -> Self {
+        value.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
-#[serde(transparent)]
+#[serde(try_from = "u64", into = "u64")]
 pub struct CredentialGeneration(u64);
 
 impl CredentialGeneration {
@@ -96,6 +131,20 @@ impl CredentialGeneration {
 
     pub fn get(self) -> u64 {
         self.0
+    }
+}
+
+impl TryFrom<u64> for CredentialGeneration {
+    type Error = AiContractError;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<CredentialGeneration> for u64 {
+    fn from(value: CredentialGeneration) -> Self {
+        value.0
     }
 }
 
@@ -129,7 +178,7 @@ pub enum CapabilitySupport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AiReasoningSelection {
     Unsupported,
     Effort { id: String },
@@ -169,10 +218,34 @@ pub fn validate_method_provider(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    try_from = "CompatibleCredentialKindInput"
+)]
 pub enum CompatibleCredentialKind {
     Bearer,
     ApiKeyHeader { name: String },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum CompatibleCredentialKindInput {
+    Bearer,
+    ApiKeyHeader { name: String },
+}
+
+impl TryFrom<CompatibleCredentialKindInput> for CompatibleCredentialKind {
+    type Error = AiContractError;
+
+    fn try_from(value: CompatibleCredentialKindInput) -> Result<Self, Self::Error> {
+        let credential = match value {
+            CompatibleCredentialKindInput::Bearer => Self::Bearer,
+            CompatibleCredentialKindInput::ApiKeyHeader { name } => Self::ApiKeyHeader { name },
+        };
+        credential.validate()?;
+        Ok(credential)
+    }
 }
 
 impl CompatibleCredentialKind {
@@ -185,13 +258,37 @@ impl CompatibleCredentialKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "CompatibleEndpointConfigurationInput")]
 pub struct CompatibleEndpointConfiguration {
     pub base_url: String,
     pub credential: CompatibleCredentialKind,
     pub custom_header_names: Vec<String>,
     pub custom_query_names: Vec<String>,
     pub model_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompatibleEndpointConfigurationInput {
+    base_url: String,
+    credential: CompatibleCredentialKind,
+    custom_header_names: Vec<String>,
+    custom_query_names: Vec<String>,
+    model_id: String,
+}
+
+impl TryFrom<CompatibleEndpointConfigurationInput> for CompatibleEndpointConfiguration {
+    type Error = AiContractError;
+
+    fn try_from(value: CompatibleEndpointConfigurationInput) -> Result<Self, Self::Error> {
+        Self::parse(
+            &value.base_url,
+            value.credential,
+            value.custom_header_names,
+            value.custom_query_names,
+            &value.model_id,
+        )
+    }
 }
 
 impl CompatibleEndpointConfiguration {
@@ -286,15 +383,7 @@ pub fn validate_custom_query_name(name: &str) -> Result<(), AiContractError> {
 }
 
 fn validate_credential_header_name(name: &str) -> Result<(), AiContractError> {
-    validate_ascii_name(name, AiContractError::InvalidCredentialPlacement)?;
-    let lower = name.to_ascii_lowercase();
-    if matches!(lower.as_str(), "authorization" | "proxy-authorization")
-        || lower.starts_with("proxy-")
-        || lower.starts_with("sec-")
-    {
-        return Err(AiContractError::InvalidCredentialPlacement);
-    }
-    Ok(())
+    validate_custom_header_name(name).map_err(|_| AiContractError::InvalidCredentialPlacement)
 }
 
 fn validate_ascii_name(name: &str, error: AiContractError) -> Result<(), AiContractError> {
@@ -394,6 +483,32 @@ pub fn normalize_label(value: &str) -> Result<String, AiContractError> {
     Ok(normalized)
 }
 
+fn normalize_description(value: &str) -> Result<String, AiContractError> {
+    let normalized: String = value.nfc().collect();
+    if normalized.is_empty() || normalized.len() > MAX_DESCRIPTION_BYTES {
+        return Err(AiContractError::InvalidLabel);
+    }
+    Ok(normalized)
+}
+
+fn validate_bounded_metadata(value: &str, limit: usize) -> Result<(), AiContractError> {
+    if value.is_empty() || value.len() > limit {
+        return Err(AiContractError::InvalidMetadata);
+    }
+    Ok(())
+}
+
+fn validate_catalogue_sha256(value: &str) -> Result<(), AiContractError> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte.is_ascii_lowercase())
+    {
+        return Err(AiContractError::InvalidMetadata);
+    }
+    Ok(())
+}
+
 fn validate_model_id(value: &str) -> Result<(), AiContractError> {
     if value.is_empty() || value.len() > MAX_MODEL_ID_BYTES {
         return Err(AiContractError::InvalidModelId);
@@ -402,7 +517,11 @@ fn validate_model_id(value: &str) -> Result<(), AiContractError> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(
+    tag = "method",
+    rename_all = "snake_case",
+    try_from = "AiConnectionConfigurationInput"
+)]
 pub enum AiConnectionConfiguration {
     AccountLogin {
         provider: AiProviderKind,
@@ -419,6 +538,53 @@ pub enum AiConnectionConfiguration {
         provider: AiProviderKind,
         endpoint: CompatibleEndpointConfiguration,
     },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
+enum AiConnectionConfigurationInput {
+    AccountLogin {
+        provider: AiProviderKind,
+        account_id: String,
+    },
+    DirectProviderKey {
+        provider: AiProviderKind,
+    },
+    OpenAiCompatible {
+        provider: AiProviderKind,
+        endpoint: CompatibleEndpointConfiguration,
+    },
+    AnthropicCompatible {
+        provider: AiProviderKind,
+        endpoint: CompatibleEndpointConfiguration,
+    },
+}
+
+impl TryFrom<AiConnectionConfigurationInput> for AiConnectionConfiguration {
+    type Error = AiContractError;
+
+    fn try_from(value: AiConnectionConfigurationInput) -> Result<Self, Self::Error> {
+        let configuration = match value {
+            AiConnectionConfigurationInput::AccountLogin {
+                provider,
+                account_id,
+            } => Self::AccountLogin {
+                provider,
+                account_id,
+            },
+            AiConnectionConfigurationInput::DirectProviderKey { provider } => {
+                Self::DirectProviderKey { provider }
+            }
+            AiConnectionConfigurationInput::OpenAiCompatible { provider, endpoint } => {
+                Self::OpenAiCompatible { provider, endpoint }
+            }
+            AiConnectionConfigurationInput::AnthropicCompatible { provider, endpoint } => {
+                Self::AnthropicCompatible { provider, endpoint }
+            }
+        };
+        configuration.validate()?;
+        Ok(configuration)
+    }
 }
 
 impl AiConnectionConfiguration {
@@ -479,15 +645,35 @@ pub struct AiCapabilitySet {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "AiReasoningOptionInput")]
 pub struct AiReasoningOption {
     pub selection: AiReasoningSelection,
     pub label: String,
     pub description: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct AiReasoningOptionInput {
+    selection: AiReasoningSelection,
+    label: String,
+    description: String,
+}
+
+impl TryFrom<AiReasoningOptionInput> for AiReasoningOption {
+    type Error = AiContractError;
+
+    fn try_from(value: AiReasoningOptionInput) -> Result<Self, Self::Error> {
+        Ok(Self {
+            selection: value.selection,
+            label: normalize_label(&value.label)?,
+            description: normalize_description(&value.description)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(try_from = "AiModelViewInput")]
 pub struct AiModelView {
     pub model_id: String,
     pub reported_model_id: Option<String>,
@@ -496,8 +682,36 @@ pub struct AiModelView {
     pub reasoning_options: Vec<AiReasoningOption>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct AiModelViewInput {
+    model_id: String,
+    reported_model_id: Option<String>,
+    display_name: String,
+    capabilities: AiCapabilitySet,
+    reasoning_options: Vec<AiReasoningOption>,
+}
+
+impl TryFrom<AiModelViewInput> for AiModelView {
+    type Error = AiContractError;
+
+    fn try_from(value: AiModelViewInput) -> Result<Self, Self::Error> {
+        validate_model_id(&value.model_id)?;
+        if let Some(reported_model_id) = &value.reported_model_id {
+            validate_model_id(reported_model_id)?;
+        }
+        Ok(Self {
+            model_id: value.model_id,
+            reported_model_id: value.reported_model_id,
+            display_name: normalize_label(&value.display_name)?,
+            capabilities: value.capabilities,
+            reasoning_options: value.reasoning_options,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(try_from = "AiProbeEvidenceInput")]
 pub struct AiProbeEvidence {
     pub connection_id: AiConnectionId,
     #[serde(rename = "execution_revision")]
@@ -507,6 +721,40 @@ pub struct AiProbeEvidence {
     pub adapter_version: String,
     pub models: Vec<AiModelView>,
     pub observed_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AiProbeEvidenceInput {
+    connection_id: AiConnectionId,
+    execution_revision: AiConnectionRevision,
+    provider: AiProviderKind,
+    endpoint_fingerprint: String,
+    adapter_version: String,
+    models: Vec<AiModelView>,
+    observed_at: String,
+}
+
+impl TryFrom<AiProbeEvidenceInput> for AiProbeEvidence {
+    type Error = AiContractError;
+
+    fn try_from(value: AiProbeEvidenceInput) -> Result<Self, Self::Error> {
+        if value.models.len() > MAX_MODELS {
+            return Err(AiContractError::InvalidCatalogue);
+        }
+        validate_bounded_metadata(&value.endpoint_fingerprint, MAX_ENDPOINT_FINGERPRINT_BYTES)?;
+        validate_bounded_metadata(&value.adapter_version, MAX_ADAPTER_VERSION_BYTES)?;
+        validate_bounded_metadata(&value.observed_at, MAX_TIMESTAMP_BYTES)?;
+        Ok(Self {
+            connection_id: value.connection_id,
+            execution_revision: value.execution_revision,
+            provider: value.provider,
+            endpoint_fingerprint: value.endpoint_fingerprint,
+            adapter_version: value.adapter_version,
+            models: value.models,
+            observed_at: value.observed_at,
+        })
+    }
 }
 
 impl AiProbeEvidence {
@@ -625,7 +873,7 @@ pub struct ActiveAiConfigurationView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AccountLoginProgress {
     Idle,
     OpeningBrowser,
@@ -639,7 +887,7 @@ pub enum AccountLoginProgress {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "ActiveAiConfigurationInput")]
 pub struct ActiveAiConfiguration {
     pub connection_id: AiConnectionId,
     #[serde(rename = "execution_revision")]
@@ -653,6 +901,48 @@ pub struct ActiveAiConfiguration {
     pub capabilities: AiCapabilitySet,
     pub data_destination: String,
     pub activated_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ActiveAiConfigurationInput {
+    connection_id: AiConnectionId,
+    execution_revision: AiConnectionRevision,
+    provider: AiProviderKind,
+    endpoint_fingerprint: String,
+    model_id: String,
+    reasoning: AiReasoningSelection,
+    adapter_version: String,
+    catalogue_sha256: String,
+    capabilities: AiCapabilitySet,
+    data_destination: String,
+    activated_at: String,
+}
+
+impl TryFrom<ActiveAiConfigurationInput> for ActiveAiConfiguration {
+    type Error = AiContractError;
+
+    fn try_from(value: ActiveAiConfigurationInput) -> Result<Self, Self::Error> {
+        validate_bounded_metadata(&value.endpoint_fingerprint, MAX_ENDPOINT_FINGERPRINT_BYTES)?;
+        validate_model_id(&value.model_id)?;
+        validate_bounded_metadata(&value.adapter_version, MAX_ADAPTER_VERSION_BYTES)?;
+        validate_catalogue_sha256(&value.catalogue_sha256)?;
+        validate_bounded_metadata(&value.data_destination, MAX_DATA_DESTINATION_BYTES)?;
+        validate_bounded_metadata(&value.activated_at, MAX_TIMESTAMP_BYTES)?;
+        Ok(Self {
+            connection_id: value.connection_id,
+            execution_revision: value.execution_revision,
+            provider: value.provider,
+            endpoint_fingerprint: value.endpoint_fingerprint,
+            model_id: value.model_id,
+            reasoning: value.reasoning,
+            adapter_version: value.adapter_version,
+            catalogue_sha256: value.catalogue_sha256,
+            capabilities: value.capabilities,
+            data_destination: value.data_destination,
+            activated_at: value.activated_at,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -929,6 +1219,123 @@ mod tests {
                 "forbidden projection field: {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn persisted_contract_deserialization_rejects_invalid_identity_endpoint_and_pairing() {
+        assert!(serde_json::from_str::<AiConnectionId>(r#""not-an-id""#).is_err());
+        assert!(serde_json::from_str::<AiConnectionRevision>("0").is_err());
+        assert!(serde_json::from_str::<CredentialGeneration>("0").is_err());
+        assert!(serde_json::from_str::<CompatibleCredentialKind>(
+            r#"{"kind":"api_key_header","name":"Host"}"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<CompatibleEndpointConfiguration>(
+            r#"{"base_url":"http://localhost:11434/v1","credential":{"kind":"bearer"},"custom_header_names":[],"custom_query_names":[],"model_id":"test-model"}"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<AiConnectionConfiguration>(
+            r#"{"method":"account_login","provider":"open_ai","account_id":"account"}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn credential_header_and_tagged_unions_fail_closed() {
+        for name in [
+            "Host",
+            "Content-Length",
+            "Authorization",
+            "Proxy-Authorization",
+        ] {
+            assert!(CompatibleCredentialKind::ApiKeyHeader {
+                name: name.to_owned()
+            }
+            .validate()
+            .is_err());
+        }
+        assert!(serde_json::from_str::<AiReasoningSelection>(
+            r#"{"kind":"effort","id":"low","extra":true}"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<AccountLoginProgress>(
+            r#"{"kind":"awaiting_device_code","verification_url":"https://example.com","user_code":"abc","extra":true}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn persisted_catalogue_normalizes_labels_and_enforces_bounds() {
+        let mut value =
+            serde_json::to_value(probe_evidence("2026-08-24T12:00:00Z", "e\u{301}", "Low"))
+                .unwrap();
+        value["models"][0]["reasoning_options"][0]["description"] =
+            serde_json::Value::String("x".repeat(4_097));
+        assert!(serde_json::from_value::<AiProbeEvidence>(value.clone()).is_err());
+
+        value["models"][0]["reasoning_options"][0]["description"] =
+            serde_json::Value::String("Bounded description".to_owned());
+        let normalized = serde_json::from_value::<AiProbeEvidence>(value.clone()).unwrap();
+        assert_eq!(normalized.models[0].display_name, "é");
+
+        let model = value["models"][0].clone();
+        value["models"] = serde_json::Value::Array(vec![model; 501]);
+        assert!(serde_json::from_value::<AiProbeEvidence>(value).is_err());
+    }
+
+    #[test]
+    fn persisted_active_configuration_rejects_unknown_and_oversized_metadata() {
+        let mut value = serde_json::json!({
+            "connection_id": "0123456789abcdef0123456789abcdef",
+            "execution_revision": 1,
+            "provider": "open_ai",
+            "endpoint_fingerprint": "direct-openai",
+            "model_id": "m".repeat(256),
+            "reasoning": {"kind": "unsupported"},
+            "adapter_version": "worker-v1",
+            "catalogue_sha256": "a".repeat(64),
+            "capabilities": {
+                "streaming": "supported",
+                "tools": "supported",
+                "images": "unsupported",
+                "reasoning": "unsupported",
+                "reroute_detection": "unknown",
+                "structured_output": "unsupported",
+                "context_window_tokens": null
+            },
+            "data_destination": "quantix",
+            "activated_at": "2026-08-24T12:00:00Z"
+        });
+        assert!(serde_json::from_value::<ActiveAiConfiguration>(value.clone()).is_ok());
+
+        value["model_id"] = serde_json::Value::String("m".repeat(257));
+        assert!(serde_json::from_value::<ActiveAiConfiguration>(value.clone()).is_err());
+
+        value["model_id"] = serde_json::Value::String("m".repeat(256));
+        value["unexpected"] = serde_json::Value::Bool(true);
+        assert!(serde_json::from_value::<ActiveAiConfiguration>(value).is_err());
+    }
+
+    #[test]
+    fn valid_configuration_round_trips_through_the_persisted_contract() {
+        let configuration = AiConnectionConfiguration::OpenAiCompatible {
+            provider: AiProviderKind::OpenAiCompatible,
+            endpoint: CompatibleEndpointConfiguration::parse(
+                "https://example.com/v1/",
+                CompatibleCredentialKind::ApiKeyHeader {
+                    name: "x-api-key".to_owned(),
+                },
+                vec!["x-tenant".to_owned()],
+                vec!["version".to_owned()],
+                "model-1",
+            )
+            .unwrap(),
+        };
+        let json = serde_json::to_string(&configuration).unwrap();
+        assert_eq!(
+            serde_json::from_str::<AiConnectionConfiguration>(&json).unwrap(),
+            configuration
+        );
     }
 
     fn ready_connection_view() -> AiConnectionView {
