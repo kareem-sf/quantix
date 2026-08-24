@@ -4411,8 +4411,7 @@ fn ensure_provider_event_capacity(
     let reserve_bytes = if completion_event {
         0
     } else {
-        u64::try_from(MAX_PROVIDER_EVENT_FIELD_BYTES)
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
+        MAX_PROVIDER_EVENT_FIELD_BYTES
             .checked_mul(18)
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
     };

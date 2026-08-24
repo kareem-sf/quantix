@@ -1800,16 +1800,17 @@ impl TenderStore {
                 {
                     return Ok(false);
                 }
-            } else if projected_attempt == 4
-                && (stage != ManagerIntakeStage::Failed
-                    || latest_consumption.is_none_or(|(source_run_id, attempt, deadline, _)| {
-                        blocking_run_id.as_deref() != Some(source_run_id.as_str())
-                            || *attempt != 4
-                            || deadline.is_some()
-                    }))
+            } else if blocking_run_id.is_some()
+                || (projected_attempt == 4
+                    && (stage != ManagerIntakeStage::Failed
+                        || latest_consumption.is_none_or(
+                            |(source_run_id, attempt, deadline, _)| {
+                                blocking_run_id.as_deref() != Some(source_run_id.as_str())
+                                    || *attempt != 4
+                                    || deadline.is_some()
+                            },
+                        )))
             {
-                return Ok(false);
-            } else if blocking_run_id.is_some() {
                 return Ok(false);
             }
 

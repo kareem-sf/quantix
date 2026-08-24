@@ -311,7 +311,7 @@ impl QuantixHost {
         {
             self.inspect_codex_subscription(tokio_util::sync::CancellationToken::new())
                 .await;
-            return self.application_settings_with_chatgpt_phase();
+            self.application_settings_with_chatgpt_phase()
         }
         #[cfg(any(not(feature = "runtime-fixture"), test))]
         {
