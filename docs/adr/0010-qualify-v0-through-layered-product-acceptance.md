@@ -72,5 +72,5 @@ Quantix's intended subscription-backed integration.
 - [Current AI connection decision](./0017-run-multiple-ai-connections-through-one-active-configuration.md)
 - [Host-owned run permissions](./0006-enforce-agent-access-through-host-owned-run-grants.md)
 - [Submission Package release](./0007-release-only-manifest-bound-submission-package-versions.md)
-- [Superseded AI Provider contract](./0008-keep-codex-behind-a-quantix-owned-ai-provider-contract.md)
+- [AI Provider contract (Codex runtime superseded)](./0008-keep-codex-behind-a-quantix-owned-ai-provider-contract.md)
 - [Desktop runtime and Tender Stores](./0009-run-one-local-host-over-self-contained-tender-stores.md)
