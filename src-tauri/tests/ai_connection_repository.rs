@@ -28,6 +28,7 @@ use quantix_lib::{
     ensure_quantix_setup, QuantixHost, SetupPlatform, SetupState, StoragePermissions,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
+use rusqlite::hooks::{AuthAction, Authorization};
 use rusqlite::{Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 
@@ -142,6 +143,37 @@ fn no_nonterminal_reference(
     _connection_id: &str,
 ) -> Result<bool, quantix_lib::ai::connections::AiConnectionError> {
     Ok(false)
+}
+
+fn deny_next_select_after_settings_update(installation: &Arc<Mutex<Connection>>) {
+    let mut saw_settings_update = false;
+    installation
+        .lock()
+        .unwrap()
+        .authorizer(Some(
+            move |context: rusqlite::hooks::AuthContext<'_>| match context.action {
+                AuthAction::Update { table_name, .. }
+                    if context.accessor.is_none() && table_name == "application_settings" =>
+                {
+                    saw_settings_update = true;
+                    Authorization::Allow
+                }
+                AuthAction::Select if context.accessor.is_none() && saw_settings_update => {
+                    saw_settings_update = false;
+                    Authorization::Deny
+                }
+                _ => Authorization::Allow,
+            },
+        ))
+        .unwrap();
+}
+
+fn remove_authorizer(installation: &Arc<Mutex<Connection>>) {
+    installation
+        .lock()
+        .unwrap()
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> Authorization>)
+        .unwrap();
 }
 
 fn openai_key_command(secret_value: &str) -> CreateAiConnectionCommand {
@@ -779,7 +811,7 @@ fn missing_targets_and_checker_failures_are_precise_and_nonpublishing() {
 }
 
 #[test]
-fn competing_run_insertion_is_observed_under_installation_then_tender_order() {
+fn direct_tender_insertion_is_detected_but_is_not_the_conforming_race_proof() {
     let fixture = RepositoryFixture::new();
     let connection = fixture
         .repo
@@ -846,6 +878,78 @@ fn competing_run_insertion_is_observed_under_installation_then_tender_order() {
     );
     inserter.join().unwrap();
     assert_eq!(fixture.repo.inspect().unwrap().connections.len(), 1);
+}
+
+#[test]
+fn conforming_future_run_and_delete_race_has_one_linearized_winner() {
+    let fixture = RepositoryFixture::new();
+    let connection = fixture
+        .repo
+        .create_connection(openai_key_command("conforming-race"))
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(3));
+
+    let run_repo = Arc::clone(&fixture.repo);
+    let run_barrier = Arc::clone(&barrier);
+    let run_tender = Arc::clone(&fixture.tender);
+    let run_connection_id = connection.connection_id.clone();
+    let run = std::thread::spawn(move || {
+        run_barrier.wait();
+        run_repo.fixture_create_future_run(&run_connection_id, || {
+            run_tender
+                .lock()
+                .map_err(|_| quantix_lib::ai::connections::AiConnectionError::StoreUnavailable)?
+                .execute(
+                    "INSERT INTO future_nonterminal_references (connection_id, terminal)
+                     VALUES (?1, 0)",
+                    [&run_connection_id],
+                )
+                .map_err(|_| quantix_lib::ai::connections::AiConnectionError::StoreUnavailable)?;
+            Ok(())
+        })
+    });
+
+    let delete_repo = Arc::clone(&fixture.repo);
+    let delete_barrier = Arc::clone(&barrier);
+    let delete_command = DeleteAiConnectionCommand {
+        connection_id: connection.connection_id.clone(),
+        expected_execution_revision: connection.execution_revision,
+        expected_credential_generation: connection.credential_generation,
+    };
+    let delete = std::thread::spawn(move || {
+        delete_barrier.wait();
+        delete_repo.delete_connection(delete_command)
+    });
+
+    barrier.wait();
+    let run_result = run.join().unwrap();
+    let delete_result = delete.join().unwrap();
+    let tender_count: i64 = fixture
+        .tender
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM future_nonterminal_references WHERE terminal = 0",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let connection_count = fixture.repo.inspect().unwrap().connections.len();
+
+    match (run_result, delete_result) {
+        (
+            Ok(()),
+            Err(quantix_lib::ai::connections::AiConnectionError::ReferencedByNonterminalRun),
+        ) => {
+            assert_eq!(tender_count, 1);
+            assert_eq!(connection_count, 1);
+        }
+        (Err(quantix_lib::ai::connections::AiConnectionError::NotFound), Ok(())) => {
+            assert_eq!(tender_count, 0);
+            assert_eq!(connection_count, 0);
+        }
+        outcomes => panic!("nonlinear future-run/delete outcome: {outcomes:?}"),
+    }
 }
 
 #[test]
@@ -1284,6 +1388,61 @@ fn probe_and_activation_require_exact_nonrerouted_evidence() {
     assert_eq!(
         fixture.repo.activate(wrong_destination).unwrap_err(),
         quantix_lib::ai::connections::AiConnectionError::InvalidCommand
+    );
+}
+
+#[test]
+fn untested_sibling_reasoning_effort_is_not_activatable() {
+    let fixture = RepositoryFixture::new();
+    let connection = fixture
+        .repo
+        .create_connection(openai_key_command("sibling-effort"))
+        .unwrap();
+    let mut evidence = current_probe(
+        &connection.connection_id,
+        connection.execution_revision,
+        "gpt-efforts",
+        "low",
+    );
+    evidence.models[0]
+        .reasoning_options
+        .push(AiReasoningOption {
+            selection: AiReasoningSelection::Effort {
+                id: "high".to_owned(),
+            },
+            label: "High".to_owned(),
+            description: "High reasoning effort".to_owned(),
+        });
+    let tested = fixture.repo.record_probe(evidence).unwrap();
+    let command = |reasoning| SetActiveAiConfigurationCommand {
+        connection_id: tested.connection_id.clone(),
+        expected_execution_revision: tested.execution_revision,
+        provider: tested.provider,
+        endpoint_fingerprint: tested.endpoint_fingerprint.clone(),
+        model_id: tested.tested_model_id.clone().unwrap(),
+        reasoning,
+        adapter_version: tested.adapter_version.clone().unwrap(),
+        catalogue_sha256: tested.catalogue_sha256.clone().unwrap(),
+        confirmed_data_destination: tested.data_destination.clone(),
+    };
+    assert_eq!(
+        fixture
+            .repo
+            .activate(command(AiReasoningSelection::Effort {
+                id: "high".to_owned(),
+            }))
+            .unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::CapabilityChanged
+    );
+    assert_eq!(
+        fixture
+            .repo
+            .activate(command(AiReasoningSelection::Effort {
+                id: "low".to_owned(),
+            }))
+            .unwrap()
+            .readiness,
+        quantix_lib::ai::contract::ActiveAiReadiness::Ready
     );
 }
 
@@ -1809,18 +1968,7 @@ fn settings_writes_preserve_preferences_and_return_exact_snapshots() {
 
     let clear_fixture = RepositoryFixture::new();
     ready_active_openai(&clear_fixture, "clear-snapshot");
-    clear_fixture
-        .installation
-        .lock()
-        .unwrap()
-        .execute_batch(
-            "CREATE TRIGGER corrupt_after_clear
-             AFTER UPDATE ON application_settings
-             BEGIN
-               UPDATE application_settings SET settings_json = '{}' WHERE singleton = 1;
-             END;",
-        )
-        .unwrap();
+    deny_next_select_after_settings_update(&clear_fixture.installation);
     let cleared = clear_fixture
         .repo
         .clear_active(ClearActiveAiConfigurationCommand {})
@@ -1830,6 +1978,26 @@ fn settings_writes_preserve_preferences_and_return_exact_snapshots() {
         cleared.readiness,
         quantix_lib::ai::contract::ActiveAiReadiness::NotConfigured
     );
+    assert_eq!(
+        clear_fixture.repo.inspect().unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreUnavailable
+    );
+    remove_authorizer(&clear_fixture.installation);
+    let stored: serde_json::Value = serde_json::from_str(
+        &clear_fixture
+            .installation
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT settings_json FROM application_settings WHERE singleton = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(stored["active_ai_configuration"].is_null());
+    assert_eq!(stored["general_preferences"]["appearance"], "system");
 }
 
 #[test]
@@ -2037,18 +2205,7 @@ fn activation_returns_the_committed_in_memory_snapshot_without_reread() {
         "low",
     );
     let tested = fixture.repo.record_probe(evidence.clone()).unwrap();
-    fixture
-        .installation
-        .lock()
-        .unwrap()
-        .execute_batch(
-            "CREATE TRIGGER corrupt_settings_after_update
-             AFTER UPDATE ON application_settings
-             BEGIN
-               UPDATE application_settings SET settings_json = '{}' WHERE singleton = 1;
-             END;",
-        )
-        .unwrap();
+    deny_next_select_after_settings_update(&fixture.installation);
 
     let result = fixture
         .repo
@@ -2067,6 +2224,33 @@ fn activation_returns_the_committed_in_memory_snapshot_without_reread() {
     assert!(result.active_configuration.is_some());
     assert_eq!(
         result.readiness,
+        quantix_lib::ai::contract::ActiveAiReadiness::Ready
+    );
+    assert_eq!(
+        fixture.repo.inspect().unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreUnavailable
+    );
+    remove_authorizer(&fixture.installation);
+    let stored: serde_json::Value = serde_json::from_str(
+        &fixture
+            .installation
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT settings_json FROM application_settings WHERE singleton = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        stored["active_ai_configuration"],
+        serde_json::to_value(result.active_configuration.unwrap()).unwrap()
+    );
+    assert_eq!(stored["general_preferences"]["appearance"], "system");
+    assert_eq!(
+        fixture.repo.inspect().unwrap().readiness,
         quantix_lib::ai::contract::ActiveAiReadiness::Ready
     );
 }

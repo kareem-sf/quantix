@@ -377,8 +377,13 @@ impl CompatibleEndpointConfiguration {
                 .map_err(|_| AiContractError::InvalidEndpoint)?;
         }
 
+        let base_url = url.to_string().trim_end_matches('/').to_owned();
+        if base_url.is_empty() || base_url.len() > MAX_ENDPOINT_URL_BYTES {
+            return Err(AiContractError::InvalidEndpoint);
+        }
+
         Ok(Self {
-            base_url: url.to_string().trim_end_matches('/').to_owned(),
+            base_url,
             credential,
             custom_header_names: headers,
             custom_query_names: query,
@@ -1430,6 +1435,20 @@ mod tests {
             .validate()
             .is_err());
         }
+    }
+
+    #[test]
+    fn compatible_endpoint_bounds_the_final_canonical_url() {
+        let raw = format!("https://example.com/{}", "é".repeat(600));
+        assert!(raw.len() <= MAX_ENDPOINT_URL_BYTES);
+        assert!(CompatibleEndpointConfiguration::parse(
+            &raw,
+            CompatibleCredentialKind::Bearer,
+            Vec::new(),
+            Vec::new(),
+            "model",
+        )
+        .is_err());
     }
 
     #[test]

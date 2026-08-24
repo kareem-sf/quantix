@@ -812,6 +812,40 @@ impl AiConnectionRepository {
         Err(AiConnectionError::InvalidCommand)
     }
 
+    #[cfg(feature = "runtime-fixture")]
+    pub fn fixture_create_future_run<F>(
+        &self,
+        connection_id: &str,
+        insert_tender_binding: F,
+    ) -> Result<(), AiConnectionError>
+    where
+        F: FnOnce() -> Result<(), AiConnectionError>,
+    {
+        AiConnectionId::parse(connection_id.to_owned())
+            .map_err(|_| AiConnectionError::InvalidCommand)?;
+        let _gate = connection_gate()
+            .lock()
+            .map_err(|_| AiConnectionError::VaultUnavailable)?;
+        self.vault
+            .with_locked_payload(|payload| {
+                Ok((|| {
+                    payload.connection(connection_id).map_err(map_vault_error)?;
+                    let mut installation = self
+                        .installation
+                        .lock()
+                        .map_err(|_| AiConnectionError::StoreUnavailable)?;
+                    let transaction = installation
+                        .transaction_with_behavior(TransactionBehavior::Immediate)
+                        .map_err(|_| AiConnectionError::StoreUnavailable)?;
+                    insert_tender_binding()?;
+                    transaction
+                        .commit()
+                        .map_err(|_| AiConnectionError::StoreUnavailable)
+                })())
+            })
+            .map_err(map_vault_error)?
+    }
+
     fn inspect_under_gate(&self) -> Result<ApplicationAiSettingsView, AiConnectionError> {
         match self
             .vault
