@@ -939,6 +939,20 @@ struct ActiveManagerIntakeGuard {
     tender_id: String,
 }
 
+#[cfg(any(test, feature = "runtime-fixture"))]
+type ManagerIntakeVerificationBatches = Vec<(
+    Vec<TenderEvidenceReference>,
+    Vec<crate::tender_store::TenderRecordAuthorityReference>,
+    String,
+    u64,
+    u64,
+)>;
+
+struct ProviderTurnTiming {
+    operation_limit: Duration,
+    started: Instant,
+}
+
 type TurnAcceptedCallback = dyn FnOnce(&str) -> Result<(), ProviderFailure> + Send;
 type TurnRequestedCallback = dyn FnOnce() -> Result<(), ProviderFailure> + Send;
 type TurnEventCallback =
@@ -1427,7 +1441,7 @@ impl QuantixHost {
                     .await?
                 }
                 ManagerIntakeExtractionRecovery::Execute(prepared) => {
-                    self.execute_recovered_manager_intake_extraction(&tender_id, &store, prepared)
+                    self.execute_recovered_manager_intake_extraction(&tender_id, &store, *prepared)
                         .await?
                 }
                 ManagerIntakeExtractionRecovery::Terminal(run_id) => {
@@ -1512,16 +1526,7 @@ impl QuantixHost {
         &self,
         tender_id: &str,
         byte_budget: u64,
-    ) -> Result<
-        Vec<(
-            Vec<TenderEvidenceReference>,
-            Vec<crate::tender_store::TenderRecordAuthorityReference>,
-            String,
-            u64,
-            u64,
-        )>,
-        TenderCommandError,
-    > {
+    ) -> Result<ManagerIntakeVerificationBatches, TenderCommandError> {
         self.manager_intake_byte_plan_for_verification(tender_id, byte_budget, false)
     }
 
@@ -1530,16 +1535,7 @@ impl QuantixHost {
         &self,
         tender_id: &str,
         byte_budget: u64,
-    ) -> Result<
-        Vec<(
-            Vec<TenderEvidenceReference>,
-            Vec<crate::tender_store::TenderRecordAuthorityReference>,
-            String,
-            u64,
-            u64,
-        )>,
-        TenderCommandError,
-    > {
+    ) -> Result<ManagerIntakeVerificationBatches, TenderCommandError> {
         self.manager_intake_byte_plan_for_verification(tender_id, byte_budget, true)
     }
 
@@ -1549,16 +1545,7 @@ impl QuantixHost {
         tender_id: &str,
         byte_budget: u64,
         persist: bool,
-    ) -> Result<
-        Vec<(
-            Vec<TenderEvidenceReference>,
-            Vec<crate::tender_store::TenderRecordAuthorityReference>,
-            String,
-            u64,
-            u64,
-        )>,
-        TenderCommandError,
-    > {
+    ) -> Result<ManagerIntakeVerificationBatches, TenderCommandError> {
         require_setup(self)?;
         let tender_id = TenderId::parse(tender_id)?;
         let store = self.tender_store(&tender_id)?;
@@ -3513,10 +3500,12 @@ async fn execute_provider_turn_from(
                     host,
                     store,
                     prepared.clone(),
-                    operation_limit,
                     cancellation,
                     callbacks,
-                    started,
+                    ProviderTurnTiming {
+                        operation_limit,
+                        started,
+                    },
                     None,
                 )
                 .await
@@ -3996,12 +3985,15 @@ async fn chatgpt_provider_turn(
     host: &QuantixHost,
     store: &Arc<Mutex<TenderStore>>,
     prepared: PreparedAgentRun,
-    operation_limit: Duration,
     cancellation: CancellationToken,
     callbacks: RunCallbacks,
-    started: Instant,
+    timing: ProviderTurnTiming,
     connection_override: Option<(crate::chatgpt_oauth::StoredConnection, String)>,
 ) -> ProviderExecution {
+    let ProviderTurnTiming {
+        operation_limit,
+        started,
+    } = timing;
     let RunCallbacks {
         on_thread_archived,
         on_thread_established,
@@ -5081,10 +5073,12 @@ mod tests {
             &host,
             &store,
             prepared.clone(),
-            Duration::from_secs(5),
             CancellationToken::new(),
             callbacks,
-            started,
+            ProviderTurnTiming {
+                operation_limit: Duration::from_secs(5),
+                started,
+            },
             Some((connection, "http://127.0.0.1:9/never-called".into())),
         )
         .await;

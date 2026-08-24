@@ -67,7 +67,7 @@ pub(crate) type TenderRecordProposalValidationResult =
 
 pub(crate) enum ManagerIntakeExtractionRecovery {
     StartNew,
-    Execute(PreparedAgentRun),
+    Execute(Box<PreparedAgentRun>),
     Terminal(String),
 }
 
@@ -1056,6 +1056,7 @@ impl TenderStore {
                 if self.manager_intake_repair_is_safely_restartable(&latest_repair_run_id)? {
                     return self
                         .load_restartable_manager_intake_repair(tender_id, &latest_repair_run_id)
+                        .map(Box::new)
                         .map(ManagerIntakeExtractionRecovery::Execute);
                 }
                 let mut latest_repair = self.inspect_agent_run(&latest_repair_run_id)?;
@@ -1070,7 +1071,7 @@ impl TenderStore {
                     if let Some(retry) = self
                         .prepare_tender_record_transport_retry(tender_id, &latest_repair_run_id)?
                     {
-                        return Ok(ManagerIntakeExtractionRecovery::Execute(retry));
+                        return Ok(ManagerIntakeExtractionRecovery::Execute(Box::new(retry)));
                     }
                 }
                 return Ok(ManagerIntakeExtractionRecovery::Terminal(
@@ -1080,7 +1081,7 @@ impl TenderStore {
             if let Some(repair) =
                 self.prepare_tender_record_repair_run(tender_id, &source.run_id)?
             {
-                return Ok(ManagerIntakeExtractionRecovery::Execute(repair));
+                return Ok(ManagerIntakeExtractionRecovery::Execute(Box::new(repair)));
             }
             return Ok(ManagerIntakeExtractionRecovery::Terminal(
                 source.run_id.clone(),
@@ -1090,7 +1091,7 @@ impl TenderStore {
             if let Some(retry) =
                 self.prepare_tender_record_transport_retry(tender_id, &latest_source.run_id)?
             {
-                return Ok(ManagerIntakeExtractionRecovery::Execute(retry));
+                return Ok(ManagerIntakeExtractionRecovery::Execute(Box::new(retry)));
             }
         }
         Ok(ManagerIntakeExtractionRecovery::Terminal(
