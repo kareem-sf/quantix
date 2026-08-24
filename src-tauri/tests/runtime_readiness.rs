@@ -115,7 +115,7 @@ fn application_only_update() -> UpdateCandidate {
         },
         compatibility: UpdateCompatibilityManifest {
             installation_schema_version: 25,
-            tender_schema_version: 36,
+            tender_schema_version: 45,
             ocr_version: "3.9.2".into(),
             runtime_manifest_schema_version: 3,
         },
