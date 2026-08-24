@@ -1,9 +1,13 @@
-use std::fmt::Write;
+use std::{
+    fmt::Write,
+    net::{Ipv4Addr, Ipv6Addr},
+};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use ts_rs::TS;
 use unicode_normalization::UnicodeNormalization;
+use url::Host;
 
 const MAX_CONNECTION_ID_BYTES: usize = 32;
 const MAX_DISPLAY_NAME_BYTES: usize = 120;
@@ -366,10 +370,14 @@ impl CompatibleEndpointConfiguration {
             return Err(AiContractError::InvalidEndpoint);
         }
 
+        let host = url.host().ok_or(AiContractError::InvalidEndpoint)?;
+        if classify_endpoint_host(&host) == EndpointHostClass::Forbidden {
+            return Err(AiContractError::InvalidEndpoint);
+        }
         let is_loopback_literal = matches!(
-            url.host_str(),
-            Some("127.0.0.1") | Some("[::1]") | Some("::1")
-        );
+            &host,
+            Host::Ipv4(address) if *address == Ipv4Addr::LOCALHOST
+        ) || matches!(&host, Host::Ipv6(address) if *address == Ipv6Addr::LOCALHOST);
         match url.scheme() {
             "https" => {}
             "http" if is_loopback_literal => {}
@@ -732,20 +740,126 @@ impl AiConnectionConfiguration {
             }
             Self::OpenAiCompatible { endpoint, .. }
             | Self::AnthropicCompatible { endpoint, .. } => {
-                let is_literal_loopback = reqwest::Url::parse(&endpoint.base_url)
+                let Some(host_class) = reqwest::Url::parse(&endpoint.base_url)
                     .ok()
-                    .and_then(|url| url.host_str().map(str::to_owned))
-                    .is_some_and(|host| matches!(host.as_str(), "127.0.0.1" | "::1"));
-                if is_literal_loopback {
-                    destination_class == AiNetworkDestinationClass::Loopback
-                } else {
-                    matches!(
+                    .and_then(|url| url.host().map(|host| classify_endpoint_host(&host)))
+                else {
+                    return false;
+                };
+                match host_class {
+                    EndpointHostClass::Dns => matches!(
                         destination_class,
                         AiNetworkDestinationClass::Public | AiNetworkDestinationClass::Private
-                    )
+                    ),
+                    EndpointHostClass::Public => {
+                        destination_class == AiNetworkDestinationClass::Public
+                    }
+                    EndpointHostClass::Private => {
+                        destination_class == AiNetworkDestinationClass::Private
+                    }
+                    EndpointHostClass::Loopback => {
+                        destination_class == AiNetworkDestinationClass::Loopback
+                    }
+                    EndpointHostClass::Forbidden => false,
                 }
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EndpointHostClass {
+    Dns,
+    Public,
+    Private,
+    Loopback,
+    Forbidden,
+}
+
+fn classify_endpoint_host(host: &Host<&str>) -> EndpointHostClass {
+    match host {
+        Host::Domain(_) => EndpointHostClass::Dns,
+        Host::Ipv4(address) => classify_ipv4(*address),
+        Host::Ipv6(address) => classify_ipv6(*address),
+    }
+}
+
+fn classify_ipv4(address: Ipv4Addr) -> EndpointHostClass {
+    if address.is_loopback() {
+        return EndpointHostClass::Loopback;
+    }
+    if address.is_private() {
+        return EndpointHostClass::Private;
+    }
+    let octets = address.octets();
+    let shared = octets[0] == 100 && (octets[1] & 0xc0) == 0x40;
+    let protocol_assignment = octets[0] == 192 && octets[1] == 0 && octets[2] == 0;
+    let documentation = (octets[0] == 192 && octets[1] == 0 && octets[2] == 2)
+        || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
+        || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113);
+    let benchmark = octets[0] == 198 && matches!(octets[1], 18 | 19);
+    let deprecated_relay = octets[0] == 192 && octets[1] == 88 && octets[2] == 99;
+    if address.is_unspecified()
+        || address.is_link_local()
+        || address.is_multicast()
+        || address.is_broadcast()
+        || octets[0] == 0
+        || octets[0] >= 240
+        || shared
+        || protocol_assignment
+        || documentation
+        || benchmark
+        || deprecated_relay
+    {
+        EndpointHostClass::Forbidden
+    } else {
+        EndpointHostClass::Public
+    }
+}
+
+fn classify_ipv6(address: Ipv6Addr) -> EndpointHostClass {
+    if address.is_loopback() {
+        return EndpointHostClass::Loopback;
+    }
+    let segments = address.segments();
+    let ipv4_mapped = segments[..5] == [0, 0, 0, 0, 0] && segments[5] == 0xffff;
+    let ipv4_compatible = segments[..6] == [0, 0, 0, 0, 0, 0];
+    let aws_imds = segments == [0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254];
+    if aws_imds {
+        return EndpointHostClass::Forbidden;
+    }
+    let unique_local = (segments[0] & 0xfe00) == 0xfc00;
+    if unique_local {
+        return EndpointHostClass::Private;
+    }
+    let link_local = (segments[0] & 0xffc0) == 0xfe80;
+    let site_local = (segments[0] & 0xffc0) == 0xfec0;
+    let documentation = segments[0] == 0x2001 && segments[1] == 0x0db8;
+    let benchmark = segments[0] == 0x2001 && segments[1] == 0x0002 && segments[2] == 0;
+    let orchid = segments[0] == 0x2001 && matches!(segments[1] & 0xfff0, 0x0010 | 0x0020);
+    let teredo = segments[0] == 0x2001 && segments[1] == 0;
+    let discard_only = segments[0] == 0x0100 && segments[1..4] == [0, 0, 0];
+    let nat64 = segments[0] == 0x0064 && segments[1] == 0xff9b;
+    let six_to_four = segments[0] == 0x2002;
+    let global_unicast = (segments[0] & 0xe000) == 0x2000;
+    if address.is_unspecified()
+        || address.is_multicast()
+        || ipv4_mapped
+        || ipv4_compatible
+        || link_local
+        || site_local
+        || documentation
+        || benchmark
+        || orchid
+        || teredo
+        || discard_only
+        || nat64
+        || six_to_four
+        || !global_unicast
+    {
+        EndpointHostClass::Forbidden
+    } else {
+        EndpointHostClass::Public
     }
 }
 
@@ -1490,6 +1604,75 @@ mod tests {
             "model",
         )
         .is_err());
+    }
+
+    #[test]
+    fn network_destination_classification_is_structural_and_fail_closed() {
+        let endpoint = |base_url: &str| {
+            CompatibleEndpointConfiguration::parse(
+                base_url,
+                CompatibleCredentialKind::Bearer,
+                Vec::new(),
+                Vec::new(),
+                "model",
+            )
+            .unwrap()
+        };
+        let configuration = |endpoint| AiConnectionConfiguration::OpenAiCompatible {
+            provider: AiProviderKind::OpenAiCompatible,
+            endpoint,
+        };
+
+        let ipv6_loopback = configuration(endpoint("http://[::1]:11434/v1"));
+        assert!(ipv6_loopback.accepts_destination_class(AiNetworkDestinationClass::Loopback));
+        assert!(!ipv6_loopback.accepts_destination_class(AiNetworkDestinationClass::Public));
+
+        let private = configuration(endpoint("https://10.0.0.1/v1"));
+        assert!(private.accepts_destination_class(AiNetworkDestinationClass::Private));
+        assert!(!private.accepts_destination_class(AiNetworkDestinationClass::Public));
+
+        let public = configuration(endpoint("https://8.8.8.8/v1"));
+        assert!(public.accepts_destination_class(AiNetworkDestinationClass::Public));
+        assert!(!public.accepts_destination_class(AiNetworkDestinationClass::Private));
+
+        let dns = configuration(endpoint("https://models.example/v1"));
+        assert!(dns.accepts_destination_class(AiNetworkDestinationClass::Public));
+        assert!(dns.accepts_destination_class(AiNetworkDestinationClass::Private));
+        assert!(!dns.accepts_destination_class(AiNetworkDestinationClass::Loopback));
+
+        let direct = AiConnectionConfiguration::DirectProviderKey {
+            provider: AiProviderKind::OpenAi,
+        };
+        assert!(direct.accepts_destination_class(AiNetworkDestinationClass::Public));
+        assert!(!direct.accepts_destination_class(AiNetworkDestinationClass::Private));
+
+        for forbidden in [
+            "https://0.0.0.0/v1",
+            "https://169.254.1.1/v1",
+            "https://192.0.2.1/v1",
+            "https://198.18.0.1/v1",
+            "https://224.0.0.1/v1",
+            "https://255.255.255.255/v1",
+            "https://[::]/v1",
+            "https://[fe80::1]/v1",
+            "https://[2001:db8::1]/v1",
+            "https://[2002::1]/v1",
+            "https://[ff02::1]/v1",
+            "https://[fd00:ec2::254]/v1",
+            "https://[::ffff:127.0.0.1]/v1",
+        ] {
+            assert!(
+                CompatibleEndpointConfiguration::parse(
+                    forbidden,
+                    CompatibleCredentialKind::Bearer,
+                    Vec::new(),
+                    Vec::new(),
+                    "model",
+                )
+                .is_err(),
+                "forbidden literal accepted: {forbidden}"
+            );
+        }
     }
 
     #[test]

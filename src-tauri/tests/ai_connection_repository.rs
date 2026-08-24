@@ -28,7 +28,7 @@ use quantix_lib::{
     ensure_quantix_setup, QuantixHost, SetupPlatform, SetupState, StoragePermissions,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
-use rusqlite::hooks::{AuthAction, Authorization};
+use rusqlite::hooks::{AuthAction, Authorization, TransactionOperation};
 use rusqlite::{Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 
@@ -2153,6 +2153,94 @@ fn indeterminate_settings_latch_blocks_current_repository_until_restart() {
     assert_eq!(
         restarted.inspect().unwrap().readiness,
         quantix_lib::ai::contract::ActiveAiReadiness::Ready
+    );
+}
+
+#[test]
+fn reconciliation_never_reads_until_commit_failure_leaves_autocommit() {
+    let fixture = RepositoryFixture::new();
+    let (tested, _) = ready_unactivated_openai(&fixture, "commit-and-rollback-denied");
+    let prior = raw_settings_row(&fixture.installation);
+    fixture
+        .installation
+        .lock()
+        .unwrap()
+        .authorizer(Some(
+            |context: rusqlite::hooks::AuthContext<'_>| match context.action {
+                AuthAction::Transaction {
+                    operation: TransactionOperation::Begin,
+                } => Authorization::Allow,
+                AuthAction::Transaction { .. } => Authorization::Deny,
+                _ => Authorization::Allow,
+            },
+        ))
+        .unwrap();
+
+    let activation = fixture.repo.activate(SetActiveAiConfigurationCommand {
+        connection_id: tested.connection_id.clone(),
+        expected_execution_revision: tested.execution_revision,
+        provider: tested.provider,
+        endpoint_fingerprint: tested.endpoint_fingerprint,
+        model_id: tested.tested_model_id.unwrap(),
+        reasoning: tested.tested_reasoning.unwrap(),
+        adapter_version: tested.adapter_version.unwrap(),
+        catalogue_sha256: tested.catalogue_sha256.unwrap(),
+        destination_class: tested.destination_class.unwrap(),
+        confirmed_data_destination: tested.data_destination,
+    });
+    assert!(!fixture.installation.lock().unwrap().is_autocommit());
+    let uncommitted_visible_row = raw_settings_row(&fixture.installation);
+    assert_ne!(uncommitted_visible_row, prior);
+    let uncommitted_settings: serde_json::Value =
+        serde_json::from_str(&uncommitted_visible_row.0).unwrap();
+    assert!(uncommitted_settings["active_ai_configuration"].is_object());
+    let inspect = fixture.repo.inspect();
+    let clear = fixture
+        .repo
+        .clear_active(ClearActiveAiConfigurationCommand {});
+    let future_run = fixture
+        .repo
+        .fixture_create_future_run(&tested.connection_id, || {
+            panic!("latched repository must not invoke the Tender closure")
+        });
+
+    remove_authorizer(&fixture.installation);
+    fixture
+        .installation
+        .lock()
+        .unwrap()
+        .execute_batch("ROLLBACK")
+        .unwrap();
+    assert!(fixture.installation.lock().unwrap().is_autocommit());
+    assert_eq!(raw_settings_row(&fixture.installation), prior);
+
+    assert_eq!(
+        activation.unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreIndeterminate
+    );
+    assert_eq!(
+        inspect.unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreIndeterminate
+    );
+    assert_eq!(
+        clear.unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreIndeterminate
+    );
+    assert_eq!(
+        future_run.unwrap_err(),
+        quantix_lib::ai::connections::AiConnectionError::StoreIndeterminate
+    );
+
+    let restarted = AiConnectionRepository::new(
+        AiConnectionVault::new(&fixture.application_home).unwrap(),
+        Arc::clone(&fixture.installation),
+        AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
+        Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
+        Arc::new(no_nonterminal_reference),
+    );
+    assert_eq!(
+        restarted.inspect().unwrap().readiness,
+        quantix_lib::ai::contract::ActiveAiReadiness::NotConfigured
     );
 }
 

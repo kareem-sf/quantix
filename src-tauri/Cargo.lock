@@ -4420,6 +4420,7 @@ dependencies = [
  "unicode-bidi",
  "unicode-normalization",
  "unicode-script",
+ "url",
  "walkdir",
  "webbrowser",
  "windows 0.62.2",

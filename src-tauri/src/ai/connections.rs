@@ -1139,6 +1139,12 @@ impl AiConnectionRepository {
             self.latch_store_indeterminate();
             return Err(AiConnectionError::StoreIndeterminate);
         }
+        if !installation.is_autocommit()
+            && (installation.execute_batch("ROLLBACK").is_err() || !installation.is_autocommit())
+        {
+            self.latch_store_indeterminate();
+            return Err(AiConnectionError::StoreIndeterminate);
+        }
         match load_final_settings_row(installation) {
             Ok(actual) if actual == *intended => Ok(intended_view),
             Ok(actual) if actual == *prior => Err(AiConnectionError::StoreUnavailable),
