@@ -2986,24 +2986,144 @@ describe("ManagerWorkspace", () => {
   });
 
   it("only elevates slow Tender navigation into the centered opening panel", async () => {
-    host.inspectManagerWorkspace.mockResolvedValue(projection);
+    vi.useFakeTimers();
     host.selectManagerWorkspaceTender.mockImplementation(
       () =>
         new Promise((resolve) =>
           window.setTimeout(() => resolve(projection), 650),
         ),
     );
-    render(<ManagerWorkspace />);
-    await screen.findByRole("heading", { name: "West Campus MEP" });
+    render(<ManagerWorkspace initialProjection={projection} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
     fireEvent.click(
       screen.getByRole("button", { name: /West Campus MEP.*Intake/ }),
     );
     expect(
       screen.queryByRole("heading", { name: "Opening West Campus MEP…" }),
     ).toBeNull();
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+      await Promise.resolve();
+    });
     expect(
-      await screen.findByRole("heading", { name: "Opening West Campus MEP…" }),
+      screen.getByRole("heading", { name: "Opening West Campus MEP…" }),
     ).toBeTruthy();
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      screen.queryByRole("heading", { name: "Opening West Campus MEP…" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "West Campus MEP", level: 1 }),
+    ).toBeTruthy();
+  });
+
+  it("times out Tender opening at 10 seconds and retries with a fresh selection", async () => {
+    vi.useFakeTimers();
+    const nextTenderId = "d".repeat(32);
+    const nextTender = {
+      ...projection.selected_tender!,
+      tender_id: nextTenderId,
+      name: "East Campus HVAC",
+    };
+    const initialProjection = {
+      ...projection,
+      catalogue: [projection.selected_tender!, nextTender],
+    };
+    const expiredProjection = {
+      ...initialProjection,
+      selected_tender: {
+        ...nextTender,
+        name: "Expired Tender Snapshot",
+      },
+    };
+    const retryProjection = {
+      ...initialProjection,
+      selected_tender: nextTender,
+    };
+    let resolveExpired: (value: ManagerWorkspaceProjection) => void = () =>
+      undefined;
+    let resolveRetry: (value: ManagerWorkspaceProjection) => void = () =>
+      undefined;
+    host.selectManagerWorkspaceTender
+      .mockReturnValueOnce(
+        new Promise<ManagerWorkspaceProjection>((resolve) => {
+          resolveExpired = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<ManagerWorkspaceProjection>((resolve) => {
+          resolveRetry = resolve;
+        }),
+      );
+
+    render(<ManagerWorkspace initialProjection={initialProjection} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /East Campus HVAC.*Intake/ }),
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(9_999);
+      await Promise.resolve();
+    });
+    expect(
+      screen.getByRole("heading", { name: "Opening East Campus HVAC…" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      screen.queryByRole("heading", { name: "Opening East Campus HVAC…" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "West Campus MEP", level: 1 }),
+    ).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Opening East Campus HVAC failed: This Tender took too long to open. Please try again.",
+    );
+
+    resolveExpired(expiredProjection);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      screen.queryByRole("heading", {
+        name: "Expired Tender Snapshot",
+        level: 1,
+      }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "West Campus MEP", level: 1 }),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Retry opening east campus hvac",
+      }),
+    );
+    expect(host.selectManagerWorkspaceTender).toHaveBeenCalledTimes(2);
+    resolveRetry(retryProjection);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      screen.getByRole("heading", { name: "East Campus HVAC", level: 1 }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("retries a failed workspace operation in its originating action", async () => {

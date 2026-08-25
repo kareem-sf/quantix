@@ -162,6 +162,9 @@ interface ManagerWorkspaceProps {
 type CapabilityStatus = "checking" | "ready" | "unavailable";
 
 const RUNTIME_READINESS_RETRY_DELAY_MS = 500;
+const TENDER_SELECTION_TIMEOUT_MS = 10_000;
+const TENDER_SELECTION_TIMEOUT_MESSAGE =
+  "This Tender took too long to open. Please try again.";
 const FOCUSED_ACTION_KINDS = [
   "review_bid_decision",
   "prepare_work_plan",
@@ -261,6 +264,12 @@ const phaseLabel: Record<ManagerWorkspaceTender["phase"], string> = {
 };
 
 function readableError(error: unknown): string {
+  if (
+    error instanceof Error &&
+    error.message === TENDER_SELECTION_TIMEOUT_MESSAGE
+  ) {
+    return TENDER_SELECTION_TIMEOUT_MESSAGE;
+  }
   if (typeof error === "object" && error !== null && "code" in error) {
     switch (error.code) {
       case "local_document_tools_required":
@@ -280,6 +289,25 @@ function readableError(error: unknown): string {
   }
   if (typeof error === "string" && error.trim()) return error;
   return "Quantix could not complete that action.";
+}
+
+async function selectManagerWorkspaceTenderWithTimeout(
+  tenderId: string,
+): Promise<ManagerWorkspaceProjection> {
+  let timeout: number | null = null;
+  try {
+    return await Promise.race([
+      selectManagerWorkspaceTender(tenderId),
+      new Promise<never>((_, reject) => {
+        timeout = window.setTimeout(
+          () => reject(new Error(TENDER_SELECTION_TIMEOUT_MESSAGE)),
+          TENDER_SELECTION_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout !== null) window.clearTimeout(timeout);
+  }
 }
 
 function TenderButton({
@@ -2640,7 +2668,10 @@ export function ManagerWorkspace({
           );
         };
         const next = await run(
-          () => selectManagerWorkspaceTender(location.tenderId as string),
+          () =>
+            selectManagerWorkspaceTenderWithTimeout(
+              location.tenderId as string,
+            ),
           {
             kind: "select_tender",
             label: `Opening ${projection?.catalogue.find((tender) => tender.tender_id === location.tenderId)?.name ?? "Tender"}`,
@@ -2853,7 +2884,7 @@ export function ManagerWorkspace({
       setRecoveryTarget(null);
       const tenderName = tender?.name ?? "Tender";
       const next = await run(
-        () => selectManagerWorkspaceTender(tenderId),
+        () => selectManagerWorkspaceTenderWithTimeout(tenderId),
         {
           kind: "select_tender",
           label: `Opening ${tenderName}`,
@@ -2890,10 +2921,13 @@ export function ManagerWorkspace({
   const openRecoveredTender = useCallback(
     async (tenderId: string) => {
       setRecoveryTarget(null);
-      const next = await run(() => selectManagerWorkspaceTender(tenderId), {
-        kind: "select_tender",
-        label: "Opening recovered Tender",
-      });
+      const next = await run(
+        () => selectManagerWorkspaceTenderWithTimeout(tenderId),
+        {
+          kind: "select_tender",
+          label: "Opening recovered Tender",
+        },
+      );
       if (!next) return;
       setProjection(next);
       const destination = tenderViews[tenderId] ?? "manager";
