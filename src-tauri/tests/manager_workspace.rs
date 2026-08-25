@@ -1581,6 +1581,65 @@ async fn public_host_clean_intake_reaches_canonical_bid_recommendation() {
         .await
         .expect("complete clean Manager intake");
 
+    let database = application_home
+        .join("tenders")
+        .join(&tender.tender_id)
+        .join("tender.sqlite");
+    let inspect_work_counts = || {
+        Connection::open(&database)
+            .expect("open completed Manager intake store")
+            .query_row(
+                "SELECT mir.parseable_document_count,
+                        mir.parsed_document_count,
+                        mir.extraction_run_count,
+                        (SELECT COUNT(*) FROM parse_attempts),
+                        (SELECT COUNT(*) FROM manager_intake_extraction_batches),
+                        (SELECT COUNT(*) FROM tender_records),
+                        (SELECT COUNT(*) FROM agent_runs),
+                        (SELECT COUNT(*) FROM manager_intake_outcomes)
+                 FROM manager_intake_runs mir
+                 ORDER BY mir.intake_run_sequence DESC LIMIT 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, u32>(0)?,
+                        row.get::<_, u32>(1)?,
+                        row.get::<_, u32>(2)?,
+                        row.get::<_, u32>(3)?,
+                        row.get::<_, u32>(4)?,
+                        row.get::<_, u32>(5)?,
+                        row.get::<_, u32>(6)?,
+                        row.get::<_, u32>(7)?,
+                    ))
+                },
+            )
+            .expect("inspect completed Manager intake work counts")
+    };
+    let before_reentry = inspect_work_counts();
+    assert_eq!(before_reentry.0, 1, "one registered parseable document");
+    assert_eq!(before_reentry.1, 1, "the registered document is parsed");
+    assert_eq!(before_reentry.3, 1, "one governed parse attempt");
+    assert!(before_reentry.2 > 0, "extraction completed");
+    assert_eq!(
+        before_reentry.2, before_reentry.4,
+        "every counted extraction has one durable batch publication"
+    );
+    assert!(before_reentry.5 > 0, "Tender Records were published");
+    assert!(
+        before_reentry.6 > 0,
+        "configured-provider Agent Runs were published"
+    );
+    assert_eq!(before_reentry.7, 1, "one Manager outcome was published");
+
+    host.run_manager_intake_for_verification(&tender.tender_id)
+        .await
+        .expect("re-enter completed Manager intake");
+    assert_eq!(
+        inspect_work_counts(),
+        before_reentry,
+        "re-entry must not duplicate parse, extraction, Tender Record, Agent Run, or outcome publication"
+    );
+
     let projection = host
         .inspect_manager_workspace(InspectManagerWorkspaceCommand {
             tender_id: Some(tender.tender_id),
