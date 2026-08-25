@@ -2067,7 +2067,7 @@ export function ManagerWorkspace({
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const projectionEpoch = useRef(0);
   const initialProjectionAccepted = useRef(Boolean(initialProjection));
-  const resumedIntakes = useRef(false);
+  const resumedIntakes = useRef<CapabilityStatus | null>(null);
   const previousAttentionTenderIds = useRef<Set<string> | null>(null);
   const contextTriggerRef = useRef<HTMLButtonElement | null>(null);
   const previousContextRail = useRef(contextRail);
@@ -2435,15 +2435,17 @@ export function ManagerWorkspace({
   ]);
 
   useEffect(() => {
-    const ready = runtimeStatus === "ready";
-    if (!ready) {
-      resumedIntakes.current = false;
+    if (
+      runtimeStatus === "checking" ||
+      resumedIntakes.current === runtimeStatus
+    ) {
       return;
     }
-    if (resumedIntakes.current) return;
-    resumedIntakes.current = true;
+    resumedIntakes.current = runtimeStatus;
     void resumeManagerIntakes().catch(() => {
-      resumedIntakes.current = false;
+      if (resumedIntakes.current === runtimeStatus) {
+        resumedIntakes.current = null;
+      }
     });
   }, [aiStatus, runtimeStatus]);
 

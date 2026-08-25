@@ -2064,6 +2064,31 @@ describe("ManagerWorkspace", () => {
     ).toBeTruthy();
   });
 
+  it("resumes durably parsed intakes after a stable unavailable runtime result", async () => {
+    const documentProjection = {
+      ...projection,
+      files: { ...projection.files, tender_document_count: 1 },
+    };
+    host.inspectRuntimeReadiness.mockResolvedValue({
+      state: "missing_executable",
+      issues: ["ocr_executable_missing"],
+      uv_version: "0.12.2",
+      ocr_version: null,
+      repair_available: true,
+    });
+
+    render(
+      <StrictMode>
+        <ManagerWorkspace initialProjection={documentProjection} />
+      </StrictMode>,
+    );
+
+    await waitFor(() => {
+      expect(host.inspectRuntimeReadiness).toHaveBeenCalledTimes(1);
+      expect(host.resumeManagerIntakes).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("keeps a transient runtime probe failure checking until a retry is ready", async () => {
     vi.useFakeTimers();
     const documentProjection = {
