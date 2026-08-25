@@ -1,7 +1,7 @@
 # SDK-First AI Runtime Cutover Design
 
 Date: 2026-08-25  
-Status: Approved in principle; pending written-spec review  
+Status: Approved
 
 Supersedes:
 
@@ -162,8 +162,10 @@ The pinned app-server policy is exact rather than “best effort”:
 | Output | agent text/reasoning deltas, usage, thread/turn status, and reviewed dynamic-tool call events only |
 | Denied | shell/exec/file/patch/web/image/app/plugin/MCP/memory/goal/environment/subagent/collaboration/config-write requests or any unknown method/item type |
 
-The generated 0.149.1 schema must accept `ephemeral: true` and the explicit
-provider-fallback denial; otherwise the adapter is incompatible. Where the pinned
+The generated 0.149.1 schema must accept `ephemeral: true` plus the exact
+`modelProvider` discovered for the selected model. Quantix supplies no alternative
+provider/model and treats any reroute as terminal; otherwise the adapter is
+incompatible. Where the pinned
 runtime exposes a real pre-execution control, Quantix disables memories,
 compaction, goals, environments, subagents/multi-agent/collaboration,
 skills/plugins/apps, MCP, browser/computer/web/image/code-mode tools,
@@ -260,7 +262,7 @@ exact request.
 Slice 3 pins official Tier-1 Rust SDK `rmcp = "3.1.4"` and MCP protocol
 `2026-07-28`. Its initial topology is Host-as-client for Engineer-installed tool
 servers. Quantix does not expose an MCP server or Codex MCP bridge in this cutover.
-The Rust Host owns server configuration, process supervision, OAuth references,
+The Rust Host owns server configuration, process supervision, credential references,
 tool discovery, schema validation, approval, execution, timeout, result limits,
 and audit.
 
@@ -272,8 +274,12 @@ bounded Streamable HTTP, explicit authentication, destination validation, and an
 Engineer-created connection. Provider-native MCP execution is disabled unless an
 exact capability explicitly returns every call through the Host approval boundary.
 
-MCP connection metadata lives in installation SQLite; API keys/OAuth material lives
-in the DPAPI vault. Nothing is written to Codex home. Version negotiation accepts
+MCP connection metadata lives in installation SQLite; bearer/named-header secrets
+live in the DPAPI vault. The first MCP slice supports no authentication, bearer,
+and one validated named header. OAuth is excluded until a separate design covers
+authorization/token/discovery destinations, browser callback state, refresh,
+revocation, and per-destination approval through the same guarded transport.
+Nothing is written to Codex home. Version negotiation accepts
 only protocol `2026-07-28`; every older, newer, or unknown version/capability fails
 closed. Public Codex tool bridging remains blocked and gets a
 separate design before replacing private-development dynamic tools.
@@ -467,7 +473,7 @@ Completion requires deterministic and live evidence for all of the following:
 6. OpenAI, Anthropic, Gemini, xAI, OpenAI-compatible, and Anthropic-compatible
    routes use pinned official SDKs through the worker, with exact request-count
    and retry-disabled contract tests.
-7. All seven routes preserve explicit selection, immutable run binding, cumulative
+7. All seven routes (Codex plus the six general-provider routes) preserve explicit selection, immutable run binding, cumulative
    budgets, reroute detection, cancellation, and zero provider/model fallback.
 8. Codex/Python workers receive no Quantix SQLite, source-package, retrieval-index,
    or arbitrary Tender path through any sanctioned code path; private acceptance

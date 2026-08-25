@@ -1,5 +1,7 @@
 # Direct ChatGPT Provider Implementation Plan
 
+> **Historical — do not execute.** This plan is superseded by `docs/superpowers/plans/2026-08-25-sdk-first-ai-runtime-plan-suite.md` and its Codex managed-runtime cutover. Quantix must not restore the private ChatGPT backend or custom OAuth path described below.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the bundled Codex CLI with a Quantix-owned ChatGPT OAuth connection and a direct executor against `https://chatgpt.com/backend-api/codex/responses`, deleting every trace of the Codex binary integration.
