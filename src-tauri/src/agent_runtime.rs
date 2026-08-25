@@ -1327,24 +1327,39 @@ impl QuantixHost {
         let _execution = self.manager_intake_execution_guard(tender_id).await?;
         let tender_id = TenderId::parse(tender_id)?;
         let store = self.tender_store(&tender_id)?;
-        if !self.document_tools_are_verified() {
-            store
-                .lock()
-                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-                .wait_manager_intake_for_local_tools()?;
-            return Ok(());
-        }
         let stage = store
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .begin_manager_intake_processing()?;
         if matches!(
             stage,
-            crate::tender_store::ManagerIntakeStage::WaitingForProvider
-                | crate::tender_store::ManagerIntakeStage::WaitingForEngineer
+            crate::tender_store::ManagerIntakeStage::WaitingForEngineer
                 | crate::tender_store::ManagerIntakeStage::BidDecisionReady
                 | crate::tender_store::ManagerIntakeStage::Failed
         ) {
+            return Ok(());
+        }
+        let (targets, parse_status) = {
+            let mut store = store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+            let targets = store.manager_intake_parse_targets(&tender_id)?;
+            store.refresh_manager_intake_parse_counts()?;
+            let status = store
+                .current_manager_intake_status()?
+                .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            (targets, status)
+        };
+        let registered_documents_are_parsed = parse_status.parseable_document_count > 0
+            && parse_status.parsed_document_count == parse_status.parseable_document_count;
+        if !registered_documents_are_parsed && !self.document_tools_are_verified() {
+            store
+                .lock()
+                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+                .wait_manager_intake_for_local_tools()?;
+            return Ok(());
+        }
+        if stage == crate::tender_store::ManagerIntakeStage::WaitingForProvider {
             return Ok(());
         }
         let intake_run_id = store
@@ -1353,14 +1368,6 @@ impl QuantixHost {
             .current_manager_intake_status()?
             .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?
             .intake_run_id;
-        let targets = store
-            .lock()
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-            .manager_intake_parse_targets(&tender_id)?;
-        store
-            .lock()
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
-            .refresh_manager_intake_parse_counts()?;
         for target in targets {
             let package_path = store
                 .lock()

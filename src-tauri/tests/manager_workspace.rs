@@ -7,12 +7,13 @@ use quantix_lib::{
     CreateTenderCommand, DecideBidDecisionPackageCommand, ErasedTenderCopyClass,
     ImportTenderPackageCommand, InspectManagerWorkspaceCommand, InspectTenderAiExecutionCommand,
     IntakeExceptionCode, ManagerIntakeStage, ManagerIntakeStatusKind, ManagerWorkspaceTenderState,
-    ProviderCleanupStatus, ProviderConnectionStatus, ProviderReasoningSelection,
-    PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand, QuantixHost,
-    RecordEngineerWorkspaceMessageCommand, RegistrationState, RunBidDecisionPackageReviewCommand,
-    RunBootstrapAgentCommand, RuntimeLayout, SelectManagerWorkspaceTenderCommand, SetupPlatform,
-    SetupState, StoragePermissions, TenderAiSelectionReadiness, TenderErrorCode,
-    TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderRecordInspection, TenderRecordKind,
+    ParseSourceArtifactCommand, ProviderCleanupStatus, ProviderConnectionStatus,
+    ProviderReasoningSelection, PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand,
+    QuantixHost, RecordEngineerWorkspaceMessageCommand, RegistrationState,
+    RunBidDecisionPackageReviewCommand, RunBootstrapAgentCommand, RuntimeLayout,
+    SelectManagerWorkspaceTenderCommand, SetupPlatform, SetupState, StoragePermissions,
+    TenderAiSelectionReadiness, TenderErrorCode, TenderOfficeMessageAuthor,
+    TenderOfficeMessageKind, TenderRecordInspection, TenderRecordKind,
     TenderRecordVersionReference, TenderRetentionDecisionCommand, TenderRetentionState,
     TrashedTenderDecisionCommand, TrashedTenderState, UpdateAiExecutionSelectionCommand,
     WorkspaceActionKind, WorkspaceMessageReference, WorkspaceMessageReferenceKind,
@@ -550,7 +551,7 @@ async fn engineer_retry_preserves_partial_provider_retry_consumption() {
                 |row| row.get(0),
             )
             .expect("read retrying Manager stage");
-        if stage == "waiting_for_local_tools" {
+        if stage == "waiting_for_provider" {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -566,7 +567,7 @@ async fn engineer_retry_preserves_partial_provider_retry_consumption() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .expect("inspect preserved partial retry count");
-    assert_eq!(preserved, ("waiting_for_local_tools".into(), 1, 1));
+    assert_eq!(preserved, ("waiting_for_provider".into(), 1, 1));
     drop(host);
 
     let reopened = QuantixHost::with_setup_platform_and_runtime(
@@ -1319,6 +1320,101 @@ async fn approving_global_ai_selection_refreshes_existing_tender_binding() {
         })
         .expect("inspect refreshed Tender binding");
     assert_eq!(after.readiness, TenderAiSelectionReadiness::Ready);
+}
+
+#[tokio::test]
+async fn already_parsed_manager_intake_advances_to_provider_wait_without_duplicate_work() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let resources = user_home.path().join("resources");
+    install_codex_fixture(&resources, "manager-intake-bid");
+    let host = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(resources),
+    );
+    host.accept_runtime_fixture();
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    install_ocr_fixture(&application_home);
+    let tender = host
+        .create_tender(CreateTenderCommand {
+            name: "Already Parsed Intake Tender".into(),
+        })
+        .expect("create Tender");
+    let package = user_home.path().join("already-parsed-source");
+    fs::create_dir_all(&package).expect("create source package");
+    fs::write(
+        package.join("ITT.pdf"),
+        b"%PDF-1.7\nBid security is required.\n%%EOF\n",
+    )
+    .expect("write source document");
+    host.import_tender_package(ImportTenderPackageCommand {
+        tender_id: tender.tender_id.clone(),
+        source_path: package.to_string_lossy().into_owned(),
+    })
+    .expect("register source package");
+
+    let database = application_home
+        .join("tenders")
+        .join(&tender.tender_id)
+        .join("tender.sqlite");
+    let (artifact_id, version): (String, u32) = Connection::open(&database)
+        .expect("open Tender store")
+        .query_row(
+            "SELECT artifact_id, version FROM source_artifact_versions",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read registered document identity");
+    host.parse_source_artifact(ParseSourceArtifactCommand {
+        tender_id: tender.tender_id.clone(),
+        artifact_id,
+        version,
+    })
+    .await
+    .expect("parse document before Manager intake");
+    host.set_document_tools_verified_for_verification(false);
+
+    for _ in 0..2 {
+        host.run_manager_intake_for_verification(&tender.tender_id)
+            .await
+            .expect("advance already-parsed intake");
+        let projection = host
+            .select_manager_workspace_tender(SelectManagerWorkspaceTenderCommand {
+                tender_id: tender.tender_id.clone(),
+            })
+            .expect("read truthful projection after Manager cycle");
+        assert_eq!(
+            projection.intake.expect("Manager intake").stage,
+            ManagerIntakeStage::WaitingForProviderApproval
+        );
+    }
+
+    let persisted: (String, u32, u32, u32, u32) = Connection::open(database)
+        .expect("reopen Tender store")
+        .query_row(
+            "SELECT mir.stage, mir.parseable_document_count,
+                    mir.parsed_document_count,
+                    (SELECT COUNT(*) FROM parse_attempts),
+                    (SELECT COUNT(*) FROM agent_runs)
+             FROM manager_intake_runs mir
+             ORDER BY mir.intake_run_sequence DESC LIMIT 1",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .expect("inspect idempotent already-parsed transition");
+    assert_eq!(
+        persisted,
+        ("waiting_for_provider_approval".into(), 1, 1, 1, 0)
+    );
 }
 
 #[tokio::test]
