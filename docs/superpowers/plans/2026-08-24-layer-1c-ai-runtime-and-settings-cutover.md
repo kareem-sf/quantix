@@ -1,5 +1,10 @@
 # Layer 1C AI Runtime and Settings Cutover Implementation Plan
 
+> **Superseded — do not execute.** ADR 0018 and the
+> [SDK-first runtime design](../specs/2026-08-25-sdk-first-ai-runtime-cutover-design.md)
+> replace its runtime, Settings, and cutover assumptions. A replacement plan will
+> be written after the revised design is approved.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Mount the new connection system end to end, switch all future Agent Runs to the one global Active AI Configuration, and delete every private-backend, plaintext-auth, ChatGPT-only, and per-Tender selection path.

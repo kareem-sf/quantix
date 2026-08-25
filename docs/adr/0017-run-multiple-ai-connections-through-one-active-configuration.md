@@ -1,5 +1,7 @@
 ---
 status: accepted
+amended_by:
+  - 0018-adopt-sdk-first-ai-runtime-boundaries.md
 supersedes:
   - 0016-connect-chatgpt-through-quantix-owned-oauth
   - 0014-scope-ai-execution-and-asa-operations-per-tender#ai-selection
@@ -8,6 +10,10 @@ supersedes:
 ---
 
 # Run multiple AI connections through one active configuration
+
+> ADR 0018 replaces this ADR's account-authentication, Codex credential,
+> provider-runtime, and related release-gate consequences. The remaining global
+> connection/selection and Host-authority decisions stay accepted.
 
 Quantix stores several Engineer-configured AI connections but uses exactly zero
 or one global Active AI Configuration. The Engineer explicitly tests and selects

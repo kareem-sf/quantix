@@ -1,7 +1,7 @@
 # Quantix Direct ChatGPT Provider — Design
 
 Date: 2026-08-21
-Status: Approved (user-approved in session)
+Status: Superseded by ADR 0018 and the 2026-08-25 SDK-first design; historical evidence only
 
 ## Goal
 

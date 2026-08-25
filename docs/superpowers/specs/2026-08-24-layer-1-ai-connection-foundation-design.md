@@ -1,5 +1,11 @@
 # Layer 1 AI Connection Foundation Design
 
+> Amended by
+> [SDK-First AI Runtime Cutover Design](./2026-08-25-sdk-first-ai-runtime-cutover-design.md)
+> for account authentication, worker/runtime SDK boundaries, MCP, and release
+> gating. Unchanged connection, vault, endpoint, selection, and Host-authority
+> decisions remain in force.
+
 ## 1. Outcome
 
 Layer 1 gives a non-developer Windows Engineer one integrated place to save several

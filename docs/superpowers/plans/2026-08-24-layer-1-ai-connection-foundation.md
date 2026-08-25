@@ -1,5 +1,10 @@
 # Layer 1 AI Connection Foundation Implementation Plan
 
+> **Superseded — do not execute.** ADR 0018 and the
+> [SDK-first runtime design](../specs/2026-08-25-sdk-first-ai-runtime-cutover-design.md)
+> replace its account-authentication and worker/runtime assumptions. A new plan
+> will be written after the revised design is approved.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the current ChatGPT-only, private-backend, per-Tender AI path with four Engineer-configured connection methods, one explicit global Active AI Configuration, a DPAPI-encrypted vault, supervised provider workers, normalized provider behavior, and no fallback.

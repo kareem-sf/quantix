@@ -1,5 +1,10 @@
 # Layer 1B Supervised AI Workers Implementation Plan
 
+> **Superseded — do not execute.** ADR 0018 and the
+> [SDK-first runtime design](../specs/2026-08-25-sdk-first-ai-runtime-cutover-design.md)
+> replace its Codex authentication, home lifecycle, MCP, and worker assumptions.
+> A new plan will be written after the revised design is approved.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build and package the two replaceable provider workers behind the Layer 1A semantic contract: direct Codex app-server for account execution and a Pydantic AI worker for direct-key and compatible endpoints.

@@ -1,5 +1,10 @@
 # Layer 1D AI Security and Acceptance Implementation Plan
 
+> **Superseded — do not execute.** ADR 0018 and the
+> [SDK-first runtime design](../specs/2026-08-25-sdk-first-ai-runtime-cutover-design.md)
+> replace its security and acceptance assumptions. A replacement plan will be
+> written after the revised design is approved.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Prove Layer 1 fails closed, leaks no credentials, never falls back, survives worker/storage faults, records durable acceptance evidence, and tells one truthful current product story.
