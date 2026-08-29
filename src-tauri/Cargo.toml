@@ -60,7 +60,7 @@ infer = "0.22.0"
 jsonschema = { version = "0.49.9", default-features = false }
 jiff = { version = "0.2.35", default-features = false, features = ["std"] }
 minisign-verify = "=0.2.5"
-processkit = { version = "=3.3.3", default-features = false }
+processkit = { version = "=3.3.4", default-features = false }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "query", "rustls", "blocking", "form"] }
 rusqlite = { version = "0.40.1", features = ["backup", "bundled", "limits", "load_extension"] }
 rust_xlsxwriter = "0.98.0"
