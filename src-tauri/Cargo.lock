@@ -4384,7 +4384,7 @@ dependencies = [
  "fastembed",
  "fs4",
  "garde",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "infer 0.22.0",
  "jiff",
  "jsonschema",
