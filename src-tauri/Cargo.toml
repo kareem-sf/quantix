@@ -47,7 +47,7 @@ embed-resource = "3"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-anydoc = "0.1.9"
+anydoc = "0.2.3"
 base64 = "0.23.1"
 cacache = { version = "13.1.0", default-features = false, features = ["mmap", "tokio-runtime"] }
 calamine = { version = "0.36.1", default-features = false, features = ["dates"] }
