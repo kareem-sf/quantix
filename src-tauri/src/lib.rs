@@ -14,6 +14,7 @@ mod doctor;
 mod document_parsing;
 mod embedding;
 mod host;
+mod managed_runtime;
 mod process_supervisor;
 mod release_gate;
 mod runtime_readiness;
@@ -93,6 +94,7 @@ pub use release_gate::{
     PublicReleaseGateOutcome, PublicReleaseGateRecord, RecordNativePlatformQualificationCommand,
     TechnicalRiskAcceptance,
 };
+pub use managed_runtime::{ManagedCodexRuntimeState, ManagedCodexRuntimeStatus};
 pub use runtime_readiness::{
     RuntimeLayout, RuntimePreparationActivity, RuntimePreparationActivityStatus,
     RuntimePreparationProgress, RuntimePreparationStatus, RuntimePreparationStep, RuntimeReadiness,
@@ -2087,6 +2089,27 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn inspect_codex_runtime(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<crate::managed_runtime::ManagedCodexRuntimeStatus, &'static str> {
+        Ok(crate::managed_runtime::inspect_managed_codex_runtime(
+            host.inner().application_home(),
+        ))
+    }
+
+    #[tauri::command]
+    pub(super) async fn prepare_codex_runtime(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<crate::managed_runtime::ManagedCodexRuntimeStatus, &'static str> {
+        crate::managed_runtime::prepare_managed_codex_runtime(
+            host.inner().application_home(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .map_err(|_| "codex_runtime_prepare_failed")
+    }
+
+    #[tauri::command]
     pub(super) async fn run_bootstrap_agent(
         host: tauri::State<'_, QuantixHost>,
         command: RunBootstrapAgentCommand,
@@ -3386,6 +3409,8 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::search_evidence_semantic,
             tauri_commands::inspect_document_tool_readiness,
             tauri_commands::prepare_document_tools,
+            tauri_commands::inspect_codex_runtime,
+            tauri_commands::prepare_codex_runtime,
             tauri_commands::repair_document_tools,
             tauri_commands::inspect_document_tool_preparation_progress,
             tauri_commands::cancel_document_tool_preparation,
