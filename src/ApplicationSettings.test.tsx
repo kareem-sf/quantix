@@ -90,7 +90,7 @@ const readyConnection = {
       input_modalities: ["text"],
       reasoning_options: [
         {
-          selection: { kind: "codex_effort", value: "medium" } as const,
+          selection: { kind: "effort", value: "medium" } as const,
           label: "Medium",
           description: "Balanced speed and depth.",
           is_default: true,
@@ -105,7 +105,7 @@ const readyConnection = {
       input_modalities: ["text"],
       reasoning_options: [
         {
-          selection: { kind: "codex_effort", value: "high" } as const,
+          selection: { kind: "effort", value: "high" } as const,
           label: "High",
           description: "Deeper review.",
           is_default: true,
@@ -119,7 +119,7 @@ const preparedSelection = {
   connection_id: "codex_chatgpt",
   provider: "codex" as const,
   model_id: "gpt-construction",
-  reasoning: { kind: "codex_effort", value: "medium" } as const,
+  reasoning: { kind: "effort", value: "medium" } as const,
   catalogue_fetched_at: "chatgpt-direct-v1",
   adapter_version: "chatgpt-direct-v1",
 };
@@ -1040,7 +1040,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
       expect(host.confirmAiExecutionSelection).toHaveBeenCalledWith({
         connection_id: "codex_chatgpt",
         model_id: "gpt-construction",
-        reasoning: { kind: "codex_effort", value: "medium" },
+        reasoning: { kind: "effort", value: "medium" },
       });
     });
     expect(
@@ -1151,7 +1151,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
       ai_execution_selection: {
         ...preparedSelection,
         model_id: "gpt-deep",
-        reasoning: { kind: "codex_effort", value: "high" },
+        reasoning: { kind: "effort", value: "high" },
       },
       ai_execution_approval: null,
     });
@@ -1174,7 +1174,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
       expect(host.updateAiExecutionSelection).toHaveBeenCalledWith({
         connection_id: "codex_chatgpt",
         model_id: "gpt-deep",
-        reasoning: { kind: "codex_effort", value: "high" },
+        reasoning: { kind: "effort", value: "high" },
       });
     });
   });

@@ -98,16 +98,19 @@ type NonterminalReferenceCheck = dyn Fn(&str) -> Result<bool, AiConnectionError>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AiAdapterVersions {
     codex: String,
+    grok: String,
     general: String,
 }
 
 impl AiAdapterVersions {
     pub fn new(
         codex: impl Into<String>,
+        grok: impl Into<String>,
         general: impl Into<String>,
     ) -> Result<Self, AiConnectionError> {
         let versions = Self {
             codex: codex.into(),
+            grok: grok.into(),
             general: general.into(),
         };
         versions.validate()?;
@@ -115,7 +118,7 @@ impl AiAdapterVersions {
     }
 
     fn validate(&self) -> Result<(), AiConnectionError> {
-        if [self.codex.as_str(), self.general.as_str()]
+        if [self.codex.as_str(), self.grok.as_str(), self.general.as_str()]
             .into_iter()
             .any(|version| version.is_empty() || version.len() > MAX_ADAPTER_VERSION_BYTES)
         {
@@ -125,10 +128,10 @@ impl AiAdapterVersions {
     }
 
     fn for_provider(&self, provider: AiProviderKind) -> &str {
-        if provider == AiProviderKind::Codex {
-            &self.codex
-        } else {
-            &self.general
+        match provider {
+            AiProviderKind::Codex => &self.codex,
+            AiProviderKind::Grok => &self.grok,
+            _ => &self.general,
         }
     }
 }

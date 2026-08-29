@@ -1204,7 +1204,7 @@ async fn public_host_exposes_and_persists_the_live_codex_selection() {
         .update_ai_execution_selection(UpdateAiExecutionSelectionCommand {
             connection_id: connection.connection_id.clone(),
             model_id: connection.models[0].model_id.clone(),
-            reasoning: ProviderReasoningSelection::CodexEffort("medium".into()),
+            reasoning: ProviderReasoningSelection::Effort("medium".into()),
         })
         .await
         .expect("save exact selection");
@@ -1215,7 +1215,7 @@ async fn public_host_exposes_and_persists_the_live_codex_selection() {
     assert_eq!(selection.model_id, "gpt-5.6-terra");
     assert_eq!(
         selection.reasoning,
-        ProviderReasoningSelection::CodexEffort("medium".into())
+        ProviderReasoningSelection::Effort("medium".into())
     );
 }
 
@@ -1250,7 +1250,7 @@ async fn public_host_confirms_codex_selection_before_document_tools_are_ready() 
         .confirm_ai_execution_selection(ConfirmAiExecutionSelectionCommand {
             connection_id: connection.connection_id.clone(),
             model_id: connection.models[0].model_id.clone(),
-            reasoning: ProviderReasoningSelection::CodexEffort("medium".into()),
+            reasoning: ProviderReasoningSelection::Effort("medium".into()),
         })
         .await
         .expect("confirm Codex selection without document tools");
@@ -1288,7 +1288,7 @@ async fn approving_global_ai_selection_refreshes_existing_tender_binding() {
     host.update_ai_execution_selection(UpdateAiExecutionSelectionCommand {
         connection_id: connection.connection_id.clone(),
         model_id: connection.models[0].model_id.clone(),
-        reasoning: ProviderReasoningSelection::CodexEffort("medium".into()),
+        reasoning: ProviderReasoningSelection::Effort("medium".into()),
     })
     .await
     .expect("save exact global selection");
@@ -1310,7 +1310,7 @@ async fn approving_global_ai_selection_refreshes_existing_tender_binding() {
     host.confirm_ai_execution_selection(ConfirmAiExecutionSelectionCommand {
         connection_id: connection.connection_id.clone(),
         model_id: connection.models[0].model_id.clone(),
-        reasoning: ProviderReasoningSelection::CodexEffort("medium".into()),
+        reasoning: ProviderReasoningSelection::Effort("medium".into()),
     })
     .await
     .expect("approve exact global selection");

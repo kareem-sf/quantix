@@ -56,7 +56,7 @@ pub enum ProviderConnectionStatus {
 #[ts(export)]
 pub enum ProviderReasoningSelection {
     ProviderDefault,
-    CodexEffort(String),
+    Effort(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -919,7 +919,7 @@ fn chatgpt_direct_models() -> Vec<ProviderModelOption> {
         reasoning_options: ["none", "low", "medium", "high", "xhigh"]
             .into_iter()
             .map(|effort| ProviderReasoningOption {
-                selection: ProviderReasoningSelection::CodexEffort(effort.to_owned()),
+                selection: ProviderReasoningSelection::Effort(effort.to_owned()),
                 label: effort.to_owned(),
                 description: format!("{effort} reasoning effort"),
                 is_default: effort == "medium",
@@ -1496,7 +1496,7 @@ fn runtime_fixture_connection_and_selection() -> (ProviderConnectionView, AiExec
             is_default: true,
             input_modalities: vec!["text".to_owned()],
             reasoning_options: vec![ProviderReasoningOption {
-                selection: ProviderReasoningSelection::CodexEffort("medium".to_owned()),
+                selection: ProviderReasoningSelection::Effort("medium".to_owned()),
                 label: "medium".to_owned(),
                 description: "Fixture reasoning effort".to_owned(),
                 is_default: true,
@@ -1510,7 +1510,7 @@ fn runtime_fixture_connection_and_selection() -> (ProviderConnectionView, AiExec
         connection_id: connection.connection_id.clone(),
         provider: connection.provider,
         model_id: "gpt-5.6-terra".to_owned(),
-        reasoning: ProviderReasoningSelection::CodexEffort("medium".to_owned()),
+        reasoning: ProviderReasoningSelection::Effort("medium".to_owned()),
         catalogue_fetched_at: "fixture-catalogue".to_owned(),
         adapter_version: connection.adapter_version.clone(),
     };
@@ -1831,7 +1831,7 @@ mod tests {
         let command = UpdateAiExecutionSelectionCommand {
             connection_id: CODEX_CONNECTION_ID.to_owned(),
             model_id: "gpt-5.4".to_owned(),
-            reasoning: ProviderReasoningSelection::CodexEffort("high".to_owned()),
+            reasoning: ProviderReasoningSelection::Effort("high".to_owned()),
         };
         let (observed_tx, observed_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -1888,7 +1888,7 @@ mod tests {
         let command = UpdateAiExecutionSelectionCommand {
             connection_id: CODEX_CONNECTION_ID.to_owned(),
             model_id: "gpt-5.5".to_owned(),
-            reasoning: ProviderReasoningSelection::CodexEffort("medium".to_owned()),
+            reasoning: ProviderReasoningSelection::Effort("medium".to_owned()),
         };
         let (observed_tx, observed_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();

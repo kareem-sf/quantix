@@ -278,7 +278,7 @@ const tenderAiProviderConnection = {
       input_modalities: ["text"],
       reasoning_options: [
         {
-          selection: { kind: "codex_effort", value: "medium" } as const,
+          selection: { kind: "effort", value: "medium" } as const,
           label: "medium",
           description: "Balanced",
           is_default: true,
@@ -293,13 +293,13 @@ const tenderAiProviderConnection = {
       input_modalities: ["text"],
       reasoning_options: [
         {
-          selection: { kind: "codex_effort", value: "high" } as const,
+          selection: { kind: "effort", value: "high" } as const,
           label: "high",
           description: "Deeper",
           is_default: true,
         },
         {
-          selection: { kind: "codex_effort", value: "xhigh" } as const,
+          selection: { kind: "effort", value: "xhigh" } as const,
           label: "xhigh",
           description: "Deepest",
           is_default: false,
@@ -317,7 +317,7 @@ function readyApplicationSettings(): ApplicationSettingsView {
     connection_id: "codex_chatgpt",
     provider: "codex" as const,
     model_id: "gpt-live-a",
-    reasoning: { kind: "codex_effort" as const, value: "medium" },
+    reasoning: { kind: "effort" as const, value: "medium" },
     catalogue_fetched_at: "chatgpt-direct-v1",
     adapter_version: "chatgpt-direct-v1",
   };
@@ -1619,7 +1619,7 @@ describe("ManagerWorkspace", () => {
         connection_id: "codex_chatgpt",
         provider: "codex",
         model_id: "gpt-live-a",
-        reasoning: { kind: "codex_effort", value: "medium" },
+        reasoning: { kind: "effort", value: "medium" },
         catalogue_fetched_at: "chatgpt-direct-v1",
         adapter_version: "chatgpt-direct-v1",
       },
@@ -1629,7 +1629,7 @@ describe("ManagerWorkspace", () => {
         account_fingerprint:
           "117d68e191e9e848c1172767d9ca54204ef5e4b20d1ead8855ef0f17f906f695",
         model_id: "gpt-live-a",
-        reasoning: { kind: "codex_effort", value: "medium" },
+        reasoning: { kind: "effort", value: "medium" },
         data_destination: "ChatGPT subscription",
         approved_at: "2026-08-15T10:01:00Z",
       },
@@ -1650,7 +1650,7 @@ describe("ManagerWorkspace", () => {
               input_modalities: ["text"],
               reasoning_options: [
                 {
-                  selection: { kind: "codex_effort", value: "medium" },
+                  selection: { kind: "effort", value: "medium" },
                   label: "medium",
                   description: "Balanced",
                   is_default: true,
@@ -1665,7 +1665,7 @@ describe("ManagerWorkspace", () => {
               input_modalities: ["text"],
               reasoning_options: [
                 {
-                  selection: { kind: "codex_effort", value: "high" },
+                  selection: { kind: "effort", value: "high" },
                   label: "high",
                   description: "Deeper",
                   is_default: true,
@@ -1692,7 +1692,7 @@ describe("ManagerWorkspace", () => {
       ai_execution_selection: {
         ...settings.ai_execution_selection,
         model_id: "gpt-live-b",
-        reasoning: { kind: "codex_effort", value: "high" },
+        reasoning: { kind: "effort", value: "high" },
       },
     });
     host.updateGeneralApplicationPreferences.mockImplementation(
@@ -1729,7 +1729,7 @@ describe("ManagerWorkspace", () => {
       expect(host.updateAiExecutionSelection).toHaveBeenCalledWith({
         connection_id: "codex_chatgpt",
         model_id: "gpt-live-b",
-        reasoning: { kind: "codex_effort", value: "high" },
+        reasoning: { kind: "effort", value: "high" },
       });
     });
     fireEvent.click(screen.getByRole("button", { name: "General" }));
@@ -1774,7 +1774,7 @@ describe("ManagerWorkspace", () => {
           connection_id: "codex_chatgpt",
           provider: "codex",
           model_id: "gpt-5.3-codex-spark",
-          reasoning: { kind: "codex_effort", value: "low" },
+          reasoning: { kind: "effort", value: "low" },
           catalogue_fetched_at: "2026-08-21T08:00:00Z",
           adapter_version: "codex-v1",
         },
@@ -1829,7 +1829,7 @@ describe("ManagerWorkspace", () => {
           connection_id: "codex_chatgpt",
           provider: "codex",
           model_id: "gpt-live-a",
-          reasoning: { kind: "codex_effort", value: "medium" },
+          reasoning: { kind: "effort", value: "medium" },
           catalogue_fetched_at: "2026-08-21T08:00:00Z",
           adapter_version: "codex-v1",
         },
@@ -1858,7 +1858,7 @@ describe("ManagerWorkspace", () => {
               reasoning_options: [
                 {
                   selection: {
-                    kind: "codex_effort" as const,
+                    kind: "effort" as const,
                     value: "medium",
                   },
                   label: "medium",
@@ -1954,7 +1954,7 @@ describe("ManagerWorkspace", () => {
           connection_id: "codex_chatgpt",
           provider: "codex",
           model_id: "gpt-live-a",
-          reasoning: { kind: "codex_effort", value: "medium" },
+          reasoning: { kind: "effort", value: "medium" },
           catalogue_fetched_at: "2026-08-21T08:00:00Z",
           adapter_version: "codex-v1",
         },

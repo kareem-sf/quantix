@@ -821,7 +821,7 @@ async fn send_turn(
         return Err(protocol_failure(false));
     }
     let effort = match &run.prepared.provider_selection.reasoning {
-        ProviderReasoningSelection::CodexEffort(effort) => Some(effort.as_str()),
+        ProviderReasoningSelection::Effort(effort) => Some(effort.as_str()),
         ProviderReasoningSelection::ProviderDefault => None,
     };
     let on_requested = std::mem::replace(

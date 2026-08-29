@@ -3808,7 +3808,7 @@ fn chatgpt_reasoning_effort(
 ) -> Result<Option<ReasoningEffort>, ProviderFailure> {
     let effort = match selection {
         ProviderReasoningSelection::ProviderDefault => return Ok(None),
-        ProviderReasoningSelection::CodexEffort(value) => value.as_str(),
+        ProviderReasoningSelection::Effort(value) => value.as_str(),
     };
     let effort = match effort {
         "none" => Some(ReasoningEffort::None),
@@ -3875,7 +3875,7 @@ mod direct_backend_mapping_tests {
         );
         for (selection, expected) in cases {
             assert_eq!(
-                chatgpt_reasoning_effort(&ProviderReasoningSelection::CodexEffort(
+                chatgpt_reasoning_effort(&ProviderReasoningSelection::Effort(
                     selection.to_owned()
                 ))
                 .unwrap(),
@@ -3887,7 +3887,7 @@ mod direct_backend_mapping_tests {
     #[test]
     fn rejects_unknown_chatgpt_reasoning_selections() {
         assert!(
-            chatgpt_reasoning_effort(&ProviderReasoningSelection::CodexEffort(
+            chatgpt_reasoning_effort(&ProviderReasoningSelection::Effort(
                 "unsupported".to_owned()
             ))
             .is_err()
@@ -4887,7 +4887,7 @@ fn parse_codex_model(model: &Value) -> Option<ProviderModelOption> {
                 return None;
             }
             Some(ProviderReasoningOption {
-                selection: ProviderReasoningSelection::CodexEffort(effort.to_owned()),
+                selection: ProviderReasoningSelection::Effort(effort.to_owned()),
                 label: effort.to_owned(),
                 description: description.to_owned(),
                 is_default: effort == default_effort,
