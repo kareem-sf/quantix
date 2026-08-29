@@ -1,9 +1,0 @@
-# Default owner for repository changes.
-* @kareem-sf
-
-# High-impact governance and automation surfaces.
-/.github/ @kareem-sf
-/AGENTS.md @kareem-sf
-/CONTEXT.md @kareem-sf
-/docs/adr/ @kareem-sf
-/src-tauri/ @kareem-sf

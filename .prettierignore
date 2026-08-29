@@ -1,9 +1,7 @@
 .scratch
 .worktrees
 dist
-docs
 node_modules
-prototypes
 src/bindings
 src-tauri/gen
 src-tauri/tests/fixtures/codex_app_server_protocol.schemas.json

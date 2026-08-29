@@ -17,20 +17,6 @@ For every non-trivial task, use a manager-worker approach.
 - Run the relevant repository verification after integrating delegated work.
 - Do not delegate trivial tasks where coordination would cost more than doing the work directly.
 
-## Agent skills
-
-### Issue tracker
-
-Issues and specs are tracked in GitHub Issues for `kareem-sf/quantix`. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-The default mattpocock/skills triage labels are used. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Domain documentation uses the single-context layout. See `docs/agents/domain.md`.
-
 ## Repository commands
 
 - Install JavaScript dependencies: `npm install`
