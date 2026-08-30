@@ -465,7 +465,7 @@ fn run_managed_login_codex(
                             "result": {
                                 "type": "chatgpt",
                                 "loginId": "fixture-browser-login",
-                                "authUrl": "https://chatgpt.com/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"
+                                "authUrl": "https://fixture.invalid/auth/callback"
                             }
                         }))?;
                         authenticated = true;

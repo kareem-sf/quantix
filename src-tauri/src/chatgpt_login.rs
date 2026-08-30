@@ -162,6 +162,10 @@ pub(crate) fn chatgpt_connection_status_from_view(
     }
 }
 
+#[cfg(feature = "runtime-fixture")]
+fn open_in_system_browser(_url: &str) {}
+
+#[cfg(not(feature = "runtime-fixture"))]
 fn open_in_system_browser(url: &str) {
     let _ = webbrowser::open(url);
 }
