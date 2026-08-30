@@ -71,7 +71,7 @@ const disconnectedConnection = {
   account_plan: null,
   models: [],
   catalogue_fetched_at: null,
-  adapter_version: "chatgpt-direct-v1",
+  adapter_version: "0.151.0",
   status_summary: "Connect ChatGPT.",
 };
 
@@ -80,7 +80,7 @@ const readyConnection = {
   status: "ready" as const,
   account_label: "engineer@example.com",
   account_plan: "plus",
-  catalogue_fetched_at: "chatgpt-direct-v1",
+  catalogue_fetched_at: "2026-08-30T00:00:00Z",
   models: [
     {
       model_id: "gpt-construction",
@@ -120,8 +120,8 @@ const preparedSelection = {
   provider: "codex" as const,
   model_id: "gpt-construction",
   reasoning: { kind: "effort", value: "medium" } as const,
-  catalogue_fetched_at: "chatgpt-direct-v1",
-  adapter_version: "chatgpt-direct-v1",
+  catalogue_fetched_at: "2026-08-30T00:00:00Z",
+  adapter_version: "0.151.0",
 };
 
 function disconnectedView(
@@ -316,24 +316,6 @@ describe("ApplicationSettings ChatGPT connection", () => {
     await waitFor(() => expect(host.cancelChatGptLogin).toHaveBeenCalledWith());
     expect(
       await screen.findByRole("button", { name: "Connect ChatGPT" }),
-    ).toBeTruthy();
-  });
-
-  it("turns a blocked browser return into plain guidance and an explicit fallback", async () => {
-    host.startChatGptLogin.mockRejectedValue({ code: "oauth_port_blocked" });
-    renderSettings();
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Connect ChatGPT" }),
-    );
-
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain(
-      "Quantix could not receive the browser sign-in.",
-    );
-    expect(alert.textContent).not.toMatch(/port|PID|OAuth/i);
-    expect(
-      screen.getByRole("button", { name: "Sign in on another device" }),
     ).toBeTruthy();
   });
 
@@ -1114,18 +1096,6 @@ describe("ApplicationSettings ChatGPT connection", () => {
   });
 
   it("does not accept inconsistent or stale account approval data", async () => {
-    const inconsistentAccount = connectedView(true);
-    inconsistentAccount.chatgpt.account_id = "replacement@example.com";
-    const onAiAvailabilityChange = vi.fn();
-    host.refreshApplicationSettings.mockResolvedValue(inconsistentAccount);
-    const { unmount } = renderSettings(onAiAvailabilityChange);
-
-    expect(
-      await screen.findByRole("button", { name: "Use ChatGPT" }),
-    ).toBeTruthy();
-    expect(onAiAvailabilityChange).toHaveBeenLastCalledWith(false);
-
-    unmount();
     const changedAccount = connectedView(true);
     changedAccount.provider_connections = [
       {
@@ -1133,7 +1103,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
         account_label: "replacement@example.com",
       },
     ];
-    changedAccount.chatgpt.account_id = "replacement@example.com";
+    const onAiAvailabilityChange = vi.fn();
     host.refreshApplicationSettings.mockResolvedValue(changedAccount);
     renderSettings(onAiAvailabilityChange);
 
@@ -1161,7 +1131,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
     fireEvent.click(advanced);
     expect(screen.getByText("Catalogue provenance")).toBeTruthy();
     expect(
-      screen.getByText("Built-in catalogue version: chatgpt-direct-v1"),
+      screen.getByText("Built-in catalogue version: 2026-08-30T00:00:00Z"),
     ).toBeTruthy();
     expect(document.body.textContent).not.toContain("Invalid Date");
     expect(

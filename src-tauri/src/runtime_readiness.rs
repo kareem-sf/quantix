@@ -49,10 +49,18 @@ impl RuntimeLayout {
     }
 
     #[cfg(feature = "runtime-fixture")]
-    pub(crate) fn codex_executable(&self) -> PathBuf {
+    pub(crate) fn codex_executable(&self, _application_home: &Path) -> PathBuf {
         self.runtime_resources
             .join("bin")
             .join(executable_name("codex"))
+    }
+
+    #[cfg(not(feature = "runtime-fixture"))]
+    pub(crate) fn codex_executable(&self, application_home: &Path) -> PathBuf {
+        crate::managed_runtime::codex_binary_path(
+            application_home,
+            crate::agent_runtime::CODEX_VERSION,
+        )
     }
 
     fn uv_executable(&self) -> PathBuf {

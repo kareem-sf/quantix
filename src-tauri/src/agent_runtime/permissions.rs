@@ -875,7 +875,6 @@ fn store_unavailable(_error: std::io::Error) -> TenderCommandError {
     TenderCommandError::new(TenderErrorCode::StoreUnavailable)
 }
 
-#[cfg(feature = "runtime-fixture")]
 pub(crate) fn deny_provider_control_request(
     grant: &PermissionGrant,
     method: &str,

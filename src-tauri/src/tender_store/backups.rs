@@ -515,7 +515,6 @@ struct PermanentDeletionPlan {
     provider_reference_discovery: ProviderReferenceDiscoveryState,
 }
 
-#[cfg(feature = "runtime-fixture")]
 struct PendingProviderCleanup {
     cleanup_id: String,
     provider: AiProviderKind,
@@ -2325,7 +2324,6 @@ impl QuantixHost {
         Ok(receipts)
     }
 
-    #[cfg(feature = "runtime-fixture")]
     pub(crate) async fn retry_pending_provider_cleanup(&self) -> Result<(), TenderCommandError> {
         let _execution = self.provider_cleanup_execution().lock().await;
         let pending = self.pending_provider_cleanup_jobs()?;
@@ -2359,12 +2357,6 @@ impl QuantixHost {
         Ok(())
     }
 
-    #[cfg(not(feature = "runtime-fixture"))]
-    pub(crate) async fn retry_pending_provider_cleanup(&self) -> Result<(), TenderCommandError> {
-        Ok(())
-    }
-
-    #[cfg(feature = "runtime-fixture")]
     fn pending_provider_cleanup_jobs(
         &self,
     ) -> Result<Vec<PendingProviderCleanup>, TenderCommandError> {
@@ -2399,16 +2391,7 @@ impl QuantixHost {
             let (cleanup_id, provider, thread_ref, target_manifest_sha256) =
                 row.map_err(sql_error)?;
             let provider = match provider.as_str() {
-                "codex" => {
-                    #[cfg(feature = "runtime-fixture")]
-                    {
-                        AiProviderKind::Codex
-                    }
-                    #[cfg(not(feature = "runtime-fixture"))]
-                    {
-                        continue;
-                    }
-                }
+                "codex" => AiProviderKind::Codex,
                 _ => return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
             };
             if manifest_sha256_record(&ProviderCleanupTarget {
@@ -2427,7 +2410,6 @@ impl QuantixHost {
         Ok(jobs)
     }
 
-    #[cfg(feature = "runtime-fixture")]
     fn record_provider_cleanup_attempt(
         &self,
         job: &PendingProviderCleanup,
@@ -3317,16 +3299,7 @@ fn permanent_provider_cleanup_target(
     let provider = match provider {
         "chatgpt" => None,
         "codex" if thread_ref.starts_with("chatgpt:") => None,
-        "codex" => {
-            #[cfg(feature = "runtime-fixture")]
-            {
-                Some(AiProviderKind::Codex)
-            }
-            #[cfg(not(feature = "runtime-fixture"))]
-            {
-                None
-            }
-        }
+        "codex" => Some(AiProviderKind::Codex),
         _ => return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
     };
     Ok(provider.map(|provider| ProviderCleanupTarget {
@@ -4199,7 +4172,6 @@ fn tender_error_code(code: TenderErrorCode) -> &'static str {
         TenderErrorCode::RequestBudgetExceeded => "request_budget_exceeded",
         TenderErrorCode::NotFound => "not_found",
         TenderErrorCode::OauthAlreadyRunning => "oauth_already_running",
-        TenderErrorCode::OauthPortBlocked => "oauth_port_blocked",
         TenderErrorCode::OperationTimedOut => "operation_timed_out",
         TenderErrorCode::RecoveryRequired => "recovery_required",
         TenderErrorCode::LocalDocumentToolsRequired => "local_document_tools_required",

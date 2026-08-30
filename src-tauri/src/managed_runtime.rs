@@ -136,12 +136,16 @@ pub async fn prepare_managed_codex_runtime(
     application_home: &Path,
     cancellation: CancellationToken,
 ) -> Result<ManagedCodexRuntimeStatus, ManagedRuntimeError> {
-    prepare_release_from(application_home, &CODEX_RELEASE, &network_fetch, cancellation).await
+    prepare_release_from(
+        application_home,
+        &CODEX_RELEASE,
+        &network_fetch,
+        cancellation,
+    )
+    .await
 }
 
-pub type FetchFuture = Pin<
-    Box<dyn std::future::Future<Output = Result<Download, String>> + Send>,
->;
+pub type FetchFuture = Pin<Box<dyn std::future::Future<Output = Result<Download, String>> + Send>>;
 
 pub type Fetcher = dyn Fn(&'static str) -> FetchFuture + Send + Sync;
 
@@ -313,16 +317,13 @@ fn hex_sha256(bytes: &[u8]) -> String {
     hex
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "runtime-fixture"))]
 mod tests {
     use super::*;
 
     fn blob_fetch(bytes: Vec<u8>) -> impl Fn(&'static str) -> FetchFuture + Send + Sync {
         move |_| {
-            let chunks: Vec<Vec<u8>> = bytes
-                .chunks(64 * 1024)
-                .map(<[u8]>::to_vec)
-                .collect();
+            let chunks: Vec<Vec<u8>> = bytes.chunks(64 * 1024).map(<[u8]>::to_vec).collect();
             Box::pin(async move { Ok(Download::Bytes(chunks.into_iter())) }) as FetchFuture
         }
     }
@@ -332,7 +333,9 @@ mod tests {
     }
 
     fn test_release() -> (CodexRelease, Vec<u8>) {
-        let bytes: Vec<u8> = (0..256 * 1024u32).map(|index| (index % 251) as u8).collect();
+        let bytes: Vec<u8> = (0..256 * 1024u32)
+            .map(|index| (index % 251) as u8)
+            .collect();
         let release = CodexRelease {
             version: "test-1.0.0",
             primary_url: "https://example.invalid/primary",
@@ -377,10 +380,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(status.state, ManagedCodexRuntimeState::Ready);
-        assert_eq!(
-            fetch_calls.load(std::sync::atomic::Ordering::SeqCst),
-            0
-        );
+        assert_eq!(fetch_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(codex_runtime_directory(&home, release.version)
             .join(PROVENANCE_FILE)
             .is_file());
@@ -450,10 +450,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(status.state, ManagedCodexRuntimeState::Ready);
-        assert_eq!(
-            binary_sha256(&binary).unwrap(),
-            release.sha256
-        );
+        assert_eq!(binary_sha256(&binary).unwrap(), release.sha256);
     }
 
     #[tokio::test]

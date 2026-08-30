@@ -26,21 +26,20 @@ export async function exactApplicationAiSelectionIsReady(
 ): Promise<boolean> {
   const selection = settings.ai_execution_selection;
   const approval = settings.ai_execution_approval;
-  if (!selection || !approval || settings.chatgpt.state !== "connected") {
+  if (!selection || !approval) {
     return false;
   }
   const connection = settings.provider_connections.find(
     (candidate) =>
       candidate.connection_id === selection.connection_id &&
       candidate.provider === selection.provider &&
-      candidate.status === "ready",
+      candidate.status === "ready" &&
+      candidate.account_label !== null,
   );
   if (
     !connection ||
     connection.catalogue_fetched_at !== selection.catalogue_fetched_at ||
-    connection.adapter_version !== selection.adapter_version ||
-    connection.account_label === null ||
-    connection.account_label !== settings.chatgpt.account_id
+    connection.adapter_version !== selection.adapter_version
   ) {
     return false;
   }
@@ -51,7 +50,8 @@ export async function exactApplicationAiSelectionIsReady(
   if (
     !model?.reasoning_options.some(
       (option) => reasoningKey(option.selection) === selectionReasoning,
-    )
+    ) ||
+    connection.account_label === null
   ) {
     return false;
   }

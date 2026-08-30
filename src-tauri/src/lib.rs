@@ -2,13 +2,9 @@
 mod acceptance;
 pub mod ai;
 
-#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
-mod agent_backend;
-
 mod agent_runtime;
 mod application_settings;
 mod chatgpt_login;
-pub(crate) mod chatgpt_oauth;
 mod diagnostics;
 mod doctor;
 mod document_parsing;
@@ -59,8 +55,9 @@ pub use application_settings::{
     UpdateGeneralApplicationPreferencesCommand, UpdateTenderAiExecutionSelectionCommand,
 };
 pub use chatgpt_login::{
-    ChatGptConnectionState, ChatGptConnectionStatus, StartChatGptDeviceLoginResult,
-    StartChatGptLoginError, StartChatGptLoginResult, StartChatGptLoginStatus,
+    ChatGptConnectionState, ChatGptConnectionStatus, ChatGptLoginPhase,
+    StartChatGptDeviceLoginResult, StartChatGptLoginError, StartChatGptLoginResult,
+    StartChatGptLoginStatus,
 };
 pub(crate) use diagnostics::RecordDiagnosticFact;
 pub use diagnostics::{
@@ -87,6 +84,7 @@ pub use document_parsing::{
     TextDirection,
 };
 pub use host::QuantixHost;
+pub use managed_runtime::{ManagedCodexRuntimeState, ManagedCodexRuntimeStatus};
 pub use release_gate::{
     release_candidate_manifest_sha256, ChatGptProductionAssuranceEvidence,
     EvaluatePublicReleaseGateCommand, IntegrationTermsDecision, LicenseDistributionReview,
@@ -94,7 +92,6 @@ pub use release_gate::{
     PublicReleaseGateOutcome, PublicReleaseGateRecord, RecordNativePlatformQualificationCommand,
     TechnicalRiskAcceptance,
 };
-pub use managed_runtime::{ManagedCodexRuntimeState, ManagedCodexRuntimeStatus};
 pub use runtime_readiness::{
     RuntimeLayout, RuntimePreparationActivity, RuntimePreparationActivityStatus,
     RuntimePreparationProgress, RuntimePreparationStatus, RuntimePreparationStep, RuntimeReadiness,
@@ -685,7 +682,6 @@ mod tauri_commands {
                 return Err(error);
             }
         };
-        #[cfg(feature = "runtime-fixture")]
         if !host.quiesce_agent_provider_for_update().await {
             let _ = host.cancel_update_installation_authorization(&command.update_id);
             *pending.0.lock().map_err(|_| {
@@ -1210,25 +1206,22 @@ mod tauri_commands {
     pub(super) async fn start_chatgpt_login(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<StartChatGptLoginResult, StartChatGptLoginError> {
-        let host = host.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || host.start_chatgpt_login())
-            .await
-            .map_err(|_| StartChatGptLoginError::new(TenderErrorCode::StoreUnavailable))?
+        host.inner().start_chatgpt_login().await
     }
 
     #[tauri::command]
     pub(super) async fn start_chatgpt_device_login(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<StartChatGptDeviceLoginResult, StartChatGptLoginError> {
-        let host = host.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || host.start_chatgpt_device_login())
-            .await
-            .map_err(|_| StartChatGptLoginError::new(TenderErrorCode::StoreUnavailable))?
+        host.inner().start_chatgpt_device_login().await
     }
 
     #[tauri::command]
-    pub(super) async fn open_chatgpt_device_login_page() -> Result<(), TenderCommandError> {
-        tauri::async_runtime::spawn_blocking(crate::chatgpt_login::open_chatgpt_device_login_page)
+    pub(super) async fn open_chatgpt_device_login_page(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<(), TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.open_chatgpt_device_login_page())
             .await
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
     }
@@ -1237,27 +1230,15 @@ mod tauri_commands {
     pub(super) async fn cancel_chatgpt_login(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<(), TenderCommandError> {
-        let host = host.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            host.cancel_chatgpt_login();
-            Ok(())
-        })
-        .await
-        .map_err(|_| TenderCommandError {
-            code: TenderErrorCode::StoreUnavailable,
-        })?
+        host.inner().cancel_chatgpt_login().await;
+        Ok(())
     }
 
     #[tauri::command]
     pub(super) async fn disconnect_chatgpt(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        let host = host.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || host.disconnect_chatgpt())
-            .await
-            .map_err(|_| TenderCommandError {
-                code: TenderErrorCode::StoreUnavailable,
-            })?
+        host.inner().disconnect_chatgpt().await
     }
 
     #[tauri::command]

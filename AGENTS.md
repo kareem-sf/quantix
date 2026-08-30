@@ -27,6 +27,7 @@ For every non-trivial task, use a manager-worker approach.
 - Check formatting without changing files: `npm run format:check`
 - Run TypeScript typechecking and Rust clippy: `npm run check`
 - Run deterministic tests and regenerate Rust-owned TypeScript DTOs: `npm test`
+- Run targeted tests during development — fastest first: `cargo test --manifest-path src-tauri/Cargo.toml --target-dir src-tauri/target/tests --features runtime-fixture --test <test-file-name>` (or `--lib <filter>` for unit tests) and `npx vitest run <file>` for one renderer test file. Reserve the full `npm test` suite for final verification only — before committing or handing off completed work.
 - Record deterministic product acceptance from a command file: `npm run acceptance:deterministic -- <application-home> <command.json>`
 - Aggregate deterministic Product Acceptance Runs: `npm run acceptance:aggregate -- <application-home> <source-revision>`
 - Record one opted-in local live-provider run: `npm run acceptance:live -- <application-home> <command.json>`

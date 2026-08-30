@@ -1461,11 +1461,7 @@ mod tests {
                 AiProviderKind::Codex,
                 true,
             ),
-            (
-                AiConnectionMethod::AccountLogin,
-                AiProviderKind::Grok,
-                true,
-            ),
+            (AiConnectionMethod::AccountLogin, AiProviderKind::Grok, true),
             (
                 AiConnectionMethod::DirectProviderKey,
                 AiProviderKind::OpenAi,

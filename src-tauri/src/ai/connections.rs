@@ -1,7 +1,9 @@
+#[cfg(feature = "runtime-fixture")]
+use std::sync::atomic::AtomicU8;
 use std::{
     fmt::{self, Write},
     sync::{
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, Ordering},
         Arc, Mutex, OnceLock,
     },
 };
@@ -118,9 +120,13 @@ impl AiAdapterVersions {
     }
 
     fn validate(&self) -> Result<(), AiConnectionError> {
-        if [self.codex.as_str(), self.grok.as_str(), self.general.as_str()]
-            .into_iter()
-            .any(|version| version.is_empty() || version.len() > MAX_ADAPTER_VERSION_BYTES)
+        if [
+            self.codex.as_str(),
+            self.grok.as_str(),
+            self.general.as_str(),
+        ]
+        .into_iter()
+        .any(|version| version.is_empty() || version.len() > MAX_ADAPTER_VERSION_BYTES)
         {
             return Err(AiConnectionError::InvalidCommand);
         }

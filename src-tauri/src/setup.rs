@@ -15,7 +15,6 @@ use crate::QuantixHost;
 pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 25;
-pub(crate) const CHATGPT_AUTH_STORE: &str = "auth.json";
 const SETUP_MARKER: &str = ".setup-in-progress";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
@@ -407,9 +406,10 @@ const UPDATE_RECOVERY_POINTS_NO_DELETE_SQL: &str = "CREATE TRIGGER update_recove
          BEGIN
            SELECT RAISE(ABORT, 'Update recovery points are immutable');
          END";
-const APPLICATION_DIRECTORIES: [&str; 10] = [
+const APPLICATION_DIRECTORIES: [&str; 11] = [
     "archives",
     "backups",
+    "codex",
     "exports",
     "logs",
     "models",
@@ -748,30 +748,6 @@ fn is_known_application_entry(name: &OsStr) -> bool {
         || STAGED_INSTALLATION_COMPANIONS
             .iter()
             .any(|known| name == OsStr::new(known))
-        || is_chatgpt_auth_store_entry(name)
-}
-
-fn is_chatgpt_auth_store_entry(name: &OsStr) -> bool {
-    if name == OsStr::new(CHATGPT_AUTH_STORE) {
-        return true;
-    }
-    let atomic_prefix = format!(".{CHATGPT_AUTH_STORE}.");
-    let Some(sequence) = name
-        .to_str()
-        .and_then(|name| name.strip_prefix(&atomic_prefix))
-        .and_then(|name| name.strip_suffix(".tmp"))
-    else {
-        return false;
-    };
-    let mut parts = sequence.split('.');
-    matches!(
-        (parts.next(), parts.next(), parts.next()),
-        (Some(process_id), Some(sequence), None)
-            if !process_id.is_empty()
-                && process_id.bytes().all(|byte| byte.is_ascii_digit())
-                && !sequence.is_empty()
-                && sequence.bytes().all(|byte| byte.is_ascii_digit())
-    )
 }
 
 fn nearest_existing_directory(path: &Path) -> Option<PathBuf> {

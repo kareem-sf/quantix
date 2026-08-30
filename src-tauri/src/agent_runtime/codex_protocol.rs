@@ -3,13 +3,11 @@ use std::{
     path::{Component, Path},
 };
 
-#[cfg(feature = "runtime-fixture")]
 use std::{collections::BTreeMap, sync::OnceLock};
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-#[cfg(feature = "runtime-fixture")]
 use crate::process_supervisor::{ProcessError, SupervisedConversation};
 
 use super::{
@@ -17,7 +15,6 @@ use super::{
     ProviderFailure, ProviderFailureCategory,
 };
 
-#[cfg(feature = "runtime-fixture")]
 use super::{
     chatgpt_subscription_is_supported, permissions::deny_provider_control_request, AgentRunState,
     PendingProviderEvent, ProviderEventKind, ProviderExecution, ProviderRateLimit,
@@ -25,14 +22,8 @@ use super::{
     PROVIDER_OUTPUT_LIMIT,
 };
 
-#[cfg(feature = "runtime-fixture")]
 pub(super) fn dynamic_tool_specs(grant: &PermissionGrant) -> Result<Vec<Value>, ProviderFailure> {
     tool_specs(&grant.access_ceiling.allowed_tools, "inputSchema")
-}
-
-#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
-pub(super) fn direct_tool_specs(grant: &PermissionGrant) -> Result<Vec<Value>, ProviderFailure> {
-    tool_specs(&grant.access_ceiling.allowed_tools, "parameters")
 }
 
 fn tool_specs(allowed_tools: &[String], schema_field: &str) -> Result<Vec<Value>, ProviderFailure> {
@@ -56,19 +47,37 @@ fn tool_specs(allowed_tools: &[String], schema_field: &str) -> Result<Vec<Value>
         .collect()
 }
 
-#[cfg(feature = "runtime-fixture")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReasoningEffort {
+    None,
+    Low,
+    Medium,
+    High,
+    XHigh,
+}
+
+impl ReasoningEffort {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+        }
+    }
+}
+
 pub(super) enum NotificationOutcome {
     Continue,
     Terminal,
 }
 
-#[cfg(feature = "runtime-fixture")]
 #[derive(Default)]
 pub(super) struct ControlRequestLedger {
     resolved: BTreeMap<String, ResolvedControlRequest>,
 }
 
-#[cfg(feature = "runtime-fixture")]
 pub(super) struct ControlRequestContext<'a> {
     pub grant: &'a PermissionGrant,
     pub expected_thread_ref: &'a str,
@@ -79,19 +88,15 @@ pub(super) struct ControlRequestContext<'a> {
     pub on_tool_call: &'a mut ToolCallCallback,
 }
 
-#[cfg(feature = "runtime-fixture")]
 type DenialCallback = dyn FnMut(&PendingProviderEvent) -> Result<(), ProviderFailure> + Send;
-#[cfg(feature = "runtime-fixture")]
 type ToolCallCallback =
     dyn FnMut(&str, &str, &Value) -> Result<Option<String>, ProviderFailure> + Send;
 
-#[cfg(feature = "runtime-fixture")]
 struct ResolvedControlRequest {
     fingerprint: String,
     response: Value,
 }
 
-#[cfg(feature = "runtime-fixture")]
 pub(super) fn handle_notification(
     method: &str,
     params: &Value,
@@ -214,7 +219,6 @@ pub(super) fn handle_notification(
     Ok(NotificationOutcome::Continue)
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn normalize_rate_limit(
     params: &Value,
     existing: Option<&ProviderRateLimit>,
@@ -244,7 +248,6 @@ fn normalize_rate_limit(
     })
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn normalize_rate_limit_window(
     window: Option<&Value>,
     existing: Option<&ProviderRateLimitWindow>,
@@ -276,7 +279,6 @@ fn normalize_rate_limit_window(
     }))
 }
 
-#[cfg(feature = "runtime-fixture")]
 pub(super) async fn handle_control_request(
     conversation: &mut SupervisedConversation,
     message: &Value,
@@ -460,7 +462,6 @@ pub(super) fn typed_tool_is_known(tool_name: &str) -> bool {
         .any(|tool| tool.name == tool_name)
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn request_id(id: &Value) -> Result<String, ProviderFailure> {
     match id {
         Value::String(value) if !value.is_empty() => Ok(value.clone()),
@@ -582,7 +583,6 @@ pub(super) fn validate_candidate(
     serde_json_canonicalizer::to_string(&payload).map_err(|_| output_failure())
 }
 
-#[cfg(feature = "runtime-fixture")]
 pub(super) async fn read_expected_response(
     conversation: &mut SupervisedConversation,
     expected_id: &Value,
@@ -605,7 +605,6 @@ pub(super) async fn read_expected_response(
     }
 }
 
-#[cfg(feature = "runtime-fixture")]
 pub(super) fn response_result(
     message: &Value,
     definition: &str,
@@ -629,7 +628,6 @@ pub(super) fn response_result(
     Ok(result)
 }
 
-#[cfg(feature = "runtime-fixture")]
 pub(super) fn parse_wire_message(line: &[u8]) -> Result<Value, ProviderFailure> {
     if line.is_empty() || line.len() > PROVIDER_OUTPUT_LIMIT {
         return Err(protocol_failure(false));
@@ -649,7 +647,6 @@ pub(super) fn parse_wire_message(line: &[u8]) -> Result<Value, ProviderFailure> 
     Ok(message)
 }
 
-#[cfg(feature = "runtime-fixture")]
 pub(super) async fn write_rpc(
     conversation: &mut SupervisedConversation,
     message: &Value,
@@ -659,15 +656,12 @@ pub(super) async fn write_rpc(
     conversation.write(&bytes).await
 }
 
-#[cfg(feature = "runtime-fixture")]
 struct CodexSchemas {
     schema: Value,
 }
 
-#[cfg(feature = "runtime-fixture")]
 static CODEX_SCHEMAS: OnceLock<Option<CodexSchemas>> = OnceLock::new();
 
-#[cfg(feature = "runtime-fixture")]
 pub(super) fn validate_schema(definition: &str, value: &Value) -> Result<(), ProviderFailure> {
     let schemas = CODEX_SCHEMAS
         .get_or_init(|| {
@@ -692,7 +686,6 @@ pub(super) fn validate_schema(definition: &str, value: &Value) -> Result<(), Pro
     if validator.is_valid(value) {
         Ok(())
     } else {
-        #[cfg(feature = "runtime-fixture")]
         eprintln!(
             "Codex fixture schema mismatch for {definition}: {}; value={value}",
             validator
@@ -748,7 +741,6 @@ pub(super) fn outcome_unknown() -> ProviderFailure {
     )
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn provider_usage(params: &Value) -> Result<ProviderUsage, ProviderFailure> {
     let last = params
         .pointer("/tokenUsage/last")
@@ -769,7 +761,6 @@ fn provider_usage(params: &Value) -> Result<ProviderUsage, ProviderFailure> {
     })
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn normalize_rpc_error(message: &Value, turn_accepted: bool) -> ProviderFailure {
     match codex_error_info(message.get("error")) {
         Some("unauthorized") => authentication_lost_failure(),
@@ -778,7 +769,6 @@ fn normalize_rpc_error(message: &Value, turn_accepted: bool) -> ProviderFailure 
     }
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn normalize_turn_error(params: &Value) -> ProviderFailure {
     let error = params
         .get("error")
@@ -795,7 +785,6 @@ fn normalize_turn_error(params: &Value) -> ProviderFailure {
     }
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn codex_error_info(error: Option<&Value>) -> Option<&str> {
     error.and_then(|value| {
         value
@@ -809,7 +798,6 @@ fn codex_error_info(error: Option<&Value>) -> Option<&str> {
     })
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn authentication_lost_failure() -> ProviderFailure {
     ProviderFailure::new(
         ProviderFailureCategory::AuthenticationRequired,
@@ -819,7 +807,6 @@ fn authentication_lost_failure() -> ProviderFailure {
     )
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn account_state_loss_outcome_unknown(auth_mode: Option<&str>) -> ProviderFailure {
     ProviderFailure::new(
         ProviderFailureCategory::OutcomeUnknown,
@@ -833,7 +820,6 @@ fn account_state_loss_outcome_unknown(auth_mode: Option<&str>) -> ProviderFailur
     )
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn rate_limit_failure() -> ProviderFailure {
     ProviderFailure::new(
         ProviderFailureCategory::RateLimited,
@@ -843,7 +829,6 @@ fn rate_limit_failure() -> ProviderFailure {
     )
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn require_turn(params: &Value, expected: &str) -> Result<(), ProviderFailure> {
     let actual = params
         .get("turnId")
@@ -870,20 +855,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_tool_specs_use_responses_parameters_shape() {
-        let tool_name = bootstrap_tool_catalogue()
-            .into_iter()
-            .next()
-            .expect("bootstrap tool catalogue is not empty")
-            .name;
-        let specifications = tool_specs(&[tool_name], "parameters").unwrap();
-        let specification = specifications.first().unwrap();
-
-        assert!(specification.get("parameters").is_some());
-        assert!(specification.get("inputSchema").is_none());
-    }
-
-    #[test]
     fn shared_failures_are_transport_neutral() {
         for failure in [protocol_failure(false), process_failure(false)] {
             let rendered = format!(
@@ -897,7 +868,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "runtime-fixture")]
     #[test]
     fn fixture_tool_specs_keep_codex_input_schema_shape() {
         let tool_name = bootstrap_tool_catalogue()

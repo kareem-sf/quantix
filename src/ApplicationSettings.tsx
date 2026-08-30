@@ -82,9 +82,6 @@ function settingsError(reason: unknown): string {
     if (reason.code === "ai_provider_required") {
       return "Connect ChatGPT before using AI for Tender work.";
     }
-    if (reason.code === "oauth_port_blocked") {
-      return "Quantix could not receive the browser sign-in. Close any other ChatGPT sign-in windows and try again, or sign in on another device.";
-    }
     if (reason.code === "oauth_already_running") {
       return "A ChatGPT sign-in is already running. Finish it in your browser or cancel it first.";
     }
@@ -170,7 +167,6 @@ export function ApplicationSettings({
   const [deviceClipboardError, setDeviceClipboardError] = useState<
     string | null
   >(null);
-  const [deviceFallbackVisible, setDeviceFallbackVisible] = useState(false);
   const [browserLoginStarted, setBrowserLoginStarted] = useState(false);
   const [deviceLogin, setDeviceLogin] = useState<DeviceLoginDetails | null>(
     null,
@@ -538,9 +534,6 @@ export function ApplicationSettings({
         return;
       }
       ownedLoginRef.current = null;
-      if (reasonHasCode(reason, "oauth_port_blocked")) {
-        setDeviceFallbackVisible(true);
-      }
       setGeneralActionError(settingsError(reason));
     } finally {
       settingsMutationInFlightRef.current = false;
@@ -719,7 +712,6 @@ export function ApplicationSettings({
     if (await runSettingsAction(disconnectChatGpt)) {
       setDeviceLogin(null);
       setDeviceCodeCopied(false);
-      setDeviceFallbackVisible(false);
       setBrowserLoginStarted(false);
     }
   };
@@ -1245,28 +1237,17 @@ export function ApplicationSettings({
                         >
                           Connect ChatGPT
                         </button>
-                        {deviceFallbackVisible ? (
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void connectChatGptOnAnotherDevice()}
-                          >
-                            Sign in on another device
-                          </button>
-                        ) : null}
                       </div>
-                      {!deviceFallbackVisible ? (
-                        <details className="application-settings__trouble">
-                          <summary>Having trouble signing in?</summary>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void connectChatGptOnAnotherDevice()}
-                          >
-                            Sign in on another device
-                          </button>
-                        </details>
-                      ) : null}
+                      <details className="application-settings__trouble">
+                        <summary>Having trouble signing in?</summary>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void connectChatGptOnAnotherDevice()}
+                        >
+                          Sign in on another device
+                        </button>
+                      </details>
                     </div>
                   )}
                 </div>

@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use garde::Validate;
@@ -1695,34 +1695,23 @@ pub fn print_candidate_acceptance_probe(challenge: &str) -> Result<(), TenderCom
 fn direct_provider_qualification_evidence(
     application_home: &Path,
 ) -> Result<DirectProviderQualificationEvidence, TenderCommandError> {
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?
-        .as_millis()
-        .try_into()
-        .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-    let connection = crate::application_settings::chatgpt_connection_readiness(
-        application_home,
-        crate::chatgpt_login::PRODUCTION_ISSUER,
-        now_ms,
-    )
-    .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-    let view = crate::application_settings::chatgpt_connection_view(&connection);
-    let catalogue_version = view
+    let connection = crate::application_settings::load_codex_connection_view(application_home)
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
+    let catalogue_version = connection
         .catalogue_fetched_at
         .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-    let account_plan = view
+    let account_plan = connection
         .account_plan
         .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-    let account_ready = view
+    let account_ready = connection
         .account_label
         .as_deref()
         .is_some_and(|label| !label.trim().is_empty());
-    let catalogue_ready = !view.adapter_version.trim().is_empty()
+    let catalogue_ready = !connection.adapter_version.trim().is_empty()
         && !catalogue_version.trim().is_empty()
-        && !view.models.is_empty()
-        && view.models.iter().any(|model| model.is_default)
-        && view.models.iter().all(|model| {
+        && !connection.models.is_empty()
+        && connection.models.iter().any(|model| model.is_default)
+        && connection.models.iter().all(|model| {
             !model.model_id.trim().is_empty()
                 && !model.reasoning_options.is_empty()
                 && model
@@ -1730,14 +1719,17 @@ fn direct_provider_qualification_evidence(
                     .iter()
                     .any(|reasoning| reasoning.is_default)
         });
-    if view.status != crate::ProviderConnectionStatus::Ready || !account_ready || !catalogue_ready {
+    if connection.status != crate::ProviderConnectionStatus::Ready
+        || !account_ready
+        || !catalogue_ready
+    {
         return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
     }
     Ok(DirectProviderQualificationEvidence {
-        adapter_version: view.adapter_version,
+        adapter_version: connection.adapter_version,
         catalogue_version,
         account_plan,
-        model_ids: view
+        model_ids: connection
             .models
             .into_iter()
             .map(|model| model.model_id)
@@ -2290,28 +2282,46 @@ fn sql_error(_: rusqlite::Error) -> TenderCommandError {
 #[cfg(test)]
 mod tests {
     use super::{LiveQualificationMetrics, LiveQualificationRun, ProductAcceptanceOutcome};
-    use crate::{
-        chatgpt_oauth::{save, StoredConnection},
-        QuantixHost,
-    };
+    use crate::{application_settings::save_live_connection, QuantixHost};
+
+    fn seeded_connection() -> crate::application_settings::ProviderConnectionView {
+        crate::application_settings::ProviderConnectionView {
+            connection_id: "codex_chatgpt".into(),
+            provider: crate::AiProviderKind::Codex,
+            display_name: "OpenAI account via Codex".into(),
+            status: crate::ProviderConnectionStatus::Ready,
+            account_label: Some("account-123".into()),
+            account_plan: Some("plus".into()),
+            models: vec![crate::application_settings::ProviderModelOption {
+                model_id: "gpt-5.6-terra".into(),
+                display_name: "GPT-5.6 Terra".into(),
+                description: "Fixture Codex model".into(),
+                is_default: true,
+                input_modalities: vec!["text".into()],
+                reasoning_options: vec![crate::application_settings::ProviderReasoningOption {
+                    selection: crate::application_settings::ProviderReasoningSelection::Effort(
+                        "medium".into(),
+                    ),
+                    label: "medium".into(),
+                    description: "Fixture reasoning effort".into(),
+                    is_default: true,
+                }],
+            }],
+            catalogue_fetched_at: Some("2026-08-30T00:00:00Z".into()),
+            adapter_version: crate::agent_runtime::CODEX_VERSION.into(),
+            status_summary: "Ready to run Tender work.".into(),
+        }
+    }
 
     #[test]
-    fn live_environment_qualifies_quantix_owned_chatgpt_connection_without_exposing_tokens() {
+    fn live_environment_qualifies_the_managed_codex_connection_without_exposing_tokens() {
         let home = tempfile::tempdir().unwrap();
-        save(
-            home.path(),
-            &StoredConnection {
-                access_token: "secret-access".into(),
-                refresh_token: "secret-refresh".into(),
-                id_token: "secret-id".into(),
-                expires_at_ms: u64::MAX,
-                account_id: "account-123".into(),
-                plan_type: Some("plus".into()),
-                compute_residency: None,
-            },
-        )
-        .unwrap();
         let host = QuantixHost::new(home.path(), home.path());
+        assert!(matches!(
+            crate::ensure_quantix_setup(&host).state,
+            crate::SetupState::Ready | crate::SetupState::Warning
+        ));
+        save_live_connection(home.path(), &seeded_connection()).unwrap();
 
         let environment = host
             .measure_live_qualification_environment("windows_11_x64".into(), "a".repeat(64))
@@ -2319,21 +2329,15 @@ mod tests {
 
         assert_eq!(
             environment.direct_provider_adapter_version,
-            "chatgpt-direct-v1"
+            crate::agent_runtime::CODEX_VERSION
         );
         assert_eq!(
             environment.direct_provider_catalogue_version,
-            "chatgpt-direct-v1"
+            "2026-08-30T00:00:00Z"
         );
         assert_eq!(environment.chatgpt_account_plan, "plus");
-        assert_eq!(
-            environment.model_observations,
-            vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
-        );
+        assert_eq!(environment.model_observations, vec!["gpt-5.6-terra"]);
         let evidence = format!("{environment:?}");
-        assert!(!evidence.contains("secret-access"));
-        assert!(!evidence.contains("secret-refresh"));
-        assert!(!evidence.contains("secret-id"));
         assert!(!evidence.contains("account-123"));
     }
 
@@ -2347,8 +2351,8 @@ mod tests {
             outcome: ProductAcceptanceOutcome::Passed,
             fixture_sha256: "b".repeat(64),
             oracle_sha256: "c".repeat(64),
-            direct_provider_adapter_version: "chatgpt-direct-v1".into(),
-            direct_provider_catalogue_version: "chatgpt-direct-v1".into(),
+            direct_provider_adapter_version: crate::agent_runtime::CODEX_VERSION.into(),
+            direct_provider_catalogue_version: crate::agent_runtime::CODEX_VERSION.into(),
             chatgpt_account_plan: "plus".into(),
             ocr_runtime_sha256: "d".repeat(64),
             model_observations: vec!["gpt-5.5".into()],
@@ -2378,11 +2382,11 @@ mod tests {
 
         assert_eq!(
             serialized["direct_provider_adapter_version"],
-            "chatgpt-direct-v1"
+            crate::agent_runtime::CODEX_VERSION
         );
         assert_eq!(
             serialized["direct_provider_catalogue_version"],
-            "chatgpt-direct-v1"
+            crate::agent_runtime::CODEX_VERSION
         );
         assert_eq!(serialized["chatgpt_account_plan"], "plus");
     }

@@ -32,9 +32,11 @@ use windows::Win32::{
 use windows_core::PCWSTR;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
+#[cfg(feature = "runtime-fixture")]
+use super::contract::AiProviderKind;
 use super::contract::{
     normalize_label, AiConnectionConfiguration, AiConnectionRevision, AiProbeEvidence,
-    AiProviderKind, CredentialGeneration,
+    CredentialGeneration,
 };
 use super::windows_dpapi::{protect_for_current_user, unprotect_for_current_user};
 use crate::setup::validate_application_home_path;

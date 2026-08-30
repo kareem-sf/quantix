@@ -87,7 +87,7 @@ fn run_codex(
         "id": initialize.get("id").cloned().ok_or("initialize id")?,
         "result": {
             "codexHome": executable.parent().ok_or("missing fixture parent")?,
-            "userAgent": "quantix/0.147.0 (fixture; runtime-readiness) (quantix; 0.1.0)",
+            "userAgent": "quantix/0.151.0 (fixture; runtime-readiness) (quantix; 0.1.0)",
             "platformFamily": if cfg!(windows) { "windows" } else { "unix" },
             "platformOs": env::consts::OS,
         }
@@ -252,9 +252,9 @@ fn run_agent_codex(
         "result": {
             "codexHome": executable.parent().ok_or("missing fixture parent")?,
             "userAgent": if scenario == "unsupported-provider-version" {
-                "Codex Desktop/0.146.0 (fixture; agent-runtime) (quantix; 0.1.0)"
+                "Codex Desktop/0.150.0 (fixture; agent-runtime) (quantix; 0.1.0)"
             } else {
-                "Codex Desktop/0.147.0 (fixture; agent-runtime) (quantix; 0.1.0)"
+                "Codex Desktop/0.151.0 (fixture; agent-runtime) (quantix; 0.1.0)"
             },
             "platformFamily": if cfg!(windows) { "windows" } else { "unix" },
             "platformOs": env::consts::OS,
@@ -3770,7 +3770,8 @@ fn fixture_thread(thread_id: &str, cwd: &str) -> serde_json::Value {
         "updatedAt": 1_780_000_000_i64,
         "cwd": cwd,
         "source": "appServer",
-        "cliVersion": "0.147.0",
+        "cliVersion": "0.151.0",
+        "projectId": null,
         "status": { "type": "idle" },
         "turns": [],
     })

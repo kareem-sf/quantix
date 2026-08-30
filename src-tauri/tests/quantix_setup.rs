@@ -194,27 +194,6 @@ fn low_space_does_not_block_opening_the_application_home() {
 }
 
 #[test]
-fn quantix_chatgpt_auth_files_keep_an_installed_application_home_ready() {
-    let parent = tempfile::tempdir().expect("temporary user home");
-    let application_home = parent.path().join(".quantix");
-    let host = host(&application_home, FakeSetupPlatform::default());
-    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
-
-    std::fs::write(application_home.join("auth.json"), b"owned credentials")
-        .expect("Quantix auth store");
-    std::fs::write(
-        application_home.join(".auth.json.123.0.tmp"),
-        b"atomic replacement",
-    )
-    .expect("Quantix temporary auth store");
-
-    let outcome = ensure_quantix_setup(&host);
-
-    assert_eq!(outcome.state, SetupState::Ready);
-    assert!(outcome.issues.is_empty());
-}
-
-#[test]
 fn unrecognized_existing_application_home_requires_repair_without_overwriting_data() {
     let parent = tempfile::tempdir().expect("temporary user home");
     let application_home = parent.path().join(".quantix");

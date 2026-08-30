@@ -42,7 +42,7 @@ const MANAGER_STABLE_IDENTITY: &str = BootstrapRole::TenderingManager.stable_ide
 const MAX_SUPPORTING_RECORDS: usize = 16;
 const MAX_SUPPORTING_EVIDENCE: usize = 32;
 const MAX_MESSAGE_REFERENCE_DETAIL: usize = 2_000;
-const RECORD_EXTRACTION_ESTIMATOR_VERSION: &str = "canonical-provider-request-v1";
+const RECORD_EXTRACTION_ESTIMATOR_VERSION: &str = "canonical-provider-request-v2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -1630,7 +1630,6 @@ impl TenderStore {
                 permission_grant,
                 provider_thread_ref,
                 provider_thread_to_archive,
-                expected_initial_request_body_bytes: None,
                 workspace: workspace.clone(),
             })
         })();
@@ -2181,7 +2180,6 @@ impl TenderStore {
                 permission_grant,
                 provider_thread_ref: None,
                 provider_thread_to_archive: None,
-                expected_initial_request_body_bytes: None,
                 workspace: std::path::PathBuf::new(),
             };
             if record_extraction_request_context_for_prepared_with_stored_data_views(
@@ -2707,11 +2705,11 @@ pub(super) fn bind_manager_intake_extraction_plan(
     prepared: &PreparedAgentRun,
     source_run_id: Option<&str>,
     created_at: &str,
-) -> Result<Option<u64>, TenderCommandError> {
+) -> Result<(), TenderCommandError> {
     let Some((intake_run_id, evidence, authorities)) =
         manager_intake_task_batch_inputs(&prepared.task)?
     else {
-        return Ok(None);
+        return Ok(());
     };
     let provider_selection_json = canonical_json(&prepared.provider_selection)?;
     let persisted_source_run_id: Option<Option<String>> = transaction
@@ -2888,7 +2886,7 @@ pub(super) fn bind_manager_intake_extraction_plan(
             ],
         )
         .map_err(sql_error)?;
-    Ok(Some(run_estimate.context.request_body_bytes))
+    Ok(())
 }
 
 fn semantic_repair_lineage_is_valid(

@@ -2256,7 +2256,7 @@ describe("ManagerWorkspace", () => {
           account_plan: null,
           models: [],
           catalogue_fetched_at: null,
-          adapter_version: "0.147.0",
+          adapter_version: "0.151.0",
           status_summary: "Connect ChatGPT.",
         },
       ],

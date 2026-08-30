@@ -1081,7 +1081,7 @@ async fn manager_intake_automatically_repairs_one_invalid_extraction() {
     )
     .expect("parse semantic repair request body");
     let repair_instructions: serde_json::Value = serde_json::from_str(
-        repair_body["instructions"]
+        repair_body["input"][0]["text"]
             .as_str()
             .expect("semantic repair instructions"),
     )

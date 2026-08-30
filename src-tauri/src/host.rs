@@ -13,7 +13,6 @@ use tokio::sync::{
 };
 use tokio_util::sync::CancellationToken;
 
-#[cfg(feature = "runtime-fixture")]
 use crate::agent_runtime::AgentProvider;
 use crate::agent_runtime::{ProviderRateLimit, ProviderRateLimitState, ProviderUsage};
 use crate::diagnostics::{
@@ -59,9 +58,7 @@ struct QuantixHostInner {
     manager_intake_execution: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     manager_intake_wakeups: Mutex<HashMap<ManagerIntakeWakeupKey, CancellationToken>>,
     production_schedulers: Mutex<HashMap<String, OrdinaryWorkLease>>,
-    #[cfg(feature = "runtime-fixture")]
     agent_provider: tokio::sync::Mutex<Option<AgentProvider>>,
-    #[cfg(feature = "runtime-fixture")]
     provider_cleanup_execution: tokio::sync::Mutex<()>,
     provider_rate_limit: Mutex<Option<ProviderRateLimit>>,
     document_tools_verified: AtomicBool,
@@ -264,9 +261,7 @@ impl QuantixHost {
                 manager_intake_execution: Mutex::new(HashMap::new()),
                 manager_intake_wakeups: Mutex::new(HashMap::new()),
                 production_schedulers: Mutex::new(HashMap::new()),
-                #[cfg(feature = "runtime-fixture")]
                 agent_provider: tokio::sync::Mutex::new(None),
-                #[cfg(feature = "runtime-fixture")]
                 provider_cleanup_execution: tokio::sync::Mutex::new(()),
                 provider_rate_limit: Mutex::new(None),
                 document_tools_verified: AtomicBool::new(false),
@@ -524,12 +519,10 @@ impl QuantixHost {
         &self.inner.process_supervisor
     }
 
-    #[cfg(feature = "runtime-fixture")]
     pub(crate) fn agent_provider(&self) -> &tokio::sync::Mutex<Option<AgentProvider>> {
         &self.inner.agent_provider
     }
 
-    #[cfg(feature = "runtime-fixture")]
     pub(crate) fn provider_cleanup_execution(&self) -> &tokio::sync::Mutex<()> {
         &self.inner.provider_cleanup_execution
     }

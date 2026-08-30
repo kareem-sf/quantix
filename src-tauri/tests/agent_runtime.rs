@@ -1,13 +1,14 @@
 use std::{fs, io, path::Path, sync::Arc, time::Duration};
 
 use quantix_lib::{
-    ensure_quantix_setup, AgentRunState, CreateTenderCommand, DiagnosticEvent,
-    ImportTenderPackageCommand, InspectAgentRunCommand, InspectTenderAiExecutionCommand,
-    InterruptAgentRunCommand, ParseSourceArtifactCommand, ProviderEventKind,
-    ProviderFailureCategory, QuantixHost, RunBootstrapAgentCommand,
-    RunTenderRecordExtractionCommand, RuntimeLayout, SetupPlatform, SetupState, StoragePermissions,
-    TenderAiSelectionReadiness, TenderErrorCode, TenderEvidenceReference, TenderIntegrityIssue,
-    TenderIntegrityState, UpdateTenderAiExecutionSelectionCommand, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    ensure_quantix_setup, AgentRunState, ChatGptConnectionState, ChatGptLoginPhase,
+    CreateTenderCommand, DiagnosticEvent, ImportTenderPackageCommand, InspectAgentRunCommand,
+    InspectTenderAiExecutionCommand, InterruptAgentRunCommand, ParseSourceArtifactCommand,
+    ProviderConnectionStatus, ProviderEventKind, ProviderFailureCategory, QuantixHost,
+    RunBootstrapAgentCommand, RunTenderRecordExtractionCommand, RuntimeLayout, SetupPlatform,
+    SetupState, StartChatGptLoginStatus, StoragePermissions, TenderAiSelectionReadiness,
+    TenderErrorCode, TenderEvidenceReference, TenderIntegrityIssue, TenderIntegrityState,
+    UpdateTenderAiExecutionSelectionCommand, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use walkdir::WalkDir;
 
@@ -780,55 +781,139 @@ async fn missing_chatgpt_connection_fails_before_a_backend_turn_is_established()
 }
 
 #[tokio::test]
-async fn local_request_budget_failure_is_nonretryable_and_stably_diagnosed() {
-    let harness = Harness::new("success");
-    let request_bytes = 512_u64 * 1024 + 1;
+async fn chatgpt_login_completes_through_the_app_server_actor() {
+    let (_root, host, _application_home) = login_host("managed-login");
 
-    let run = harness
-        .host
-        .run_request_budget_exceeded_bootstrap_agent_for_verification(
-            RunBootstrapAgentCommand {
-                tender_id: harness.tender_id.clone(),
-                retry_of_run_id: None,
-            },
-            request_bytes,
-        )
+    let started = host
+        .start_chatgpt_login()
         .await
-        .expect("persist local request budget failure");
+        .expect("browser login starts");
+    assert_eq!(started.status, StartChatGptLoginStatus::AwaitingBrowser);
 
-    assert_eq!(run.state, AgentRunState::Failed, "{run:#?}");
-    let failure = run.failure.as_ref().expect("request budget failure");
+    let view = wait_for_chatgpt_connection(&host, ChatGptConnectionState::Connected).await;
+    assert_eq!(view.chatgpt.login_phase, ChatGptLoginPhase::Completed);
     assert_eq!(
-        failure.category,
-        ProviderFailureCategory::RequestBudgetExceeded
+        view.chatgpt.account_id.as_deref(),
+        Some("engineer@example.com")
     );
-    assert!(!failure.retry_safe);
-    assert!(run.proposed_result.is_none());
-    assert_eq!(
-        run.events
-            .iter()
-            .map(|event| event.kind)
-            .collect::<Vec<_>>(),
-        vec![ProviderEventKind::RunStarted, ProviderEventKind::Terminal]
-    );
-    assert_eq!(
-        run.events.last().map(|event| event.summary.as_str()),
-        Some("Prepared request rejected by local request budget")
-    );
-    let facts = diagnostic_facts_for_run(&harness, &run.run_id);
-    let failed = facts
+    assert_eq!(view.chatgpt.plan_type.as_deref(), Some("plus"));
+    let connection = view
+        .provider_connections
         .iter()
-        .find(|fact| fact.event_name == "provider_request_rejected")
-        .expect("local request rejection diagnostic");
-    assert_eq!(
-        failed.error_code.as_deref(),
-        Some("REQUEST_BUDGET_EXCEEDED")
-    );
-    assert!(!facts
+        .find(|connection| connection.connection_id == "codex_chatgpt")
+        .expect("Codex connection persisted by readiness refresh");
+    assert_eq!(connection.status, ProviderConnectionStatus::Ready);
+    assert!(connection
+        .models
         .iter()
-        .any(|fact| fact.event_name == "provider_turn_failed"));
-    assert!(!failed.summary.contains(&harness.tender_id));
-    assert!(!failed.summary.contains(&run.task.task_id));
+        .any(|model| model.model_id == "gpt-5.6-terra"));
+    assert!(view.ai_execution_selection.is_some());
+}
+
+#[tokio::test]
+async fn chatgpt_device_login_reports_a_one_time_code_and_can_be_cancelled() {
+    let (_root, host, _application_home) = login_host("managed-login");
+
+    let started = host
+        .start_chatgpt_device_login()
+        .await
+        .expect("device login starts");
+    assert_eq!(started.user_code, "ABCD-EFGH");
+    assert!(started.verification_url.contains("device"));
+
+    host.cancel_chatgpt_login().await;
+
+    let view = wait_for_chatgpt_login_phase(&host, ChatGptLoginPhase::Cancelled).await;
+    assert_eq!(
+        view.chatgpt.state,
+        ChatGptConnectionState::Absent,
+        "a cancelled login must not persist a connection"
+    );
+    assert!(view.ai_execution_selection.is_none());
+}
+
+#[tokio::test]
+async fn chatgpt_disconnect_signs_out_the_app_server_actor_and_clears_the_saved_selection() {
+    let (_root, host, _application_home) = login_host("managed-login");
+
+    host.start_chatgpt_login()
+        .await
+        .expect("browser login starts");
+    let view = wait_for_chatgpt_connection(&host, ChatGptConnectionState::Connected).await;
+    assert!(view.ai_execution_selection.is_some());
+
+    let disconnected = host.disconnect_chatgpt().await.expect("disconnect");
+    assert_eq!(disconnected.chatgpt.state, ChatGptConnectionState::Absent);
+    assert!(disconnected.ai_execution_selection.is_none());
+    assert!(disconnected.ai_execution_approval.is_none());
+    assert_eq!(
+        disconnected.provider_connections[0].status,
+        ProviderConnectionStatus::AuthenticationRequired
+    );
+
+    let restarted = host
+        .start_chatgpt_login()
+        .await
+        .expect("sign-in after disconnect must not short-circuit as connected");
+    assert_eq!(restarted.status, StartChatGptLoginStatus::AwaitingBrowser);
+    host.cancel_chatgpt_login().await;
+}
+
+fn login_host(agent_scenario: &str) -> (tempfile::TempDir, QuantixHost, std::path::PathBuf) {
+    let root = tempfile::tempdir().expect("temporary login harness");
+    let application_home = root.path().join(".quantix");
+    let resources = root.path().join("resources");
+    install_codex_fixture(&resources, agent_scenario);
+    let host = QuantixHost::with_setup_platform_and_runtime(
+        &application_home,
+        Arc::new(ReadySetupPlatform),
+        RuntimeLayout::bundled(resources),
+    );
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    host.accept_runtime_fixture();
+    (root, host, application_home)
+}
+
+async fn wait_for_chatgpt_connection(
+    host: &QuantixHost,
+    expected: ChatGptConnectionState,
+) -> quantix_lib::ApplicationSettingsView {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let view = host
+            .refresh_application_settings()
+            .await
+            .expect("refresh settings");
+        if view.chatgpt.state == expected {
+            return view;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "connection never reached {expected:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn wait_for_chatgpt_login_phase(
+    host: &QuantixHost,
+    expected: ChatGptLoginPhase,
+) -> quantix_lib::ApplicationSettingsView {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let view = host
+            .refresh_application_settings()
+            .await
+            .expect("refresh settings");
+        if view.chatgpt.login_phase == expected {
+            return view;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "login phase never reached {expected:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 #[tokio::test]
