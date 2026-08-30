@@ -28,6 +28,10 @@ pub use acceptance::{
     ProductAcceptanceRecord, ProductAcceptanceRun, RecordLiveQualificationRunCommand,
     RunDeterministicAcceptanceCommand,
 };
+pub use agent_runtime::worker_lane::{
+    WorkerApproval, WorkerDriverError, WorkerFailureCategory, WorkerOperation, WorkerOutcome,
+    WorkerRunRequest, WorkerToolDescriptor, WorkerUsage,
+};
 pub use agent_runtime::{
     approve_one_run_access, AccessApproval, AccessRequest, AgentAccessRequestStatus,
     AgentAccessRequestView, AgentAccessResolution, AgentProfileStatus, AgentProfileVersionView,
@@ -85,8 +89,8 @@ pub use document_parsing::{
 };
 pub use host::QuantixHost;
 pub use managed_runtime::{
-    worker_python_path, ManagedCodexRuntimeState, ManagedCodexRuntimeStatus,
-    ManagedRuntimeError, ManagedWorkerRuntimeState, ManagedWorkerRuntimeStatus,
+    worker_python_path, ManagedCodexRuntimeState, ManagedCodexRuntimeStatus, ManagedRuntimeError,
+    ManagedWorkerRuntimeState, ManagedWorkerRuntimeStatus,
 };
 pub use release_gate::{
     release_candidate_manifest_sha256, ChatGptProductionAssuranceEvidence,

@@ -53,6 +53,7 @@ mod bootstrap_profile;
 mod codex_actor;
 mod codex_protocol;
 pub(crate) mod permissions;
+pub mod worker_lane;
 pub(crate) use bootstrap_profile::{bootstrap_profile, bootstrap_task};
 pub(crate) use codex_actor::{ChatGptLoginType, CodexProvider, LoginOutcome, LoginStartInfo};
 use codex_protocol::{

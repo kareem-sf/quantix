@@ -387,7 +387,9 @@ pub fn inspect_managed_worker_runtime(
             return ManagedWorkerRuntimeStatus {
                 state: ManagedWorkerRuntimeState::InstallFailed,
                 lock_sha256: None,
-                summary: "The AI components are incomplete in this installation. Reinstall Quantix.".to_owned(),
+                summary:
+                    "The AI components are incomplete in this installation. Reinstall Quantix."
+                        .to_owned(),
             }
         }
     };
@@ -418,7 +420,8 @@ pub fn inspect_managed_worker_runtime(
         return ManagedWorkerRuntimeStatus {
             state: ManagedWorkerRuntimeState::Outdated,
             lock_sha256: Some(lock_hash),
-            summary: "The AI components are out of date. Quantix updates them before the next run.".to_owned(),
+            summary: "The AI components are out of date. Quantix updates them before the next run."
+                .to_owned(),
         };
     }
     ManagedWorkerRuntimeStatus {
@@ -537,7 +540,7 @@ async fn run_worker_sync(
     }
 }
 
-fn controlled_worker_environment(application_home: &Path) -> Vec<(OsString, OsString)> {
+pub(crate) fn controlled_worker_environment(application_home: &Path) -> Vec<(OsString, OsString)> {
     let staging = application_home.join("staging");
     let mut environment = vec![
         (

@@ -302,6 +302,30 @@ impl QuantixHost {
         .await
     }
 
+    #[cfg(feature = "runtime-fixture")]
+    pub async fn run_worker_operation_for_test(
+        &self,
+        request: crate::agent_runtime::worker_lane::WorkerRunRequest,
+        cancellation: tokio_util::sync::CancellationToken,
+        on_approval: impl FnMut(
+            &str,
+            &serde_json::Value,
+        ) -> crate::agent_runtime::worker_lane::WorkerApproval,
+    ) -> Result<
+        crate::agent_runtime::worker_lane::WorkerOutcome,
+        crate::agent_runtime::worker_lane::WorkerDriverError,
+    > {
+        crate::agent_runtime::worker_lane::run_worker_operation(
+            self.process_supervisor(),
+            &crate::managed_runtime::worker_python_path(&self.inner.application_home),
+            &self.inner.application_home,
+            &request,
+            cancellation,
+            on_approval,
+        )
+        .await
+    }
+
     pub(crate) fn diagnostics(&self) -> &DiagnosticsStore {
         &self.inner.diagnostics
     }

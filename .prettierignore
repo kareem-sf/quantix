@@ -7,3 +7,5 @@ src-tauri/gen
 src-tauri/src/agent_runtime/codex_app_server_protocol.schemas.json
 src-tauri/target*
 *.md
+
+src-tauri/runtime/ai-worker/.venv/

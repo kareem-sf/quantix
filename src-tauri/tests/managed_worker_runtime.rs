@@ -47,8 +47,15 @@ impl WorkerHarness {
         fs::write(runtime_bin.join("uv.version"), "0.12.2\n").expect("uv version");
         fs::write(runtime_bin.join("ocr.version"), "3.9.2\n").expect("ocr version");
 
-        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime").join("ai-worker");
-        for name in ["pyproject.toml", "uv.lock", ".python-version", "python-downloads.json"] {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("runtime")
+            .join("ai-worker");
+        for name in [
+            "pyproject.toml",
+            "uv.lock",
+            ".python-version",
+            "python-downloads.json",
+        ] {
             fs::copy(source.join(name), worker_project.join(name)).expect("copy worker source");
         }
 
@@ -141,7 +148,10 @@ async fn interrupted_marker_is_reported_then_converges() {
     fs::write(harness.marker(), b"preparing").expect("marker");
 
     let inspected = harness.host.inspect_worker_runtime();
-    assert_eq!(inspected.state, ManagedWorkerRuntimeState::InterruptedPreparation);
+    assert_eq!(
+        inspected.state,
+        ManagedWorkerRuntimeState::InterruptedPreparation
+    );
 
     let prepared = harness
         .host
@@ -162,10 +172,7 @@ async fn cancellation_cleans_the_marker() {
         .prepare_worker_runtime(cancellation)
         .await
         .expect_err("cancelled prepare");
-    assert!(matches!(
-        error,
-        quantix_lib::ManagedRuntimeError::Cancelled
-    ));
+    assert!(matches!(error, quantix_lib::ManagedRuntimeError::Cancelled));
     assert!(!harness.marker().exists());
     let inspected = harness.host.inspect_worker_runtime();
     assert_eq!(inspected.state, ManagedWorkerRuntimeState::NotInstalled);
