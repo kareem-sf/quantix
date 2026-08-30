@@ -2014,6 +2014,49 @@ button {
   margin-top: 8px;
 }
 
+.start-tender__ai-note {
+  display: grid;
+  width: min(100%, 460px);
+  gap: 10px;
+  margin-top: 26px;
+  padding: 22px 24px;
+  border: 1px solid var(--qx-border);
+  border-radius: 12px;
+  background: var(--qx-surface-subtle);
+  text-align: center;
+}
+
+.start-tender__ai-note h3 {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+}
+
+.start-tender__ai-note p {
+  margin: 0;
+  color: var(--qx-text-muted);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+.start-tender__ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.start-tender__ai-actions button {
+  min-height: 38px;
+  padding: 0 13px;
+  border: 1px solid var(--qx-border-strong);
+  border-radius: 8px;
+  background: var(--qx-surface);
+  cursor: pointer;
+}
+
 .workspace-operation-panel {
   display: flex;
   width: min(100%, 560px);
@@ -2926,6 +2969,72 @@ html.quantix-reduced-motion *::after {
 .manager-activity__suggestions button:disabled {
   opacity: 0.48;
   cursor: wait;
+}
+
+.manager-view__blocker {
+  display: grid;
+  width: min(calc(100% - 40px), var(--conversation-width));
+  flex: 0 0 auto;
+  gap: 12px;
+  margin: 0 auto;
+  padding: 14px 16px;
+  border: 1px solid var(--qx-border);
+  border-radius: 12px;
+  background: var(--qx-surface-subtle);
+}
+
+.manager-view__blocker > div {
+  display: grid;
+  gap: 8px;
+}
+
+.manager-view__blocker strong {
+  font-size: 0.875rem;
+  font-weight: 660;
+}
+
+.manager-view__blocker__details summary {
+  width: fit-content;
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.manager-view__blocker__details p {
+  margin: 8px 0 0;
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.manager-view__blocker button {
+  width: fit-content;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--qx-border);
+  border-radius: 999px;
+  color: var(--qx-text-muted);
+  background: transparent;
+  font-size: 0.75rem;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.manager-view__blocker button:hover:not(:disabled) {
+  border-color: var(--qx-border-strong);
+  color: var(--qx-text);
+  background: var(--qx-hover);
+}
+
+.manager-view__capability {
+  width: min(calc(100% - 40px), var(--conversation-width));
+  flex: 0 0 auto;
+  margin: 12px auto 0;
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.55;
 }
 
 .manager-composer {

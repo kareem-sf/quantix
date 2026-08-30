@@ -928,6 +928,13 @@ function ManagerView({
     aiStatus === "checking" &&
     projection.current_action.kind === "configure_ai_provider";
   const aiAvailable = projection.ai_execution?.readiness === "ready";
+  const aiBlockers = projection.doctor_blockers.filter(
+    (blocker) => blocker.area === "ai_execution",
+  );
+  const capabilityGaps =
+    projection.capability_readiness?.state === "blocked"
+      ? projection.capability_readiness.gaps
+      : [];
 
   const openCurrentAction = () => {
     if (documentToolsRequired) {
@@ -1032,43 +1039,95 @@ function ManagerView({
     : projection.current_action.kind === "configure_ai_provider" && !aiAvailable
       ? "Open Settings"
       : projection.current_action.action_label;
+  const managerQuiet =
+    !documentToolsRequired &&
+    !providerCheckPending &&
+    !preparationActive &&
+    aiAvailable &&
+    aiStatus !== "unavailable" &&
+    !projection.intake &&
+    projection.team.active_agent_runs === 0 &&
+    !projection.current_action.requires_engineer &&
+    !hasActionButton &&
+    projection.doctor_blockers.length === 0;
+  const capabilityGatesCurrentAction =
+    capabilityGaps.length > 0 &&
+    ["prepare_work_plan", "review_work_plan"].includes(
+      projection.current_action.kind,
+    );
+  const capabilityGapList = capabilityGaps
+    .map((gap) => gap.capability.replace(/_/g, " "))
+    .join(", ");
+  const showBlockerRecovery =
+    aiBlockers.length > 0 &&
+    !(
+      showActionButton &&
+      !aiAvailable &&
+      projection.current_action.kind === "configure_ai_provider"
+    );
   const sendSuggestion = (body: string) => {
     if (!busy) void onSend(body);
   };
 
   return (
     <div className="manager-view">
-      <div className="manager-view__status">
-        <span
-          className={
-            projection.team.active_agent_runs > 0 || intakeWorking
-              ? "is-working"
-              : ""
-          }
-        />
-        <div>
-          <strong>Tendering Manager</strong>
-          <small>
-            {documentToolsRequired
-              ? preparationActive
-                ? "Preparing local document tools"
-                : runtimeStatus === "checking"
-                  ? "Checking local document tools"
-                  : "Waiting for local document tools"
-              : projection.intake
-                ? intakePaused
-                  ? "Paused — AI office unavailable"
-                  : projection.intake.label
-                : projection.team.active_agent_runs > 0
-                  ? "Coordinating the Tender team"
-                  : aiAvailable
-                    ? "Ready"
-                    : aiStatus === "checking"
-                      ? "Checking AI connection"
-                      : "AI office unavailable — records remain accessible"}
-          </small>
+      {managerQuiet ? null : (
+        <div className="manager-view__status">
+          <span
+            className={
+              projection.team.active_agent_runs > 0 || intakeWorking
+                ? "is-working"
+                : ""
+            }
+          />
+          <div>
+            <strong>Tendering Manager</strong>
+            <small>
+              {documentToolsRequired
+                ? preparationActive
+                  ? "Preparing local document tools"
+                  : runtimeStatus === "checking"
+                    ? "Checking local document tools"
+                    : "Waiting for local document tools"
+                : projection.intake
+                  ? intakePaused
+                    ? "Paused — AI office unavailable"
+                    : projection.intake.label
+                  : projection.team.active_agent_runs > 0
+                    ? "Coordinating the Tender team"
+                    : aiAvailable
+                      ? "Ready"
+                      : aiStatus === "checking"
+                        ? "Checking AI connection"
+                        : "AI office unavailable — records remain accessible"}
+            </small>
+          </div>
         </div>
-      </div>
+      )}
+      {!readOnly && aiBlockers.length > 0 ? (
+        <section className="manager-view__blocker" role="status">
+          {aiBlockers.map((blocker) => (
+            <div key={blocker.code}>
+              <strong>{blocker.title}</strong>
+              <details className="manager-view__blocker__details">
+                <summary>Technical details</summary>
+                <p>{blocker.detail}</p>
+              </details>
+            </div>
+          ))}
+          {showBlockerRecovery ? (
+            <button type="button" onClick={onOpenSettings}>
+              Restore AI connection
+            </button>
+          ) : null}
+        </section>
+      ) : null}
+      {!readOnly && capabilityGatesCurrentAction ? (
+        <p className="manager-view__capability" role="note">
+          These skills still need a specialist before the work plan can
+          continue: {capabilityGapList}.
+        </p>
+      ) : null}
       <div
         ref={conversationRef}
         className="manager-view__conversation"
@@ -1095,7 +1154,7 @@ function ManagerView({
             }
           />
         ))}
-        {!readOnly ? (
+        {!readOnly && !managerQuiet ? (
           <article
             className="manager-message manager-message--activity"
             aria-label="Current Tender activity"
@@ -1184,7 +1243,10 @@ function ManagerView({
                     Cancel preparation
                   </button>
                 ) : null}
-                {intakePaused && !documentToolsRequired && !showActionButton ? (
+                {intakePaused &&
+                !documentToolsRequired &&
+                !showActionButton &&
+                aiBlockers.length === 0 ? (
                   <button type="button" onClick={onOpenSettings}>
                     Restore AI connection
                   </button>
@@ -2970,6 +3032,8 @@ export function ManagerWorkspace({
 
   const selectTender = useCallback(
     async (tenderId: string) => {
+      setPendingTenderStart(null);
+      setAiPreflightOpen(false);
       const tender = projection?.catalogue.find(
         (candidate) => candidate.tender_id === tenderId,
       );
@@ -4093,6 +4157,72 @@ export function ManagerWorkspace({
                     focusRef={packageFocusRef}
                     onStart={startTender}
                   />
+                  {aiPreflightOpen && pendingTenderStart ? (
+                    <section
+                      className="start-tender__ai-note"
+                      aria-label="AI setup for the new Tender"
+                    >
+                      <h3>
+                        {aiStatus === "ready"
+                          ? "AI is ready for this Tender"
+                          : "AI & Models is not fully set up"}
+                      </h3>
+                      <p>
+                        {aiPreflightReason} Local package registration and
+                        document work remain available without AI; only
+                        AI-required work will wait.
+                      </p>
+                      {settingsSnapshot?.ai_execution_selection ? (
+                        <p>
+                          Current default:{" "}
+                          {settingsSnapshot.ai_execution_selection.model_id}
+                        </p>
+                      ) : null}
+                      <div className="start-tender__ai-actions">
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => {
+                            setAiPreflightOpen(false);
+                            setPendingTenderStart(null);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        {aiStatus !== "ready" ? (
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => {
+                              setAiPreflightOpen(false);
+                              openSettings("ai");
+                            }}
+                          >
+                            Set up AI &amp; Models
+                          </button>
+                        ) : null}
+                        <button
+                          className="manager-workspace__primary"
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => {
+                            const kind = pendingTenderStart;
+                            if (!kind) return;
+                            setAiPreflightOpen(false);
+                            setPendingTenderStart(null);
+                            void continueStartTender(
+                              kind,
+                              aiStatus !== "ready",
+                            );
+                          }}
+                        >
+                          {aiStatus === "ready"
+                            ? "Continue New Tender"
+                            : "Continue without AI"}
+                        </button>
+                      </div>
+                    </section>
+                  ) : null}
                 </main>
               ) : null}
             </m.div>
@@ -4141,72 +4271,6 @@ export function ManagerWorkspace({
               presentation="drawer"
             />
           ) : null}
-
-          <QuantixDialog
-            isOpen={aiPreflightOpen}
-            title={
-              aiStatus === "ready"
-                ? "AI is ready for this Tender"
-                : "AI & Models is not fully set up"
-            }
-            onOpenChange={(open) => {
-              setAiPreflightOpen(open);
-              if (!open && aiStatus !== "ready") {
-                setPendingTenderStart(null);
-              }
-            }}
-          >
-            <p className="manager-workspace__dialog-copy">
-              {aiPreflightReason} Local package registration and document work
-              remain available without AI; only AI-required work will wait.
-            </p>
-            {settingsSnapshot?.ai_execution_selection ? (
-              <p className="manager-workspace__dialog-detail">
-                Current default:{" "}
-                {settingsSnapshot.ai_execution_selection.model_id}
-              </p>
-            ) : null}
-            <div className="retention-dialog__actions">
-              <button
-                type="button"
-                disabled={isBusy}
-                onClick={() => {
-                  setAiPreflightOpen(false);
-                  setPendingTenderStart(null);
-                }}
-              >
-                Cancel
-              </button>
-              {aiStatus !== "ready" ? (
-                <button
-                  type="button"
-                  disabled={isBusy}
-                  onClick={() => {
-                    setAiPreflightOpen(false);
-                    openSettings("ai");
-                  }}
-                >
-                  Set up AI &amp; Models
-                </button>
-              ) : null}
-              <button
-                className="manager-workspace__primary"
-                type="button"
-                disabled={isBusy || pendingTenderStart === null}
-                onClick={() => {
-                  const kind = pendingTenderStart;
-                  if (!kind) return;
-                  setAiPreflightOpen(false);
-                  setPendingTenderStart(null);
-                  void continueStartTender(kind, aiStatus !== "ready");
-                }}
-              >
-                {aiStatus === "ready"
-                  ? "Continue New Tender"
-                  : "Continue without AI"}
-              </button>
-            </div>
-          </QuantixDialog>
 
           <QuantixDialog
             isOpen={renameTarget !== null}

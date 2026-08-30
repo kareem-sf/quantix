@@ -3525,4 +3525,200 @@ describe("ManagerWorkspace", () => {
       screen.getByRole("textbox", { name: "Message your Tendering Manager" }),
     ).toBeTruthy();
   });
+
+  it("keeps the Manager surface quiet while the workspace is healthy and idle", async () => {
+    host.inspectManagerWorkspace.mockResolvedValue({
+      ...projection,
+      ai_execution: {
+        revision: 1n,
+        selection: null,
+        readiness: "ready",
+        status_summary: "Ready to run Tender work.",
+      },
+      current_action: {
+        kind: "observe_intake",
+        title: "Tender intake is complete",
+        summary: "The Tendering Manager is watching over the workspace.",
+        action_label: "Intake complete",
+        requires_engineer: false,
+      },
+      intake: null,
+    });
+    host.inspectApplicationSettings.mockResolvedValue(
+      readyApplicationSettings(),
+    );
+    const { container } = render(<ManagerWorkspace />);
+
+    await screen.findByRole("log", { name: "Tender conversation" });
+    await waitFor(() => {
+      expect(container.querySelector(".manager-view__status")).toBeNull();
+    });
+    expect(screen.queryByText("Ready")).toBeNull();
+    expect(screen.queryByLabelText("Current Tender activity")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Explain what happens next" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("textbox", { name: "Message your Tendering Manager" }),
+    ).toBeTruthy();
+  });
+
+  it("presents the AI provider blocker with one recovery action and technical details", async () => {
+    const detail =
+      "The approved provider is unreachable right now. Records remain accessible.";
+    host.inspectManagerWorkspace.mockResolvedValue({
+      ...projection,
+      current_action: {
+        kind: "observe_intake",
+        title: "Tender intake is complete",
+        summary: "The Tendering Manager is watching over the workspace.",
+        action_label: "Intake complete",
+        requires_engineer: false,
+      },
+      intake: null,
+      ai_execution: {
+        revision: 1n,
+        selection: null,
+        readiness: "provider_unavailable",
+        status_summary: detail,
+      },
+      doctor_blockers: [
+        {
+          code: "ai_provider_unavailable",
+          area: "ai_execution" as const,
+          title: "AI provider unavailable",
+          detail,
+        },
+      ],
+    });
+    const { container } = render(<ManagerWorkspace />);
+
+    expect(
+      await screen.findByText(
+        "AI office unavailable — records remain accessible",
+      ),
+    ).toBeTruthy();
+    const blocker = await screen.findByText("AI provider unavailable");
+    expect(blocker.closest(".manager-view__blocker")).toBeTruthy();
+    const details = document.querySelector(".manager-view__blocker__details");
+    if (!details) throw new Error("Technical details disclosure is missing");
+    expect(details.hasAttribute("open")).toBe(false);
+    fireEvent.click(
+      within(details as HTMLElement).getByText("Technical details"),
+    );
+    expect(details.hasAttribute("open")).toBe(true);
+    expect(within(details as HTMLElement).getByText(detail)).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Restore AI connection" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Settings" }),
+    ).toBeTruthy();
+    expect(container.querySelector(".manager-view__capability")).toBeNull();
+  });
+
+  it("names capability gaps next to the work plan action only when they gate it", async () => {
+    const blockedReadiness = {
+      state: "blocked" as const,
+      gaps: [
+        {
+          capability: "cost_estimation",
+          reason: "No qualified separate Agent Profile is assigned.",
+          affected_work: ["cost_estimation"],
+        },
+      ],
+      blocker_codes: ["capability_gap"],
+    };
+    const gated: ManagerWorkspaceProjection = {
+      ...projection,
+      current_action: {
+        kind: "prepare_work_plan",
+        title: "Prepare the work plan",
+        summary: "The Tender Manager is ready to propose the team and tasks.",
+        action_label: "Prepare plan",
+        requires_engineer: false,
+      },
+      capability_readiness: blockedReadiness,
+    };
+    host.inspectManagerWorkspace.mockResolvedValue(gated);
+    render(<ManagerWorkspace />);
+
+    expect(
+      await screen.findByText(
+        "These skills still need a specialist before the work plan can continue: cost estimation.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("stays quiet about capability gaps that do not gate the current action", async () => {
+    host.inspectManagerWorkspace.mockResolvedValue({
+      ...projection,
+      current_action: {
+        kind: "review_work",
+        title: "Tender work is in progress",
+        summary: "The Tender Manager is coordinating the approved plan.",
+        action_label: "View work",
+        requires_engineer: false,
+      },
+      capability_readiness: {
+        state: "blocked",
+        gaps: [
+          {
+            capability: "cost_estimation",
+            reason: "No qualified separate Agent Profile is assigned.",
+            affected_work: ["cost_estimation"],
+          },
+        ],
+        blocker_codes: ["capability_gap"],
+      },
+    });
+    const { container } = render(<ManagerWorkspace />);
+
+    await screen.findByRole("log", { name: "Tender conversation" });
+    expect(screen.queryByText(/cost estimation/)).toBeNull();
+    expect(container.querySelector(".manager-view__capability")).toBeNull();
+  });
+
+  it("presents the AI preflight as an inline card instead of a modal before starting a Tender", async () => {
+    const empty: ManagerWorkspaceProjection = {
+      ...projection,
+      catalogue: [],
+      selected_tender: null,
+      conversation: null,
+      current_action: {
+        kind: "start_tender",
+        title: "Start a Tender",
+        summary: "Choose the Tender Package.",
+        action_label: "Choose Tender Package",
+        requires_engineer: true,
+      },
+      intake: null,
+    };
+    host.inspectManagerWorkspace.mockResolvedValue(empty);
+    host.startManagerTender.mockResolvedValue(null);
+    render(<ManagerWorkspace />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Choose Tender Package" }),
+    );
+
+    const note = await screen.findByLabelText("AI setup for the new Tender");
+    expect(
+      within(note).getByRole("heading", {
+        name: "AI & Models is not fully set up",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(note).getByRole("button", { name: "Set up AI & Models" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    fireEvent.click(
+      within(note).getByRole("button", { name: "Continue without AI" }),
+    );
+    await waitFor(() => {
+      expect(host.startManagerTender).toHaveBeenCalledWith("directory", true);
+    });
+  });
 });
