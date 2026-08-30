@@ -23,8 +23,9 @@ use super::{
     lock_mutex_with_check, random_identifier, require_setup, sha256_hex, sql_error,
     sqlite_timestamp,
     tender_records::TenderRecordKind,
+    workspace::{append_manager_message, MAX_MESSAGE_BYTES},
     BidPackageOperationBudget, TenderCommandError, TenderErrorCode, TenderId, TenderLifecyclePhase,
-    TenderStore,
+    TenderOfficeMessageKind, TenderStore,
 };
 
 const CAPABILITY_CATALOGUE_VERSION: u32 = 1;
@@ -84,6 +85,7 @@ type StoredWorkPlanInspectionRow = (
     String,
     u32,
     u32,
+    String,
     String,
     String,
     String,
@@ -230,6 +232,22 @@ pub struct WorkPlanCapabilityGap {
     pub affected_work: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkPlanOutcomeItem {
+    pub workstream: String,
+    pub milestone: String,
+    pub deadline: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkPlanRecordBasis {
+    pub record_id: String,
+    pub version: u32,
+    pub title: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -286,9 +304,13 @@ pub struct WorkPlanProposalInspection {
     pub profiles: Vec<WorkPlanProfileBinding>,
     pub workstreams: Vec<WorkPlanWorkstream>,
     pub tasks: Vec<WorkPlanTask>,
+    pub outcome: Vec<WorkPlanOutcomeItem>,
+    pub risks: Vec<WorkPlanRecordBasis>,
+    pub assumptions: Vec<WorkPlanRecordBasis>,
     pub query_bindings: Vec<TenderRecordVersionReference>,
     pub capability_gaps: Vec<WorkPlanCapabilityGap>,
     pub blocker_codes: Vec<String>,
+    pub revision_actions: Vec<WorkPlanRevisionAction>,
     pub approval: Option<WorkPlanApprovalRecord>,
     pub current: bool,
     pub created_by: String,
@@ -571,6 +593,18 @@ impl TenderStore {
                 "plan_id": plan_id,
                 "plan_version": "1",
             }),
+            &created_at,
+        )?;
+        append_manager_message(
+            &transaction,
+            TenderOfficeMessageKind::Output,
+            &compose_proposal_message(
+                profiles.len(),
+                &workstreams,
+                &tasks,
+                &capability_gaps,
+                &deadlines,
+            ),
             &created_at,
         )?;
         budget.check()?;
@@ -1222,6 +1256,12 @@ impl TenderStore {
             }),
             &decided_at,
         )?;
+        append_manager_message(
+            &transaction,
+            TenderOfficeMessageKind::Status,
+            &decision_message_body(command.decision, command.version, &command.rationale),
+            &decided_at,
+        )?;
         budget.check()?;
         transaction.commit().map_err(sql_error)?;
         self.inspect_work_plan_version(&command.plan_id, command.version, budget)
@@ -1273,7 +1313,7 @@ impl TenderStore {
                 "SELECT bid_package_id, bid_package_version, bid_package_manifest_sha256,
                         capability_catalogue_version, permission_policy_version, profiles_json,
                         workstreams_json, tasks_json, query_bindings_json, capability_gaps_json,
-                        blocker_codes_json,
+                        blocker_codes_json, revision_actions_json,
                         manifest_sha256, created_at
                  FROM work_plan_versions WHERE plan_id = ?1 AND version = ?2",
                 params![plan_id, version],
@@ -1292,6 +1332,7 @@ impl TenderStore {
                         row.get(10)?,
                         row.get(11)?,
                         row.get(12)?,
+                        row.get(13)?,
                     ))
                 },
             )
@@ -1384,6 +1425,24 @@ impl TenderStore {
                 }
             }
         }
+        let workstreams: Vec<WorkPlanWorkstream> = parse_canonical_json(&row.6)?;
+        let outcome = workstream_outcomes(&workstreams);
+        let risks = load_package_record_basis(
+            &self.connection,
+            &row.0,
+            row.1,
+            "risk",
+            TenderRecordKind::Risk,
+            budget,
+        )?;
+        let assumptions = load_package_record_basis(
+            &self.connection,
+            &row.0,
+            row.1,
+            "assumption",
+            TenderRecordKind::Assumption,
+            budget,
+        )?;
         Ok(WorkPlanProposalInspection {
             plan_id: plan_id.into(),
             version,
@@ -1393,16 +1452,20 @@ impl TenderStore {
             capability_catalogue_version: row.3,
             permission_policy_version: row.4,
             profiles,
-            workstreams: parse_canonical_json(&row.6)?,
+            outcome,
+            risks,
+            assumptions,
+            workstreams,
             tasks: parse_canonical_json(&row.7)?,
             query_bindings: parse_canonical_json(&row.8)?,
             capability_gaps: parse_canonical_json(&row.9)?,
             blocker_codes: parse_canonical_json(&row.10)?,
+            revision_actions: parse_canonical_json(&row.11)?,
             approval,
             current,
             created_by: "engineer_user".into(),
-            created_at: row.12,
-            manifest_sha256: row.11,
+            created_at: row.13,
+            manifest_sha256: row.12,
         })
     }
 
@@ -1696,9 +1759,13 @@ impl TenderStore {
                                 profiles: profiles.clone(),
                                 workstreams: workstreams.clone(),
                                 tasks: tasks.clone(),
+                                outcome: Vec::new(),
+                                risks: Vec::new(),
+                                assumptions: Vec::new(),
                                 query_bindings: query_bindings.clone(),
                                 capability_gaps: capability_gaps.clone(),
                                 blocker_codes: blocker_codes.clone(),
+                                revision_actions: Vec::new(),
                                 approval: None,
                                 current: false,
                                 created_by: row.14.clone(),
@@ -2014,6 +2081,118 @@ fn load_package_query_bindings_with_check(
         return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
     }
     Ok(queries)
+}
+
+fn compose_proposal_message(
+    profile_count: usize,
+    workstreams: &[WorkPlanWorkstream],
+    tasks: &[WorkPlanTask],
+    gaps: &[WorkPlanCapabilityGap],
+    deadlines: &[String],
+) -> String {
+    let mut body = format!(
+        "The project office is ready: {profile_count} specialists will deliver {} workstreams and {} tasks, working toward the recorded deadline {}. Review Work Plan v1 and approve it to start production.",
+        workstreams.len(),
+        tasks.len(),
+        deadlines.first().map(String::as_str).unwrap_or_default(),
+    );
+    if !gaps.is_empty() {
+        let missing = gaps
+            .iter()
+            .map(|gap| gap.capability.replace('_', " "))
+            .collect::<Vec<_>>()
+            .join(", ");
+        body.push_str(&format!(
+            " Unfilled specialties still block approval: {missing}."
+        ));
+    }
+    body
+}
+
+fn decision_message_body(decision: WorkPlanDecision, version: u32, rationale: &str) -> String {
+    let body = match decision {
+        WorkPlanDecision::Approve => format!(
+            "Work Plan v{version} is approved and now in progress. Unblocked work starts automatically."
+        ),
+        WorkPlanDecision::Return => format!(
+            "You returned Work Plan v{version} for revision: {}",
+            rationale.trim()
+        ),
+        WorkPlanDecision::Reject => format!(
+            "You rejected Work Plan v{version}: {}",
+            rationale.trim()
+        ),
+    };
+    bounded_message_body(&body)
+}
+
+fn bounded_message_body(body: &str) -> String {
+    const ELLIPSIS: &str = "…";
+    if body.len() <= MAX_MESSAGE_BYTES {
+        return body.to_owned();
+    }
+    let mut end = MAX_MESSAGE_BYTES - ELLIPSIS.len();
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{ELLIPSIS}", &body[..end])
+}
+
+fn workstream_outcomes(workstreams: &[WorkPlanWorkstream]) -> Vec<WorkPlanOutcomeItem> {
+    workstreams
+        .iter()
+        .filter_map(|workstream| {
+            Some(WorkPlanOutcomeItem {
+                workstream: workstream.name.clone(),
+                milestone: workstream.milestones.first()?.clone(),
+                deadline: workstream.deadlines.first()?.clone(),
+            })
+        })
+        .collect()
+}
+
+fn load_package_record_basis(
+    connection: &rusqlite::Connection,
+    package_id: &str,
+    package_version: u32,
+    category: &str,
+    kind: TenderRecordKind,
+    budget: BidPackageOperationBudget,
+) -> Result<Vec<WorkPlanRecordBasis>, TenderCommandError> {
+    budget.check()?;
+    let mut statement = connection
+        .prepare(
+            "SELECT records.record_id, records.version, records.title
+             FROM bid_decision_package_record_bindings AS bindings
+             JOIN tender_record_versions AS records
+               ON records.record_id = bindings.record_id
+              AND records.version = bindings.record_version
+             WHERE bindings.package_id = ?1 AND bindings.package_version = ?2
+               AND bindings.category = ?3 AND records.kind = ?4
+             ORDER BY bindings.ordinal",
+        )
+        .map_err(sql_error)?;
+    let mapped = statement
+        .query_map(
+            params![package_id, package_version, category, kind.as_str()],
+            |row| {
+                Ok(WorkPlanRecordBasis {
+                    record_id: row.get(0)?,
+                    version: row.get(1)?,
+                    title: row.get(2)?,
+                })
+            },
+        )
+        .map_err(sql_error)?;
+    let mut basis = Vec::new();
+    for record in mapped {
+        budget.check()?;
+        basis.push(record.map_err(sql_error)?);
+        if basis.len() > MAX_PLAN_QUERIES {
+            return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+        }
+    }
+    Ok(basis)
 }
 
 fn append_work_plan_denial(

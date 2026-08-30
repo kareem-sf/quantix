@@ -19,7 +19,7 @@ use super::{
 };
 
 const MAX_CONVERSATION_MESSAGES: i64 = 100;
-const MAX_MESSAGE_BYTES: usize = 4_000;
+pub(super) const MAX_MESSAGE_BYTES: usize = 4_000;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
@@ -457,6 +457,25 @@ pub(super) fn append_system_message(
     body: &str,
     created_at: &str,
 ) -> Result<String, TenderCommandError> {
+    append_office_message(transaction, "system", kind, body, created_at)
+}
+
+pub(super) fn append_manager_message(
+    transaction: &Transaction<'_>,
+    kind: TenderOfficeMessageKind,
+    body: &str,
+    created_at: &str,
+) -> Result<String, TenderCommandError> {
+    append_office_message(transaction, "manager", kind, body, created_at)
+}
+
+fn append_office_message(
+    transaction: &Transaction<'_>,
+    author: &str,
+    kind: TenderOfficeMessageKind,
+    body: &str,
+    created_at: &str,
+) -> Result<String, TenderCommandError> {
     if body.is_empty() || body.len() > MAX_MESSAGE_BYTES || kind == TenderOfficeMessageKind::Routine
     {
         return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
@@ -473,10 +492,11 @@ pub(super) fn append_system_message(
         .execute(
             "INSERT INTO tender_office_messages (
                message_id, conversation_id, author, kind, body, created_at
-             ) VALUES (?1, ?2, 'system', ?3, ?4, ?5)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 message_id,
                 conversation_id,
+                author,
                 message_kind_value(kind),
                 body,
                 created_at

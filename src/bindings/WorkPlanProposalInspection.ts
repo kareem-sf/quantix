@@ -2,8 +2,11 @@
 import type { TenderRecordVersionReference } from "./TenderRecordVersionReference";
 import type { WorkPlanApprovalRecord } from "./WorkPlanApprovalRecord";
 import type { WorkPlanCapabilityGap } from "./WorkPlanCapabilityGap";
+import type { WorkPlanOutcomeItem } from "./WorkPlanOutcomeItem";
 import type { WorkPlanProfileBinding } from "./WorkPlanProfileBinding";
+import type { WorkPlanRecordBasis } from "./WorkPlanRecordBasis";
+import type { WorkPlanRevisionAction } from "./WorkPlanRevisionAction";
 import type { WorkPlanTask } from "./WorkPlanTask";
 import type { WorkPlanWorkstream } from "./WorkPlanWorkstream";
 
-export type WorkPlanProposalInspection = { plan_id: string, version: number, bid_package_id: string, bid_package_version: number, bid_package_manifest_sha256: string, capability_catalogue_version: number, permission_policy_version: number, profiles: Array<WorkPlanProfileBinding>, workstreams: Array<WorkPlanWorkstream>, tasks: Array<WorkPlanTask>, query_bindings: Array<TenderRecordVersionReference>, capability_gaps: Array<WorkPlanCapabilityGap>, blocker_codes: Array<string>, approval: WorkPlanApprovalRecord | null, current: boolean, created_by: string, created_at: string, manifest_sha256: string, };
+export type WorkPlanProposalInspection = { plan_id: string, version: number, bid_package_id: string, bid_package_version: number, bid_package_manifest_sha256: string, capability_catalogue_version: number, permission_policy_version: number, profiles: Array<WorkPlanProfileBinding>, workstreams: Array<WorkPlanWorkstream>, tasks: Array<WorkPlanTask>, outcome: Array<WorkPlanOutcomeItem>, risks: Array<WorkPlanRecordBasis>, assumptions: Array<WorkPlanRecordBasis>, query_bindings: Array<TenderRecordVersionReference>, capability_gaps: Array<WorkPlanCapabilityGap>, blocker_codes: Array<string>, revision_actions: Array<WorkPlanRevisionAction>, approval: WorkPlanApprovalRecord | null, current: boolean, created_by: string, created_at: string, manifest_sha256: string, };

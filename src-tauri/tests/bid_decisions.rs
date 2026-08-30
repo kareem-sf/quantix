@@ -36,15 +36,15 @@ use quantix_lib::{
     InspectChangeAssessmentsCommand, InspectCoordinatedBidBaselinesCommand,
     InspectDecisionCockpitCommand, InspectEstimateWorkspaceCommand,
     InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
-    InspectPackageProductionCommand, InspectProductionTaskReviewCommand,
-    InspectSubmissionArtifactContentCommand, InspectSubmissionPackageItemContentCommand,
-    InspectTenderQueriesCommand, InterpretExternalRfiResponseCommand,
-    InvalidateBidDecisionApprovalCommand, MajorFindingPolicy, ManagerCapabilityDemandInput,
-    ManualVerificationResult, PackageValidationCheckCategory, PackageValidationOutcome,
-    ParseSourceArtifactCommand, PrepareTenderRecoveryCommand, PricedCostBaselineReviewOutcome,
-    PricingAdjustmentDirection, PricingAdjustmentKind, PricingAdjustmentReference,
-    ProductionFindingDispositionKind, ProductionFindingSeverity, ProductionTaskState,
-    ProposeBoqCalculationRuleCommand, ProviderFailureCategory, QuantixHost,
+    InspectManagerWorkspaceCommand, InspectPackageProductionCommand,
+    InspectProductionTaskReviewCommand, InspectSubmissionArtifactContentCommand,
+    InspectSubmissionPackageItemContentCommand, InspectTenderQueriesCommand,
+    InterpretExternalRfiResponseCommand, InvalidateBidDecisionApprovalCommand, MajorFindingPolicy,
+    ManagerCapabilityDemandInput, ManualVerificationResult, PackageValidationCheckCategory,
+    PackageValidationOutcome, ParseSourceArtifactCommand, PrepareTenderRecoveryCommand,
+    PricedCostBaselineReviewOutcome, PricingAdjustmentDirection, PricingAdjustmentKind,
+    PricingAdjustmentReference, ProductionFindingDispositionKind, ProductionFindingSeverity,
+    ProductionTaskState, ProposeBoqCalculationRuleCommand, ProviderFailureCategory, QuantixHost,
     RecordPackageManualVerificationCommand, RegisterExternalRfiResponseCommand,
     ReleaseReadinessBlockerCode, ResolveBidDecisionReturnReworkCommand,
     ResolveIndeterminateAgentRunCommand, ReviseExternalRfiDraftCommand, ReviseTenderCommand,
@@ -57,10 +57,11 @@ use quantix_lib::{
     SetupState, SourceRelationshipKind, StoragePermissions, SubmissionCoverageDisposition,
     SubmissionItemSource, SubmissionPackageAssessment, SubmissionPackageCurrentnessCode,
     SubmissionPackageStatus, SubmissionPackageVersion, TenderErrorCode, TenderEvidenceReference,
-    TenderIntegrityState, TenderLifecyclePhase, TenderQuery, TenderQueryTreatment,
-    TenderQueryTreatmentProposalInput, TenderQueryType, TenderRecordEngineerDecisionKind,
-    TenderRecordInspection, TenderRecordKind, TenderRecordVersionReference, VerificationStatus,
-    WorkPlanDecision, WorkPlanRevisionAction, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    TenderIntegrityState, TenderLifecyclePhase, TenderOfficeMessageAuthor, TenderOfficeMessageKind,
+    TenderQuery, TenderQueryTreatment, TenderQueryTreatmentProposalInput, TenderQueryType,
+    TenderRecordEngineerDecisionKind, TenderRecordInspection, TenderRecordKind,
+    TenderRecordVersionReference, VerificationStatus, WorkPlanDecision, WorkPlanRevisionAction,
+    MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 #[tokio::test]
@@ -6326,6 +6327,153 @@ async fn active_production_materializes_only_the_exact_approved_plan_and_ready_f
         .host
         .inspect_tender_integrity(&harness.tender_id)
         .expect("inspect Active Production integrity");
+    assert_eq!(
+        integrity.state,
+        TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+}
+
+#[tokio::test]
+async fn work_plan_conversation_narrates_composition_and_one_decision_auto_start() {
+    let harness = Harness::new("record-extraction");
+    let package = ready_package(&harness).await;
+    harness
+        .host
+        .decide_bid_decision_package(approval_command(
+            &harness,
+            &package,
+            BidDecisionApprovalDecision::Accept,
+        ))
+        .expect("accept exact package");
+    let composed = harness
+        .host
+        .compose_tender_office(ComposeTenderOfficeCommand {
+            tender_id: harness.tender_id.clone(),
+        })
+        .expect("compose the exact Work Plan");
+    let conversation = |harness: &Harness| {
+        harness
+            .host
+            .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+                tender_id: Some(harness.tender_id.clone()),
+            })
+            .expect("inspect Manager conversation")
+            .conversation
+            .expect("Manager conversation")
+            .messages
+    };
+    let proposal = conversation(&harness)
+        .into_iter()
+        .find(|message| {
+            message.author == TenderOfficeMessageAuthor::Manager
+                && message.body.contains("Work Plan v1")
+        })
+        .expect("attributable proposal message from the Tendering Manager");
+    assert_eq!(proposal.kind, TenderOfficeMessageKind::Output);
+    assert!(proposal.body.contains("specialists"));
+    assert!(proposal.body.contains(&composed.tasks.len().to_string()));
+
+    let returned = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: composed.plan_id.clone(),
+            version: composed.version,
+            decision: WorkPlanDecision::Return,
+            rationale: "Confirm the milestone dates before production.".into(),
+        })
+        .expect("return the proposal for revision");
+    assert_eq!(
+        returned.approval.as_ref().map(|approval| approval.decision),
+        Some(WorkPlanDecision::Return)
+    );
+    let successor = harness
+        .host
+        .revise_work_plan_proposal(ReviseWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: composed.plan_id.clone(),
+            base_version: composed.version,
+            actions: vec![WorkPlanRevisionAction::RenameProfile {
+                profile_id: composed
+                    .profiles
+                    .iter()
+                    .find(|binding| binding.archetype == "tender_analyst")
+                    .expect("analyst profile")
+                    .profile
+                    .profile_id
+                    .clone(),
+                identity: "Tender Requirements Analyst".into(),
+            }],
+        })
+        .expect("publish the successor proposal");
+    assert_eq!(successor.revision_actions.len(), 1);
+    assert!(!successor.risks.is_empty());
+    assert!(!successor.assumptions.is_empty());
+    assert!(!successor.outcome.is_empty());
+
+    let approved = harness
+        .host
+        .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: successor.plan_id.clone(),
+            version: successor.version,
+            decision: WorkPlanDecision::Approve,
+            rationale: "Approve the exact validated Work Plan for controlled production.".into(),
+        })
+        .expect("approve the exact Work Plan");
+    assert_eq!(
+        approved.approval.as_ref().map(|approval| approval.decision),
+        Some(WorkPlanDecision::Approve)
+    );
+
+    let production = harness
+        .host
+        .activate_tender_production(ActivateTenderProductionCommand {
+            tender_id: harness.tender_id.clone(),
+            plan_id: approved.plan_id.clone(),
+            plan_version: approved.version,
+            plan_manifest_sha256: approved.manifest_sha256.clone(),
+        })
+        .expect("start production from the approved plan");
+    assert_eq!(production.plan_id, approved.plan_id);
+    assert_eq!(production.plan_version, approved.version);
+    assert_eq!(production.tasks.len(), approved.tasks.len());
+    assert!(production
+        .tasks
+        .iter()
+        .any(|task| task.state == ProductionTaskState::Ready));
+
+    let messages = conversation(&harness);
+    let return_message = messages
+        .iter()
+        .find(|message| {
+            message.author == TenderOfficeMessageAuthor::Manager
+                && message.body.contains("for revision")
+        })
+        .expect("return message from the Tendering Manager");
+    assert!(return_message
+        .body
+        .contains("Confirm the milestone dates before production."));
+    let confirmation = messages
+        .iter()
+        .find(|message| {
+            message.author == TenderOfficeMessageAuthor::Manager
+                && message.body.contains("Unblocked work starts automatically")
+        })
+        .expect("approval confirmation from the Tendering Manager");
+    assert!(confirmation
+        .body
+        .contains(&format!("Work Plan v{}", successor.version)));
+
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close the activated Tender");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("inspect integrity after the narrated decision");
     assert_eq!(
         integrity.state,
         TenderIntegrityState::Ready,

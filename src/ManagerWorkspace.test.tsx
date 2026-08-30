@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
+import type { TenderProductionInspection } from "./bindings/TenderProductionInspection";
+import type { WorkPlanProposalInspection } from "./bindings/WorkPlanProposalInspection";
 
 const host = vi.hoisted(() => ({
   archiveTender: vi.fn(),
@@ -263,6 +265,168 @@ const projection: ManagerWorkspaceProjection = {
   },
   doctor_blockers: [],
 };
+
+const planBudget = {
+  provider_turns: 1,
+  duration_seconds: 120,
+  output_bytes: 262_144,
+};
+
+function planProfile(
+  profileId: string,
+  archetype: string,
+  identity: string,
+  profession: string,
+) {
+  return {
+    archetype,
+    status: "proposed" as const,
+    profile: {
+      profile_id: profileId,
+      version: 1,
+      identity,
+      profession,
+      seniority: "senior",
+      capabilities: ["cost_estimation"],
+      objective: "Deliver the verified Tender output for this specialty.",
+      behavior: "Works only from verified records and exact inputs.",
+      skepticism: "Challenges every unsupported input.",
+      risk_tolerance: "low",
+      instructions:
+        "Deliver the verified Tender output for this specialty. Works only from verified records and exact inputs. Challenges every unsupported input.",
+      output_contract_json: "{}",
+      review_policy: "independent_review",
+      permissions: {
+        data_scopes: ["tender_analysis"],
+        data_classifications: ["tender_internal" as const],
+        allowed_actions: ["read"],
+        allowed_tools: [],
+        network_allowed: false,
+        workspace_write_allowed: true,
+      },
+      prohibited_actions: ["approve_own_work"],
+      resource_budget: planBudget,
+    },
+  };
+}
+
+function workPlanInspection(): WorkPlanProposalInspection {
+  const estimatorProfileId = "e".repeat(32);
+  const reviewerProfileId = "f".repeat(32);
+  return {
+    plan_id: "p".repeat(32),
+    version: 2,
+    bid_package_id: "k".repeat(32),
+    bid_package_version: 1,
+    bid_package_manifest_sha256: "1".repeat(64),
+    capability_catalogue_version: 1,
+    permission_policy_version: 1,
+    profiles: [
+      planProfile(
+        estimatorProfileId,
+        "cost_estimator",
+        "Cost Estimator",
+        "Senior Construction Cost Estimator",
+      ),
+      planProfile(
+        reviewerProfileId,
+        "independent_cost_reviewer",
+        "Independent Cost Reviewer",
+        "Senior Cost Assurance Surveyor",
+      ),
+    ],
+    workstreams: [
+      {
+        workstream_key: "cost_estimation",
+        name: "Cost Estimating",
+        capability: "cost_estimation",
+        accountable_profile_id: estimatorProfileId,
+        dependencies: ["tender_analysis"],
+        deadlines: ["2026-10-01T00:00:00Z"],
+        milestones: ["cost_estimation_ready"],
+        resource_budget: planBudget,
+      },
+    ],
+    tasks: [
+      {
+        task_key: "cost_estimation_production",
+        workstream_key: "cost_estimation",
+        profile_id: estimatorProfileId,
+        profile_version: 1,
+        objective: "Develop the evidence-linked estimate.",
+        exact_inputs: [],
+        dependencies: [],
+        deadline: "2026-10-01T00:00:00Z",
+        milestone: "cost_estimation_ready",
+        review_profile_id: reviewerProfileId,
+        review_profile_version: 1,
+        major_finding_policy: "remediation_required" as const,
+        permissions: {
+          data_scopes: ["tender_analysis"],
+          data_classifications: ["tender_internal" as const],
+          allowed_actions: ["read"],
+          allowed_tools: [],
+          network_allowed: false,
+          workspace_write_allowed: true,
+        },
+        resource_budget: planBudget,
+        output_contract_json: "{}",
+      },
+    ],
+    outcome: [
+      {
+        workstream: "Cost Estimating",
+        milestone: "cost_estimation_ready",
+        deadline: "2026-10-01T00:00:00Z",
+      },
+    ],
+    risks: [
+      {
+        record_id: "r".repeat(32),
+        version: 1,
+        title: "Ground conditions may differ from the survey.",
+      },
+    ],
+    assumptions: [
+      {
+        record_id: "s".repeat(32),
+        version: 1,
+        title: "Site access is available from day one.",
+      },
+    ],
+    query_bindings: [],
+    capability_gaps: [],
+    blocker_codes: [],
+    revision_actions: [
+      {
+        action: "add_profile" as const,
+        archetype: "cost_estimator",
+        identity: "Cost Estimator",
+      },
+    ],
+    approval: null,
+    current: true,
+    created_by: "engineer_user",
+    created_at: "2026-08-30T09:00:00Z",
+    manifest_sha256: "2".repeat(64),
+  };
+}
+
+function productionInspection(
+  plan: WorkPlanProposalInspection,
+): TenderProductionInspection {
+  return {
+    activation_id: "t".repeat(32),
+    plan_id: plan.plan_id,
+    plan_version: plan.version,
+    plan_manifest_sha256: plan.manifest_sha256,
+    active: true,
+    tasks: [],
+    activated_by: "engineer_user",
+    acting_role: "tendering_manager",
+    created_at: "2026-08-30T09:05:00Z",
+  };
+}
 
 const tenderAiProviderConnection = {
   connection_id: "codex_chatgpt",
@@ -775,6 +939,179 @@ describe("ManagerWorkspace", () => {
     expect(
       screen.getByRole("button", { name: "Back to Manager" }),
     ).toBeTruthy();
+  });
+
+  it("routes prepare work plan into the focused governed panel", async () => {
+    host.inspectManagerWorkspace.mockResolvedValue({
+      ...projection,
+      current_action: {
+        kind: "prepare_work_plan" as const,
+        title: "Prepare the work plan",
+        summary:
+          "The Tendering Manager is ready to propose the team and tasks.",
+        action_label: "Prepare the Work Plan",
+        requires_engineer: false,
+      },
+    });
+
+    render(<ManagerWorkspace />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Prepare the Work Plan" }),
+    );
+
+    expect(await screen.findByTestId("tender-focused-action")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Work Plan" })).toBeTruthy();
+    expect(
+      await screen.findByRole("button", {
+        name: "Compose Tender Office proposal",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("routes review work plan into the focused governed panel", async () => {
+    host.inspectManagerWorkspace.mockResolvedValue({
+      ...projection,
+      current_action: {
+        kind: "review_work_plan" as const,
+        title: "Review the Work Plan",
+        summary: "Review the exact Work Plan proposal.",
+        action_label: "Review the Work Plan",
+        requires_engineer: true,
+      },
+    });
+
+    render(<ManagerWorkspace />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Review the Work Plan" }),
+    );
+
+    expect(await screen.findByTestId("tender-focused-action")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Work Plan" })).toBeTruthy();
+  });
+
+  it("starts the approved plan automatically and returns to the Manager conversation", async () => {
+    const plan = workPlanInspection();
+    const approvedPlan = {
+      ...plan,
+      approval: {
+        approval_id: "q".repeat(32),
+        plan_id: plan.plan_id,
+        plan_version: plan.version,
+        decision: "approve" as const,
+        rationale: "Start the work now.",
+        plan_manifest_sha256: plan.manifest_sha256,
+        decided_by: "engineer_user",
+        acting_role: "tendering_manager",
+        approval_sha256: "3".repeat(64),
+        created_at: "2026-08-30T09:04:00Z",
+      },
+    };
+    const reviewAction = {
+      kind: "review_work_plan" as const,
+      title: "Review the Work Plan",
+      summary: "Review the exact Work Plan proposal.",
+      action_label: "Review the Work Plan",
+      requires_engineer: true,
+    };
+    const systemMessage = {
+      message_id: messageId,
+      sequence: 1,
+      author: "system" as const,
+      kind: "status" as const,
+      body: "West Campus MEP workspace is ready.",
+      created_at: "2026-08-30T09:00:00Z",
+      references: [],
+    };
+    const planMessage = {
+      message_id: "m".repeat(32),
+      sequence: 2,
+      author: "manager" as const,
+      kind: "output" as const,
+      body: `The project office is ready: ${plan.profiles.length} specialists will deliver the work. Review Work Plan v${plan.version}.`,
+      created_at: "2026-08-30T09:01:00Z",
+      references: [],
+    };
+    const confirmationMessage = {
+      message_id: "n".repeat(32),
+      sequence: 3,
+      author: "manager" as const,
+      kind: "status" as const,
+      body: `Work Plan v${plan.version} is approved and now in progress. Unblocked work starts automatically.`,
+      created_at: "2026-08-30T09:05:00Z",
+      references: [],
+    };
+    const planningProjection: ManagerWorkspaceProjection = {
+      ...projection,
+      current_action: reviewAction,
+      conversation: {
+        conversation_id: "c".repeat(32),
+        latest_meaningful_message_id: planMessage.message_id,
+        messages: [systemMessage, planMessage],
+      },
+    };
+    const productionProjection: ManagerWorkspaceProjection = {
+      ...projection,
+      current_action: {
+        kind: "review_work" as const,
+        title: "Tender work is in progress",
+        summary: "The Tendering Manager is coordinating the approved plan.",
+        action_label: "View work",
+        requires_engineer: false,
+      },
+      conversation: {
+        conversation_id: "c".repeat(32),
+        latest_meaningful_message_id: confirmationMessage.message_id,
+        messages: [systemMessage, planMessage, confirmationMessage],
+      },
+    };
+    host.inspectManagerWorkspace
+      .mockResolvedValueOnce(planningProjection)
+      .mockResolvedValue(productionProjection);
+    host.inspectCurrentWorkPlan.mockResolvedValue(plan);
+    host.decideWorkPlanProposal.mockResolvedValue(approvedPlan);
+    host.activateTenderProduction.mockResolvedValue(productionInspection(plan));
+
+    render(<ManagerWorkspace />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Review the Work Plan" }),
+    );
+    expect(await screen.findByTestId("tender-focused-action")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Attributable rationale"), {
+      target: { value: "Start the work now." },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Approve exact Work Plan" }),
+    );
+
+    await waitFor(() => {
+      expect(host.decideWorkPlanProposal).toHaveBeenCalledWith(
+        tenderId,
+        plan.plan_id,
+        plan.version,
+        "approve",
+        "Start the work now.",
+      );
+    });
+    await waitFor(() => {
+      expect(host.activateTenderProduction).toHaveBeenCalledWith(
+        tenderId,
+        plan.plan_id,
+        plan.version,
+        plan.manifest_sha256,
+      );
+    });
+    expect(
+      await screen.findByText(
+        `Work Plan v${plan.version} is approved and now in progress. Unblocked work starts automatically.`,
+      ),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.queryByTestId("tender-focused-action")).toBeNull();
+    });
   });
 
   it("opens a recovery center for a recovery-required Tender without selecting it", async () => {

@@ -46,6 +46,28 @@ const splitLines = (value: string) =>
     .map((item) => item.trim())
     .filter(Boolean);
 
+const describeRevisionAction = (
+  action: WorkPlanRevisionAction,
+  resolveIdentity: (profileId: string) => string | undefined,
+): string => {
+  switch (action.action) {
+    case "rebase_package_basis":
+      return "Rebuilt the plan on the accepted successor Bid Decision Package.";
+    case "add_profile":
+      return `Added specialist: ${action.identity}`;
+    case "remove_profile":
+      return `Removed specialist: ${action.profile_id.slice(0, 12)}`;
+    case "split_profile":
+      return `Split ${action.profile_id.slice(0, 12)} into: ${action.identities.join(", ")}`;
+    case "combine_profiles":
+      return `Combined ${action.profile_ids.length} profiles into: ${action.identity}`;
+    case "rename_profile":
+      return `Renamed profile to: ${action.identity}`;
+    case "adjust_profile":
+      return `Adjusted ${resolveIdentity(action.profile_id) ?? action.profile_id.slice(0, 12)} (objective, behavior, or budget)`;
+  }
+};
+
 export function TenderOfficePanel({
   tenderId,
   runtimeReady,
@@ -203,17 +225,17 @@ export function TenderOfficePanel({
 
   const execute = async (
     command: () => Promise<WorkPlanProposalInspection>,
-  ) => {
+  ): Promise<WorkPlanProposalInspection | null> => {
     const request = ++requestSequence.current;
     setBusy(true);
     try {
       const next = await command();
       onTenderStateChange();
       if (request === requestSequence.current) setPlan(next);
-      return true;
+      return next;
     } catch {
       if (request === requestSequence.current) reportCommandFailure();
-      return false;
+      return null;
     } finally {
       if (request === requestSequence.current) setBusy(false);
     }
@@ -293,31 +315,14 @@ export function TenderOfficePanel({
     });
   };
 
-  const decide = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!plan || !rationale.trim()) return;
-    void execute(() =>
-      decideWorkPlanProposal(
-        tenderId,
-        plan.plan_id,
-        plan.version,
-        decision,
-        rationale.trim(),
-      ),
-    ).then((updated) => {
-      if (updated) setRationale("");
-    });
-  };
-
-  const activate = async () => {
-    if (!plan) return;
+  const activatePlan = async (target: WorkPlanProposalInspection) => {
     setBusy(true);
     try {
       const next = await activateTenderProduction(
         tenderId,
-        plan.plan_id,
-        plan.version,
-        plan.manifest_sha256,
+        target.plan_id,
+        target.version,
+        target.manifest_sha256,
       );
       setProduction(next);
       onTenderStateChange();
@@ -327,6 +332,27 @@ export function TenderOfficePanel({
     } finally {
       setBusy(false);
     }
+  };
+
+  const decide = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!plan || !rationale.trim()) return;
+    const rationaleText = rationale.trim();
+    void execute(() =>
+      decideWorkPlanProposal(
+        tenderId,
+        plan.plan_id,
+        plan.version,
+        decision,
+        rationaleText,
+      ),
+    ).then(async (decided) => {
+      if (!decided) return;
+      setRationale("");
+      if (decision === "approve") {
+        await activatePlan(decided);
+      }
+    });
   };
 
   const cancelTask = async (runId: string) => {
@@ -497,6 +523,25 @@ export function TenderOfficePanel({
             <p className="record-identity">Manifest {plan.manifest_sha256}</p>
           </div>
 
+          {plan.revision_actions.length > 0 ? (
+            <div className="bid-record-bindings">
+              <h5>What changed since v{plan.version - 1}</h5>
+              <ul>
+                {plan.revision_actions.map((action, index) => (
+                  <li key={index}>
+                    {describeRevisionAction(
+                      action,
+                      (profileId) =>
+                        plan.profiles.find(
+                          (binding) => binding.profile.profile_id === profileId,
+                        )?.profile.identity,
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           {plan.capability_gaps.length > 0 ? (
             <div className="bid-review" role="status">
               <h5>Capability Gaps block production</h5>
@@ -617,19 +662,67 @@ export function TenderOfficePanel({
             </ul>
           </div>
 
+          <div className="bid-record-bindings">
+            <h5>Outcome</h5>
+            {plan.outcome.length > 0 ? (
+              <ul>
+                {plan.outcome.map((item, index) => (
+                  <li key={`${item.workstream}-${index}`}>
+                    <strong>{item.workstream}</strong> ·{" "}
+                    {humanize(item.milestone)} · by {item.deadline}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No outcome recorded.</p>
+            )}
+          </div>
+
+          <div className="bid-record-bindings">
+            <h5>Risks</h5>
+            {plan.risks.length > 0 ? (
+              <ul>
+                {plan.risks.map((risk) => (
+                  <li key={`${risk.record_id}:${risk.version}`}>
+                    <strong>{risk.title}</strong> · record{" "}
+                    {risk.record_id.slice(0, 12)} · v{risk.version}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No risks recorded.</p>
+            )}
+          </div>
+
+          <div className="bid-record-bindings">
+            <h5>Assumptions</h5>
+            {plan.assumptions.length > 0 ? (
+              <ul>
+                {plan.assumptions.map((assumption) => (
+                  <li key={`${assumption.record_id}:${assumption.version}`}>
+                    <strong>{assumption.title}</strong> · record{" "}
+                    {assumption.record_id.slice(0, 12)} · v{assumption.version}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No assumptions recorded.</p>
+            )}
+          </div>
+
           {plan.approval?.decision === "approve" && !productionMatchesPlan ? (
             <div className="bid-review" role="status">
-              <h5>Active Production boundary</h5>
+              <h5>Start the approved plan</h5>
               <p>
-                Approval fixes authority, but no profile or task becomes Active
-                until this exact manifest is activated.
+                The approved plan is bound exactly, but production has not
+                started yet. Start it to begin the unblocked work.
               </p>
               <button
                 type="button"
-                onClick={() => void activate()}
+                onClick={() => void activatePlan(plan)}
                 disabled={busy || !runtimeReady || !plan.current}
               >
-                Activate exact Work Plan
+                Start approved Work Plan
               </button>
             </div>
           ) : null}
