@@ -1,13 +1,17 @@
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
+
+use crate::process_supervisor::{ProcessSpec, ProcessSupervisor};
+use crate::runtime_readiness::RuntimeLayout;
 
 const MAX_BINARY_BYTES: u64 = 400 * 1024 * 1024;
 const STAGING_PREFIX: &str = ".staging-";
@@ -52,6 +56,7 @@ pub enum ManagedRuntimeError {
     Cancelled,
     DownloadFailed(String),
     IntegrityFailed,
+    ProcessFailed,
     Io(std::io::Error),
 }
 
@@ -61,6 +66,7 @@ impl fmt::Display for ManagedRuntimeError {
             Self::Cancelled => write!(formatter, "cancelled"),
             Self::DownloadFailed(detail) => write!(formatter, "download failed: {detail}"),
             Self::IntegrityFailed => write!(formatter, "integrity check failed"),
+            Self::ProcessFailed => write!(formatter, "process failed"),
             Self::Io(error) => write!(formatter, "io error: {error}"),
         }
     }
@@ -315,6 +321,250 @@ fn hex_sha256(bytes: &[u8]) -> String {
         let _ = write!(hex, "{byte:02x}");
     }
     hex
+}
+
+const WORKER_PYTHON_VERSION: &str = "3.12.13";
+const WORKER_PREPARATION_TIMEOUT: Duration = Duration::from_secs(900);
+const WORKER_OUTPUT_LIMIT: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ManagedWorkerRuntimeState {
+    Ready,
+    NotInstalled,
+    InterruptedPreparation,
+    Outdated,
+    InstallFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ManagedWorkerRuntimeStatus {
+    pub state: ManagedWorkerRuntimeState,
+    pub lock_sha256: Option<String>,
+    pub summary: String,
+}
+
+pub fn worker_venv_directory(application_home: &Path) -> PathBuf {
+    application_home.join("runtimes").join("ai-worker")
+}
+
+pub fn worker_python_path(application_home: &Path) -> PathBuf {
+    let binaries = if cfg!(windows) {
+        worker_venv_directory(application_home).join("Scripts")
+    } else {
+        worker_venv_directory(application_home).join("bin")
+    };
+    binaries.join(executable_name("python"))
+}
+
+fn worker_provenance_path(application_home: &Path) -> PathBuf {
+    application_home
+        .join("runtimes")
+        .join("ai-worker-provenance.json")
+}
+
+fn worker_preparing_marker(application_home: &Path) -> PathBuf {
+    application_home
+        .join("runtimes")
+        .join("ai-worker-preparing")
+}
+
+fn worker_lock_hash(layout: &RuntimeLayout) -> Result<String, ManagedRuntimeError> {
+    let lock = layout.ai_worker_project().join("uv.lock");
+    binary_sha256(&lock).ok_or(ManagedRuntimeError::IntegrityFailed)
+}
+
+pub fn inspect_managed_worker_runtime(
+    application_home: &Path,
+    layout: &RuntimeLayout,
+) -> ManagedWorkerRuntimeStatus {
+    let lock_hash = match worker_lock_hash(layout) {
+        Ok(hash) => hash,
+        Err(_) => {
+            return ManagedWorkerRuntimeStatus {
+                state: ManagedWorkerRuntimeState::InstallFailed,
+                lock_sha256: None,
+                summary: "The AI components are incomplete in this installation. Reinstall Quantix.".to_owned(),
+            }
+        }
+    };
+    if worker_preparing_marker(application_home).is_file() {
+        return ManagedWorkerRuntimeStatus {
+            state: ManagedWorkerRuntimeState::InterruptedPreparation,
+            lock_sha256: Some(lock_hash),
+            summary: "The last setup of the AI components was interrupted. Quantix finishes it the next time you try.".to_owned(),
+        };
+    }
+    if !worker_python_path(application_home).is_file() {
+        return ManagedWorkerRuntimeStatus {
+            state: ManagedWorkerRuntimeState::NotInstalled,
+            lock_sha256: Some(lock_hash),
+            summary: "The AI components are not set up yet.".to_owned(),
+        };
+    }
+    let recorded = fs::read_to_string(worker_provenance_path(application_home))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|value| {
+            value
+                .get("lock_sha256")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        });
+    if recorded.as_deref() != Some(lock_hash.as_str()) {
+        return ManagedWorkerRuntimeStatus {
+            state: ManagedWorkerRuntimeState::Outdated,
+            lock_sha256: Some(lock_hash),
+            summary: "The AI components are out of date. Quantix updates them before the next run.".to_owned(),
+        };
+    }
+    ManagedWorkerRuntimeStatus {
+        state: ManagedWorkerRuntimeState::Ready,
+        lock_sha256: Some(lock_hash),
+        summary: "The AI components are ready.".to_owned(),
+    }
+}
+
+pub async fn prepare_managed_worker_runtime(
+    application_home: &Path,
+    layout: &RuntimeLayout,
+    supervisor: &ProcessSupervisor,
+    cancellation: CancellationToken,
+) -> Result<ManagedWorkerRuntimeStatus, ManagedRuntimeError> {
+    let lock_hash = worker_lock_hash(layout)?;
+    let inspected = inspect_managed_worker_runtime(application_home, layout);
+    if inspected.state == ManagedWorkerRuntimeState::Ready {
+        return Ok(inspected);
+    }
+    let runtimes = application_home.join("runtimes");
+    fs::create_dir_all(&runtimes).map_err(ManagedRuntimeError::Io)?;
+    let marker = worker_preparing_marker(application_home);
+    fs::write(&marker, b"preparing").map_err(ManagedRuntimeError::Io)?;
+    let result = run_worker_sync(application_home, layout, supervisor, &cancellation).await;
+    match result {
+        Ok(()) => {
+            let _ = fs::remove_file(&marker);
+            let provenance = serde_json::json!({
+                "schema_version": 1,
+                "lock_sha256": lock_hash,
+                "python_version": WORKER_PYTHON_VERSION,
+                "provisioned_at_epoch_ms": SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|since| since.as_millis() as u64)
+                    .unwrap_or_default(),
+            });
+            fs::write(
+                worker_provenance_path(application_home),
+                provenance.to_string(),
+            )
+            .map_err(ManagedRuntimeError::Io)?;
+            Ok(inspect_managed_worker_runtime(application_home, layout))
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&marker);
+            Err(error)
+        }
+    }
+}
+
+async fn run_worker_sync(
+    application_home: &Path,
+    layout: &RuntimeLayout,
+    supervisor: &ProcessSupervisor,
+    cancellation: &CancellationToken,
+) -> Result<(), ManagedRuntimeError> {
+    let project = layout.ai_worker_project();
+    let runtimes = application_home.join("runtimes");
+    let mut arguments = vec![OsString::from("sync")];
+    for argument in [
+        "--locked",
+        "--no-dev",
+        "--managed-python",
+        "--python",
+        WORKER_PYTHON_VERSION,
+        "--project",
+    ] {
+        arguments.push(OsString::from(argument));
+    }
+    arguments.push(project.clone().into_os_string());
+    arguments.push(OsString::from("--no-config"));
+    let environment = controlled_worker_environment(application_home)
+        .into_iter()
+        .chain([
+            (
+                OsString::from("UV_PROJECT_ENVIRONMENT"),
+                worker_venv_directory(application_home).into_os_string(),
+            ),
+            (
+                OsString::from("UV_PYTHON_INSTALL_DIR"),
+                runtimes.join("python").into_os_string(),
+            ),
+            (
+                OsString::from("UV_CACHE_DIR"),
+                runtimes.join("uv-cache").into_os_string(),
+            ),
+            (OsString::from("UV_NO_CONFIG"), OsString::from("1")),
+            (
+                OsString::from("UV_PYTHON_DOWNLOADS_JSON_URL"),
+                project.join("python-downloads.json").into_os_string(),
+            ),
+        ])
+        .collect();
+    let spec = ProcessSpec {
+        executable: layout.uv_executable(),
+        arguments,
+        current_directory: Some(project),
+        environment,
+        inherit_environment: false,
+        stdin: Vec::new(),
+        timeout: WORKER_PREPARATION_TIMEOUT,
+        stdout_limit: WORKER_OUTPUT_LIMIT,
+        stderr_limit: WORKER_OUTPUT_LIMIT,
+    };
+    let output = supervisor
+        .run(spec, cancellation.clone())
+        .await
+        .map_err(|_| ManagedRuntimeError::ProcessFailed)?;
+    match (output.termination, output.exit_code) {
+        (crate::process_supervisor::ProcessTermination::Exited, Some(0)) => Ok(()),
+        (crate::process_supervisor::ProcessTermination::Cancelled, _) => {
+            Err(ManagedRuntimeError::Cancelled)
+        }
+        _ => Err(ManagedRuntimeError::ProcessFailed),
+    }
+}
+
+fn controlled_worker_environment(application_home: &Path) -> Vec<(OsString, OsString)> {
+    let staging = application_home.join("staging");
+    let mut environment = vec![
+        (
+            OsString::from("HOME"),
+            application_home.as_os_str().to_owned(),
+        ),
+        (
+            OsString::from("USERPROFILE"),
+            application_home.as_os_str().to_owned(),
+        ),
+        (
+            OsString::from("XDG_CACHE_HOME"),
+            application_home
+                .join("runtimes")
+                .join("cache")
+                .into_os_string(),
+        ),
+        (OsString::from("TEMP"), staging.clone().into_os_string()),
+        (OsString::from("TMP"), staging.clone().into_os_string()),
+        (OsString::from("TMPDIR"), staging.into_os_string()),
+    ];
+    for name in ["SystemRoot", "WINDIR"] {
+        if let Some(value) = std::env::var_os(name) {
+            environment.push((OsString::from(name), value));
+        }
+    }
+    environment
 }
 
 #[cfg(all(test, feature = "runtime-fixture"))]

@@ -84,7 +84,10 @@ pub use document_parsing::{
     TextDirection,
 };
 pub use host::QuantixHost;
-pub use managed_runtime::{ManagedCodexRuntimeState, ManagedCodexRuntimeStatus};
+pub use managed_runtime::{
+    worker_python_path, ManagedCodexRuntimeState, ManagedCodexRuntimeStatus,
+    ManagedRuntimeError, ManagedWorkerRuntimeState, ManagedWorkerRuntimeStatus,
+};
 pub use release_gate::{
     release_candidate_manifest_sha256, ChatGptProductionAssuranceEvidence,
     EvaluatePublicReleaseGateCommand, IntegrationTermsDecision, LicenseDistributionReview,
@@ -2091,6 +2094,23 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn inspect_worker_runtime(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<crate::managed_runtime::ManagedWorkerRuntimeStatus, &'static str> {
+        Ok(host.inner().inspect_worker_runtime())
+    }
+
+    #[tauri::command]
+    pub(super) async fn prepare_worker_runtime(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<crate::managed_runtime::ManagedWorkerRuntimeStatus, &'static str> {
+        host.inner()
+            .prepare_worker_runtime(tokio_util::sync::CancellationToken::new())
+            .await
+            .map_err(|_| "worker_runtime_prepare_failed")
+    }
+
+    #[tauri::command]
     pub(super) async fn run_bootstrap_agent(
         host: tauri::State<'_, QuantixHost>,
         command: RunBootstrapAgentCommand,
@@ -3392,6 +3412,8 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::prepare_document_tools,
             tauri_commands::inspect_codex_runtime,
             tauri_commands::prepare_codex_runtime,
+            tauri_commands::inspect_worker_runtime,
+            tauri_commands::prepare_worker_runtime,
             tauri_commands::repair_document_tools,
             tauri_commands::inspect_document_tool_preparation_progress,
             tauri_commands::cancel_document_tool_preparation,

@@ -63,7 +63,7 @@ impl RuntimeLayout {
         )
     }
 
-    fn uv_executable(&self) -> PathBuf {
+    pub(crate) fn uv_executable(&self) -> PathBuf {
         self.runtime_resources
             .join("bin")
             .join(executable_name("uv"))
@@ -71,6 +71,10 @@ impl RuntimeLayout {
 
     pub(crate) fn ocr_project(&self) -> PathBuf {
         self.runtime_resources.join("ocr")
+    }
+
+    pub(crate) fn ai_worker_project(&self) -> PathBuf {
+        self.runtime_resources.join("ai-worker")
     }
 
     fn readiness_document(&self) -> PathBuf {

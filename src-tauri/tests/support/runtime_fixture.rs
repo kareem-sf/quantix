@@ -3867,9 +3867,13 @@ fn run_uv(
         env::consts::ARCH
     ));
     #[cfg(windows)]
-    junction::create(&concrete_python, &minor_python)?;
+    if !minor_python.exists() {
+        junction::create(&concrete_python, &minor_python)?;
+    }
     #[cfg(unix)]
-    std::os::unix::fs::symlink(&concrete_python, &minor_python)?;
+    if !minor_python.exists() {
+        std::os::unix::fs::symlink(&concrete_python, &minor_python)?;
+    }
     #[cfg(unix)]
     {
         let library = environment.join("lib");

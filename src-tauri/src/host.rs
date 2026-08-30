@@ -279,6 +279,29 @@ impl QuantixHost {
         &self.inner.application_home
     }
 
+    pub fn inspect_worker_runtime(&self) -> crate::managed_runtime::ManagedWorkerRuntimeStatus {
+        crate::managed_runtime::inspect_managed_worker_runtime(
+            &self.inner.application_home,
+            self.runtime_layout(),
+        )
+    }
+
+    pub async fn prepare_worker_runtime(
+        &self,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<
+        crate::managed_runtime::ManagedWorkerRuntimeStatus,
+        crate::managed_runtime::ManagedRuntimeError,
+    > {
+        crate::managed_runtime::prepare_managed_worker_runtime(
+            &self.inner.application_home,
+            self.runtime_layout(),
+            self.process_supervisor(),
+            cancellation,
+        )
+        .await
+    }
+
     pub(crate) fn diagnostics(&self) -> &DiagnosticsStore {
         &self.inner.diagnostics
     }
