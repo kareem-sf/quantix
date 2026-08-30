@@ -11,8 +11,8 @@ use quantix_lib::{
     ProviderReasoningSelection, PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand,
     QuantixHost, RecordEngineerWorkspaceMessageCommand, RegistrationState,
     RunBidDecisionPackageReviewCommand, RunBootstrapAgentCommand, RuntimeLayout,
-    SelectManagerWorkspaceTenderCommand, SetupPlatform, SetupState, StoragePermissions,
-    TenderAiSelectionReadiness, TenderErrorCode, TenderOfficeMessageAuthor,
+    SelectManagerWorkspaceTenderCommand, SetupPlatform, SetupState, StartupReconciliationReport,
+    StoragePermissions, TenderAiSelectionReadiness, TenderErrorCode, TenderOfficeMessageAuthor,
     TenderOfficeMessageKind, TenderRecordInspection, TenderRecordKind,
     TenderRecordVersionReference, TenderRetentionDecisionCommand, TenderRetentionState,
     TrashedTenderDecisionCommand, TrashedTenderState, UpdateAiExecutionSelectionCommand,
@@ -1830,6 +1830,70 @@ fn selection_failure_cannot_follow_a_committed_engineer_message() {
         .messages
         .len();
     assert_eq!(after, before);
+}
+
+#[test]
+fn startup_reconciliation_stays_silent_for_a_healthy_workspace() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let host = QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    host.create_tender(CreateTenderCommand {
+        name: "Healthy Startup Tender".into(),
+    })
+    .expect("create Tender");
+
+    assert_eq!(
+        host.inspect_startup_reconciliation(),
+        StartupReconciliationReport::default()
+    );
+}
+
+#[test]
+fn startup_reconciliation_reports_the_last_startup_cleanup_once() {
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let host = QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    let tender = host
+        .create_tender(CreateTenderCommand {
+            name: "Interrupted Backup Tender".into(),
+        })
+        .expect("create Tender");
+    host.close_tender(&tender.tender_id).expect("close Tender");
+    drop(host);
+
+    assert!(!run_storage_fixture(
+        &application_home,
+        &["backup", &tender.tender_id],
+        "backup_after_verify",
+    ));
+    let staged = application_home
+        .join("staging")
+        .join("tender-22222222222222222222222222222222");
+    fs::create_dir(&staged).expect("stage interrupted Tender candidate");
+    fs::write(staged.join("partial"), b"not committed").expect("write interrupted candidate");
+
+    let restarted =
+        QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+    restarted
+        .list_tenders()
+        .expect("reconcile startup before listing");
+    let report = restarted.inspect_startup_reconciliation();
+    assert_eq!(report.removed_tender_candidates, 1);
+    assert_eq!(report.interrupted_backup_operations, 1);
+    assert_eq!(report.interrupted_recovery_operations, 0);
+    assert_eq!(report.completed_retention_operations, 0);
+    let records = restarted
+        .inspect_tender_backups(&tender.tender_id)
+        .expect("inspect closed backup");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].diagnostic_code.as_deref(), Some("interrupted"));
+
+    restarted
+        .list_tenders()
+        .expect("list again after reconciliation");
+    assert_eq!(restarted.inspect_startup_reconciliation(), report);
 }
 
 fn install_codex_fixture(resources: &Path, scenario: &str) -> std::path::PathBuf {

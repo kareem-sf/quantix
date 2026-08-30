@@ -167,6 +167,7 @@ import type { SelectManagerWorkspaceTenderCommand } from "./bindings/SelectManag
 import type { SetupOutcome } from "./bindings/SetupOutcome";
 import type { SourceRelationshipKind } from "./bindings/SourceRelationshipKind";
 import type { StartManagerTenderCommand } from "./bindings/StartManagerTenderCommand";
+import type { StartupReconciliationReport } from "./bindings/StartupReconciliationReport";
 import type { TenderSummary } from "./bindings/TenderSummary";
 import type { TenderCatalogueEntry } from "./bindings/TenderCatalogueEntry";
 import type { TenderBackupRecord } from "./bindings/TenderBackupRecord";
@@ -535,6 +536,10 @@ export function inspectTenderIntegrity(
 ): Promise<TenderIntegrityReport> {
   const command: OpenTenderCommand = { tender_id: tenderId };
   return invoke<TenderIntegrityReport>("inspect_tender_integrity", { command });
+}
+
+export function inspectStartupReconciliation(): Promise<StartupReconciliationReport> {
+  return invoke<StartupReconciliationReport>("inspect_startup_reconciliation");
 }
 
 export function createTenderBackup(

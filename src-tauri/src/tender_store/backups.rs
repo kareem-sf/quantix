@@ -3178,7 +3178,7 @@ impl QuantixHost {
         }
     }
 
-    pub(crate) fn reconcile_trash_records(&self) -> Result<(), TenderCommandError> {
+    pub(crate) fn reconcile_trash_records(&self) -> Result<u32, TenderCommandError> {
         let records = {
             let _guard = self
                 .catalogue_lock()
@@ -3210,6 +3210,7 @@ impl QuantixHost {
             }
             records
         };
+        let completed_retention_operations = records.len() as u32;
         for mut record in records {
             let live = self
                 .application_home()
@@ -3285,7 +3286,7 @@ impl QuantixHost {
             }
             self.update_trash_record(&record, expected)?;
         }
-        Ok(())
+        Ok(completed_retention_operations)
     }
 }
 
@@ -3310,7 +3311,7 @@ fn permanent_provider_cleanup_target(
 
 pub(crate) fn reconcile_interrupted_backup_operations(
     application_home: &Path,
-) -> Result<(), TenderCommandError> {
+) -> Result<(u32, u32), TenderCommandError> {
     let connection =
         Connection::open(application_home.join("installation.sqlite")).map_err(sql_error)?;
     let interrupted_backups = {
@@ -3324,8 +3325,8 @@ pub(crate) fn reconcile_interrupted_backup_operations(
             .map_err(sql_error)?;
         rows
     };
-    for backup_id in interrupted_backups {
-        if !valid_identifier(&backup_id) {
+    for backup_id in &interrupted_backups {
+        if !valid_identifier(backup_id) {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
         remove_operation_staging(
@@ -3343,8 +3344,8 @@ pub(crate) fn reconcile_interrupted_backup_operations(
         if connection
             .execute(
                 "UPDATE tender_backups SET state = 'failed', diagnostic_code = 'interrupted'
-                 WHERE backup_id = ?1 AND state = 'creating'",
-                [&backup_id],
+                     WHERE backup_id = ?1 AND state = 'creating'",
+                [backup_id],
             )
             .map_err(sql_error)?
             != 1
@@ -3352,6 +3353,7 @@ pub(crate) fn reconcile_interrupted_backup_operations(
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
         }
     }
+    let interrupted_backup_operations = interrupted_backups.len() as u32;
 
     let interrupted_recoveries = {
         let mut statement = connection
@@ -3375,6 +3377,7 @@ pub(crate) fn reconcile_interrupted_backup_operations(
             .map_err(sql_error)?;
         rows
     };
+    let interrupted_recovery_operations = interrupted_recoveries.len() as u32;
     for (recovery_id, tender_id, backup_id, state, backup_source_json) in interrupted_recoveries {
         if !valid_identifier(&recovery_id) || !valid_identifier(&tender_id) {
             return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
@@ -3477,7 +3480,10 @@ pub(crate) fn reconcile_interrupted_backup_operations(
             &staging_parent.join(format!("recovery-{recovery_id}")),
         )?;
     }
-    Ok(())
+    Ok((
+        interrupted_backup_operations,
+        interrupted_recovery_operations,
+    ))
 }
 
 fn copy_file_verified(

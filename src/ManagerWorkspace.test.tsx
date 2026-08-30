@@ -30,6 +30,8 @@ const host = vi.hoisted(() => ({
   composeTenderOffice: vi.fn(),
   inspectCurrentWorkPlan: vi.fn(),
   inspectTenderProduction: vi.fn(),
+  createTenderBackup: vi.fn(),
+  inspectStartupReconciliation: vi.fn(),
   reviseWorkPlanProposal: vi.fn(),
   decideWorkPlanProposal: vi.fn(),
   activateTenderProduction: vi.fn(),
@@ -368,6 +370,12 @@ beforeEach(() => {
   });
   host.cancelPackageIntake.mockResolvedValue(true);
   host.ensureQuantixSetup.mockResolvedValue({ state: "ready", warnings: [] });
+  host.inspectStartupReconciliation.mockResolvedValue({
+    removed_tender_candidates: 0,
+    interrupted_backup_operations: 0,
+    interrupted_recovery_operations: 0,
+    completed_retention_operations: 0,
+  });
   host.inspectTrashedTenders.mockResolvedValue([]);
   host.inspectDeletionReceipts.mockResolvedValue([]);
   host.inspectRuntimeReadiness.mockResolvedValue({
@@ -913,6 +921,129 @@ describe("ManagerWorkspace", () => {
         name: `Open recovery center for ${recoveryTender.name}`,
       }),
     ).toBeTruthy();
+  });
+
+  it("creates a verified backup from the Tender menu and shows where to inspect it", async () => {
+    const backup = {
+      backup_id: "b".repeat(32),
+      tender_id: tenderId,
+      state: "ready" as const,
+      source: null,
+      content_object_count: 1n,
+      manifest_sha256: "a".repeat(64),
+      archive_size_bytes: 2n,
+      diagnostic_code: null,
+      created_at: "2026-08-30T09:30:00Z",
+    };
+    host.inspectManagerWorkspace.mockResolvedValue(projection);
+    host.createTenderBackup.mockResolvedValue(backup);
+    host.inspectTenderIntegrity.mockResolvedValue({
+      tender_id: tenderId,
+      state: "ready",
+      issues: [],
+      recovery_choices: [],
+    });
+    host.inspectTenderBackups.mockResolvedValue([backup]);
+    host.inspectTenderRecoveries.mockResolvedValue([]);
+
+    render(<ManagerWorkspace />);
+    await screen.findByRole("heading", { name: "West Campus MEP" });
+    fireEvent.click(screen.getByLabelText("Manage West Campus MEP"));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: /Create verified backup/ }),
+    );
+    await waitFor(() => {
+      expect(host.createTenderBackup).toHaveBeenCalledWith(tenderId);
+    });
+    expect(
+      await screen.findByText(
+        `Verified backup created at ${new Date(backup.created_at).toLocaleString()}. Find it under Inspect backups.`,
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("Manage West Campus MEP"));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: /Inspect backups/ }),
+    );
+    expect(
+      await screen.findByRole("heading", {
+        name: "Backups for West Campus MEP",
+      }),
+    ).toBeTruthy();
+    expect(screen.getByText("Verified and ready")).toBeTruthy();
+    expect(screen.getByText(/content objects/)).toBeTruthy();
+  });
+
+  it("keeps backup actions out of a recovery-required Tender menu", async () => {
+    const recoveryTender = {
+      ...projection.catalogue[0],
+      name: "Broken Tender",
+      state: "recovery_required" as const,
+      can_archive: false,
+      can_delete: true,
+    };
+    host.inspectManagerWorkspace.mockResolvedValue({
+      ...projection,
+      catalogue: [recoveryTender],
+      selected_tender: null,
+      conversation: null,
+    } as ManagerWorkspaceProjection);
+
+    render(<ManagerWorkspace />);
+    const recoveryButton = await screen.findByRole("button", {
+      name: `Open recovery center for ${recoveryTender.name}`,
+    });
+    fireEvent.keyDown(
+      recoveryButton.closest(".manager-workspace__tender-row")!,
+      { key: "F10", shiftKey: true },
+    );
+    expect(
+      await screen.findByRole("menuitem", { name: /Inspect recovery/ }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("menuitem", { name: /Create verified backup/ }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: /Inspect backups/ }),
+    ).toBeNull();
+  });
+
+  it("surfaces one plain startup cleanup line when the Host finished interrupted work", async () => {
+    host.inspectManagerWorkspace.mockResolvedValue(projection);
+    host.inspectStartupReconciliation.mockResolvedValue({
+      removed_tender_candidates: 1,
+      interrupted_backup_operations: 1,
+      interrupted_recovery_operations: 0,
+      completed_retention_operations: 2,
+    });
+
+    render(<ManagerWorkspace />);
+    const notice = await screen.findByRole("status", {
+      name: "Startup cleanup",
+    });
+    expect(notice.textContent).toContain(
+      "One unfinished Tender registration was cleaned up during startup.",
+    );
+    expect(notice.textContent).toContain(
+      "An interrupted backup was safely closed.",
+    );
+    expect(notice.textContent).toContain(
+      "2 interrupted Archived & Trash changes were finished safely.",
+    );
+    expect(within(notice).getByText(/Technical details/)).toBeTruthy();
+  });
+
+  it("stays silent about startup cleanup when the Host reported nothing", async () => {
+    host.inspectManagerWorkspace.mockResolvedValue(projection);
+
+    render(<ManagerWorkspace />);
+    await screen.findByRole("heading", { name: "West Campus MEP" });
+    await waitFor(() => {
+      expect(host.inspectStartupReconciliation).toHaveBeenCalled();
+    });
+    expect(
+      screen.queryByRole("status", { name: "Startup cleanup" }),
+    ).toBeNull();
   });
 
   it("approves a prepared recovery with rationale before opening the repaired Tender", async () => {

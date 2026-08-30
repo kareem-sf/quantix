@@ -501,16 +501,16 @@ mod tauri_commands {
         SearchEvidenceCommand, SearchEvidenceSemanticCommand, SearchManagerWorkspaceCommand,
         SelectManagerWorkspaceTenderCommand, SelectPricingScenarioCommand, SetupOutcome,
         SetupState, StartChatGptDeviceLoginResult, StartChatGptLoginError, StartChatGptLoginResult,
-        StartManagerTenderCommand, StartupSplashPreferences, StartupSplashState,
-        SubmissionArtifactContent, SubmissionItemContent, SubmissionPackageVersion,
-        SubmissionReleaseInspection, SubmissionSectionReviewRunResult, TenderBackupRecord,
-        TenderCatalogueEntry, TenderCommandError, TenderErrorCode, TenderIntegrityReport,
-        TenderPackageImportResult, TenderPackageSourceKind, TenderProductionInspection,
-        TenderQuery, TenderQueryPage, TenderRecordAuthority, TenderRecordDecisionResult,
-        TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult,
-        TenderRecoveryRecord, TenderRetentionDecisionCommand, TenderRetentionDecisionRecord,
-        TenderSummary, TrashRecoveryRequiredTenderCommand, TrashedTenderDecisionCommand,
-        TrashedTenderRecord, UpdateAiExecutionSelectionCommand,
+        StartManagerTenderCommand, StartupReconciliationReport, StartupSplashPreferences,
+        StartupSplashState, SubmissionArtifactContent, SubmissionItemContent,
+        SubmissionPackageVersion, SubmissionReleaseInspection, SubmissionSectionReviewRunResult,
+        TenderBackupRecord, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
+        TenderIntegrityReport, TenderPackageImportResult, TenderPackageSourceKind,
+        TenderProductionInspection, TenderQuery, TenderQueryPage, TenderRecordAuthority,
+        TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordPage,
+        TenderRecordReviewResult, TenderRecoveryRecord, TenderRetentionDecisionCommand,
+        TenderRetentionDecisionRecord, TenderSummary, TrashRecoveryRequiredTenderCommand,
+        TrashedTenderDecisionCommand, TrashedTenderRecord, UpdateAiExecutionSelectionCommand,
         UpdateGeneralApplicationPreferencesCommand, UpdateTenderAiExecutionSelectionCommand,
         WorkPlanProposalInspection, WorkspaceSearchProjection,
     };
@@ -1734,6 +1734,18 @@ mod tauri_commands {
     ) -> Result<Vec<TrashedTenderRecord>, TenderCommandError> {
         let host = host.inner().clone();
         tauri::async_runtime::spawn_blocking(move || host.inspect_trashed_tenders())
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_startup_reconciliation(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<StartupReconciliationReport, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || Ok(host.inspect_startup_reconciliation()))
             .await
             .map_err(|_| TenderCommandError {
                 code: TenderErrorCode::StoreUnavailable,
@@ -3396,6 +3408,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::trash_tender,
             tauri_commands::trash_recovery_required_tender,
             tauri_commands::inspect_trashed_tenders,
+            tauri_commands::inspect_startup_reconciliation,
             tauri_commands::restore_trashed_tender,
             tauri_commands::purge_trashed_tender,
             tauri_commands::purge_recovery_required_tender,

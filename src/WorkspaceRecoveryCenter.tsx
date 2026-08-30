@@ -18,6 +18,7 @@ import "./WorkspaceRecoveryCenter.css";
 interface WorkspaceRecoveryCenterProps {
   tenderId: string;
   tenderName: string;
+  variant?: "recovery" | "backups";
   onClose: () => void;
   onRecovered: () => void | Promise<void>;
   onMoveToTrash: (rationale: string) => void | Promise<void>;
@@ -140,6 +141,7 @@ function errorMessage(error: unknown): string {
 export function WorkspaceRecoveryCenter({
   tenderId,
   tenderName,
+  variant = "recovery",
   onClose,
   onRecovered,
   onMoveToTrash,
@@ -147,6 +149,7 @@ export function WorkspaceRecoveryCenter({
   requestedAction,
   onRequestedActionHandled,
 }: WorkspaceRecoveryCenterProps) {
+  const forBackups = variant === "backups";
   const titleId = useId();
   const mounted = useRef(true);
   const [snapshot, setSnapshot] = useState<RecoverySnapshot>();
@@ -281,19 +284,23 @@ export function WorkspaceRecoveryCenter({
     >
       <header className="workspace-recovery__header">
         <div>
-          <p className="workspace-recovery__eyebrow">Tender recovery</p>
-          <h2 id={titleId}>Recover {tenderName}</h2>
+          <p className="workspace-recovery__eyebrow">
+            {forBackups ? "Tender backups" : "Tender recovery"}
+          </p>
+          <h2 id={titleId}>
+            {forBackups ? `Backups for ${tenderName}` : `Recover ${tenderName}`}
+          </h2>
           <p className="workspace-recovery__subtitle">
-            This Tender is isolated until its records and provenance can be
-            verified. Recovery never changes the current store without your
-            explicit Engineer decision.
+            {forBackups
+              ? "Quantix verifies every backup before listing it here. Nothing changes the current Tender without your explicit Engineer decision."
+              : "This Tender is isolated until its records and provenance can be verified. Recovery never changes the current store without your explicit Engineer decision."}
           </p>
         </div>
         <button
           className="workspace-recovery__close"
           type="button"
           onClick={onClose}
-          aria-label="Close recovery"
+          aria-label={forBackups ? "Close backups" : "Close recovery"}
         >
           ×
         </button>

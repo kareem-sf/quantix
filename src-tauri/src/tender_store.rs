@@ -4127,6 +4127,9 @@ pub struct TenderIntegrityReport {
 #[ts(export)]
 pub struct StartupReconciliationReport {
     pub removed_tender_candidates: u32,
+    pub interrupted_backup_operations: u32,
+    pub interrupted_recovery_operations: u32,
+    pub completed_retention_operations: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

@@ -511,10 +511,11 @@ impl QuantixHost {
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
         if !*reconciled {
-            crate::tender_store::backups::reconcile_interrupted_backup_operations(
-                &self.inner.application_home,
-            )?;
-            self.reconcile_trash_records()?;
+            let (interrupted_backup_operations, interrupted_recovery_operations) =
+                crate::tender_store::backups::reconcile_interrupted_backup_operations(
+                    &self.inner.application_home,
+                )?;
+            let completed_retention_operations = self.reconcile_trash_records()?;
             let removed_tender_candidates =
                 crate::tender_store::reconcile_application_staging(&self.inner.application_home)?;
             *self
@@ -524,6 +525,9 @@ impl QuantixHost {
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))? =
                 StartupReconciliationReport {
                     removed_tender_candidates,
+                    interrupted_backup_operations,
+                    interrupted_recovery_operations,
+                    completed_retention_operations,
                 };
             *reconciled = true;
         }

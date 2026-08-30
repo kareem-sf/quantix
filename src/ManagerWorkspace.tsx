@@ -3,8 +3,10 @@ import {
   Bot,
   ChevronRight,
   CircleAlert,
+  DatabaseBackup,
   FileText,
   Folder,
+  Info,
   ListChecks,
   LoaderCircle,
   MessageSquare,
@@ -17,6 +19,7 @@ import {
   Send,
   Settings,
   ShieldAlert,
+  ShieldCheck,
   Trash2,
   Undo2,
   Users,
@@ -37,6 +40,7 @@ import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProj
 import type { ManagerWorkspaceTender } from "./bindings/ManagerWorkspaceTender";
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
 import type { DeletionReceipt } from "./bindings/DeletionReceipt";
+import type { StartupReconciliationReport } from "./bindings/StartupReconciliationReport";
 import type { TrashedTenderRecord } from "./bindings/TrashedTenderRecord";
 import type { GeneralApplicationPreferences } from "./bindings/GeneralApplicationPreferences";
 import type { RuntimePreparationProgress } from "./bindings/RuntimePreparationProgress";
@@ -73,6 +77,7 @@ import {
   archiveTender,
   cancelRuntimePreparation,
   chooseAndImportTenderPackage,
+  createTenderBackup,
   ensureQuantixSetup,
   inspectManagerWorkspace,
   inspectDeletionReceipts,
@@ -82,6 +87,7 @@ import {
   inspectRuntimeReadiness,
   inspectPackageIntakeProgress,
   cancelPackageIntake,
+  inspectStartupReconciliation,
   inspectTrashedTenders,
   rebindManagerIntakeProvider,
   recordEngineerWorkspaceMessage,
@@ -131,6 +137,7 @@ type WorkspaceOperationKind =
   | "retry_intake"
   | "rebind_intake"
   | "rename_tender"
+  | "create_backup"
   | "retention"
   | "trash";
 
@@ -218,6 +225,58 @@ function setupWarningCopy(issue: SetupIssue): string {
     return "Quantix could not verify that Application Home is private to this device user.";
   }
   return "Review the local workspace security warning before adding confidential Tender material.";
+}
+
+function startupReconciliationNotice(
+  report: StartupReconciliationReport,
+): { summary: string; details: string } | null {
+  const sentences: string[] = [];
+  const {
+    removed_tender_candidates,
+    interrupted_backup_operations,
+    interrupted_recovery_operations,
+    completed_retention_operations,
+  } = report;
+  if (removed_tender_candidates === 1) {
+    sentences.push(
+      "One unfinished Tender registration was cleaned up during startup.",
+    );
+  } else if (removed_tender_candidates > 1) {
+    sentences.push(
+      `${removed_tender_candidates} unfinished Tender registrations were cleaned up during startup.`,
+    );
+  }
+  if (interrupted_backup_operations === 1) {
+    sentences.push("An interrupted backup was safely closed.");
+  } else if (interrupted_backup_operations > 1) {
+    sentences.push(
+      `${interrupted_backup_operations} interrupted backups were safely closed.`,
+    );
+  }
+  if (interrupted_recovery_operations === 1) {
+    sentences.push("An interrupted recovery was safely closed.");
+  } else if (interrupted_recovery_operations > 1) {
+    sentences.push(
+      `${interrupted_recovery_operations} interrupted recoveries were safely closed.`,
+    );
+  }
+  if (completed_retention_operations === 1) {
+    sentences.push(
+      "An interrupted Archived & Trash change was finished safely.",
+    );
+  } else if (completed_retention_operations > 1) {
+    sentences.push(
+      `${completed_retention_operations} interrupted Archived & Trash changes were finished safely.`,
+    );
+  }
+  if (sentences.length === 0) return null;
+  const details = [
+    `Unfinished Tender registrations removed: ${removed_tender_candidates}`,
+    `Interrupted backups closed: ${interrupted_backup_operations}`,
+    `Interrupted recoveries closed: ${interrupted_recovery_operations}`,
+    `Archived & Trash changes finished: ${completed_retention_operations}`,
+  ].join(" · ");
+  return { summary: sentences.join(" "), details };
 }
 
 function formatRuntimeBytes(bytes: number | bigint) {
@@ -315,6 +374,8 @@ function TenderButton({
   selected,
   busy,
   onSelect,
+  onCreateBackup,
+  onInspectBackups,
   onRename,
   onArchive,
   onTrash,
@@ -324,6 +385,8 @@ function TenderButton({
   selected: boolean;
   busy: boolean;
   onSelect: () => void;
+  onCreateBackup: () => void;
+  onInspectBackups: () => void;
   onRename: () => void;
   onArchive: () => void;
   onTrash: () => void;
@@ -400,7 +463,23 @@ function TenderButton({
                     "Review the integrity finding and verified recovery options.",
                 },
               ]
-            : []),
+            : [
+                {
+                  id: "create_backup",
+                  label: "Create verified backup",
+                  icon: <DatabaseBackup size={15} aria-hidden="true" />,
+                  disabled: busy,
+                  description: "Verify this Tender and save a restorable copy.",
+                },
+                {
+                  id: "inspect_backups",
+                  label: "Inspect backups",
+                  icon: <ShieldCheck size={15} aria-hidden="true" />,
+                  disabled: busy,
+                  description:
+                    "Review verified backups and recovery candidates.",
+                },
+              ]),
           {
             id: "rename",
             label: "Rename",
@@ -445,6 +524,8 @@ function TenderButton({
         onAction={(action) => {
           setMenuOpen(false);
           if (action === "recovery") onSelect();
+          else if (action === "create_backup") onCreateBackup();
+          else if (action === "inspect_backups") onInspectBackups();
           else if (action === "rename") onRename();
           else if (action === "archive") onArchive();
           else if (action === "trash") onTrash();
@@ -2052,6 +2133,12 @@ export function ManagerWorkspace({
   const [packageTask, setPackageTask] = useState<PackageTaskState | null>(null);
   const [operationFailure, setOperationFailure] =
     useState<WorkspaceOperationFailure | null>(null);
+  const [backupConfirmation, setBackupConfirmation] = useState<string | null>(
+    null,
+  );
+  const [startupReconciliation, setStartupReconciliation] =
+    useState<StartupReconciliationReport | null>(null);
+  const startupReconciliationFetched = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const refreshRunning = useRef(false);
   const settingsSnapshotRequestVersion = useRef(0);
@@ -2171,6 +2258,20 @@ export function ManagerWorkspace({
       if (epoch === projectionEpoch.current) setError(readableError(reason));
     }
   }, []);
+
+  useEffect(() => {
+    if (!projection || startupReconciliationFetched.current) return;
+    startupReconciliationFetched.current = true;
+    let disposed = false;
+    void inspectStartupReconciliation()
+      .then((report) => {
+        if (!disposed) setStartupReconciliation(report);
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, [projection]);
 
   const acceptRuntimeReadiness = useCallback((readiness: RuntimeReadiness) => {
     const runtimeProbePending =
@@ -3022,6 +3123,29 @@ export function ManagerWorkspace({
     if (succeeded) await load();
   }, [load, projection?.selected_tender?.tender_id, run]);
 
+  const createBackup = useCallback(
+    async (tender: ManagerWorkspaceTender) => {
+      setBackupConfirmation(null);
+      const record = await run(
+        () => createTenderBackup(tender.tender_id),
+        { kind: "create_backup", label: "Creating verified backup" },
+        async () => load(),
+      );
+      if (record) setBackupConfirmation(record.created_at);
+    },
+    [load, run],
+  );
+
+  const inspectBackups = useCallback((tender: ManagerWorkspaceTender) => {
+    setBackupConfirmation(null);
+    setRecoveryRequestedAction(null);
+    setRecoveryTarget(tender);
+    setSettingsOpen(false);
+    setRetentionOpen(false);
+    setContextOpen(false);
+    if (mediaQueryMatches("(max-width: 819px)")) setSidebarOpen(false);
+  }, []);
+
   const applyRetentionAction = useCallback(async () => {
     const tenderId = retentionAction?.tender.tender_id;
     const action = retentionAction?.kind;
@@ -3233,6 +3357,13 @@ export function ManagerWorkspace({
     projection?.catalogue.filter((tender) => tender.state === "archived") ?? [];
   const visibleTrash = trashedTenders.filter(
     (record) => !["restored", "purged"].includes(record.state),
+  );
+  const reconciliationNotice = useMemo(
+    () =>
+      startupReconciliation
+        ? startupReconciliationNotice(startupReconciliation)
+        : null,
+    [startupReconciliation],
   );
   const activeCounts = useMemo(() => {
     if (!projection) return 0;
@@ -3599,6 +3730,8 @@ export function ManagerWorkspace({
                       }
                       busy={isBusy}
                       onSelect={() => void selectTender(tender.tender_id)}
+                      onCreateBackup={() => void createBackup(tender)}
+                      onInspectBackups={() => inspectBackups(tender)}
                       onRename={() => {
                         setRenameTarget(tender);
                         setRenameValue(tender.name);
@@ -3672,6 +3805,22 @@ export function ManagerWorkspace({
                 </button>
               </aside>
             ) : null}
+            {reconciliationNotice ? (
+              <aside
+                className="manager-workspace__warning"
+                role="status"
+                aria-label="Startup cleanup"
+              >
+                <Info size={18} aria-hidden="true" />
+                <div>
+                  <span>{reconciliationNotice.summary}</span>
+                  <details>
+                    <summary>Technical details</summary>
+                    <small>{reconciliationNotice.details}</small>
+                  </details>
+                </div>
+              </aside>
+            ) : null}
             {error ? (
               <div className="manager-workspace__error" role="alert">
                 <CircleAlert size={18} aria-hidden="true" />
@@ -3711,6 +3860,14 @@ export function ManagerWorkspace({
                 role="status"
               >
                 {operation.label}…
+              </div>
+            ) : null}
+            {!operation && backupConfirmation ? (
+              <div
+                className="manager-workspace__operation-feedback"
+                role="status"
+              >
+                {`Verified backup created at ${new Date(backupConfirmation).toLocaleString()}. Find it under Inspect backups.`}
               </div>
             ) : null}
 
@@ -3755,6 +3912,11 @@ export function ManagerWorkspace({
                 <WorkspaceRecoveryCenter
                   tenderId={recoveryTarget.tender_id}
                   tenderName={recoveryTarget.name}
+                  variant={
+                    recoveryTarget.state === "recovery_required"
+                      ? "recovery"
+                      : "backups"
+                  }
                   requestedAction={recoveryRequestedAction}
                   onRequestedActionHandled={() =>
                     setRecoveryRequestedAction(null)
