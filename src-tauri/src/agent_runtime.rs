@@ -3729,15 +3729,32 @@ fn deterministic_provider_execution(
                 .expect("static deterministic provider result is canonical JSON"),
             ),
         },
-        DeterministicProviderOutcome::Failed => failed_execution(
-            ProviderFailure::new(
-                ProviderFailureCategory::ProcessFailed,
-                true,
-                "Retry only after the deterministic provider failure is reviewed.",
-                Some("The deterministic adapter injected an invalid provider outcome."),
+        DeterministicProviderOutcome::Failed => ProviderExecution {
+            state: AgentRunState::Failed,
+            transport_disposition: ProviderTransportDisposition::Completed,
+            candidate_disposition: CandidateDisposition::rejected(vec!["schema_rejection".into()]),
+            provider_thread_ref: Some(
+                prepared
+                    .provider_thread_ref
+                    .clone()
+                    .unwrap_or_else(|| format!("acceptance-thread-{}", prepared.run_id)),
             ),
-            Instant::now(),
-        ),
+            provider_turn_ref: Some(format!("acceptance-turn-{}", prepared.run_id)),
+            events: Vec::new(),
+            usage: ProviderUsage {
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                elapsed_milliseconds: Some(0),
+                ..ProviderUsage::default()
+            },
+            failure: Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                true,
+                "Create a linked retry after reviewing the output-contract failure.",
+                Some("The deterministic adapter injected an invalid provider outcome."),
+            )),
+            candidate_payload_json: None,
+        },
         #[cfg(any(test, feature = "runtime-fixture"))]
         DeterministicProviderOutcome::RateLimited => failed_execution(
             ProviderFailure::new(
@@ -4429,7 +4446,7 @@ mod tests {
         assert_eq!(failed.provider_selection, expected_selection);
         assert_eq!(
             failed.failure.as_ref().map(|failure| failure.category),
-            Some(ProviderFailureCategory::ProcessFailed)
+            Some(ProviderFailureCategory::OutputInvalid)
         );
         assert_eq!(
             failed
@@ -4437,11 +4454,16 @@ mod tests {
                 .iter()
                 .map(|event| event.kind)
                 .collect::<Vec<_>>(),
-            vec![ProviderEventKind::RunStarted, ProviderEventKind::Terminal]
+            vec![
+                ProviderEventKind::RunStarted,
+                ProviderEventKind::ThreadEstablished,
+                ProviderEventKind::CandidateRejected,
+                ProviderEventKind::Terminal
+            ]
         );
         assert_eq!(
             failed.events.last().map(|event| event.summary.as_str()),
-            Some("Provider transport failed")
+            Some("Agent Run rejected after candidate validation")
         );
 
         let interrupted = host
