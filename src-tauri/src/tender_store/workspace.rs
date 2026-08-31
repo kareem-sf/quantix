@@ -194,7 +194,35 @@ pub enum WorkspaceActionKind {
     ReviewChange,
     ReviewSubmissionPackage,
     ReviewFinalPackage,
+    DraftExternalRfi,
+    ReviewExternalRfi,
+    InterpretExternalRfiResponse,
     TenderDeclined,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum WorkspaceExternalRfiStatus {
+    AwaitingReview,
+    ReviewFailed,
+    AwaitingApproval,
+    ApprovedForIssue,
+    ResponseAwaitingInterpretation,
+    QueryBasisStale,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceExternalRfiSummary {
+    pub rfi_id: String,
+    pub version: u32,
+    pub status: WorkspaceExternalRfiStatus,
+    pub question_count: u32,
+    pub response_count: u32,
+    pub approval_pending: bool,
+    pub export_pending: bool,
+    pub interpretation_pending: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -375,6 +403,7 @@ pub struct ManagerWorkspaceProjection {
     pub work: WorkspaceWorkSummary,
     pub files: WorkspaceFilesSummary,
     pub team: WorkspaceTeamSummary,
+    pub external_rfis: Vec<WorkspaceExternalRfiSummary>,
     pub intake: Option<ManagerIntakeStatus>,
     pub ai_execution: Option<TenderAiExecutionBinding>,
     pub capability_readiness: Option<WorkspaceCapabilityReadiness>,
@@ -519,6 +548,7 @@ struct WorkspaceSnapshot {
     work: WorkspaceWorkSummary,
     files: WorkspaceFilesSummary,
     team: WorkspaceTeamSummary,
+    external_rfis: Vec<WorkspaceExternalRfiSummary>,
     intake: Option<ManagerIntakeStatus>,
     ai_execution: TenderAiExecutionBinding,
     capability_readiness: WorkspaceCapabilityReadiness,
@@ -544,8 +574,13 @@ impl TenderStore {
         let ai_execution = self.inspect_tender_ai_execution_binding()?;
         let capability_readiness = self.workspace_capability_readiness()?;
         let doctor_blockers = workspace_doctor_blockers(&ai_execution, &capability_readiness);
-        let current_action =
-            self.workspace_current_action(summary.lifecycle_phase, &work, intake.as_ref())?;
+        let external_rfis = self.workspace_external_rfi_summaries()?;
+        let current_action = self.workspace_current_action(
+            summary.lifecycle_phase,
+            &work,
+            intake.as_ref(),
+            &external_rfis,
+        )?;
         let safe_terminal_boundary = self.retention_boundary_is_safe()?;
         let tender = ManagerWorkspaceTender {
             tender_id: summary.tender_id,
@@ -569,6 +604,7 @@ impl TenderStore {
             work,
             files,
             team,
+            external_rfis,
             intake,
             ai_execution,
             capability_readiness,
@@ -1350,7 +1386,11 @@ impl TenderStore {
         phase: TenderLifecyclePhase,
         work: &WorkspaceWorkSummary,
         intake: Option<&ManagerIntakeStatus>,
+        external_rfis: &[WorkspaceExternalRfiSummary],
     ) -> Result<WorkspaceCurrentAction, TenderCommandError> {
+        if let Some(action) = self.workspace_external_rfi_action(external_rfis)? {
+            return Ok(action);
+        }
         let action = match phase {
             TenderLifecyclePhase::Intake => {
                 if let Some(intake) = intake {
@@ -1554,6 +1594,203 @@ impl TenderStore {
             ),
         };
         Ok(action)
+    }
+
+    fn workspace_external_rfi_summaries(
+        &self,
+    ) -> Result<Vec<WorkspaceExternalRfiSummary>, TenderCommandError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT heads.rfi_id,
+                       heads.current_version,
+                       json_array_length(versions.questions_json),
+                       versions.query_refs_json,
+                       (
+                         SELECT COUNT(*) FROM external_rfi_responses AS responses
+                         WHERE responses.rfi_id = heads.rfi_id
+                           AND responses.rfi_version = heads.current_version
+                       ),
+                       (
+                         SELECT COUNT(*) FROM external_rfi_responses AS responses
+                         WHERE responses.rfi_id = heads.rfi_id
+                           AND responses.rfi_version = heads.current_version
+                           AND (
+                             SELECT json_array_length(issued.query_refs_json)
+                             FROM external_rfi_versions AS issued
+                             WHERE issued.rfi_id = responses.rfi_id
+                               AND issued.version = responses.rfi_version
+                           ) >
+                           (
+                             SELECT COUNT(*)
+                             FROM external_rfi_response_interpretations AS interpretations
+                             WHERE interpretations.response_link_id = responses.response_link_id
+                           )
+                       ),
+                       (
+                         SELECT COUNT(*) FROM external_rfi_approvals AS approvals
+                         WHERE approvals.rfi_id = heads.rfi_id
+                           AND approvals.rfi_version = heads.current_version
+                       ),
+                       (
+                         SELECT reviews.outcome FROM external_rfi_reviews AS reviews
+                         WHERE reviews.rfi_id = heads.rfi_id
+                           AND reviews.rfi_version = heads.current_version
+                       ),
+                       (
+                         SELECT COUNT(*)
+                         FROM external_rfi_approvals AS approvals
+                         JOIN external_rfi_exports AS exports
+                           ON exports.approval_id = approvals.approval_id
+                         WHERE approvals.rfi_id = heads.rfi_id
+                           AND approvals.rfi_version = heads.current_version
+                       )
+                FROM external_rfi_heads AS heads
+                JOIN external_rfi_versions AS versions
+                  ON versions.rfi_id = heads.rfi_id
+                 AND versions.version = heads.current_version
+                ORDER BY versions.created_at DESC, heads.rfi_id",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, i64>(8)?,
+                ))
+            })
+            .map_err(sql_error)?;
+        let mut summaries = Vec::new();
+        for row in rows {
+            let (
+                rfi_id,
+                version,
+                question_count,
+                query_refs_json,
+                response_count,
+                uninterpreted_response_count,
+                approval_count,
+                review_outcome,
+                export_count,
+            ) = row.map_err(sql_error)?;
+            let query_refs: Vec<super::external_rfis::ExternalRfiQueryReference> =
+                serde_json::from_str(&query_refs_json)
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            let evidence_current = super::external_rfis::external_rfi_query_refs_are_current(
+                &self.connection,
+                &query_refs,
+            )?;
+            let status = if !evidence_current {
+                WorkspaceExternalRfiStatus::QueryBasisStale
+            } else if uninterpreted_response_count > 0 {
+                WorkspaceExternalRfiStatus::ResponseAwaitingInterpretation
+            } else if approval_count > 0 {
+                WorkspaceExternalRfiStatus::ApprovedForIssue
+            } else if review_outcome.as_deref() == Some("passed") {
+                WorkspaceExternalRfiStatus::AwaitingApproval
+            } else if review_outcome.as_deref() == Some("failed") {
+                WorkspaceExternalRfiStatus::ReviewFailed
+            } else {
+                WorkspaceExternalRfiStatus::AwaitingReview
+            };
+            let approved_for_issue = evidence_current
+                && approval_count > 0
+                && review_outcome.as_deref() == Some("passed");
+            summaries.push(WorkspaceExternalRfiSummary {
+                rfi_id,
+                version,
+                status,
+                question_count: to_u32(question_count)?,
+                response_count: to_u32(response_count)?,
+                approval_pending: !approved_for_issue
+                    && evidence_current
+                    && approval_count == 0
+                    && review_outcome.as_deref() == Some("passed"),
+                export_pending: approved_for_issue && export_count == 0,
+                interpretation_pending: uninterpreted_response_count > 0,
+            });
+        }
+        Ok(summaries)
+    }
+
+    fn workspace_external_rfi_action(
+        &self,
+        summaries: &[WorkspaceExternalRfiSummary],
+    ) -> Result<Option<WorkspaceCurrentAction>, TenderCommandError> {
+        if let Some(pending) = summaries.iter().find(|summary| {
+            matches!(
+                summary.status,
+                WorkspaceExternalRfiStatus::AwaitingReview
+                    | WorkspaceExternalRfiStatus::ReviewFailed
+                    | WorkspaceExternalRfiStatus::AwaitingApproval
+            )
+        }) {
+            let (title, summary_text) = match pending.status {
+                WorkspaceExternalRfiStatus::AwaitingReview => (
+                    "Review the External RFI draft",
+                    "A controlled question to the client is drafted from exact Tender questions and evidence. It needs independent review before you approve it for issue.",
+                ),
+                WorkspaceExternalRfiStatus::ReviewFailed => (
+                    "Resolve the External RFI review findings",
+                    "The independent review found problems in the draft. Revise the draft to resolve them, then run a new review.",
+                ),
+                WorkspaceExternalRfiStatus::AwaitingApproval => (
+                    "Approve the External RFI for issue",
+                    "The independent review passed. Your approval records the exact wording before it can be exported for human issue.",
+                ),
+                _ => unreachable!("matched only the three pending review statuses"),
+            };
+            return Ok(Some(action(
+                WorkspaceActionKind::ReviewExternalRfi,
+                title,
+                summary_text,
+                "Review External RFI",
+                true,
+            )));
+        }
+        if summaries
+            .iter()
+            .any(|summary| summary.interpretation_pending)
+        {
+            return Ok(Some(action(
+                WorkspaceActionKind::InterpretExternalRfiResponse,
+                "Interpret the received response",
+                "A response to your External RFI arrived. Record one interpretation as the Manager so the answer enters the Tender record.",
+                "Interpret response",
+                true,
+            )));
+        }
+        let eligible_queries: i64 = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM tender_query_heads AS heads
+                 JOIN tender_query_treatment_decisions AS decisions
+                   ON decisions.query_id = heads.query_id
+                  AND decisions.query_version = heads.current_version
+                 WHERE decisions.treatment = 'external_rfi_drafting'
+                   AND decisions.closes_query = 0",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if eligible_queries > 0 {
+            return Ok(Some(action(
+                WorkspaceActionKind::DraftExternalRfi,
+                "Ask the client a controlled question",
+                "A Tender question is routed for a controlled External RFI. Gather the exact questions, address them to the recipient, and Quantix prepares the draft for review.",
+                "Start External RFI",
+                true,
+            )));
+        }
+        Ok(None)
     }
 }
 
@@ -2089,6 +2326,7 @@ fn projection_from_snapshot(
         work: snapshot.work,
         files: snapshot.files,
         team: snapshot.team,
+        external_rfis: snapshot.external_rfis,
         intake: snapshot.intake,
         ai_execution: Some(snapshot.ai_execution),
         capability_readiness: Some(snapshot.capability_readiness),
@@ -2283,6 +2521,7 @@ fn empty_projection(catalogue: Vec<ManagerWorkspaceTender>) -> ManagerWorkspaceP
         work: WorkspaceWorkSummary::default(),
         files: WorkspaceFilesSummary::default(),
         team: WorkspaceTeamSummary::default(),
+        external_rfis: Vec::new(),
         intake: None,
         ai_execution: None,
         capability_readiness: None,

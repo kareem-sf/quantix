@@ -70,6 +70,7 @@ import { ApplicationSettings } from "./ApplicationSettings";
 import { exactApplicationAiSelectionIsReady } from "./applicationAiSelectionReadiness";
 import { notifyAttentionRequired } from "./applicationNotifications";
 import { TenderFocusedAction } from "./TenderFocusedAction";
+import { TenderRfiReview } from "./TenderRfiReview";
 import {
   type EvidenceReviewConflict,
   type EvidenceReviewTarget,
@@ -222,6 +223,19 @@ function isFocusedActionKind(
   kind: WorkspaceCurrentAction["kind"],
 ): kind is FocusedActionKind {
   return (FOCUSED_ACTION_KINDS as readonly string[]).includes(kind);
+}
+
+const RFI_ACTION_KINDS = [
+  "draft_external_rfi",
+  "review_external_rfi",
+  "interpret_external_rfi_response",
+] as const;
+type RfiActionKind = (typeof RFI_ACTION_KINDS)[number];
+
+function isRfiActionKind(
+  kind: WorkspaceCurrentAction["kind"],
+): kind is RfiActionKind {
+  return (RFI_ACTION_KINDS as readonly string[]).includes(kind);
 }
 
 const LOADING_TITLE_BAR_MENUS: readonly WindowTitleBarMenu[] = [
@@ -961,6 +975,7 @@ function ManagerView({
   onOpenSettings,
   onOpenAction,
   onOpenFocusedAction,
+  onOpenRfiReview,
   onOpenRecordDecision,
   onOpenChangeReview,
   canDecideCitedRecords,
@@ -990,6 +1005,7 @@ function ManagerView({
   onOpenSettings: () => void;
   onOpenAction: () => void;
   onOpenFocusedAction: () => void;
+  onOpenRfiReview: () => void;
   onOpenRecordDecision: () => void;
   onOpenChangeReview: () => void;
   canDecideCitedRecords: boolean;
@@ -1099,6 +1115,11 @@ function ManagerView({
         onOpenFocusedAction();
         break;
       }
+      case "draft_external_rfi":
+      case "review_external_rfi":
+      case "interpret_external_rfi_response":
+        onOpenRfiReview();
+        break;
       case "review_change":
         onOpenChangeReview();
         break;
@@ -1125,6 +1146,7 @@ function ManagerView({
     "prepare_work_plan",
     "review_work_plan",
     "review_work",
+    ...RFI_ACTION_KINDS,
   ].includes(projection.current_action.kind);
   const intakeWorking =
     !documentToolsRequired &&
@@ -3152,6 +3174,7 @@ export function ManagerWorkspace({
   const [recordDecision, setRecordDecision] =
     useState<RecordDecisionState | null>(null);
   const [changeReviewOpen, setChangeReviewOpen] = useState(false);
+  const [rfiReviewOpen, setRfiReviewOpen] = useState(false);
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
   const [tenderViews, setTenderViews] = useState<Record<string, WorkspaceView>>(
     {},
@@ -3278,9 +3301,20 @@ export function ManagerWorkspace({
 
   useEffect(() => {
     if (
+      rfiReviewOpen &&
+      (!projection?.selected_tender ||
+        !isRfiActionKind(projection.current_action.kind))
+    ) {
+      setRfiReviewOpen(false);
+    }
+  }, [rfiReviewOpen, projection]);
+
+  useEffect(() => {
+    if (
       !evidenceReview &&
       !recordDecision &&
       !changeReviewOpen &&
+      !rfiReviewOpen &&
       !focusedTaskId
     )
       return;
@@ -3289,17 +3323,25 @@ export function ManagerWorkspace({
         if (evidenceReview) setEvidenceReview(null);
         else if (recordDecision) setRecordDecision(null);
         else if (changeReviewOpen) setChangeReviewOpen(false);
+        else if (rfiReviewOpen) setRfiReviewOpen(false);
         else setFocusedTaskId(null);
       }
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [evidenceReview, recordDecision, changeReviewOpen, focusedTaskId]);
+  }, [
+    evidenceReview,
+    recordDecision,
+    changeReviewOpen,
+    rfiReviewOpen,
+    focusedTaskId,
+  ]);
 
   useEffect(() => {
     setEvidenceReview(null);
     setRecordDecision(null);
     setChangeReviewOpen(false);
+    setRfiReviewOpen(false);
     setFocusedTaskId(null);
   }, [projection?.selected_tender?.tender_id]);
 
@@ -5278,8 +5320,22 @@ export function ManagerWorkspace({
                   ) : null}
                   <main className="manager-workspace__content">
                     {view === "manager" ? (
-                      focusedActionTenderId === selected.tender_id &&
-                      isFocusedActionKind(projection.current_action.kind) ? (
+                      rfiReviewOpen &&
+                      isRfiActionKind(projection.current_action.kind) ? (
+                        <TenderRfiReview
+                          tenderId={selected.tender_id}
+                          summaries={projection.external_rfis}
+                          interpretationFirst={
+                            projection.current_action.kind ===
+                            "interpret_external_rfi_response"
+                          }
+                          runtimeReady={runtimeStatus === "ready"}
+                          reportCommandFailure={reportFocusedCommandFailure}
+                          onRefresh={load}
+                          onClose={() => setRfiReviewOpen(false)}
+                        />
+                      ) : focusedActionTenderId === selected.tender_id &&
+                        isFocusedActionKind(projection.current_action.kind) ? (
                         <TenderFocusedAction
                           tenderId={selected.tender_id}
                           actionKind={projection.current_action.kind}
@@ -5323,6 +5379,7 @@ export function ManagerWorkspace({
                           onOpenFocusedAction={() =>
                             setFocusedActionTenderId(selected.tender_id)
                           }
+                          onOpenRfiReview={() => setRfiReviewOpen(true)}
                           onOpenRecordDecision={() =>
                             setRecordDecision({ focusTarget: null })
                           }

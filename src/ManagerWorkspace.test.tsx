@@ -14,6 +14,7 @@ import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProj
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
 import type { ChangeAssessment } from "./bindings/ChangeAssessment";
 import type { ChangeAssessmentPage } from "./bindings/ChangeAssessmentPage";
+import type { ExternalRfiDraft } from "./bindings/ExternalRfiDraft";
 import type { EvidenceDocument } from "./bindings/EvidenceDocument";
 import type { EvidenceLocation } from "./bindings/EvidenceLocation";
 import type { ProductionTaskReviewInspection } from "./bindings/ProductionTaskReviewInspection";
@@ -27,14 +28,17 @@ import type { WorkspaceTaskRow } from "./bindings/WorkspaceTaskRow";
 const host = vi.hoisted(() => ({
   archiveTender: vi.fn(),
   approveProductionFindingException: vi.fn(),
+  approveExternalRfiForIssue: vi.fn(),
   cancelChatGptLogin: vi.fn(),
   cancelRuntimePreparation: vi.fn(),
   chooseAndImportTenderPackage: vi.fn(),
   createBidDecisionPackage: vi.fn(),
+  createExternalRfiDraft: vi.fn(),
   decideBidDecisionPackage: vi.fn(),
   decideChangeAssessment: vi.fn(),
   decideTenderQueryTreatment: vi.fn(),
   decideTenderRecord: vi.fn(),
+  exportApprovedExternalRfi: vi.fn(),
   inspectArtifactVersions: vi.fn(),
   inspectBidDecisionApprovalHistory: vi.fn(),
   inspectBidDecisionPackageRecords: vi.fn(),
@@ -42,13 +46,20 @@ const host = vi.hoisted(() => ({
   inspectComplianceMatrix: vi.fn(),
   inspectCurrentBidDecisionPackage: vi.fn(),
   inspectEvidence: vi.fn(),
+  inspectExternalRfis: vi.fn(),
+  inspectExternalRfiEligibleQueries: vi.fn(),
+  inspectExternalRfiResponseCandidates: vi.fn(),
   inspectProductionTaskReview: vi.fn(),
   inspectTenderQueries: vi.fn(),
   inspectTenderRecord: vi.fn(),
+  interpretExternalRfiResponse: vi.fn(),
   interruptAgentRun: vi.fn(),
   invalidateBidDecisionApproval: vi.fn(),
+  registerExternalRfiResponse: vi.fn(),
   resolveBidDecisionReturnRework: vi.fn(),
+  reviseExternalRfiDraft: vi.fn(),
   runBidDecisionPackageReview: vi.fn(),
+  runExternalRfiReview: vi.fn(),
   runProductionTask: vi.fn(),
   searchEvidence: vi.fn(),
   composeTenderOffice: vi.fn(),
@@ -273,6 +284,7 @@ const projection: ManagerWorkspaceProjection = {
     events: [],
     agent_runs: [],
   },
+  external_rfis: [],
   intake: null,
   ai_execution: {
     revision: 1n,
@@ -552,6 +564,138 @@ function sixStateTasks(): WorkspaceTaskRow[] {
 }
 
 const focusedProductionTaskId = "task-working-running";
+
+const rfiQueryRef = {
+  query_id: "1".repeat(32),
+  version: 1,
+  manifest_sha256: "2".repeat(64),
+};
+
+const rfiQuestion =
+  "Who carries the installation responsibility for the pumphouse works?";
+
+function eligibleQueryPage() {
+  return {
+    items: [
+      {
+        query_ref: rfiQueryRef,
+        question: rfiQuestion,
+        ambiguity_or_gap:
+          "The cited wording leaves the responsibility boundary unresolved.",
+        due_at: "2030-01-01T00:00:00Z",
+        affected_task_keys: ["cost_estimation_production"],
+      },
+    ],
+    next_cursor: null,
+    total_count: 1,
+  };
+}
+
+function rfiDraftFixture(
+  overrides: Partial<ExternalRfiDraft> = {},
+): ExternalRfiDraft {
+  return {
+    rfi_id: "4".repeat(32),
+    version: 1,
+    query_refs: [rfiQueryRef],
+    current_query_refs: [rfiQueryRef],
+    questions: [
+      {
+        query_id: rfiQueryRef.query_id,
+        query_version: 1,
+        question: rfiQuestion,
+        ambiguity_or_gap:
+          "The cited wording leaves the responsibility boundary unresolved.",
+      },
+    ],
+    source_evidence: [
+      { kind: "source_evidence", reference: `${"5".repeat(32)}#1`, version: 1 },
+    ],
+    contractual_context:
+      "The tender documents leave the responsibility boundary unresolved.",
+    response_need: "Confirm the responsible party before pricing.",
+    attachments: [],
+    due_at: "2030-01-01T00:00:00Z",
+    recipient: {
+      organization: "Employer Procurement Team",
+      attention: "Tender Clarifications Manager",
+      email: null,
+    },
+    affected_task_keys: ["cost_estimation_production"],
+    affected_commitments: ["Tender price qualification"],
+    review: null,
+    approval: null,
+    exports: [],
+    responses: [],
+    interpretations: [],
+    current: true,
+    evidence_current: true,
+    revision_allowed: true,
+    approved_for_issue: false,
+    manifest_sha256: "3".repeat(64),
+    created_at: "2026-08-30T09:00:00Z",
+    ...overrides,
+  };
+}
+
+function rfiReviewFixture() {
+  return {
+    review_id: "8".repeat(32),
+    rfi_id: "4".repeat(32),
+    rfi_version: 1,
+    rfi_manifest_sha256: "3".repeat(64),
+    reviewer_run_id: "9".repeat(32),
+    reviewer_profile_id: "f".repeat(32),
+    reviewer_profile_version: 1,
+    outcome: "passed" as const,
+    findings: [],
+    manifest_sha256: "b".repeat(64),
+    created_at: "2026-08-30T10:00:00Z",
+  };
+}
+
+function rfiApprovalFixture() {
+  return {
+    approval_id: "c".repeat(32),
+    rfi_id: "4".repeat(32),
+    rfi_version: 1,
+    rfi_manifest_sha256: "3".repeat(64),
+    review_id: "8".repeat(32),
+    review_manifest_sha256: "b".repeat(64),
+    rationale: "Approved exact wording.",
+    approved_by: "engineer_user",
+    acting_role: "tendering_manager",
+    approval_sha256: "d".repeat(64),
+    created_at: "2026-08-30T11:00:00Z",
+  };
+}
+
+function rfiSummary(
+  overrides: Partial<ManagerWorkspaceProjection["external_rfis"][number]> = {},
+) {
+  return {
+    rfi_id: "4".repeat(32),
+    version: 1,
+    status: "awaiting_review" as const,
+    question_count: 1,
+    response_count: 0,
+    approval_pending: false,
+    export_pending: false,
+    interpretation_pending: false,
+    ...overrides,
+  };
+}
+
+function rfiProjection(
+  currentAction: ManagerWorkspaceProjection["current_action"],
+  externalRfis: ManagerWorkspaceProjection["external_rfis"],
+): ManagerWorkspaceProjection {
+  return {
+    ...projection,
+    current_action: currentAction,
+    external_rfis: externalRfis,
+  };
+}
 
 function focusedProductionInspection(): TenderProductionInspection {
   return {
@@ -1568,6 +1712,516 @@ describe("ManagerWorkspace", () => {
 
     expect(await screen.findByTestId("tender-focused-action")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Work Plan" })).toBeTruthy();
+  });
+
+  it("gathers routed questions into an evidence-linked External RFI draft", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(
+      rfiProjection(
+        {
+          kind: "draft_external_rfi" as const,
+          title: "Ask the client a controlled question",
+          summary: "A Tender question is routed for a controlled External RFI.",
+          action_label: "Start External RFI",
+          requires_engineer: true,
+        },
+        [],
+      ),
+    );
+    host.inspectExternalRfis.mockResolvedValue({
+      items: [],
+      next_cursor: null,
+      total_current_count: 0,
+      approved_for_issue_count: 0,
+    });
+    host.inspectExternalRfiEligibleQueries.mockResolvedValue(
+      eligibleQueryPage(),
+    );
+    host.createExternalRfiDraft.mockResolvedValue(rfiDraftFixture());
+
+    render(<ManagerWorkspace />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Start External RFI" }),
+    );
+    const surface = await screen.findByTestId("tender-rfi-review");
+    const questionCheckbox = await within(surface).findByRole("checkbox", {
+      name: /Who carries the installation responsibility/,
+    });
+    expect(questionCheckbox).toBeTruthy();
+
+    fireEvent.click(questionCheckbox);
+    fireEvent.change(
+      within(surface).getByLabelText("Exact contractual context"),
+      { target: { value: "The wording leaves the boundary unresolved." } },
+    );
+    fireEvent.change(within(surface).getByLabelText("Response needed"), {
+      target: { value: "Confirm the responsible party." },
+    });
+    fireEvent.change(within(surface).getByLabelText("Response needed by"), {
+      target: { value: "2030-01-01T00:00" },
+    });
+    fireEvent.change(within(surface).getByLabelText("Recipient organization"), {
+      target: { value: "Employer Procurement Team" },
+    });
+    fireEvent.change(within(surface).getByLabelText("Attention"), {
+      target: { value: "Tender Clarifications Manager" },
+    });
+
+    fireEvent.click(
+      within(surface).getByRole("button", {
+        name: "Create External RFI draft",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(host.createExternalRfiDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tender_id: tenderId,
+          query_refs: [rfiQueryRef],
+          additional_evidence: [],
+          contractual_context: "The wording leaves the boundary unresolved.",
+          response_need: "Confirm the responsible party.",
+          recipient: {
+            organization: "Employer Procurement Team",
+            attention: "Tender Clarifications Manager",
+            email: null,
+          },
+          attachments: [],
+        }),
+      ),
+    );
+    await waitFor(() => {
+      expect(
+        (
+          within(surface).getByRole("button", {
+            name: "Create External RFI draft",
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(true);
+    });
+  });
+
+  it("revises, independently reviews, and approves the pending External RFI draft", async () => {
+    installResponsiveMatchMedia(1440);
+    let currentDraft = rfiDraftFixture();
+    host.inspectManagerWorkspace.mockResolvedValue(
+      rfiProjection(
+        {
+          kind: "review_external_rfi" as const,
+          title: "Review the External RFI draft",
+          summary:
+            "A controlled question to the client is drafted from exact Tender questions and evidence.",
+          action_label: "Review External RFI",
+          requires_engineer: true,
+        },
+        [rfiSummary()],
+      ),
+    );
+    host.inspectExternalRfis.mockImplementation(() =>
+      Promise.resolve({
+        items: [currentDraft],
+        next_cursor: null,
+        total_current_count: 1,
+        approved_for_issue_count: 0,
+      }),
+    );
+    host.inspectExternalRfiEligibleQueries.mockResolvedValue(
+      eligibleQueryPage(),
+    );
+    host.reviseExternalRfiDraft.mockImplementation((command) => {
+      currentDraft = {
+        ...currentDraft,
+        version: command.base_version + 1,
+        contractual_context: command.contractual_context,
+      };
+      return Promise.resolve(currentDraft);
+    });
+    host.runExternalRfiReview.mockImplementation(() => {
+      currentDraft = { ...currentDraft, review: rfiReviewFixture() };
+      return Promise.resolve({
+        run: { state: "completed" },
+        rfi: currentDraft,
+      });
+    });
+    host.approveExternalRfiForIssue.mockResolvedValue(rfiDraftFixture());
+
+    render(<ManagerWorkspace />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Review External RFI" }),
+    );
+    const surface = await screen.findByTestId("tender-rfi-review");
+    const reviewSection = await within(surface).findByTestId(
+      "tender-rfi-review-section",
+    );
+    expect(await within(reviewSection).findByText(rfiQuestion)).toBeTruthy();
+
+    fireEvent.click(
+      within(reviewSection).getByRole("button", { name: "Revise draft" }),
+    );
+    fireEvent.change(
+      within(reviewSection).getByLabelText("Exact contractual context"),
+      {
+        target: {
+          value:
+            "The wording leaves the boundary unresolved. Revision clarifies the split.",
+        },
+      },
+    );
+    fireEvent.click(
+      within(reviewSection).getByRole("button", {
+        name: "Publish revised draft",
+      }),
+    );
+    await waitFor(() =>
+      expect(host.reviseExternalRfiDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tender_id: tenderId,
+          rfi_id: currentDraft.rfi_id,
+          base_version: 1,
+          additional_evidence: currentDraft.source_evidence,
+        }),
+      ),
+    );
+
+    fireEvent.click(
+      await within(surface).findByRole("button", {
+        name: "Run independent review",
+      }),
+    );
+    await waitFor(() =>
+      expect(host.runExternalRfiReview).toHaveBeenCalledWith({
+        tender_id: tenderId,
+        rfi_id: currentDraft.rfi_id,
+        version: 2,
+      }),
+    );
+    const reviewSectionAfter = within(surface).getByTestId(
+      "tender-rfi-review-section",
+    );
+    expect(
+      await within(reviewSectionAfter).findByText(
+        "Independent review result: passed",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.change(
+      within(reviewSectionAfter).getByLabelText("Approval rationale"),
+      {
+        target: {
+          value:
+            "The reviewed wording asks the exact question the bid needs answered.",
+        },
+      },
+    );
+    fireEvent.click(
+      within(reviewSectionAfter).getByRole("button", {
+        name: "Approve for issue",
+      }),
+    );
+    await waitFor(() =>
+      expect(host.approveExternalRfiForIssue).toHaveBeenCalledWith({
+        tender_id: tenderId,
+        rfi_id: currentDraft.rfi_id,
+        version: 2,
+        manifest_sha256: currentDraft.manifest_sha256,
+        rationale:
+          "The reviewed wording asks the exact question the bid needs answered.",
+      }),
+    );
+  });
+
+  it("exports the approved External RFI and shows the verified record for human delivery", async () => {
+    installResponsiveMatchMedia(1440);
+    const approval = rfiApprovalFixture();
+    const approvedDraft = rfiDraftFixture({
+      review: rfiReviewFixture(),
+      approval,
+      approved_for_issue: true,
+    });
+    host.inspectManagerWorkspace.mockResolvedValue(
+      rfiProjection(
+        {
+          kind: "draft_external_rfi" as const,
+          title: "Ask the client a controlled question",
+          summary: "A Tender question is routed for a controlled External RFI.",
+          action_label: "Start External RFI",
+          requires_engineer: true,
+        },
+        [
+          rfiSummary({
+            status: "approved_for_issue",
+            approval_pending: false,
+            export_pending: true,
+          }),
+        ],
+      ),
+    );
+    host.inspectExternalRfis.mockResolvedValue({
+      items: [approvedDraft],
+      next_cursor: null,
+      total_current_count: 1,
+      approved_for_issue_count: 1,
+    });
+    host.inspectExternalRfiEligibleQueries.mockResolvedValue(
+      eligibleQueryPage(),
+    );
+    host.inspectExternalRfiResponseCandidates.mockResolvedValue({
+      items: [],
+      next_cursor: null,
+    });
+    host.exportApprovedExternalRfi.mockResolvedValue({
+      export_id: "7".repeat(32),
+      approval_id: approval.approval_id,
+      path: "A:\\Quantix-test\\exports\\external-rfi-v1.txt",
+      bytes_sha256: "e".repeat(64),
+      size_bytes: 1234n,
+      bytes_verified: true,
+      manifest_sha256: "0".repeat(64),
+      created_at: "2026-08-31T10:00:00Z",
+    });
+
+    render(<ManagerWorkspace />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Start External RFI" }),
+    );
+    const section = await screen.findByTestId("tender-rfi-response-section");
+    expect(
+      within(section).getByText(
+        /You deliver that file to the recipient outside Quantix/,
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      within(section).getByRole("button", { name: "Export verified file" }),
+    );
+
+    await waitFor(() =>
+      expect(host.exportApprovedExternalRfi).toHaveBeenCalledWith({
+        tender_id: tenderId,
+        rfi_id: approvedDraft.rfi_id,
+        version: 1,
+        approval_sha256: approval.approval_sha256,
+      }),
+    );
+    expect(await screen.findByTestId("tender-rfi-export-record")).toBeTruthy();
+    expect(
+      screen.getByText(/A:\\Quantix-test\\exports\\external-rfi-v1\.txt/),
+    ).toBeTruthy();
+    expect(screen.getByText(/File verified after writing/)).toBeTruthy();
+  });
+
+  it("registers a received response without replacing the outgoing questions or prior responses", async () => {
+    installResponsiveMatchMedia(1440);
+    const approval = rfiApprovalFixture();
+    const priorResponse = {
+      response_link_id: "a".repeat(32),
+      rfi_id: "4".repeat(32),
+      rfi_version: 1,
+      approval_id: approval.approval_id,
+      source_artifact_id: "6".repeat(32),
+      source_artifact_version: 2,
+      registered_by: "engineer_user",
+      manifest_sha256: "1".repeat(64),
+      created_at: "2026-08-30T12:00:00Z",
+    };
+    const issuedDraft = rfiDraftFixture({
+      review: rfiReviewFixture(),
+      approval,
+      approved_for_issue: true,
+      responses: [priorResponse],
+    });
+    host.inspectManagerWorkspace.mockResolvedValue(
+      rfiProjection(
+        {
+          kind: "interpret_external_rfi_response" as const,
+          title: "Interpret the received response",
+          summary:
+            "A response to your External RFI arrived. Record one interpretation as the Manager.",
+          action_label: "Interpret response",
+          requires_engineer: true,
+        },
+        [
+          rfiSummary({
+            status: "response_awaiting_interpretation",
+            response_count: 1,
+            interpretation_pending: true,
+          }),
+        ],
+      ),
+    );
+    host.inspectExternalRfis.mockResolvedValue({
+      items: [issuedDraft],
+      next_cursor: null,
+      total_current_count: 1,
+      approved_for_issue_count: 1,
+    });
+    host.inspectExternalRfiEligibleQueries.mockResolvedValue(
+      eligibleQueryPage(),
+    );
+    host.inspectExternalRfiResponseCandidates.mockResolvedValue({
+      items: [
+        {
+          source_artifact_id: "9".repeat(32),
+          source_artifact_version: 1,
+          package_path: "responses/employer-reply.pdf",
+        },
+      ],
+      next_cursor: null,
+    });
+
+    render(<ManagerWorkspace />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Interpret response" }),
+    );
+    const section = await screen.findByTestId("tender-rfi-response-section");
+    expect(
+      (await within(section).findAllByText(rfiQuestion)).length,
+    ).toBeGreaterThan(0);
+    expect(within(section).getByText(`${"6".repeat(32)} · v2`)).toBeTruthy();
+
+    const responseSelect = within(section).getByLabelText(
+      "Response document from the Tender package intake",
+    );
+    await within(responseSelect).findByRole("option", {
+      name: /employer-reply\.pdf/,
+    });
+    fireEvent.change(responseSelect, {
+      target: { value: `${"9".repeat(32)}:1` },
+    });
+    fireEvent.click(
+      within(section).getByRole("button", { name: "Register response" }),
+    );
+
+    await waitFor(() =>
+      expect(host.registerExternalRfiResponse).toHaveBeenCalledWith({
+        tender_id: tenderId,
+        rfi_id: issuedDraft.rfi_id,
+        rfi_version: 1,
+        approval_id: approval.approval_id,
+        source_artifact_id: "9".repeat(32),
+        source_artifact_version: 1,
+      }),
+    );
+    expect(
+      within(section).getByText(
+        `${priorResponse.source_artifact_id} · v${priorResponse.source_artifact_version}`,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("records one Manager interpretation and returns to the conversation", async () => {
+    installResponsiveMatchMedia(1440);
+    const approval = rfiApprovalFixture();
+    const response = {
+      response_link_id: "a".repeat(32),
+      rfi_id: "4".repeat(32),
+      rfi_version: 1,
+      approval_id: approval.approval_id,
+      source_artifact_id: "6".repeat(32),
+      source_artifact_version: 2,
+      registered_by: "engineer_user",
+      manifest_sha256: "1".repeat(64),
+      created_at: "2026-08-30T12:00:00Z",
+    };
+    const issuedDraft = rfiDraftFixture({
+      review: rfiReviewFixture(),
+      approval,
+      approved_for_issue: true,
+      responses: [response],
+    });
+    host.inspectManagerWorkspace.mockResolvedValue(
+      rfiProjection(
+        {
+          kind: "interpret_external_rfi_response" as const,
+          title: "Interpret the received response",
+          summary:
+            "A response to your External RFI arrived. Record one interpretation as the Manager.",
+          action_label: "Interpret response",
+          requires_engineer: true,
+        },
+        [
+          rfiSummary({
+            status: "response_awaiting_interpretation",
+            response_count: 1,
+            interpretation_pending: true,
+          }),
+        ],
+      ),
+    );
+    host.inspectExternalRfis.mockResolvedValue({
+      items: [issuedDraft],
+      next_cursor: null,
+      total_current_count: 1,
+      approved_for_issue_count: 1,
+    });
+    host.inspectExternalRfiEligibleQueries.mockResolvedValue(
+      eligibleQueryPage(),
+    );
+    host.inspectExternalRfiResponseCandidates.mockResolvedValue({
+      items: [],
+      next_cursor: null,
+    });
+    host.interpretExternalRfiResponse.mockResolvedValue(issuedDraft);
+
+    render(<ManagerWorkspace />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Interpret response" }),
+    );
+    const section = await screen.findByTestId("tender-rfi-response-section");
+    expect(
+      await within(section).findByText(
+        `source_artifact ${"6".repeat(32)} · v2`,
+      ),
+    ).toBeTruthy();
+
+    fireEvent.change(within(section).getByLabelText("Interpretation"), {
+      target: {
+        value:
+          "The bidder carries installation responsibility while the Employer retains design responsibility.",
+      },
+    });
+    fireEvent.change(within(section).getByLabelText("Manager rationale"), {
+      target: { value: "Preserve the confirmed responsibility split." },
+    });
+    fireEvent.change(
+      within(section).getByLabelText("Exact treatment details"),
+      {
+        target: {
+          value:
+            "Qualify the price against the confirmed responsibility split.",
+        },
+      },
+    );
+    fireEvent.click(
+      within(section).getByRole("button", { name: "Record interpretation" }),
+    );
+
+    await waitFor(() =>
+      expect(host.interpretExternalRfiResponse).toHaveBeenCalledWith({
+        tender_id: tenderId,
+        response_link_id: response.response_link_id,
+        query_id: rfiQueryRef.query_id,
+        issued_query_version: 1,
+        base_query_version: 1,
+        base_query_manifest_sha256: rfiQueryRef.manifest_sha256,
+        material: true,
+        interpretation:
+          "The bidder carries installation responsibility while the Employer retains design responsibility.",
+        treatment: "qualification",
+        rationale: "Preserve the confirmed responsibility split.",
+        treatment_details:
+          "Qualify the price against the confirmed responsibility split.",
+        closes_query: false,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("tender-rfi-review")).toBeNull(),
+    );
   });
 
   it("starts the approved plan automatically and returns to the Manager conversation", async () => {
@@ -3770,6 +4424,7 @@ describe("ManagerWorkspace", () => {
       intake: null,
       ai_execution: null,
       capability_readiness: null,
+      external_rfis: [],
       doctor_blockers: [],
     };
     host.inspectManagerWorkspace.mockResolvedValue(empty);

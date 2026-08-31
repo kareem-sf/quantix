@@ -1,22 +1,30 @@
 use std::{fs, io, path::Path, process::Command, sync::Arc};
 
 use quantix_lib::{
-    ensure_quantix_setup, AiProviderKind, BidDecisionApprovalDecision, CodexReadiness,
-    ComplianceDisposition, ComplianceDispositionUpdate, ConfirmAiExecutionSelectionCommand,
-    CreateBidDecisionPackageCommand, CreatePortableTenderArchiveCommand, CreateTenderBackupCommand,
-    CreateTenderCommand, DecideBidDecisionPackageCommand, ErasedTenderCopyClass,
-    ImportTenderPackageCommand, InspectManagerWorkspaceCommand, InspectTenderAiExecutionCommand,
-    IntakeExceptionCode, ManagerIntakeStage, ManagerIntakeStatusKind, ManagerWorkspaceTenderState,
-    ParseSourceArtifactCommand, ProviderCleanupStatus, ProviderConnectionStatus,
+    ensure_quantix_setup, ActivateTenderProductionCommand, AgentRunState, AgentTaskInputReference,
+    AiProviderKind, ApproveExternalRfiForIssueCommand, BidDecisionApprovalDecision, CodexReadiness,
+    ComplianceDisposition, ComplianceDispositionUpdate, ComposeTenderOfficeCommand,
+    ConfirmAiExecutionSelectionCommand, CreateBidDecisionPackageCommand,
+    CreateExternalRfiDraftCommand, CreatePortableTenderArchiveCommand, CreateTenderBackupCommand,
+    CreateTenderCommand, DecideBidDecisionPackageCommand, DecideTenderQueryTreatmentCommand,
+    DecideTenderRecordCommand, DecideWorkPlanProposalCommand, ErasedTenderCopyClass,
+    ExternalRfiQueryReference, ExternalRfiRecipient, ImportTenderPackageCommand,
+    InspectManagerWorkspaceCommand, InspectTenderAiExecutionCommand, InspectTenderQueriesCommand,
+    IntakeExceptionCode, InterpretExternalRfiResponseCommand, ManagerIntakeStage,
+    ManagerIntakeStatusKind, ManagerWorkspaceTenderState, ParseSourceArtifactCommand,
+    ProductionTaskState, ProviderCleanupStatus, ProviderConnectionStatus,
     ProviderReasoningSelection, PurgeRecoveryRequiredTenderCommand, PurgeTrashedTenderCommand,
-    QuantixHost, RecordEngineerWorkspaceMessageCommand, RegistrationState,
-    RunBidDecisionPackageReviewCommand, RunBootstrapAgentCommand, RuntimeLayout,
-    SelectManagerWorkspaceTenderCommand, SetupPlatform, SetupState, StartupReconciliationReport,
-    StoragePermissions, TenderAiSelectionReadiness, TenderErrorCode, TenderOfficeMessageAuthor,
-    TenderOfficeMessageKind, TenderRecordInspection, TenderRecordKind,
-    TenderRecordVersionReference, TenderRetentionDecisionCommand, TenderRetentionState,
-    TrashedTenderDecisionCommand, TrashedTenderState, UpdateAiExecutionSelectionCommand,
-    WorkspaceActionKind, WorkspaceMessageReference, WorkspaceMessageReferenceKind,
+    QuantixHost, RecordEngineerWorkspaceMessageCommand, RegisterExternalRfiResponseCommand,
+    RegistrationState, RunBidDecisionPackageReviewCommand, RunBootstrapAgentCommand,
+    RunExternalRfiReviewCommand, RunProductionTaskCommand, RunTenderRecordExtractionCommand,
+    RuntimeLayout, SelectManagerWorkspaceTenderCommand, SetupPlatform, SetupState,
+    StartupReconciliationReport, StoragePermissions, TenderAiSelectionReadiness, TenderErrorCode,
+    TenderEvidenceReference, TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderQuery,
+    TenderQueryTreatment, TenderRecordEngineerDecisionKind, TenderRecordInspection,
+    TenderRecordKind, TenderRecordVersionReference, TenderRetentionDecisionCommand,
+    TenderRetentionState, TrashedTenderDecisionCommand, TrashedTenderState,
+    UpdateAiExecutionSelectionCommand, WorkPlanDecision, WorkspaceActionKind,
+    WorkspaceExternalRfiStatus, WorkspaceMessageReference, WorkspaceMessageReferenceKind,
     MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use rusqlite::Connection;
@@ -1894,6 +1902,489 @@ fn startup_reconciliation_reports_the_last_startup_cleanup_once() {
         .list_tenders()
         .expect("list again after reconciliation");
     assert_eq!(restarted.inspect_startup_reconciliation(), report);
+}
+
+struct WorkspaceHarness {
+    _root: tempfile::TempDir,
+    codex: std::path::PathBuf,
+    host: QuantixHost,
+    tender_id: String,
+}
+
+impl WorkspaceHarness {
+    fn new(agent_scenario: &str) -> Self {
+        let root = tempfile::tempdir().expect("temporary workspace harness");
+        let application_home = root.path().join(".quantix");
+        let resources = root.path().join("resources");
+        let codex = install_codex_fixture(&resources, agent_scenario);
+        let host = QuantixHost::with_setup_platform_and_runtime(
+            &application_home,
+            Arc::new(ReadySetupPlatform),
+            RuntimeLayout::bundled(resources),
+        );
+        host.accept_runtime_fixture();
+        assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+        host.approve_runtime_fixture_ai_selection()
+            .expect("approve fixture AI selection");
+        install_ocr_fixture(&application_home);
+        let tender = host
+            .create_tender(CreateTenderCommand {
+                name: "Controlled External RFI Tender".into(),
+            })
+            .expect("create workspace harness Tender");
+        Self {
+            _root: root,
+            codex,
+            host,
+            tender_id: tender.tender_id,
+        }
+    }
+
+    fn set_agent_scenario(&self, scenario: &str) {
+        fs::write(self.codex.with_extension("agent-scenario"), scenario)
+            .expect("update fake app-server scenario");
+        self.host
+            .approve_runtime_fixture_ai_selection()
+            .expect("restore approved fixture provider readiness");
+    }
+
+    async fn extract_records(&self) -> Vec<TenderRecordInspection> {
+        let source = self._root.path().join("decision-source");
+        fs::create_dir(&source).expect("source directory");
+        fs::write(
+            source.join("conditions.pdf"),
+            b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
+        )
+        .expect("PDF fixture");
+        let imported = self
+            .host
+            .import_tender_package(ImportTenderPackageCommand {
+                tender_id: self.tender_id.clone(),
+                source_path: source.to_string_lossy().into_owned(),
+            })
+            .expect("import decision source");
+        let mut evidence = Vec::new();
+        for document in &imported.documents {
+            self.host
+                .parse_source_artifact(ParseSourceArtifactCommand {
+                    tender_id: self.tender_id.clone(),
+                    artifact_id: document.artifact_id.clone(),
+                    version: document.version,
+                })
+                .await
+                .expect("parse source");
+            evidence.extend(
+                self.host
+                    .inspect_evidence(ParseSourceArtifactCommand {
+                        tender_id: self.tender_id.clone(),
+                        artifact_id: document.artifact_id.clone(),
+                        version: document.version,
+                    })
+                    .expect("inspect Evidence")
+                    .locations
+                    .into_iter()
+                    .map(|location| TenderEvidenceReference {
+                        artifact_id: document.artifact_id.clone(),
+                        version: document.version,
+                        ordinal: location.ordinal,
+                    }),
+            );
+        }
+        let extraction = self
+            .host
+            .run_tender_record_extraction(RunTenderRecordExtractionCommand {
+                tender_id: self.tender_id.clone(),
+                evidence,
+                authorities: Vec::new(),
+            })
+            .await
+            .expect("extract Tender Records");
+        assert_eq!(extraction.run.state, AgentRunState::Completed);
+        inspect_all_records(&self.host, &self.tender_id)
+    }
+
+    fn verify_records(&self, records: &[TenderRecordInspection]) {
+        for record in records.iter().filter(|record| record.version == 1) {
+            let decision = if record.kind == TenderRecordKind::Assumption {
+                TenderRecordEngineerDecisionKind::ApproveAssumption
+            } else {
+                TenderRecordEngineerDecisionKind::Verify
+            };
+            self.host
+                .decide_tender_record(DecideTenderRecordCommand {
+                    tender_id: self.tender_id.clone(),
+                    record_id: record.record_id.clone(),
+                    version: record.version,
+                    decision,
+                    rationale: "Exact pre-bid basis verified for planning.".into(),
+                })
+                .expect("verify exact Tender Record");
+        }
+    }
+
+    async fn activate_production(&self) {
+        let records = self.extract_records().await;
+        self.verify_records(&records);
+        let package = self
+            .host
+            .create_bid_decision_package(CreateBidDecisionPackageCommand {
+                tender_id: self.tender_id.clone(),
+                base_version: None,
+                disposition_updates: complete_dispositions(&records),
+                manager_capability_demands: Vec::new(),
+            })
+            .expect("create decision package");
+        self.set_agent_scenario("bid-package-review");
+        let package = self
+            .host
+            .run_bid_decision_package_review(RunBidDecisionPackageReviewCommand {
+                tender_id: self.tender_id.clone(),
+                package_id: package.package_id,
+                version: package.version,
+            })
+            .await
+            .expect("review decision package")
+            .package;
+        self.host
+            .decide_bid_decision_package(DecideBidDecisionPackageCommand {
+                tender_id: self.tender_id.clone(),
+                package_id: package.package_id.clone(),
+                version: package.version,
+                manifest_sha256: package.manifest_sha256.clone(),
+                decision: BidDecisionApprovalDecision::Accept,
+                rationale:
+                    "Tendering Manager reviewed the exact package, Evidence, findings, and consequences."
+                        .into(),
+                conditions: vec!["Work Plan approval remains mandatory before production.".into()],
+                exceptions: vec!["No exception grants production authority.".into()],
+                required_rework: Vec::new(),
+            })
+            .expect("accept exact package");
+        let plan = self
+            .host
+            .compose_tender_office(ComposeTenderOfficeCommand {
+                tender_id: self.tender_id.clone(),
+            })
+            .expect("compose exact Work Plan");
+        let approved = self
+            .host
+            .decide_work_plan_proposal(DecideWorkPlanProposalCommand {
+                tender_id: self.tender_id.clone(),
+                plan_id: plan.plan_id,
+                version: plan.version,
+                decision: WorkPlanDecision::Approve,
+                rationale: "Approve the exact bounded production plan.".into(),
+            })
+            .expect("approve exact Work Plan");
+        self.host
+            .activate_tender_production(ActivateTenderProductionCommand {
+                tender_id: self.tender_id.clone(),
+                plan_id: approved.plan_id.clone(),
+                plan_version: approved.version,
+                plan_manifest_sha256: approved.manifest_sha256.clone(),
+            })
+            .expect("activate exact approved Work Plan");
+    }
+
+    async fn external_rfi_drafting_query(&self) -> TenderQuery {
+        let production = self
+            .host
+            .inspect_tender_production(&self.tender_id)
+            .expect("inspect active production")
+            .expect("active production");
+        let target = production
+            .tasks
+            .iter()
+            .find(|task| task.state == ProductionTaskState::Ready)
+            .expect("ready task for External RFI Query")
+            .clone();
+        self.set_agent_scenario("production-task-query-proposal");
+        let proposed = self
+            .host
+            .run_production_task(RunProductionTaskCommand {
+                tender_id: self.tender_id.clone(),
+                production_task_id: target.production_task_id,
+            })
+            .await
+            .expect("publish specialist Query proposal");
+        assert_eq!(proposed.run.state, AgentRunState::Completed);
+        let query = self
+            .host
+            .inspect_tender_queries(InspectTenderQueriesCommand {
+                tender_id: self.tender_id.clone(),
+                cursor: None,
+                limit: 8,
+            })
+            .expect("inspect proposed External RFI Query")
+            .items
+            .into_iter()
+            .next()
+            .expect("External RFI Query");
+        self.host
+            .decide_tender_query_treatment(DecideTenderQueryTreatmentCommand {
+                tender_id: self.tender_id.clone(),
+                query_id: query.query_id.clone(),
+                query_version: query.version,
+                treatment: TenderQueryTreatment::ExternalRfiDrafting,
+                rationale: "The exact ambiguity requires a controlled question to the Employer."
+                    .into(),
+                treatment_details:
+                    "Draft, independently review, and obtain Manager approval before human issue."
+                        .into(),
+                closes_query: false,
+            })
+            .expect("authorize External RFI drafting")
+    }
+
+    fn external_rfi_create_command(&self, query: &TenderQuery) -> CreateExternalRfiDraftCommand {
+        let source = self
+            .host
+            .inspect_document_register(&self.tender_id)
+            .expect("inspect exact Source Artifact Register")
+            .documents
+            .into_iter()
+            .next()
+            .expect("registered source for External RFI attachment");
+        CreateExternalRfiDraftCommand {
+            tender_id: self.tender_id.clone(),
+            query_refs: vec![ExternalRfiQueryReference {
+                query_id: query.query_id.clone(),
+                version: query.version,
+                manifest_sha256: query.manifest_sha256.clone(),
+            }],
+            additional_evidence: Vec::new(),
+            contractual_context: "The tender documents require the bidder to price and programme the exact stated obligation, but the cited wording leaves the responsibility boundary unresolved.".into(),
+            response_need: "Confirm the responsible party and the exact basis the bidder must use in its submission.".into(),
+            attachments: vec![AgentTaskInputReference {
+                kind: "source_artifact".into(),
+                reference: source.artifact_id,
+                version: source.version,
+            }],
+            due_at: "2030-01-01T00:00:00Z".into(),
+            recipient: ExternalRfiRecipient {
+                organization: "Employer Procurement Team".into(),
+                attention: "Tender Clarifications Manager".into(),
+                email: Some("clarifications@example.com".into()),
+            },
+            affected_commitments: vec![
+                "Tender price qualification".into(),
+                "Submission programme basis".into(),
+            ],
+        }
+    }
+
+    fn inspect_workspace(&self) -> quantix_lib::ManagerWorkspaceProjection {
+        self.host
+            .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+                tender_id: Some(self.tender_id.clone()),
+            })
+            .expect("inspect Manager workspace")
+    }
+}
+
+#[tokio::test]
+async fn manager_workspace_projection_surfaces_an_rfi_action_when_a_draft_awaits_review() {
+    let harness = WorkspaceHarness::new("record-extraction");
+    harness.activate_production().await;
+    let query = harness.external_rfi_drafting_query().await;
+
+    let before_draft = harness.inspect_workspace();
+    assert_eq!(
+        before_draft.current_action.kind,
+        WorkspaceActionKind::DraftExternalRfi,
+        "a routed external question offers the gather action"
+    );
+    assert!(before_draft.current_action.requires_engineer);
+    assert!(before_draft.external_rfis.is_empty());
+
+    let draft = harness
+        .host
+        .create_external_rfi_draft(harness.external_rfi_create_command(&query))
+        .expect("create External RFI draft");
+
+    let projection = harness.inspect_workspace();
+    assert_eq!(
+        projection.current_action.kind,
+        WorkspaceActionKind::ReviewExternalRfi
+    );
+    assert_eq!(
+        projection.current_action.action_label,
+        "Review External RFI"
+    );
+    assert!(projection.current_action.requires_engineer);
+    assert!(
+        projection
+            .selected_tender
+            .expect("selected Tender")
+            .needs_engineer
+    );
+    let summaries = &projection.external_rfis;
+    assert_eq!(summaries.len(), 1);
+    let summary = &summaries[0];
+    assert_eq!(summary.rfi_id, draft.rfi_id);
+    assert_eq!(summary.version, 1);
+    assert_eq!(summary.status, WorkspaceExternalRfiStatus::AwaitingReview);
+    assert_eq!(summary.question_count, 1);
+    assert_eq!(summary.response_count, 0);
+    assert!(!summary.approval_pending);
+    assert!(!summary.export_pending);
+    assert!(!summary.interpretation_pending);
+
+    harness
+        .host
+        .close_tender(&harness.tender_id)
+        .expect("close projection Tender");
+    let integrity = harness
+        .host
+        .inspect_tender_integrity(&harness.tender_id)
+        .expect("cold-verify the projection fixture Tender");
+    assert_eq!(
+        integrity.state,
+        quantix_lib::TenderIntegrityState::Ready,
+        "{integrity:#?}"
+    );
+}
+
+#[tokio::test]
+async fn manager_workspace_approval_and_interpretation_record_attributable_manager_messages() {
+    let harness = WorkspaceHarness::new("record-extraction");
+    harness.activate_production().await;
+    let query = harness.external_rfi_drafting_query().await;
+    let draft = harness
+        .host
+        .create_external_rfi_draft(harness.external_rfi_create_command(&query))
+        .expect("create External RFI draft");
+
+    harness.set_agent_scenario("external-rfi-review");
+    let reviewed = harness
+        .host
+        .run_external_rfi_review(RunExternalRfiReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            rfi_id: draft.rfi_id.clone(),
+            version: draft.version,
+        })
+        .await
+        .expect("independently review exact External RFI draft");
+    assert_eq!(reviewed.run.state, AgentRunState::Completed);
+
+    let approved = harness
+        .host
+        .approve_external_rfi_for_issue(ApproveExternalRfiForIssueCommand {
+            tender_id: harness.tender_id.clone(),
+            rfi_id: draft.rfi_id.clone(),
+            version: draft.version,
+            manifest_sha256: draft.manifest_sha256.clone(),
+            rationale: "The Tendering Manager approves this exact reviewed wording.".into(),
+        })
+        .expect("approve exact reviewed External RFI");
+    assert!(approved.approved_for_issue);
+
+    let approval_projection = harness.inspect_workspace();
+    let approval_messages = approval_projection
+        .conversation
+        .expect("Manager conversation")
+        .messages
+        .into_iter()
+        .filter(|message| {
+            message.author == TenderOfficeMessageAuthor::Manager
+                && message.body.contains("Approved External RFI")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(approval_messages.len(), 1, "exactly one approval message");
+    let approval_message = &approval_messages[0];
+    assert_eq!(approval_message.kind, TenderOfficeMessageKind::Status);
+    assert!(approval_message.body.contains(&draft.rfi_id));
+    assert!(approval_message.body.contains(&draft.version.to_string()));
+
+    let response_source = harness._root.path().join("external-rfi-response");
+    fs::create_dir(&response_source).expect("response package directory");
+    fs::write(
+        response_source.join("employer-response.pdf"),
+        "%PDF-1.7\nThe Employer response confirms the bidder responsibility boundary.\n%%EOF\n",
+    )
+    .expect("External RFI response fixture");
+    let response_import = harness
+        .host
+        .import_tender_package(ImportTenderPackageCommand {
+            tender_id: harness.tender_id.clone(),
+            source_path: response_source.to_string_lossy().into_owned(),
+        })
+        .expect("register External RFI response through Intake");
+    let response_document = response_import
+        .documents
+        .first()
+        .expect("imported response document")
+        .clone();
+    let linked = harness
+        .host
+        .register_external_rfi_response(RegisterExternalRfiResponseCommand {
+            tender_id: harness.tender_id.clone(),
+            rfi_id: approved.rfi_id.clone(),
+            rfi_version: approved.version,
+            approval_id: approved
+                .approval
+                .as_ref()
+                .expect("approval")
+                .approval_id
+                .clone(),
+            source_artifact_id: response_document.artifact_id.clone(),
+            source_artifact_version: response_document.version,
+        })
+        .expect("link immutable Intake response to exact RFI");
+    let response = linked.responses.first().expect("response link").clone();
+
+    let interpreted = harness
+        .host
+        .interpret_external_rfi_response(InterpretExternalRfiResponseCommand {
+            tender_id: harness.tender_id.clone(),
+            response_link_id: response.response_link_id.clone(),
+            query_id: query.query_id.clone(),
+            issued_query_version: query.version,
+            base_query_version: query.version,
+            base_query_manifest_sha256: query.manifest_sha256.clone(),
+            material: true,
+            interpretation: "The response confirms the bidder carries installation responsibility."
+                .into(),
+            treatment: TenderQueryTreatment::Qualification,
+            rationale: "Preserve the exact responsibility split in the bid basis.".into(),
+            treatment_details: "Qualify the price against the confirmed responsibility split."
+                .into(),
+            closes_query: false,
+        })
+        .expect("record Manager interpretation and exact Query successor");
+    assert_eq!(interpreted.interpretations.len(), 1);
+
+    let interpretation_projection = harness.inspect_workspace();
+    let messages = interpretation_projection
+        .conversation
+        .expect("Manager conversation")
+        .messages;
+    let interpretation_messages = messages
+        .iter()
+        .filter(|message| {
+            message.author == TenderOfficeMessageAuthor::Manager
+                && message.body.contains("Interpreted the received response")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        interpretation_messages.len(),
+        1,
+        "exactly one interpretation message"
+    );
+    let interpretation_message = interpretation_messages[0];
+    assert_eq!(interpretation_message.kind, TenderOfficeMessageKind::Status);
+    assert!(interpretation_message.body.contains(&draft.rfi_id));
+    assert!(interpretation_message.body.contains(&query.query_id));
+    assert!(
+        messages
+            .iter()
+            .filter(
+                |message| message.author == TenderOfficeMessageAuthor::Manager
+                    && message.body.contains("Approved External RFI")
+            )
+            .count()
+            == 1
+    );
 }
 
 fn install_codex_fixture(resources: &Path, scenario: &str) -> std::path::PathBuf {

@@ -4205,6 +4205,247 @@ html.quantix-reduced-motion *::after {
   resize: vertical;
 }
 
+.tender-rfi {
+  width: min(100% - 40px, var(--conversation-width));
+  margin: 0 auto;
+  padding: 34px 0 46px;
+}
+
+.tender-rfi__header {
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  padding: 22px 24px;
+  border: 1px solid var(--qx-border);
+  border-radius: 14px;
+  background: var(--qx-surface);
+}
+
+.tender-rfi__header h2 {
+  margin: 8px 0 10px;
+  font-size: clamp(1.4rem, 3vw, 1.9rem);
+  letter-spacing: -0.03em;
+}
+
+.tender-rfi__header p {
+  max-width: 680px;
+  margin: 0;
+  color: var(--qx-text-muted);
+  line-height: 1.55;
+}
+
+.tender-rfi__loading {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--qx-text-muted);
+  font-size: 0.8125rem;
+}
+
+.tender-rfi__loading svg {
+  animation: manager-spin 900ms linear infinite;
+}
+
+.tender-rfi__card {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 18px 20px;
+  border: 1px solid var(--qx-border);
+  border-radius: 12px;
+  background: var(--qx-surface);
+  font-size: 0.8125rem;
+}
+
+.tender-rfi__card h3 {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.tender-rfi__card h4 {
+  margin: 4px 0 0;
+  font-size: 0.8125rem;
+}
+
+.tender-rfi__card p {
+  margin: 0;
+  color: var(--qx-text-muted);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.tender-rfi__status {
+  font-weight: 650;
+  color: var(--qx-text) !important;
+}
+
+.tender-rfi__card code {
+  font-family: var(--qx-font-mono);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.tender-rfi__questions ul,
+.tender-rfi__evidence ul,
+.tender-rfi__findings ul,
+.tender-rfi__responses ul {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tender-rfi__questions li {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--qx-border);
+  border-radius: 9px;
+  background: var(--qx-surface-raised, var(--qx-surface));
+}
+
+.tender-rfi__questions li span {
+  color: var(--qx-text-muted);
+}
+
+.tender-rfi__evidence li code,
+.tender-rfi__responses li code {
+  overflow-wrap: anywhere;
+}
+
+.tender-rfi__responses li {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--qx-border);
+  border-radius: 9px;
+  background: var(--qx-surface-raised, var(--qx-surface));
+}
+
+.tender-rfi__responses li span {
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+}
+
+.tender-rfi__responses li p {
+  margin: 4px 0 0;
+  padding-inline-start: 10px;
+  border-inline-start: 2px solid var(--qx-border);
+  font-size: 0.75rem;
+}
+
+.tender-rfi__findings li strong {
+  text-transform: capitalize;
+}
+
+.tender-rfi__record {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--qx-border);
+  border-radius: 9px;
+  background: var(--qx-surface-raised, var(--qx-surface));
+}
+
+.tender-rfi__record span {
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+}
+
+.tender-rfi__record code {
+  overflow-wrap: anywhere;
+}
+
+.tender-rfi__form {
+  display: grid;
+  gap: 12px;
+  margin-top: 6px;
+  padding: 16px;
+  border: 1px solid var(--qx-border);
+  border-radius: 12px;
+  background: var(--qx-surface-raised, var(--qx-surface));
+}
+
+.tender-rfi__form label {
+  display: grid;
+  gap: 6px;
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.tender-rfi__form input,
+.tender-rfi__form select,
+.tender-rfi__form textarea {
+  padding: 9px 12px;
+  border: 1px solid var(--qx-border);
+  border-radius: 8px;
+  background: var(--qx-surface);
+  color: var(--qx-text);
+  font: inherit;
+  font-size: 0.8125rem;
+}
+
+.tender-rfi__form textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.tender-rfi__checkbox {
+  display: flex !important;
+  gap: 9px;
+  align-items: flex-start;
+  color: var(--qx-text) !important;
+  font-weight: 500 !important;
+}
+
+.tender-rfi__checkbox input {
+  margin-top: 3px;
+}
+
+.tender-rfi__checkbox span {
+  display: grid;
+  gap: 2px;
+}
+
+.tender-rfi__checkbox small {
+  color: var(--qx-text-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.tender-rfi__queries {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--qx-border);
+  border-radius: 10px;
+}
+
+.tender-rfi__queries legend {
+  padding-inline: 6px;
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.tender-rfi__actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
 .tender-evidence__search {
   display: grid;
   gap: 8px;
