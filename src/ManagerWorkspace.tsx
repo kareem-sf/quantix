@@ -868,6 +868,17 @@ function StartTender({
   );
 }
 
+const MESSAGE_KIND_LABELS: Partial<
+  Record<TenderOfficeMessage["kind"], string>
+> = {
+  status: "Status",
+  question: "Question",
+  finding: "Finding",
+  handoff: "Handoff",
+  blocker: "Blocker",
+  output: "Output",
+};
+
 function Message({
   message,
   meaningful,
@@ -879,6 +890,7 @@ function Message({
 }) {
   const isEngineer = message.author === "engineer";
   const isSystem = message.author === "system";
+  const kindLabel = MESSAGE_KIND_LABELS[message.kind];
   return (
     <article
       id={`manager-message-${message.message_id}`}
@@ -893,6 +905,9 @@ function Message({
           <strong>
             {isEngineer ? "You" : isSystem ? "Quantix" : "Tendering Manager"}
           </strong>
+          {kindLabel ? (
+            <span className="manager-message__kind">{kindLabel}</span>
+          ) : null}
           <time dateTime={message.created_at}>
             {new Intl.DateTimeFormat(undefined, {
               hour: "numeric",
@@ -2437,8 +2452,115 @@ function WorkTaskDetail({
   );
 }
 
-function TeamView({ projection }: { projection: ManagerWorkspaceProjection }) {
+type TeamRoomFilter = "all" | "needs_you" | "handoffs" | "outputs";
+
+const TEAM_ROOM_FILTERS: readonly { id: TeamRoomFilter; label: string }[] = [
+  { id: "all", label: "All messages" },
+  { id: "needs_you", label: "Needs you" },
+  { id: "handoffs", label: "Handoffs" },
+  { id: "outputs", label: "Outputs" },
+];
+
+const NEEDS_YOU_MESSAGE_KINDS: readonly TenderOfficeMessage["kind"][] = [
+  "question",
+  "finding",
+  "blocker",
+];
+
+function roomFilter(
+  messages: TenderOfficeMessage[],
+  filter: TeamRoomFilter,
+  latestMeaningfulMessageId: string | null | undefined,
+): TenderOfficeMessage[] {
+  switch (filter) {
+    case "handoffs":
+      return messages.filter((message) => message.kind === "handoff");
+    case "outputs":
+      return messages.filter((message) => message.kind === "output");
+    case "needs_you":
+      return messages.filter((message) => {
+        if (!NEEDS_YOU_MESSAGE_KINDS.includes(message.kind)) return false;
+        if (message.message_id === latestMeaningfulMessageId) return true;
+        return !messages.some(
+          (later) =>
+            later.sequence > message.sequence && later.author === "engineer",
+        );
+      });
+    default:
+      return messages;
+  }
+}
+
+type ConversationSection = {
+  key: string;
+  heading: string | null;
+  messages: TenderOfficeMessage[];
+};
+
+function conversationDayKey(at: string): string {
+  const date = new Date(at);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+function groupConversationByDay(
+  messages: TenderOfficeMessage[],
+): ConversationSection[] {
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const todayKey = conversationDayKey(today.toISOString());
+  const yesterdayKey = conversationDayKey(yesterday.toISOString());
+  const formatDate = new Intl.DateTimeFormat(undefined, { dateStyle: "long" });
+  const sections: ConversationSection[] = [];
+  for (const message of messages) {
+    const key = conversationDayKey(message.created_at);
+    const section = sections[sections.length - 1];
+    if (section && section.key === key) {
+      section.messages.push(message);
+      continue;
+    }
+    const date = new Date(message.created_at);
+    const heading =
+      !key || Number.isNaN(date.getTime())
+        ? null
+        : key === todayKey
+          ? null
+          : key === yesterdayKey
+            ? "Yesterday"
+            : formatDate.format(date);
+    sections.push({ key, heading, messages: [message] });
+  }
+  return sections;
+}
+
+function TeamRoom({
+  projection,
+  busy,
+  readOnly,
+  composer,
+  onComposerChange,
+  onSend,
+  onOpenSearch,
+  contextRefs,
+  onRemoveContext,
+  onOpenReference,
+  onClose,
+}: {
+  projection: ManagerWorkspaceProjection;
+  busy: boolean;
+  readOnly: boolean;
+  composer: string;
+  onComposerChange: (value: string) => void;
+  onSend: (body: string) => Promise<boolean>;
+  onOpenSearch: () => void;
+  contextRefs: WorkspaceMessageReference[];
+  onRemoveContext: (reference: string) => void;
+  onOpenReference: (reference: WorkspaceMessageReference) => void;
+  onClose: () => void;
+}) {
   const tenderId = projection.selected_tender?.tender_id ?? null;
+  const [filter, setFilter] = useState<TeamRoomFilter>("all");
   const [selectedRun, setSelectedRun] = useState<AgentRunInspection | null>(
     null,
   );
@@ -2446,6 +2568,28 @@ function TeamView({ projection }: { projection: ManagerWorkspaceProjection }) {
   const [workroomTab, setWorkroomTab] = useState<
     "conversation" | "context" | "activity" | "outputs"
   >("conversation");
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
+
+  const messages = projection.conversation?.messages ?? [];
+  const filteredMessages = useMemo(
+    () =>
+      roomFilter(
+        messages,
+        filter,
+        projection.conversation?.latest_meaningful_message_id,
+      ),
+    [filter, messages, projection.conversation?.latest_meaningful_message_id],
+  );
+  const sections = useMemo(
+    () => groupConversationByDay(filteredMessages),
+    [filteredMessages],
+  );
+
+  useEffect(() => {
+    const conversation = conversationRef.current;
+    if (conversation) conversation.scrollTop = conversation.scrollHeight;
+  }, [filter, messages[messages.length - 1]?.sequence]);
 
   const openWorkroom = async (runId: string) => {
     if (!tenderId) return;
@@ -2458,41 +2602,94 @@ function TeamView({ projection }: { projection: ManagerWorkspaceProjection }) {
     }
   };
 
+  const send = async () => {
+    const body = composer.trim();
+    if (!body || busy) return;
+    if (await onSend(body)) onComposerChange("");
+  };
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void send();
+    }
+  };
+
   return (
-    <section
-      className="workspace-summary workspace-team"
-      aria-labelledby="team-title"
-    >
-      <div className="workspace-summary__heading">
-        <Users size={22} aria-hidden="true" />
-        <div>
-          <h2 id="team-title">Team</h2>
-          <p>
-            Attributable questions, findings, handoffs, blockers, and outputs.
-          </p>
+    <section className="team-room" aria-labelledby="team-room-title">
+      <header className="team-room__header">
+        <div className="team-room__heading">
+          <Users size={22} aria-hidden="true" />
+          <div>
+            <h2 id="team-room-title">Team working</h2>
+            <p>
+              The live room for this Tender. Closing it returns you to the
+              Manager conversation.
+            </p>
+          </div>
         </div>
+        <button
+          type="button"
+          className="manager-workspace__secondary"
+          onClick={onClose}
+        >
+          Back to Manager
+        </button>
+      </header>
+      <div
+        className="team-room__filters"
+        role="group"
+        aria-label="Message filters"
+      >
+        {TEAM_ROOM_FILTERS.map(({ id, label }) => (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={filter === id}
+            onClick={() => setFilter(id)}
+          >
+            {label}
+          </button>
+        ))}
       </div>
-      <div className="workspace-team__columns">
-        <section>
-          <h3>Team stream</h3>
-          {projection.team.events.length ? (
-            <ol className="workspace-team__stream">
-              {projection.team.events.map((event) => (
-                <li key={event.message_id}>
-                  <span>{event.kind.replace(/_/g, " ")}</span>
-                  <strong>
-                    {event.author === "engineer" ? "Engineer" : "Quantix"}
-                  </strong>
-                  <p>{event.body}</p>
-                  <time>{new Date(event.created_at).toLocaleString()}</time>
-                </li>
-              ))}
-            </ol>
+      <div className="team-room__body">
+        <div
+          ref={conversationRef}
+          className="team-room__conversation"
+          role="log"
+          aria-label="Team room conversation"
+          aria-live="polite"
+        >
+          {sections.length === 0 ? (
+            <p className="team-room__empty">
+              {filter === "all"
+                ? "No messages yet. The Manager and specialists post here as the work moves."
+                : "No messages match this filter."}
+            </p>
           ) : (
-            <p className="workspace-summary__empty">No Team events yet.</p>
+            sections.map((section) => (
+              <div key={section.key} className="team-room__section">
+                {section.heading ? (
+                  <h3 className="team-room__section-heading">
+                    {section.heading}
+                  </h3>
+                ) : null}
+                {section.messages.map((message) => (
+                  <Message
+                    key={message.message_id}
+                    message={message}
+                    meaningful={
+                      message.message_id ===
+                      projection.conversation?.latest_meaningful_message_id
+                    }
+                    onOpenReference={onOpenReference}
+                  />
+                ))}
+              </div>
+            ))
           )}
-        </section>
-        <section>
+        </div>
+        <aside className="team-room__rail" aria-label="Agent workrooms">
           <h3>Agent workrooms</h3>
           {projection.team.agent_runs.length ? (
             <ul className="workspace-team__runs">
@@ -2514,100 +2711,159 @@ function TeamView({ projection }: { projection: ManagerWorkspaceProjection }) {
               ))}
             </ul>
           ) : (
-            <p className="workspace-summary__empty">No Agent Runs yet.</p>
+            <p className="team-room__empty">No Agent Runs yet.</p>
           )}
-        </section>
+          {selectedRun ? (
+            <section className="agent-workroom" aria-label="Agent workroom">
+              <div className="agent-workroom__heading">
+                <div>
+                  <strong>{selectedRun.profile.identity}</strong>
+                  <span>{selectedRun.task.objective}</span>
+                </div>
+                <button type="button" onClick={() => setSelectedRun(null)}>
+                  Close
+                </button>
+              </div>
+              <nav aria-label="Agent workroom sections">
+                {(
+                  ["conversation", "context", "activity", "outputs"] as const
+                ).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    aria-current={workroomTab === tab ? "page" : undefined}
+                    onClick={() => setWorkroomTab(tab)}
+                  >
+                    {tab[0].toUpperCase() + tab.slice(1)}
+                  </button>
+                ))}
+              </nav>
+              {workroomTab === "conversation" ? (
+                <div className="agent-workroom__panel">
+                  <p>
+                    Run <code>{selectedRun.run_id}</code> is{" "}
+                    {selectedRun.state.replace(/_/g, " ")}.
+                  </p>
+                  <p>
+                    {selectedRun.failure?.required_user_action ??
+                      "No provider failure recorded."}
+                  </p>
+                </div>
+              ) : null}
+              {workroomTab === "context" ? (
+                <div className="agent-workroom__panel">
+                  <h4>Exact inputs</h4>
+                  <ul>
+                    {selectedRun.task.exact_inputs.map((input) => (
+                      <li
+                        key={`${input.kind}-${input.reference}-${input.version}`}
+                      >
+                        {input.kind}: <code>{input.reference}</code> · v
+                        {input.version}
+                      </li>
+                    ))}
+                  </ul>
+                  <h4>Granted access</h4>
+                  <p>
+                    {selectedRun.permission_grant.data_scopes.join(", ") ||
+                      "No data scopes"}
+                  </p>
+                  <h4>Requested but not granted</h4>
+                  <p>
+                    {selectedRun.access_requests
+                      .filter((request) => request.status !== "approved")
+                      .flatMap((request) => request.request.data_scopes)
+                      .join(", ") || "None"}
+                  </p>
+                </div>
+              ) : null}
+              {workroomTab === "activity" ? (
+                <ol className="agent-workroom__panel agent-workroom__events">
+                  {selectedRun.events.map((event) => (
+                    <li key={event.sequence}>
+                      <strong>{event.kind.replace(/_/g, " ")}</strong>
+                      <span>{event.summary}</span>
+                    </li>
+                  ))}
+                </ol>
+              ) : null}
+              {workroomTab === "outputs" ? (
+                <div className="agent-workroom__panel">
+                  {selectedRun.proposed_result ? (
+                    <>
+                      <strong>
+                        {selectedRun.proposed_result.verification_status.replace(
+                          /_/g,
+                          " ",
+                        )}
+                      </strong>
+                      <pre>{selectedRun.proposed_result.payload_json}</pre>
+                    </>
+                  ) : (
+                    <p>No output has been proposed.</p>
+                  )}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+        </aside>
       </div>
-      {selectedRun ? (
-        <section className="agent-workroom" aria-label="Agent workroom">
-          <div className="agent-workroom__heading">
-            <div>
-              <strong>{selectedRun.profile.identity}</strong>
-              <span>{selectedRun.task.objective}</span>
+      {!readOnly ? (
+        <div className="manager-composer team-room__composer">
+          {contextRefs.length ? (
+            <div
+              className="manager-composer__context"
+              aria-label="Attached context"
+            >
+              {contextRefs.map((reference) => (
+                <button
+                  key={[
+                    reference.kind,
+                    reference.reference,
+                    reference.version,
+                    reference.evidence_ordinal ?? 0,
+                  ].join("-")}
+                  type="button"
+                  title="Remove attached context"
+                  onClick={() => onRemoveContext(reference.reference)}
+                >
+                  {reference.label} ×
+                </button>
+              ))}
             </div>
-            <button type="button" onClick={() => setSelectedRun(null)}>
-              Close
+          ) : null}
+          <div className="manager-composer__surface">
+            <button
+              className="manager-composer__attach"
+              type="button"
+              aria-label="Add Tender context"
+              title="Add Tender context"
+              disabled={busy}
+              onClick={onOpenSearch}
+            >
+              <Paperclip size={18} aria-hidden="true" />
+            </button>
+            <textarea
+              ref={composerRef}
+              rows={1}
+              value={composer}
+              aria-label="Message the Team"
+              placeholder="Message the Team…"
+              disabled={busy}
+              onChange={(event) => onComposerChange(event.target.value)}
+              onKeyDown={onKeyDown}
+            />
+            <button
+              className="manager-composer__send"
+              type="button"
+              aria-label="Send message"
+              disabled={busy || !composer.trim()}
+              onClick={() => void send()}
+            >
+              <Send size={18} aria-hidden="true" />
             </button>
           </div>
-          <nav aria-label="Agent workroom sections">
-            {(["conversation", "context", "activity", "outputs"] as const).map(
-              (tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  aria-current={workroomTab === tab ? "page" : undefined}
-                  onClick={() => setWorkroomTab(tab)}
-                >
-                  {tab[0].toUpperCase() + tab.slice(1)}
-                </button>
-              ),
-            )}
-          </nav>
-          {workroomTab === "conversation" ? (
-            <div className="agent-workroom__panel">
-              <p>
-                Run <code>{selectedRun.run_id}</code> is{" "}
-                {selectedRun.state.replace(/_/g, " ")}.
-              </p>
-              <p>
-                {selectedRun.failure?.required_user_action ??
-                  "No provider failure recorded."}
-              </p>
-            </div>
-          ) : null}
-          {workroomTab === "context" ? (
-            <div className="agent-workroom__panel">
-              <h4>Exact inputs</h4>
-              <ul>
-                {selectedRun.task.exact_inputs.map((input) => (
-                  <li key={`${input.kind}-${input.reference}-${input.version}`}>
-                    {input.kind}: <code>{input.reference}</code> · v
-                    {input.version}
-                  </li>
-                ))}
-              </ul>
-              <h4>Granted access</h4>
-              <p>
-                {selectedRun.permission_grant.data_scopes.join(", ") ||
-                  "No data scopes"}
-              </p>
-              <h4>Requested but not granted</h4>
-              <p>
-                {selectedRun.access_requests
-                  .filter((request) => request.status !== "approved")
-                  .flatMap((request) => request.request.data_scopes)
-                  .join(", ") || "None"}
-              </p>
-            </div>
-          ) : null}
-          {workroomTab === "activity" ? (
-            <ol className="agent-workroom__panel agent-workroom__events">
-              {selectedRun.events.map((event) => (
-                <li key={event.sequence}>
-                  <strong>{event.kind.replace(/_/g, " ")}</strong>
-                  <span>{event.summary}</span>
-                </li>
-              ))}
-            </ol>
-          ) : null}
-          {workroomTab === "outputs" ? (
-            <div className="agent-workroom__panel">
-              {selectedRun.proposed_result ? (
-                <>
-                  <strong>
-                    {selectedRun.proposed_result.verification_status.replace(
-                      /_/g,
-                      " ",
-                    )}
-                  </strong>
-                  <pre>{selectedRun.proposed_result.payload_json}</pre>
-                </>
-              ) : (
-                <p>No output has been proposed.</p>
-              )}
-            </div>
-          ) : null}
-        </section>
+        </div>
       ) : null}
     </section>
   );
@@ -5431,7 +5687,41 @@ export function ManagerWorkspace({
                       />
                     ) : null}
                     {view === "team" ? (
-                      <TeamView projection={projection} />
+                      <TeamRoom
+                        projection={projection}
+                        busy={isBusy}
+                        readOnly={selected.state === "archived"}
+                        composer={composerDrafts[selected.tender_id] ?? ""}
+                        onComposerChange={(value) =>
+                          setComposerDrafts((current) => ({
+                            ...current,
+                            [selected.tender_id]: value,
+                          }))
+                        }
+                        onSend={sendMessage}
+                        onOpenSearch={() => {
+                          searchInputRef.current?.focus();
+                          searchInputRef.current?.scrollIntoView({
+                            behavior: "smooth",
+                            block: "center",
+                          });
+                        }}
+                        contextRefs={
+                          contextRefsByTender[selected.tender_id] ?? []
+                        }
+                        onRemoveContext={(reference) =>
+                          setContextRefsByTender((current) => ({
+                            ...current,
+                            [selected.tender_id]: (
+                              current[selected.tender_id] ?? []
+                            ).filter(
+                              (candidate) => candidate.reference !== reference,
+                            ),
+                          }))
+                        }
+                        onOpenReference={handleMessageReference}
+                        onClose={() => navigateToView("manager")}
+                      />
                     ) : null}
                     {view === "files" ? (
                       <FilesView

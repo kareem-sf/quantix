@@ -150,6 +150,8 @@ pub enum WorkspaceMessageReferenceKind {
     ManagerIntakeOutcome,
     TenderRecord,
     SourceEvidence,
+    ArtifactVersion,
+    TenderTask,
 }
 
 impl WorkspaceMessageReferenceKind {
@@ -159,6 +161,8 @@ impl WorkspaceMessageReferenceKind {
             Self::ManagerIntakeOutcome => "manager_intake_outcome",
             Self::TenderRecord => "tender_record",
             Self::SourceEvidence => "source_evidence",
+            Self::ArtifactVersion => "artifact_version",
+            Self::TenderTask => "tender_task",
         }
     }
 
@@ -168,6 +172,8 @@ impl WorkspaceMessageReferenceKind {
             "manager_intake_outcome" => Ok(Self::ManagerIntakeOutcome),
             "tender_record" => Ok(Self::TenderRecord),
             "source_evidence" => Ok(Self::SourceEvidence),
+            "artifact_version" => Ok(Self::ArtifactVersion),
+            "tender_task" => Ok(Self::TenderTask),
             _ => Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed)),
         }
     }

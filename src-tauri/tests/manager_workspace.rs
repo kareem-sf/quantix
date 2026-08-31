@@ -1783,6 +1783,160 @@ fn public_host_projection_resumes_selection_and_persists_the_manager_conversatio
 }
 
 #[test]
+fn engineer_messages_accept_artifact_version_and_tender_task_reference_kinds() {
+    assert_eq!(
+        serde_json::to_string(&WorkspaceMessageReferenceKind::ArtifactVersion).expect("serialize"),
+        "\"artifact_version\""
+    );
+    assert_eq!(
+        serde_json::to_string(&WorkspaceMessageReferenceKind::TenderTask).expect("serialize"),
+        "\"tender_task\""
+    );
+
+    let user_home = tempfile::tempdir().expect("temporary user home");
+    let application_home = user_home.path().join(".quantix");
+    let host = QuantixHost::with_setup_platform(&application_home, Arc::new(ReadySetupPlatform));
+    assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
+    let tender = host
+        .create_tender(CreateTenderCommand {
+            name: "Reference Kind Tender".into(),
+        })
+        .expect("create Tender");
+    let package = user_home.path().join("reference-kind-source");
+    fs::create_dir_all(&package).expect("create source package");
+    fs::write(
+        package.join("ITT.pdf"),
+        b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
+    )
+    .expect("write source package");
+    let imported = host
+        .import_tender_package(ImportTenderPackageCommand {
+            tender_id: tender.tender_id.clone(),
+            source_path: package.to_string_lossy().into_owned(),
+        })
+        .expect("register source package");
+    let artifact = imported
+        .documents
+        .first()
+        .expect("registered source artifact")
+        .clone();
+
+    let database = application_home
+        .join("tenders")
+        .join(&tender.tender_id)
+        .join("tender.sqlite");
+    let (profile_id, profile_version): (String, u32) = Connection::open(&database)
+        .expect("open reference-kind Tender Store")
+        .query_row(
+            "SELECT profile_id, version FROM agent_profile_versions
+             WHERE identity = 'Tendering Manager' LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read seeded Manager profile");
+    let task_id = "1".repeat(32);
+    Connection::open(&database)
+        .expect("open Tender Store for the Task fixture")
+        .execute(
+            "INSERT INTO tender_tasks (
+               task_id, profile_id, profile_version, objective, exact_inputs_json,
+               output_contract_json, review_policy, deadline, permissions_json,
+               resource_budget_json, created_at
+             ) VALUES (?1, ?2, ?3, 'Produce the verified estimate.', '[]', '{}',
+                       'independent_review', '2030-01-01T00:00:00Z',
+                       '{\"data_scopes\":[],\"data_classifications\":[],\"allowed_actions\":[],\"allowed_tools\":[],\"network_allowed\":false,\"workspace_write_allowed\":true}',
+                       '{\"provider_turns\":1,\"duration_seconds\":120,\"output_bytes\":262144}',
+                       strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            rusqlite::params![task_id, profile_id, profile_version],
+        )
+        .expect("seed exact Tender Task fixture");
+
+    let before = host
+        .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+            tender_id: Some(tender.tender_id.clone()),
+        })
+        .expect("inspect projection before recording");
+    let before_messages = before.conversation.expect("prior conversation").messages;
+
+    let updated = host
+        .record_engineer_workspace_message(RecordEngineerWorkspaceMessageCommand {
+            tender_id: tender.tender_id.clone(),
+            body: "Link the exact Artifact Version and Task for this request.".into(),
+            attachment_refs: Vec::new(),
+            context_refs: vec![
+                WorkspaceMessageReference {
+                    kind: WorkspaceMessageReferenceKind::ArtifactVersion,
+                    reference: artifact.artifact_id.clone(),
+                    version: artifact.version,
+                    evidence_ordinal: None,
+                    label: artifact.package_path.clone(),
+                    detail: None,
+                },
+                WorkspaceMessageReference {
+                    kind: WorkspaceMessageReferenceKind::TenderTask,
+                    reference: task_id.clone(),
+                    version: 1,
+                    evidence_ordinal: None,
+                    label: "Produce the verified estimate.".into(),
+                    detail: None,
+                },
+            ],
+        })
+        .expect("record Engineer message with the new reference kinds");
+
+    let conversation = updated.conversation.expect("updated conversation");
+    assert_eq!(conversation.messages.len(), before_messages.len() + 1);
+    assert_eq!(
+        conversation.messages[..before_messages.len()],
+        before_messages[..],
+        "projection messages other than the new one stay unchanged"
+    );
+    let message = conversation.messages.last().expect("recorded message");
+    assert_eq!(message.author, TenderOfficeMessageAuthor::Engineer);
+    assert!(message
+        .references
+        .iter()
+        .any(|reference| reference.kind == WorkspaceMessageReferenceKind::ArtifactVersion));
+    assert!(message
+        .references
+        .iter()
+        .any(|reference| reference.kind == WorkspaceMessageReferenceKind::TenderTask));
+
+    let foreign_artifact = host
+        .record_engineer_workspace_message(RecordEngineerWorkspaceMessageCommand {
+            tender_id: tender.tender_id.clone(),
+            body: "Use this foreign Artifact Version.".into(),
+            attachment_refs: Vec::new(),
+            context_refs: vec![WorkspaceMessageReference {
+                kind: WorkspaceMessageReferenceKind::ArtifactVersion,
+                reference: "f".repeat(32),
+                version: 9,
+                evidence_ordinal: None,
+                label: "Foreign artifact".into(),
+                detail: None,
+            }],
+        })
+        .expect_err("artifact_version references must exist in the Tender Store");
+    assert_eq!(foreign_artifact.code, TenderErrorCode::InvalidCommand);
+    let foreign_task = host
+        .record_engineer_workspace_message(RecordEngineerWorkspaceMessageCommand {
+            tender_id: tender.tender_id.clone(),
+            body: "Use this foreign Tender Task.".into(),
+            attachment_refs: Vec::new(),
+            context_refs: vec![WorkspaceMessageReference {
+                kind: WorkspaceMessageReferenceKind::TenderTask,
+                reference: "e".repeat(32),
+                version: 1,
+                evidence_ordinal: None,
+                label: "Foreign task".into(),
+                detail: None,
+            }],
+        })
+        .expect_err("tender_task references must exist in the Tender Store");
+    assert_eq!(foreign_task.code, TenderErrorCode::InvalidCommand);
+}
+
+#[test]
 fn selection_failure_cannot_follow_a_committed_engineer_message() {
     let user_home = tempfile::tempdir().expect("temporary user home");
     let application_home = user_home.path().join(".quantix");

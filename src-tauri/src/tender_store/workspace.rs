@@ -1841,6 +1841,23 @@ fn workspace_reference_exists(
                 |row| row.get(0),
             )
         }
+        super::WorkspaceMessageReferenceKind::ArtifactVersion => transaction.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM source_artifact_versions
+               WHERE artifact_id = ?1 AND version = ?2
+             )
+             OR EXISTS(
+               SELECT 1 FROM production_artifact_versions
+               WHERE artifact_id = ?1 AND version = ?2
+             )",
+            params![reference.reference, reference.version],
+            |row| row.get(0),
+        ),
+        super::WorkspaceMessageReferenceKind::TenderTask => transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tender_tasks WHERE task_id = ?1)",
+            [&reference.reference],
+            |row| row.get(0),
+        ),
     }
     .map_err(sql_error)?;
     Ok(exists)

@@ -21,8 +21,10 @@ import type { ProductionTaskReviewInspection } from "./bindings/ProductionTaskRe
 import type { TenderProductionInspection } from "./bindings/TenderProductionInspection";
 import type { TenderQuery } from "./bindings/TenderQuery";
 import type { TenderQueryPage } from "./bindings/TenderQueryPage";
+import type { TenderOfficeMessage } from "./bindings/TenderOfficeMessage";
 import type { TenderRecordInspection } from "./bindings/TenderRecordInspection";
 import type { WorkPlanProposalInspection } from "./bindings/WorkPlanProposalInspection";
+import type { WorkspaceMessageReference } from "./bindings/WorkspaceMessageReference";
 import type { WorkspaceTaskRow } from "./bindings/WorkspaceTaskRow";
 
 const host = vi.hoisted(() => ({
@@ -1149,6 +1151,158 @@ function questionProjection(): ManagerWorkspaceProjection {
       ],
     },
   };
+}
+
+function teamRoomMessage(
+  overrides: Partial<TenderOfficeMessage> & {
+    message_id: string;
+    sequence: number;
+  },
+): TenderOfficeMessage {
+  return {
+    author: "manager",
+    kind: "routine",
+    body: "Room message.",
+    created_at: new Date().toISOString(),
+    references: [],
+    ...overrides,
+  };
+}
+
+function teamRoomMessageReference(
+  overrides: Partial<WorkspaceMessageReference> & { reference: string },
+): WorkspaceMessageReference {
+  return {
+    kind: "tender_record",
+    version: 1,
+    evidence_ordinal: null,
+    label: "Exact reference",
+    detail: null,
+    ...overrides,
+  };
+}
+
+function daysAgoIso(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  date.setHours(10, 0, 0, 0);
+  return date.toISOString();
+}
+
+function teamRoomProjection(): ManagerWorkspaceProjection {
+  const handoffMessage = teamRoomMessage({
+    message_id: "msg-handoff",
+    sequence: 2,
+    kind: "handoff",
+    body: "Handing the lift-pit dimensions to the estimator.",
+    created_at: daysAgoIso(3),
+    references: [
+      teamRoomMessageReference({
+        kind: "tender_task",
+        reference: "task-0000000000000000000000000000000",
+        label: "Produce the verified estimate.",
+      }),
+    ],
+  });
+  const outputMessage = teamRoomMessage({
+    message_id: "msg-output",
+    sequence: 3,
+    kind: "output",
+    body: "Cost estimate v2 is recorded and ready for your review.",
+    created_at: daysAgoIso(1),
+    references: [
+      teamRoomMessageReference({
+        kind: "artifact_version",
+        reference: "artifact-000000000000000000000000000",
+        version: 2,
+        label: "Cost estimate v2",
+      }),
+    ],
+  });
+  const blockerMessage = teamRoomMessage({
+    message_id: "msg-blocker",
+    sequence: 5,
+    kind: "blocker",
+    body: "The pumphouse duty pump schedule is missing.",
+  });
+  const questionMessage = teamRoomMessage({
+    message_id: "msg-question",
+    sequence: 6,
+    kind: "question",
+    body: "Which concrete class applies to the ground-floor slab?",
+    references: [
+      teamRoomMessageReference({
+        reference: citedRecordId,
+        label: "Slab concrete strength",
+        detail: "Proposed requirement",
+      }),
+      teamRoomMessageReference({
+        kind: "source_evidence",
+        reference: evidenceArtifactId,
+        version: 2,
+        evidence_ordinal: 7,
+        label: "01 Instructions/ITT.pdf",
+        detail: "Concrete class passage",
+      }),
+    ],
+  });
+  return {
+    ...projection,
+    conversation: {
+      conversation_id: "c".repeat(32),
+      latest_meaningful_message_id: questionMessage.message_id,
+      messages: [
+        teamRoomMessage({
+          message_id: "msg-start",
+          sequence: 1,
+          author: "system",
+          kind: "status",
+          body: "West Campus MEP workspace is ready.",
+          created_at: daysAgoIso(3),
+        }),
+        handoffMessage,
+        outputMessage,
+        teamRoomMessage({
+          message_id: "msg-routine",
+          sequence: 4,
+          author: "engineer",
+          body: "Understood, keep me posted.",
+          created_at: daysAgoIso(1),
+        }),
+        blockerMessage,
+        questionMessage,
+      ],
+    },
+    team: {
+      ...projection.team,
+      agent_runs: [
+        {
+          run_id: "5".repeat(32),
+          task_id: "2".repeat(32),
+          state: "running",
+          agent: {
+            profile_id: "e".repeat(32),
+            profile_version: 1,
+            identity: "Cost Estimator",
+            profession: "Senior Construction Cost Estimator",
+          },
+          started_at: "2026-08-30T09:10:00Z",
+          completed_at: null,
+        },
+      ],
+    },
+  };
+}
+
+async function openTeamRoom() {
+  await screen.findByRole("textbox", {
+    name: "Message your Tendering Manager",
+  });
+  const workspace = screen.getByRole("complementary", {
+    name: "Tender workspace",
+  });
+  fireEvent.click(within(workspace).getByRole("button", { name: "Team" }));
+  await screen.findByRole("heading", { name: "Team working" });
 }
 
 const tenderAiProviderConnection = {
@@ -5915,5 +6069,206 @@ describe("ManagerWorkspace", () => {
       }),
     ).toBeTruthy();
     expect(screen.queryByTestId("work-task-detail")).toBeNull();
+  });
+
+  it("opens Team working as a full room and closing returns to the same Manager context", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(teamRoomProjection());
+
+    render(<ManagerWorkspace />);
+    const managerComposer = await screen.findByRole("textbox", {
+      name: "Message your Tendering Manager",
+    });
+    fireEvent.change(managerComposer, {
+      target: { value: "Draft for the Manager" },
+    });
+
+    await openTeamRoom();
+
+    expect(
+      screen.queryByRole("textbox", {
+        name: "Message your Tendering Manager",
+      }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("log", { name: "Team room conversation" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open workroom" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to Manager" }));
+
+    const restoredComposer = await screen.findByRole("textbox", {
+      name: "Message your Tendering Manager",
+    });
+    expect(restoredComposer).toHaveProperty("value", "Draft for the Manager");
+    expect(
+      screen.getByText(
+        "Which concrete class applies to the ground-floor slab?",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Team working" })).toBeNull();
+  });
+
+  it("exposes Needs you, Handoffs, Outputs, and All messages filters in the room", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(teamRoomProjection());
+
+    render(<ManagerWorkspace />);
+    await openTeamRoom();
+    const filters = screen.getByRole("group", { name: "Message filters" });
+    for (const label of ["All messages", "Needs you", "Handoffs", "Outputs"]) {
+      expect(within(filters).getByRole("button", { name: label })).toBeTruthy();
+    }
+    expect(
+      within(filters)
+        .getByRole("button", { name: "All messages" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    const log = screen.getByRole("log", { name: "Team room conversation" });
+    expect(
+      within(log).getByText(
+        "Which concrete class applies to the ground-floor slab?",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(within(filters).getByRole("button", { name: "Handoffs" }));
+    expect(
+      within(log).getByText(
+        "Handing the lift-pit dimensions to the estimator.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(log).queryByText(
+        "Which concrete class applies to the ground-floor slab?",
+      ),
+    ).toBeNull();
+
+    fireEvent.click(within(filters).getByRole("button", { name: "Outputs" }));
+    expect(
+      within(log).getByText(
+        "Cost estimate v2 is recorded and ready for your review.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(log).queryByText(
+        "Handing the lift-pit dimensions to the estimator.",
+      ),
+    ).toBeNull();
+
+    fireEvent.click(within(filters).getByRole("button", { name: "Needs you" }));
+    expect(
+      within(log).getByText(
+        "Which concrete class applies to the ground-floor slab?",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(log).getByText("The pumphouse duty pump schedule is missing."),
+    ).toBeTruthy();
+    expect(within(log).queryByText("Understood, keep me posted.")).toBeNull();
+
+    fireEvent.click(
+      within(filters).getByRole("button", { name: "All messages" }),
+    );
+    expect(within(log).getByText("Understood, keep me posted.")).toBeTruthy();
+  });
+
+  it("groups older messages under period headers while today flows chronologically", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(teamRoomProjection());
+
+    render(<ManagerWorkspace />);
+    await openTeamRoom();
+    const log = screen.getByRole("log", { name: "Team room conversation" });
+    const threeDaysAgoHeading = new Intl.DateTimeFormat(undefined, {
+      dateStyle: "long",
+    }).format(
+      (() => {
+        const date = new Date();
+        date.setDate(date.getDate() - 3);
+        return date;
+      })(),
+    );
+    expect(within(log).getByText("Yesterday")).toBeTruthy();
+    expect(within(log).getByText(threeDaysAgoHeading)).toBeTruthy();
+    expect(within(log).queryByText(/^Today$/)).toBeNull();
+
+    const olderMessage = within(log)
+      .getByText("Handing the lift-pit dimensions to the estimator.")
+      .closest("article")!;
+    const newerMessage = within(log)
+      .getByText("Cost estimate v2 is recorded and ready for your review.")
+      .closest("article")!;
+    expect(
+      olderMessage.compareDocumentPosition(newerMessage) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("sends the Engineer message from the room composer into the same conversation", async () => {
+    installResponsiveMatchMedia(1440);
+    const updated = teamRoomProjection();
+    updated.conversation!.latest_meaningful_message_id = "msg-reply";
+    updated.conversation!.messages.push(
+      teamRoomMessage({
+        message_id: "msg-reply",
+        sequence: 7,
+        author: "engineer",
+        body: "Please confirm the pump schedule with the supplier.",
+      }),
+    );
+    host.inspectManagerWorkspace.mockResolvedValue(teamRoomProjection());
+    host.recordEngineerWorkspaceMessage.mockResolvedValue(updated);
+
+    render(<ManagerWorkspace />);
+    await openTeamRoom();
+    const composer = screen.getByRole("textbox", { name: "Message the Team" });
+    fireEvent.change(composer, {
+      target: { value: "Please confirm the pump schedule with the supplier." },
+    });
+    fireEvent.keyDown(composer, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(host.recordEngineerWorkspaceMessage).toHaveBeenCalledWith(
+        tenderId,
+        "Please confirm the pump schedule with the supplier.",
+        [],
+        [],
+      );
+    });
+    expect(
+      await screen.findByText(
+        "Please confirm the pump schedule with the supplier.",
+      ),
+    ).toBeTruthy();
+    expect(composer).toHaveProperty("value", "");
+  });
+
+  it("renders attributable messages with their exact references in the room", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(teamRoomProjection());
+
+    render(<ManagerWorkspace />);
+    await openTeamRoom();
+    const log = screen.getByRole("log", { name: "Team room conversation" });
+    expect(
+      within(log).getAllByText("Tendering Manager").length,
+    ).toBeGreaterThan(0);
+    expect(within(log).getAllByText("You").length).toBeGreaterThan(0);
+    expect(within(log).getByText("Question")).toBeTruthy();
+    expect(within(log).getByText("Handoff")).toBeTruthy();
+    expect(within(log).getByText("Blocker")).toBeTruthy();
+    expect(within(log).getByText("Output")).toBeTruthy();
+
+    expect(within(log).getByText("Slab concrete strength")).toBeTruthy();
+    expect(
+      within(log).getByRole("button", { name: /Review evidence/ }),
+    ).toBeTruthy();
+    expect(
+      within(log).getAllByRole("button", { name: /Review record/ }).length,
+    ).toBeGreaterThan(0);
+    expect(
+      within(log).getByText("Produce the verified estimate."),
+    ).toBeTruthy();
+    expect(within(log).getByText("Cost estimate v2")).toBeTruthy();
   });
 });

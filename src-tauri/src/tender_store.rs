@@ -260,7 +260,7 @@ static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static CONTENT_VERIFY_PASS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 45;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 46;
 
 pub(crate) fn record_agent_run_provider_binding(
     transaction: &Transaction<'_>,
@@ -504,7 +504,8 @@ CREATE TABLE tender_office_message_references (
   message_id TEXT NOT NULL,
   ordinal INTEGER NOT NULL CHECK (ordinal > 0),
   kind TEXT NOT NULL CHECK (kind IN (
-    'agent_run', 'manager_intake_outcome', 'tender_record', 'source_evidence'
+    'agent_run', 'manager_intake_outcome', 'tender_record', 'source_evidence',
+    'artifact_version', 'tender_task'
   )),
   reference TEXT NOT NULL CHECK (length(reference) = 32),
   version INTEGER NOT NULL CHECK (version > 0),
