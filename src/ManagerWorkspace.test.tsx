@@ -16,14 +16,17 @@ import type { ChangeAssessment } from "./bindings/ChangeAssessment";
 import type { ChangeAssessmentPage } from "./bindings/ChangeAssessmentPage";
 import type { EvidenceDocument } from "./bindings/EvidenceDocument";
 import type { EvidenceLocation } from "./bindings/EvidenceLocation";
+import type { ProductionTaskReviewInspection } from "./bindings/ProductionTaskReviewInspection";
 import type { TenderProductionInspection } from "./bindings/TenderProductionInspection";
 import type { TenderQuery } from "./bindings/TenderQuery";
 import type { TenderQueryPage } from "./bindings/TenderQueryPage";
 import type { TenderRecordInspection } from "./bindings/TenderRecordInspection";
 import type { WorkPlanProposalInspection } from "./bindings/WorkPlanProposalInspection";
+import type { WorkspaceTaskRow } from "./bindings/WorkspaceTaskRow";
 
 const host = vi.hoisted(() => ({
   archiveTender: vi.fn(),
+  approveProductionFindingException: vi.fn(),
   cancelChatGptLogin: vi.fn(),
   cancelRuntimePreparation: vi.fn(),
   chooseAndImportTenderPackage: vi.fn(),
@@ -39,11 +42,14 @@ const host = vi.hoisted(() => ({
   inspectComplianceMatrix: vi.fn(),
   inspectCurrentBidDecisionPackage: vi.fn(),
   inspectEvidence: vi.fn(),
+  inspectProductionTaskReview: vi.fn(),
   inspectTenderQueries: vi.fn(),
   inspectTenderRecord: vi.fn(),
+  interruptAgentRun: vi.fn(),
   invalidateBidDecisionApproval: vi.fn(),
   resolveBidDecisionReturnRework: vi.fn(),
   runBidDecisionPackageReview: vi.fn(),
+  runProductionTask: vi.fn(),
   searchEvidence: vi.fn(),
   composeTenderOffice: vi.fn(),
   inspectCurrentWorkPlan: vi.fn(),
@@ -441,6 +447,192 @@ function productionInspection(
     activated_by: "engineer_user",
     acting_role: "tendering_manager",
     created_at: "2026-08-30T09:05:00Z",
+  };
+}
+
+function workTask(overrides: Partial<WorkspaceTaskRow> = {}): WorkspaceTaskRow {
+  return {
+    production_task_id: "task-default",
+    task_id: "2".repeat(32),
+    task_key: "cost_estimation_production",
+    objective: "Develop the evidence-linked estimate.",
+    state: "waiting",
+    status_detail: "ready",
+    dependencies: [],
+    agent: {
+      profile_id: "e".repeat(32),
+      profile_version: 1,
+      identity: "Cost Estimator",
+      profession: "Senior Construction Cost Estimator",
+    },
+    current_run_id: null,
+    output_count: 0,
+    ...overrides,
+  };
+}
+
+function workTasksProjection(
+  tasks: WorkspaceTaskRow[],
+): ManagerWorkspaceProjection {
+  return {
+    ...projection,
+    selected_tender: {
+      ...projection.selected_tender!,
+      phase: "active_production" as const,
+      needs_engineer: false,
+    },
+    work: {
+      needs_engineer: 1,
+      working: 1,
+      waiting: 2,
+      done: 1,
+      cancelled: 0,
+      failed: 1,
+      tasks,
+    },
+  };
+}
+
+function sixStateTasks(): WorkspaceTaskRow[] {
+  return [
+    workTask({
+      production_task_id: "task-waiting-blocked",
+      task_key: "risk_review",
+      objective: "Review the ground risks.",
+      state: "waiting",
+      status_detail: "blocked",
+      dependencies: ["cost_estimation_production"],
+    }),
+    workTask({
+      production_task_id: "task-waiting-ready",
+      task_key: "cost_estimation_production",
+      objective: "Develop the evidence-linked estimate.",
+      state: "waiting",
+      status_detail: "ready",
+    }),
+    workTask({
+      production_task_id: "task-working-running",
+      task_key: "boq_takeoff",
+      objective: "Take off the BOQ quantities.",
+      state: "working",
+      status_detail: "running",
+      current_run_id: "5".repeat(32),
+    }),
+    workTask({
+      production_task_id: "task-needs-engineer",
+      task_key: "estimate_review",
+      objective: "Review the estimate.",
+      state: "needs_engineer",
+      status_detail: "review_ready",
+      dependencies: ["boq_takeoff"],
+    }),
+    workTask({
+      production_task_id: "task-paused",
+      task_key: "pricing_scenario",
+      objective: "Price the tender scenarios.",
+      state: "paused",
+      status_detail: "suspended",
+    }),
+    workTask({
+      production_task_id: "task-done",
+      task_key: "tender_analysis",
+      objective: "Analyse the tender package.",
+      state: "done",
+      status_detail: "ready_for_integration",
+      output_count: 1,
+    }),
+    workTask({
+      production_task_id: "task-failed",
+      task_key: "compliance_check",
+      objective: "Check the compliance matrix.",
+      state: "failed",
+      status_detail: "failed",
+    }),
+  ];
+}
+
+const focusedProductionTaskId = "task-working-running";
+
+function focusedProductionInspection(): TenderProductionInspection {
+  return {
+    ...productionInspection(workPlanInspection()),
+    tasks: [
+      {
+        production_task_id: focusedProductionTaskId,
+        plan_manifest_sha256: "2".repeat(64),
+        task: {
+          task_key: "boq_takeoff",
+          workstream_key: "cost_estimation",
+          profile_id: "e".repeat(32),
+          profile_version: 1,
+          objective: "Take off the BOQ quantities.",
+          exact_inputs: [
+            {
+              kind: "source_evidence",
+              reference: `${evidenceArtifactId}#7`,
+              version: 2,
+            },
+          ],
+          dependencies: [],
+          deadline: "2026-10-01T00:00:00Z",
+          milestone: "boq_takeoff_ready",
+          review_profile_id: "f".repeat(32),
+          review_profile_version: 1,
+          major_finding_policy: "remediation_required" as const,
+          permissions: {
+            data_scopes: ["tender_analysis"],
+            data_classifications: ["tender_internal" as const],
+            allowed_actions: ["read"],
+            allowed_tools: [],
+            network_allowed: false,
+            workspace_write_allowed: true,
+          },
+          resource_budget: planBudget,
+          output_contract_json: "{}",
+        },
+        state: "running",
+        run_ids: ["5".repeat(32)],
+        artifact_version_count: 1,
+        review_count: 0,
+        finding_count: 0,
+        open_blocking_finding_count: 0,
+        latest_artifact: null,
+        latest_review_result: null,
+        query_control_available: false,
+        ready_for_integration: false,
+        created_at: "2026-08-30T09:10:00Z",
+        updated_at: "2026-08-30T10:00:00Z",
+      },
+    ],
+  };
+}
+
+function focusedTaskReview(): ProductionTaskReviewInspection {
+  return {
+    production_task_id: focusedProductionTaskId,
+    artifact_versions: [
+      {
+        payload: {
+          summary: "Ground-floor slab takeoff on a C30/37 basis.",
+          evidence_references: [`${evidenceArtifactId}#7`],
+          gaps: [],
+          coordination_observations: [],
+        },
+        artifact_id: "4".repeat(32),
+        version: 1,
+        author_run_id: "7".repeat(32),
+        prior_version: null,
+        remediation_review_id: null,
+        payload_sha256: "d".repeat(64),
+        output_validation_passed: true,
+        evidence_verified: true,
+        data_scopes: ["tender_analysis"],
+        data_classifications: ["tender_internal" as const],
+        created_at: "2026-08-30T10:00:00Z",
+      },
+    ],
+    reviews: [],
+    readiness: null,
   };
 }
 
@@ -4857,5 +5049,216 @@ describe("ManagerWorkspace", () => {
     expect(
       await screen.findByRole("button", { name: "Review change" }),
     ).toBeTruthy();
+  });
+
+  function openWorkView(): Promise<HTMLElement> {
+    return screen.findByRole("heading", { name: "West Campus MEP", level: 1 });
+  }
+
+  it("shows the six plain-language work groups with Paused and Failed named exactly", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(
+      workTasksProjection(sixStateTasks()),
+    );
+
+    render(<ManagerWorkspace />);
+    await openWorkView();
+    fireEvent.click(
+      within(
+        screen.getByRole("complementary", { name: "Tender workspace" }),
+      ).getByRole("button", { name: "Work" }),
+    );
+
+    for (const label of [
+      "Waiting",
+      "Working",
+      "Needs you",
+      "Paused",
+      "Done",
+      "Failed",
+    ]) {
+      expect(
+        screen.getByRole("heading", { name: label, level: 3 }),
+      ).toBeTruthy();
+    }
+    expect(
+      screen.queryByRole("heading", { name: "Needs attention" }),
+    ).toBeNull();
+
+    const waiting = screen.getByRole("region", { name: "Waiting" });
+    expect(within(waiting).getByText("Review the ground risks.")).toBeTruthy();
+    expect(
+      within(waiting).getByText("Waiting for: cost estimation production"),
+    ).toBeTruthy();
+    expect(
+      within(waiting).queryByText("Price the tender scenarios."),
+    ).toBeNull();
+    const paused = screen.getByRole("region", { name: "Paused" });
+    expect(
+      within(paused).getByText("Price the tender scenarios."),
+    ).toBeTruthy();
+    expect(
+      within(paused).getByText(
+        "Paused because the Work Plan changed. The Manager will resume or re-plan it.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("renders Done work quietly without loud accents", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(
+      workTasksProjection(sixStateTasks()),
+    );
+
+    const { container } = render(<ManagerWorkspace />);
+    await openWorkView();
+    fireEvent.click(
+      within(
+        screen.getByRole("complementary", { name: "Tender workspace" }),
+      ).getByRole("button", { name: "Work" }),
+    );
+
+    const doneGroup = screen.getByRole("region", { name: "Done" });
+    const quietRow = within(doneGroup)
+      .getByText("Analyse the tender package.")
+      .closest("li");
+    expect(quietRow?.classList.contains("is-quiet")).toBe(true);
+    expect(
+      quietRow?.querySelector('.workspace-task__state[data-state="done"]'),
+    ).toBeTruthy();
+    expect(container.querySelectorAll("li.is-quiet")).toHaveLength(1);
+  });
+
+  it("opens a focused task detail with exact context, evidence, and the current output", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(
+      workTasksProjection(sixStateTasks()),
+    );
+    host.inspectTenderProduction.mockResolvedValue(
+      focusedProductionInspection(),
+    );
+    host.inspectProductionTaskReview.mockResolvedValue(focusedTaskReview());
+
+    render(<ManagerWorkspace />);
+    await openWorkView();
+    fireEvent.click(
+      within(
+        screen.getByRole("complementary", { name: "Tender workspace" }),
+      ).getByRole("button", { name: "Work" }),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Take off the BOQ quantities/ }),
+    );
+
+    expect(await screen.findByTestId("work-task-detail")).toBeTruthy();
+    expect(
+      await screen.findByText(`${evidenceArtifactId}#7 · v2`),
+    ).toBeTruthy();
+    expect(screen.getByText(`${evidenceArtifactId}#7`)).toBeTruthy();
+    expect(
+      screen.getByText("Ground-floor slab takeoff on a C30/37 basis."),
+    ).toBeTruthy();
+    expect(screen.getByText("Output v1 · latest")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to Work" }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("work-task-detail")).toBeNull(),
+    );
+    expect(screen.getByRole("heading", { name: "Work" })).toBeTruthy();
+  });
+
+  it("stops an in-flight run only after explaining what depends on it", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(
+      workTasksProjection(sixStateTasks()),
+    );
+    host.inspectTenderProduction.mockResolvedValue(
+      focusedProductionInspection(),
+    );
+    host.inspectProductionTaskReview.mockResolvedValue(focusedTaskReview());
+    host.interruptAgentRun.mockResolvedValue(true);
+
+    render(<ManagerWorkspace />);
+    await openWorkView();
+    fireEvent.click(
+      within(
+        screen.getByRole("complementary", { name: "Tender workspace" }),
+      ).getByRole("button", { name: "Work" }),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Take off the BOQ quantities/ }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
+
+    const consequence = await screen.findByRole("alert");
+    expect(
+      within(consequence).getByText(
+        /1 task waits for this work: Review the estimate\./,
+      ),
+    ).toBeTruthy();
+    expect(
+      within(consequence).getByText(
+        /Stopping now records the outcome as it stands/,
+      ),
+    ).toBeTruthy();
+    expect(host.interruptAgentRun).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(consequence).getByRole("button", { name: "Stop the work" }),
+    );
+    await waitFor(() => {
+      expect(host.interruptAgentRun).toHaveBeenCalledWith(
+        tenderId,
+        "5".repeat(32),
+      );
+    });
+  });
+
+  it("routes scope changes to the Manager conversation instead of editing the task", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(
+      workTasksProjection(sixStateTasks()),
+    );
+    host.inspectTenderProduction.mockResolvedValue(
+      focusedProductionInspection(),
+    );
+    host.inspectProductionTaskReview.mockResolvedValue(focusedTaskReview());
+    host.recordEngineerWorkspaceMessage.mockResolvedValue(
+      workTasksProjection(sixStateTasks()),
+    );
+
+    render(<ManagerWorkspace />);
+    await openWorkView();
+    fireEvent.click(
+      within(
+        screen.getByRole("complementary", { name: "Tender workspace" }),
+      ).getByRole("button", { name: "Work" }),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Take off the BOQ quantities/ }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Request a change through the Manager",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(host.recordEngineerWorkspaceMessage).toHaveBeenCalledWith(
+        tenderId,
+        expect.stringContaining("boq_takeoff"),
+        [],
+        [],
+      );
+    });
+    expect(
+      await screen.findByRole("textbox", {
+        name: "Message your Tendering Manager",
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("work-task-detail")).toBeNull();
   });
 });

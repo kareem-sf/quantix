@@ -3364,13 +3364,40 @@ html.quantix-reduced-motion *::after {
 }
 
 .workspace-work-groups li {
+  min-width: 0;
+}
+
+.workspace-work-groups li > button {
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr);
   gap: 11px;
+  width: 100%;
   padding: 13px 14px;
   border: 1px solid var(--qx-border);
   border-radius: 12px;
+  color: var(--qx-text);
   background: var(--qx-surface);
+  text-align: left;
+}
+
+.workspace-work-groups li > button:hover {
+  border-color: var(--qx-border-strong);
+  background: var(--qx-hover);
+}
+
+.workspace-work-groups li.is-quiet > button {
+  border-color: var(--qx-border);
+  background: transparent;
+  color: var(--qx-text-muted);
+}
+
+.workspace-work-groups li.is-quiet strong {
+  color: var(--qx-text-muted);
+}
+
+.workspace-work-groups li.is-quiet .workspace-task__state {
+  background: var(--qx-text-disabled);
+  box-shadow: 0 0 0 3px var(--qx-border);
 }
 
 .workspace-task__state {
@@ -3390,14 +3417,162 @@ html.quantix-reduced-motion *::after {
 
 .workspace-task__state[data-state="completed"],
 .workspace-task__state[data-state="done"] {
-  background: var(--qx-success);
-  box-shadow: 0 0 0 3px var(--qx-success-soft);
+  background: var(--qx-text-disabled);
+  box-shadow: 0 0 0 3px var(--qx-border);
 }
 
 .workspace-task__state[data-state="failed"],
 .workspace-task__state[data-state="blocked"] {
   background: var(--qx-danger);
   box-shadow: 0 0 0 3px var(--qx-danger-soft);
+}
+
+.workspace-task__waiting {
+  color: var(--qx-text);
+  font-weight: 600;
+}
+
+.work-task-detail {
+  width: min(100% - 40px, var(--conversation-width));
+  margin: 0 auto;
+  padding: 34px 0 46px;
+}
+
+.work-task-detail__header {
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  padding: 22px 24px;
+  border: 1px solid var(--qx-border);
+  border-radius: 14px;
+  background: var(--qx-surface);
+}
+
+.work-task-detail__header h2 {
+  margin: 8px 0 10px;
+  font-size: clamp(1.3rem, 3vw, 1.7rem);
+  letter-spacing: -0.03em;
+}
+
+.work-task-detail__header p {
+  max-width: 680px;
+  margin: 4px 0 0;
+  color: var(--qx-text-muted);
+  line-height: 1.55;
+}
+
+.work-task-detail__loading {
+  color: var(--qx-text-muted);
+}
+
+.work-task-detail__section {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 18px 20px;
+  border: 1px solid var(--qx-border);
+  border-radius: 14px;
+  background: var(--qx-surface);
+}
+
+.work-task-detail__section h3 {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.work-task-detail__section p {
+  margin: 0;
+  color: var(--qx-text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.work-task-detail__references {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.78rem;
+}
+
+.work-task-detail__references li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+}
+
+.work-task-detail__references code {
+  color: var(--qx-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.work-task-detail__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.work-task-detail__stop {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--qx-danger);
+  border-radius: 12px;
+  background: var(--qx-danger-soft);
+}
+
+.work-task-detail__stop p {
+  color: var(--qx-text);
+}
+
+.work-task-detail__output,
+.work-task-detail__review {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--qx-border);
+  border-radius: 12px;
+}
+
+.work-task-detail__findings {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8125rem;
+}
+
+.work-task-detail__findings p {
+  margin: 4px 0 0;
+}
+
+.work-task-detail__exception {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.work-task-detail__exception label {
+  display: grid;
+  gap: 6px;
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.work-task-detail__exception textarea {
+  padding: 9px 12px;
+  border: 1px solid var(--qx-border);
+  border-radius: 8px;
+  background: var(--qx-surface-raised);
+  color: var(--qx-text);
+  font: inherit;
+  resize: vertical;
 }
 
 .workspace-work-groups li > div:last-child {
@@ -4468,7 +4643,9 @@ html.quantix-reduced-motion *::after {
   .manager-composer__surface,
   .tender-search > form,
   .tender-search__results li > button,
-  .workspace-work-groups li,
+  .workspace-work-groups li > button,
+  .work-task-detail__header,
+  .work-task-detail__section,
   .workspace-team__stream li,
   .workspace-team__runs li,
   .agent-workroom {

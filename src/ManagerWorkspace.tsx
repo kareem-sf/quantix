@@ -55,6 +55,12 @@ import type { WorkspaceSearchHit } from "./bindings/WorkspaceSearchHit";
 import type { WorkspaceMessageReference } from "./bindings/WorkspaceMessageReference";
 import type { AgentRunInspection } from "./bindings/AgentRunInspection";
 import type { WorkspaceTaskRow } from "./bindings/WorkspaceTaskRow";
+import type { WorkspaceTaskState } from "./bindings/WorkspaceTaskState";
+import type { ProductionArtifactVersion } from "./bindings/ProductionArtifactVersion";
+import type { ProductionReview } from "./bindings/ProductionReview";
+import type { ProductionReviewFinding } from "./bindings/ProductionReviewFinding";
+import type { ProductionTaskReviewInspection } from "./bindings/ProductionTaskReviewInspection";
+import type { TenderProductionInspection } from "./bindings/TenderProductionInspection";
 import type { TenderRecordEvidence } from "./bindings/TenderRecordEvidence";
 import type { TenderRecordInspection } from "./bindings/TenderRecordInspection";
 import type { ChangeAssessmentClassification } from "./bindings/ChangeAssessmentClassification";
@@ -117,7 +123,12 @@ import {
   restoreTrashedTender,
   selectManagerWorkspaceTender,
   startManagerTender,
+  approveProductionFindingException,
+  inspectProductionTaskReview,
+  inspectTenderProduction,
   inspectTenderRecord,
+  interruptAgentRun,
+  runProductionTask,
   trashRecoveryRequiredTender,
   trashTender,
   purgeRecoveryRequiredTender,
@@ -164,7 +175,10 @@ type WorkspaceOperationKind =
   | "rename_tender"
   | "create_backup"
   | "retention"
-  | "trash";
+  | "trash"
+  | "run_task"
+  | "stop_task"
+  | "request_change";
 
 type WorkspaceOperation = {
   kind: WorkspaceOperationKind;
@@ -1787,29 +1801,95 @@ function TenderSearch({
   );
 }
 
-function WorkView({ projection }: { projection: ManagerWorkspaceProjection }) {
-  const groups: Array<[string, WorkspaceTaskRow[]]> = [
-    [
-      "Needs you",
-      projection.work.tasks.filter((task) => task.state === "needs_engineer"),
-    ],
-    [
-      "Working",
-      projection.work.tasks.filter((task) => task.state === "working"),
-    ],
-    [
-      "Waiting",
-      projection.work.tasks.filter((task) =>
-        ["waiting", "paused"].includes(task.state),
-      ),
-    ],
-    ["Done", projection.work.tasks.filter((task) => task.state === "done")],
-    [
-      "Needs attention",
-      projection.work.tasks.filter((task) => task.state === "failed"),
-    ],
-  ];
-  const total = projection.work.tasks.length;
+const WORK_GROUP_ORDER: readonly WorkspaceTaskState[] = [
+  "waiting",
+  "working",
+  "needs_engineer",
+  "paused",
+  "done",
+  "failed",
+];
+
+const WORK_GROUP_LABELS: Record<WorkspaceTaskState, string> = {
+  waiting: "Waiting",
+  working: "Working",
+  needs_engineer: "Needs you",
+  paused: "Paused",
+  done: "Done",
+  failed: "Failed",
+};
+
+function humanizeToken(value: string): string {
+  return value.replace(/_/g, " ");
+}
+
+function taskStateSentence(task: WorkspaceTaskRow): string {
+  switch (task.status_detail) {
+    case "blocked":
+      return "Waiting for earlier work to finish first.";
+    case "ready":
+      return "Ready. The Manager's coordinator starts this automatically.";
+    case "running":
+      return "A specialist is working on this right now.";
+    case "reviewing":
+      return "An independent reviewer is checking the finished work.";
+    case "review_ready":
+      return "The work is finished. Its review waits for your decision.";
+    case "remediation_ready":
+      return "The reviewer asked for changes. The rework starts next.";
+    case "query_blocked":
+      return "On hold until a Tender question is answered.";
+    case "attempt_limit_reached":
+      return "Tried too many times without a verified result. It needs your decision.";
+    case "indeterminate":
+      return "The last attempt ended without a clear result. It needs your decision.";
+    case "ready_for_integration":
+      return "Done. The Manager folds this output into the next stage.";
+    case "suspended":
+      return "Paused because the Work Plan changed. The Manager will resume or re-plan it.";
+    case "cancelled":
+      return "Stopped before finishing. The recorded outcome stays on file.";
+    case "failed":
+      return "Could not finish. Decide what happens next with the Manager.";
+    default:
+      return WORK_GROUP_LABELS[task.state] + ".";
+  }
+}
+
+function waitingForLabel(task: WorkspaceTaskRow): string | null {
+  if (task.state !== "waiting" || task.dependencies.length === 0) return null;
+  return task.dependencies.map(humanizeToken).join(", ");
+}
+
+function workDependents(
+  tasks: WorkspaceTaskRow[],
+  task: WorkspaceTaskRow,
+): WorkspaceTaskRow[] {
+  if (!task.task_key) return [];
+  return tasks.filter(
+    (candidate) =>
+      candidate.production_task_id !== task.production_task_id &&
+      candidate.dependencies.includes(task.task_key),
+  );
+}
+
+function taskChangeRequestBody(task: WorkspaceTaskRow): string {
+  const objective = task.objective ?? humanizeToken(task.task_key);
+  return `Please amend the Work Plan for task "${task.task_key}" (${objective}). I want to change what this task covers. Propose the amendment for my approval, and restart this task only after the amended plan is approved.`;
+}
+
+function WorkView({
+  projection,
+  onOpenTask,
+}: {
+  projection: ManagerWorkspaceProjection;
+  onOpenTask: (task: WorkspaceTaskRow) => void;
+}) {
+  const tasks = projection.work.tasks;
+  const groups = WORK_GROUP_ORDER.map(
+    (state) => [state, tasks.filter((task) => task.state === state)] as const,
+  );
+  const total = tasks.length;
   return (
     <section className="workspace-summary" aria-labelledby="work-title">
       <div className="workspace-summary__heading">
@@ -1827,51 +1907,510 @@ function WorkView({ projection }: { projection: ManagerWorkspaceProjection }) {
       ) : (
         <div className="workspace-work-groups">
           {groups
-            .filter(([, tasks]) => tasks.length > 0)
-            .map(([label, tasks]) => (
-              <section key={label} aria-label={label}>
+            .filter(([, groupTasks]) => groupTasks.length > 0)
+            .map(([state, groupTasks]) => (
+              <section key={state} aria-label={WORK_GROUP_LABELS[state]}>
                 <div className="workspace-work-groups__heading">
-                  <h3>{label}</h3>
-                  <span>{tasks.length}</span>
+                  <h3>{WORK_GROUP_LABELS[state]}</h3>
+                  <span>{groupTasks.length}</span>
                 </div>
                 <ul>
-                  {tasks.map((task) => (
-                    <li key={task.production_task_id}>
-                      <div
-                        className="workspace-task__state"
-                        data-state={task.state}
-                      />
-                      <div>
-                        <strong>{task.objective ?? task.task_key}</strong>
-                        <span>{task.status_detail}</span>
-                        <dl>
+                  {groupTasks.map((task) => {
+                    const waitingFor = waitingForLabel(task);
+                    return (
+                      <li
+                        key={task.production_task_id}
+                        className={
+                          task.state === "done" ? "is-quiet" : undefined
+                        }
+                      >
+                        <button
+                          type="button"
+                          className="workspace-task__open"
+                          onClick={() => onOpenTask(task)}
+                        >
+                          <span
+                            className="workspace-task__state"
+                            data-state={task.state}
+                            aria-hidden="true"
+                          />
                           <div>
-                            <dt>Specialist</dt>
-                            <dd>
-                              {task.agent?.identity ?? "Tendering Manager"}
-                            </dd>
+                            <strong>
+                              {task.objective ?? humanizeToken(task.task_key)}
+                            </strong>
+                            <span>{taskStateSentence(task)}</span>
+                            {waitingFor ? (
+                              <span className="workspace-task__waiting">
+                                Waiting for: {waitingFor}
+                              </span>
+                            ) : null}
+                            <dl>
+                              <div>
+                                <dt>Specialist</dt>
+                                <dd>
+                                  {task.agent?.identity ?? "Tendering Manager"}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt>Outputs</dt>
+                                <dd>{task.output_count}</dd>
+                              </div>
+                            </dl>
                           </div>
-                          <div>
-                            <dt>Blocker</dt>
-                            <dd>
-                              {task.dependencies.length
-                                ? task.dependencies.join(", ")
-                                : "None"}
-                            </dd>
-                          </div>
-                          <div>
-                            <dt>Outputs</dt>
-                            <dd>{task.output_count}</dd>
-                          </div>
-                        </dl>
-                      </div>
-                    </li>
-                  ))}
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
             ))}
         </div>
       )}
+    </section>
+  );
+}
+
+function WorkTaskDetail({
+  tenderId,
+  task,
+  tasks,
+  busy,
+  readOnly,
+  onRefresh,
+  onStart,
+  onStop,
+  onRequestChange,
+  reportCommandFailure,
+  onClose,
+}: {
+  tenderId: string;
+  task: WorkspaceTaskRow;
+  tasks: WorkspaceTaskRow[];
+  busy: boolean;
+  readOnly: boolean;
+  onRefresh: () => Promise<void>;
+  onStart: () => Promise<boolean>;
+  onStop: () => Promise<boolean>;
+  onRequestChange: () => Promise<boolean>;
+  reportCommandFailure: () => void;
+  onClose: () => void;
+}) {
+  const [production, setProduction] =
+    useState<TenderProductionInspection | null>(null);
+  const [review, setReview] = useState<ProductionTaskReviewInspection | null>(
+    null,
+  );
+  const [loading, setLoading] = useState(true);
+  const [confirmStop, setConfirmStop] = useState(false);
+  const [exceptionDrafts, setExceptionDrafts] = useState<
+    Record<string, { rationale: string; consequence: string }>
+  >({});
+  const [approvingFindingId, setApprovingFindingId] = useState<string | null>(
+    null,
+  );
+
+  const dependents = useMemo(() => workDependents(tasks, task), [tasks, task]);
+  const productionTask =
+    production?.tasks.find(
+      (candidate) => candidate.production_task_id === task.production_task_id,
+    ) ?? null;
+  const canStart = !readOnly && task.status_detail === "ready";
+  const canRequestQueryControl =
+    !readOnly &&
+    task.status_detail === "query_blocked" &&
+    productionTask?.query_control_available === true;
+  const canStop =
+    !readOnly && task.state === "working" && task.current_run_id !== null;
+  const exceptionAllowed =
+    productionTask?.task.major_finding_policy === "engineer_exception_allowed";
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setConfirmStop(false);
+    setExceptionDrafts({});
+    const load = async () => {
+      try {
+        const [nextProduction, nextReview] = await Promise.all([
+          inspectTenderProduction(tenderId),
+          inspectProductionTaskReview(tenderId, task.production_task_id),
+        ]);
+        if (!active) return;
+        setProduction(nextProduction);
+        setReview(nextReview);
+      } catch {
+        if (active) reportCommandFailure();
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [
+    tenderId,
+    task.production_task_id,
+    task.state,
+    task.current_run_id,
+    reportCommandFailure,
+  ]);
+
+  const requestStart = async () => {
+    await onStart();
+  };
+
+  const requestStop = async () => {
+    await onStop();
+  };
+
+  const approveException = async (
+    targetReview: ProductionReview,
+    finding: ProductionReviewFinding,
+  ) => {
+    const draft = exceptionDrafts[finding.finding_id];
+    const artifact = review?.artifact_versions.find(
+      (candidate) =>
+        candidate.artifact_id === targetReview.target_artifact_id &&
+        candidate.version === targetReview.target_version,
+    );
+    if (!draft?.rationale.trim() || !draft.consequence.trim() || !artifact) {
+      return;
+    }
+    setApprovingFindingId(finding.finding_id);
+    try {
+      const next = await approveProductionFindingException(
+        tenderId,
+        task.production_task_id,
+        finding.finding_id,
+        targetReview.review_id,
+        artifact.artifact_id,
+        artifact.version,
+        artifact.payload_sha256,
+        draft.rationale.trim(),
+        draft.consequence.trim(),
+      );
+      setReview(next);
+      setExceptionDrafts((current) => {
+        const nextDrafts = { ...current };
+        delete nextDrafts[finding.finding_id];
+        return nextDrafts;
+      });
+      await onRefresh();
+    } catch {
+      reportCommandFailure();
+    } finally {
+      setApprovingFindingId(null);
+    }
+  };
+
+  const artifacts = review?.artifact_versions ?? [];
+  const evidenceReferences = [
+    ...new Set(
+      artifacts.flatMap((artifact) => artifact.payload.evidence_references),
+    ),
+  ];
+
+  return (
+    <section
+      className="work-task-detail"
+      data-testid="work-task-detail"
+      aria-labelledby="work-task-detail-title"
+    >
+      <header className="work-task-detail__header">
+        <div>
+          <p className="section-label">Work task</p>
+          <h2 id="work-task-detail-title">
+            {task.objective ?? humanizeToken(task.task_key)}
+          </h2>
+          <p>{taskStateSentence(task)}</p>
+          <p>
+            Specialist: {task.agent?.identity ?? "Tendering Manager"}
+            {task.agent ? ` · ${task.agent.profession}` : ""}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="manager-workspace__secondary"
+          onClick={onClose}
+        >
+          Back to Work
+        </button>
+      </header>
+
+      {loading ? (
+        <p className="work-task-detail__loading" role="status">
+          Opening the task detail…
+        </p>
+      ) : null}
+
+      {!readOnly && (canStart || canRequestQueryControl || canStop) ? (
+        <section className="work-task-detail__section" aria-label="Actions">
+          {canStart || canRequestQueryControl ? (
+            <div className="work-task-detail__actions">
+              <button
+                type="button"
+                className="manager-workspace__primary"
+                disabled={busy}
+                onClick={() => void requestStart()}
+              >
+                {canStart ? "Start work now" : "Request specialist update"}
+              </button>
+            </div>
+          ) : null}
+          {canStop ? (
+            confirmStop ? (
+              <div className="work-task-detail__stop" role="alert">
+                <strong>Stop this work?</strong>
+                <p>
+                  {dependents.length > 0
+                    ? `${dependents.length === 1 ? "1 task waits" : `${dependents.length} tasks wait`} for this work: ${dependents
+                        .map(
+                          (dependent) =>
+                            dependent.objective ??
+                            humanizeToken(dependent.task_key),
+                        )
+                        .join("; ")}. `
+                    : "Nothing else waits on this task right now. "}
+                  Stopping now records the outcome as it stands, and dependent
+                  work stays waiting until the Manager re-plans or the task
+                  starts again.
+                </p>
+                <div className="work-task-detail__actions">
+                  <button
+                    type="button"
+                    className="manager-workspace__primary"
+                    disabled={busy}
+                    onClick={() => void requestStop()}
+                  >
+                    Stop the work
+                  </button>
+                  <button
+                    type="button"
+                    className="manager-workspace__secondary"
+                    disabled={busy}
+                    onClick={() => setConfirmStop(false)}
+                  >
+                    Keep working
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="work-task-detail__actions">
+                <button
+                  type="button"
+                  className="manager-workspace__secondary"
+                  disabled={busy}
+                  onClick={() => setConfirmStop(true)}
+                >
+                  Stop
+                </button>
+              </div>
+            )
+          ) : null}
+        </section>
+      ) : null}
+
+      {productionTask && productionTask.task.exact_inputs.length > 0 ? (
+        <section className="work-task-detail__section">
+          <h3>What this task works from</h3>
+          <ul className="work-task-detail__references">
+            {productionTask.task.exact_inputs.map((input) => (
+              <li key={`${input.kind}-${input.reference}-${input.version}`}>
+                <strong>{humanizeToken(input.kind)}</strong>
+                <code>
+                  {input.reference} · v{input.version}
+                </code>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {evidenceReferences.length > 0 ? (
+        <section className="work-task-detail__section">
+          <h3>Evidence used</h3>
+          <ul className="work-task-detail__references">
+            {evidenceReferences.map((reference) => (
+              <li key={reference}>
+                <code>{reference}</code>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      <section className="work-task-detail__section">
+        <h3>Current output</h3>
+        {artifacts.length > 0 ? (
+          artifacts.map((artifact: ProductionArtifactVersion) => (
+            <article
+              key={`${artifact.artifact_id}-${artifact.version}`}
+              className="work-task-detail__output"
+            >
+              <strong>
+                Output v{artifact.version}
+                {artifact.version === artifacts[artifacts.length - 1].version
+                  ? " · latest"
+                  : ""}
+              </strong>
+              <p>{artifact.payload.summary}</p>
+              <p>
+                Output checks{" "}
+                {artifact.output_validation_passed ? "passed" : "failed"} ·
+                Evidence verification{" "}
+                {artifact.evidence_verified ? "passed" : "failed"}
+              </p>
+              {artifact.payload.gaps.length > 0 ? (
+                <p>Disclosed gaps: {artifact.payload.gaps.join(", ")}</p>
+              ) : null}
+            </article>
+          ))
+        ) : (
+          <p>
+            No output yet ({task.output_count} recorded). It appears here as
+            soon as the specialist records one.
+          </p>
+        )}
+      </section>
+
+      {review && review.reviews.length > 0 ? (
+        <section className="work-task-detail__section">
+          <h3>Independent reviews</h3>
+          {review.reviews.map((targetReview) => (
+            <article
+              key={targetReview.review_id}
+              className="work-task-detail__review"
+            >
+              <strong>
+                Output v{targetReview.target_version} ·{" "}
+                {humanizeToken(targetReview.result)}
+              </strong>
+              <p>
+                {humanizeToken(targetReview.capability)} · criteria:{" "}
+                {targetReview.criteria.join(", ")}
+              </p>
+              {targetReview.findings.length === 0 ? (
+                <p>No findings.</p>
+              ) : (
+                <ul className="work-task-detail__findings">
+                  {targetReview.findings.map((finding) => {
+                    const draft = exceptionDrafts[finding.finding_id];
+                    return (
+                      <li key={finding.finding_id}>
+                        <strong>{humanizeToken(finding.severity)}</strong> ·{" "}
+                        {finding.summary}
+                        {finding.evidence_references.length > 0 ? (
+                          <span>
+                            {" "}
+                            · Evidence {finding.evidence_references.join(", ")}
+                          </span>
+                        ) : null}
+                        {finding.disposition ? (
+                          <p>
+                            Settled: {humanizeToken(finding.disposition.kind)}{" "}
+                            by {humanizeToken(finding.disposition.decided_by)}.
+                            Consequence: {finding.disposition.consequence}
+                          </p>
+                        ) : finding.severity === "minor" ? (
+                          <p>Disclosed; does not block the work.</p>
+                        ) : finding.severity === "critical" ? (
+                          <p>
+                            Open and nonwaivable; the author must fix it and a
+                            new independent review is required.
+                          </p>
+                        ) : finding.severity === "major" && exceptionAllowed ? (
+                          <div className="work-task-detail__exception">
+                            <label>
+                              Exception rationale
+                              <textarea
+                                value={draft?.rationale ?? ""}
+                                maxLength={4000}
+                                disabled={busy || approvingFindingId !== null}
+                                onChange={(event) => {
+                                  const rationale = event.currentTarget.value;
+                                  setExceptionDrafts((current) => ({
+                                    ...current,
+                                    [finding.finding_id]: {
+                                      rationale,
+                                      consequence:
+                                        current[finding.finding_id]
+                                          ?.consequence ?? "",
+                                    },
+                                  }));
+                                }}
+                              />
+                            </label>
+                            <label>
+                              Exact consequence
+                              <textarea
+                                value={draft?.consequence ?? ""}
+                                maxLength={4000}
+                                disabled={busy || approvingFindingId !== null}
+                                onChange={(event) => {
+                                  const consequence = event.currentTarget.value;
+                                  setExceptionDrafts((current) => ({
+                                    ...current,
+                                    [finding.finding_id]: {
+                                      rationale:
+                                        current[finding.finding_id]
+                                          ?.rationale ?? "",
+                                      consequence,
+                                    },
+                                  }));
+                                }}
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              className="manager-workspace__primary"
+                              disabled={
+                                busy ||
+                                approvingFindingId !== null ||
+                                !draft?.rationale.trim() ||
+                                !draft?.consequence.trim()
+                              }
+                              onClick={() =>
+                                void approveException(targetReview, finding)
+                              }
+                            >
+                              Approve this exception
+                            </button>
+                          </div>
+                        ) : (
+                          <p>
+                            Open; the approved Review Policy requires the author
+                            to fix it and run a new review.
+                          </p>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </article>
+          ))}
+        </section>
+      ) : null}
+
+      {!readOnly ? (
+        <section className="work-task-detail__section work-task-detail__change">
+          <h3>Need this task to do something different?</h3>
+          <p>
+            What a task covers comes from the approved Work Plan. Only the
+            Manager can change it, through a Work Plan amendment. Sending the
+            request opens the Manager conversation with this exact task named.
+          </p>
+          <button
+            type="button"
+            className="manager-workspace__secondary"
+            disabled={busy}
+            onClick={() => void onRequestChange()}
+          >
+            Request a change through the Manager
+          </button>
+        </section>
+      ) : null}
     </section>
   );
 }
@@ -2613,6 +3152,7 @@ export function ManagerWorkspace({
   const [recordDecision, setRecordDecision] =
     useState<RecordDecisionState | null>(null);
   const [changeReviewOpen, setChangeReviewOpen] = useState(false);
+  const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
   const [tenderViews, setTenderViews] = useState<Record<string, WorkspaceView>>(
     {},
   );
@@ -2737,22 +3277,30 @@ export function ManagerWorkspace({
   }, [contextOpen, contextRail]);
 
   useEffect(() => {
-    if (!evidenceReview && !recordDecision && !changeReviewOpen) return;
+    if (
+      !evidenceReview &&
+      !recordDecision &&
+      !changeReviewOpen &&
+      !focusedTaskId
+    )
+      return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !operationRef.current) {
         if (evidenceReview) setEvidenceReview(null);
         else if (recordDecision) setRecordDecision(null);
-        else setChangeReviewOpen(false);
+        else if (changeReviewOpen) setChangeReviewOpen(false);
+        else setFocusedTaskId(null);
       }
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [evidenceReview, recordDecision, changeReviewOpen]);
+  }, [evidenceReview, recordDecision, changeReviewOpen, focusedTaskId]);
 
   useEffect(() => {
     setEvidenceReview(null);
     setRecordDecision(null);
     setChangeReviewOpen(false);
+    setFocusedTaskId(null);
   }, [projection?.selected_tender?.tender_id]);
 
   useEffect(() => {
@@ -3679,6 +4227,83 @@ export function ManagerWorkspace({
     });
   }, []);
 
+  const startFocusedTask = useCallback(async () => {
+    const tenderId = projection?.selected_tender?.tender_id;
+    const task = projection?.work.tasks.find(
+      (candidate) => candidate.production_task_id === focusedTaskId,
+    );
+    if (!tenderId || !task) return false;
+    const succeeded = await run(
+      async () => {
+        await runProductionTask(tenderId, task.production_task_id);
+        return true;
+      },
+      { kind: "run_task", label: "Starting the task" },
+      async () => load(),
+    );
+    if (succeeded) await load();
+    return succeeded === true;
+  }, [
+    focusedTaskId,
+    load,
+    projection?.selected_tender?.tender_id,
+    projection?.work.tasks,
+    run,
+  ]);
+
+  const stopFocusedTask = useCallback(async () => {
+    const tenderId = projection?.selected_tender?.tender_id;
+    const task = projection?.work.tasks.find(
+      (candidate) => candidate.production_task_id === focusedTaskId,
+    );
+    if (!tenderId || !task?.current_run_id) return false;
+    const succeeded = await run(
+      async () => {
+        await interruptAgentRun(tenderId, task.current_run_id!);
+        return true;
+      },
+      { kind: "stop_task", label: "Stopping the run" },
+      async () => load(),
+    );
+    if (succeeded) await load();
+    return succeeded === true;
+  }, [
+    focusedTaskId,
+    load,
+    projection?.selected_tender?.tender_id,
+    projection?.work.tasks,
+    run,
+  ]);
+
+  const requestFocusedTaskChange = useCallback(async () => {
+    const tenderId = projection?.selected_tender?.tender_id;
+    const task = projection?.work.tasks.find(
+      (candidate) => candidate.production_task_id === focusedTaskId,
+    );
+    if (!tenderId || !task) return false;
+    const succeeded = await run(
+      () =>
+        recordEngineerWorkspaceMessage(
+          tenderId,
+          taskChangeRequestBody(task),
+          [],
+          [],
+        ),
+      { kind: "request_change", label: "Sending the change request" },
+      (next) => setProjection(next),
+    );
+    if (!succeeded) return false;
+    setFocusedTaskId(null);
+    navigateToView("manager");
+    return true;
+  }, [
+    focusedTaskId,
+    navigateToView,
+    projection?.selected_tender?.tender_id,
+    projection?.work.tasks,
+    run,
+  ]);
+
   const openEvidenceReview = useCallback(
     (target: EvidenceReviewTarget, conflicts?: EvidenceReviewConflict[]) => {
       const tenderId = projection?.selected_tender?.tender_id;
@@ -3764,6 +4389,12 @@ export function ManagerWorkspace({
   const canDecideCitedRecords =
     projection?.current_action.kind === "answer_manager_question" &&
     citedRecordTargets(projection).length > 0;
+  const focusedTask =
+    focusedTaskId && projection
+      ? (projection.work.tasks.find(
+          (task) => task.production_task_id === focusedTaskId,
+        ) ?? null)
+      : null;
   const evidenceReviewOriginLabel = recordDecision
     ? "record decision"
     : "Manager conversation";
@@ -4735,7 +5366,12 @@ export function ManagerWorkspace({
                       )
                     ) : null}
                     {view === "work" ? (
-                      <WorkView projection={projection} />
+                      <WorkView
+                        projection={projection}
+                        onOpenTask={(task) =>
+                          setFocusedTaskId(task.production_task_id)
+                        }
+                      />
                     ) : null}
                     {view === "team" ? (
                       <TeamView projection={projection} />
@@ -4770,6 +5406,23 @@ export function ManagerWorkspace({
                         reportCommandFailure={reportFocusedCommandFailure}
                         onDecided={() => void handleRecordDecided()}
                         onClose={closeRecordDecision}
+                      />
+                    </div>
+                  ) : null}
+                  {focusedTask ? (
+                    <div className="manager-workspace__overlay">
+                      <WorkTaskDetail
+                        tenderId={selected.tender_id}
+                        task={focusedTask}
+                        tasks={projection.work.tasks}
+                        busy={isBusy}
+                        readOnly={selected.state === "archived"}
+                        onRefresh={load}
+                        onStart={() => startFocusedTask()}
+                        onStop={() => stopFocusedTask()}
+                        onRequestChange={() => requestFocusedTaskChange()}
+                        reportCommandFailure={reportFocusedCommandFailure}
+                        onClose={() => setFocusedTaskId(null)}
                       />
                     </div>
                   ) : null}
