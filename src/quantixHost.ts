@@ -25,6 +25,8 @@ import type { CalculationWorkspaceInspection } from "./bindings/CalculationWorks
 import type { ChangeAssessment } from "./bindings/ChangeAssessment";
 import type { ChangeAssessmentClassification } from "./bindings/ChangeAssessmentClassification";
 import type { ChangeAssessmentPage } from "./bindings/ChangeAssessmentPage";
+import type { ArtifactVersionHistory } from "./bindings/ArtifactVersionHistory";
+import type { InspectArtifactVersionsCommand } from "./bindings/InspectArtifactVersionsCommand";
 import type { DecisionCockpit } from "./bindings/DecisionCockpit";
 import type { InspectDecisionCockpitCommand } from "./bindings/InspectDecisionCockpitCommand";
 import type { ControlledBoqCalculationRun } from "./bindings/ControlledBoqCalculationRun";
@@ -1854,6 +1856,19 @@ export function inspectChangeAssessments(
     limit,
   };
   return invoke<ChangeAssessmentPage>("inspect_change_assessments", {
+    command,
+  });
+}
+
+export function inspectArtifactVersions(
+  tenderId: string,
+  artifactId: string,
+): Promise<ArtifactVersionHistory> {
+  const command: InspectArtifactVersionsCommand = {
+    tender_id: tenderId,
+    artifact_id: artifactId,
+  };
+  return invoke<ArtifactVersionHistory>("inspect_artifact_versions", {
     command,
   });
 }

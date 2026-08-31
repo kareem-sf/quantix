@@ -104,12 +104,13 @@ pub use calculations::{
     RunCostEstimatorCalculationCommand,
 };
 pub use change_assessments::{
-    ChangeAssessment, ChangeAssessmentApprovalConsequence, ChangeAssessmentClassification,
-    ChangeAssessmentDecision, ChangeAssessmentDependencyKind, ChangeAssessmentDependencyReference,
+    ArtifactVersionHistory, ArtifactVersionSummary, ChangeAssessment,
+    ChangeAssessmentApprovalConsequence, ChangeAssessmentClassification, ChangeAssessmentDecision,
+    ChangeAssessmentDependencyKind, ChangeAssessmentDependencyReference,
     ChangeAssessmentEvidenceExcerpt, ChangeAssessmentImpact, ChangeAssessmentImpactConsequence,
     ChangeAssessmentImpactKind, ChangeAssessmentObjectKind, ChangeAssessmentPage,
     ChangeAssessmentSource, ChangeAssessmentStatus, DecideChangeAssessmentCommand,
-    InspectChangeAssessmentsCommand,
+    InspectArtifactVersionsCommand, InspectChangeAssessmentsCommand,
 };
 pub use coordinated_baselines::{
     AssembleCoordinatedBidBaselineCommand, CoordinatedBidBaseline, CoordinatedBidBaselineApproval,

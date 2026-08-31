@@ -221,11 +221,12 @@ pub(crate) fn change_assessment_has_active_affected_execution(
 use super::agent_records::load_task;
 use super::bid_decisions::invalidate_accepted_bid_decision_for_change_assessment;
 use super::production_scheduler::record_version_is_relevant_to_production_task;
+use super::workspace::{append_manager_message, MAX_MESSAGE_BYTES};
 use super::{
     append_audit_event_with_sequence, lock_mutex_with_check, random_identifier, sha256_hex,
     sql_error, sqlite_timestamp, BidPackageOperationBudget, QuantixHost, TenderCommandError,
-    TenderErrorCode, TenderEvidenceReference, TenderId, TenderLifecyclePhase, TenderStore,
-    WorkPlanTask,
+    TenderErrorCode, TenderEvidenceReference, TenderId, TenderLifecyclePhase,
+    TenderOfficeMessageKind, TenderStore, WorkPlanTask,
 };
 
 const MAX_CHANGE_ASSESSMENTS: u32 = 128;
@@ -542,6 +543,31 @@ pub struct ChangeAssessmentPage {
     pub next_before_sequence: Option<u32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct InspectArtifactVersionsCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub artifact_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct ArtifactVersionSummary {
+    pub artifact_id: String,
+    pub version: u32,
+    pub digest: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct ArtifactVersionHistory {
+    pub versions: Vec<ArtifactVersionSummary>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ChangeAssessmentManifest {
     schema_version: u32,
@@ -604,6 +630,23 @@ impl QuantixHost {
         let result = lock_mutex_with_check(&store, &mut || budget.check())?
             .inspect_change_assessments(command.before_sequence, command.limit, budget);
         result
+    }
+
+    pub fn inspect_artifact_versions(
+        &self,
+        command: InspectArtifactVersionsCommand,
+    ) -> Result<ArtifactVersionHistory, TenderCommandError> {
+        super::require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        let store = self.tender_store(&tender_id)?;
+        let history = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .inspect_artifact_versions(&command.artifact_id)?;
+        Ok(history)
     }
 
     pub fn decide_change_assessment(
@@ -1301,6 +1344,12 @@ impl TenderStore {
             })
             .collect::<Vec<_>>();
         let assessment_id = random_identifier(transaction)?;
+        let change_summary = change_summary_message(
+            relationship_kind,
+            &prior_source,
+            &replacement_source,
+            &impacts,
+        );
         let manifest = ChangeAssessmentManifest {
             schema_version: 1,
             assessment_id: assessment_id.clone(),
@@ -1396,6 +1445,12 @@ impl TenderStore {
                 [],
             )
             .map_err(sql_error)?;
+        append_manager_message(
+            transaction,
+            TenderOfficeMessageKind::Finding,
+            &change_summary,
+            created_at,
+        )?;
         Ok(assessment_id)
     }
 
@@ -1699,6 +1754,93 @@ impl TenderStore {
             next_before_sequence: has_more.then(|| ids.last().map(|item| item.0)).flatten(),
             items,
         })
+    }
+
+    pub(crate) fn inspect_artifact_versions(
+        &self,
+        artifact_id: &str,
+    ) -> Result<ArtifactVersionHistory, TenderCommandError> {
+        let source_versions = self.source_artifact_version_chain(artifact_id)?;
+        if !source_versions.is_empty() {
+            return Ok(ArtifactVersionHistory {
+                versions: source_versions,
+            });
+        }
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT artifact_id, version, payload_sha256, created_at
+                 FROM production_artifact_versions WHERE artifact_id = ?1
+                 ORDER BY version DESC",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([artifact_id], |row| {
+                Ok(ArtifactVersionSummary {
+                    artifact_id: row.get(0)?,
+                    version: row.get(1)?,
+                    digest: Some(row.get(2)?),
+                    created_at: row.get(3)?,
+                })
+            })
+            .map_err(sql_error)?;
+        let versions = rows
+            .map(|row| row.map_err(sql_error))
+            .collect::<Result<Vec<_>, _>>()?;
+        if versions.is_empty() {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        Ok(ArtifactVersionHistory { versions })
+    }
+
+    fn source_artifact_version_chain(
+        &self,
+        artifact_id: &str,
+    ) -> Result<Vec<ArtifactVersionSummary>, TenderCommandError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "WITH RECURSIVE chain(artifact_id, version) AS (
+                   SELECT artifact_id, version
+                   FROM source_artifact_versions WHERE artifact_id = ?1
+                   UNION
+                   SELECT relationships.prior_artifact_id, relationships.prior_version
+                   FROM source_relationships AS relationships
+                   JOIN chain
+                     ON relationships.replacement_artifact_id = chain.artifact_id
+                    AND relationships.replacement_version = chain.version
+                   UNION
+                   SELECT relationships.replacement_artifact_id, relationships.replacement_version
+                   FROM source_relationships AS relationships
+                   JOIN chain
+                     ON relationships.prior_artifact_id = chain.artifact_id
+                    AND relationships.prior_version = chain.version
+                 )
+                 SELECT versions.artifact_id, versions.version, versions.sha256,
+                        versions.created_at,
+                        EXISTS(
+                          SELECT 1 FROM source_relationships AS priors
+                          WHERE priors.prior_artifact_id = versions.artifact_id
+                            AND priors.prior_version = versions.version
+                        ) AS is_prior
+                 FROM chain
+                 JOIN source_artifact_versions AS versions
+                   ON versions.artifact_id = chain.artifact_id
+                  AND versions.version = chain.version
+                 ORDER BY is_prior ASC, versions.created_at DESC, versions.artifact_id DESC",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([artifact_id], |row| {
+                Ok(ArtifactVersionSummary {
+                    artifact_id: row.get(0)?,
+                    version: row.get(1)?,
+                    digest: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            })
+            .map_err(sql_error)?;
+        rows.map(|row| row.map_err(sql_error)).collect()
     }
 
     fn load_change_assessment(
@@ -4695,4 +4837,89 @@ fn valid_hash(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn change_summary_message(
+    relationship_kind: SourceRelationshipKind,
+    prior: &ChangeAssessmentSource,
+    replacement: &ChangeAssessmentSource,
+    impacts: &[ChangeAssessmentImpact],
+) -> String {
+    let kind = match relationship_kind {
+        SourceRelationshipKind::Addendum => "addendum",
+        SourceRelationshipKind::Replacement => "replacement document",
+    };
+    let mut body = format!(
+        "A new {kind} for '{}' arrived and was registered as '{}'. The earlier version of \
+         the document stays preserved unchanged.",
+        prior.package_path, replacement.package_path
+    );
+    let affected = affected_work_counts(impacts);
+    if affected.is_empty() {
+        body.push_str(
+            " Nothing in the current bid cites the replaced document, so no rework is needed.",
+        );
+    } else {
+        body.push_str(&format!(
+            " It makes {affected} out of date, and the affected work needs targeted rework \
+             before the bid can continue."
+        ));
+    }
+    body.push_str(" I need your decision on this change before work continues.");
+    bounded_change_message(&body)
+}
+
+fn affected_work_counts(impacts: &[ChangeAssessmentImpact]) -> String {
+    let mut counts = BTreeMap::<&'static str, BTreeSet<&str>>::new();
+    for impact in impacts {
+        let singular = match impact.kind {
+            ChangeAssessmentImpactKind::TenderRecord => "tender record",
+            ChangeAssessmentImpactKind::TenderQuery => "tender query",
+            ChangeAssessmentImpactKind::WorkPlan => "work plan item",
+            ChangeAssessmentImpactKind::ProductionTask => "work task",
+            ChangeAssessmentImpactKind::ProductionArtifact => "work output",
+            ChangeAssessmentImpactKind::CalculationRun => "calculation",
+            ChangeAssessmentImpactKind::Estimate => "estimate",
+            ChangeAssessmentImpactKind::PricingDecision => "pricing decision",
+            ChangeAssessmentImpactKind::CoordinatedBaseline => "cost baseline",
+            ChangeAssessmentImpactKind::Package => "bid decision package",
+            ChangeAssessmentImpactKind::Approval => "approval",
+            ChangeAssessmentImpactKind::AgentRun | ChangeAssessmentImpactKind::Review => continue,
+        };
+        counts
+            .entry(singular)
+            .or_default()
+            .insert(impact.object_id.as_str());
+    }
+    counts
+        .into_iter()
+        .map(|(singular, ids)| {
+            let count = ids.len();
+            if count == 1 {
+                format!("{count} {singular}")
+            } else {
+                format!("{count} {}", pluralize_noun(singular))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn pluralize_noun(singular: &str) -> String {
+    match singular.strip_suffix('y') {
+        Some(stem) => format!("{stem}ies"),
+        None => format!("{singular}s"),
+    }
+}
+
+fn bounded_change_message(body: &str) -> String {
+    const ELLIPSIS: &str = "…";
+    if body.len() <= MAX_MESSAGE_BYTES {
+        return body.to_owned();
+    }
+    let mut end = MAX_MESSAGE_BYTES - ELLIPSIS.len();
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{ELLIPSIS}", &body[..end])
 }

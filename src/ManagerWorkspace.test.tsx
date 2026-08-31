@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
+import type { ChangeAssessment } from "./bindings/ChangeAssessment";
+import type { ChangeAssessmentPage } from "./bindings/ChangeAssessmentPage";
 import type { EvidenceDocument } from "./bindings/EvidenceDocument";
 import type { EvidenceLocation } from "./bindings/EvidenceLocation";
 import type { TenderProductionInspection } from "./bindings/TenderProductionInspection";
@@ -27,10 +29,13 @@ const host = vi.hoisted(() => ({
   chooseAndImportTenderPackage: vi.fn(),
   createBidDecisionPackage: vi.fn(),
   decideBidDecisionPackage: vi.fn(),
+  decideChangeAssessment: vi.fn(),
   decideTenderQueryTreatment: vi.fn(),
   decideTenderRecord: vi.fn(),
+  inspectArtifactVersions: vi.fn(),
   inspectBidDecisionApprovalHistory: vi.fn(),
   inspectBidDecisionPackageRecords: vi.fn(),
+  inspectChangeAssessments: vi.fn(),
   inspectComplianceMatrix: vi.fn(),
   inspectCurrentBidDecisionPackage: vi.fn(),
   inspectEvidence: vi.fn(),
@@ -651,6 +656,107 @@ function emptyQueryPage(): TenderQueryPage {
     total_current_count: 0,
     overdue_count: 0,
     release_blocking_count: 0,
+  };
+}
+
+const addendumAssessmentId = "9".repeat(32);
+const addendumAssessmentManifest = "d".repeat(64);
+
+function addendumAssessment(): ChangeAssessment {
+  return {
+    assessment_sequence: 1,
+    assessment_id: addendumAssessmentId,
+    relationship_id: "e".repeat(32),
+    relationship_kind: "addendum",
+    prior_source: {
+      artifact_id: evidenceArtifactId,
+      version: 2,
+      package_path: "01 Instructions/ITT.pdf",
+      document_type: "pdf_document",
+      sha256: "a".repeat(64),
+      evidence_count: 1,
+      evidence_preview: [],
+    },
+    replacement_source: {
+      artifact_id: conflictingArtifactId,
+      version: 1,
+      package_path: "02 Addenda/Addendum-1.pdf",
+      document_type: "pdf_document",
+      sha256: "c".repeat(64),
+      evidence_count: 0,
+      evidence_preview: [],
+    },
+    lifecycle_before: "bid_decision",
+    status: "pending",
+    baseline_id: null,
+    baseline_version: null,
+    baseline_manifest_sha256: null,
+    impacts: [
+      {
+        kind: "tender_record",
+        object_id: citedRecordId,
+        object_version: 1,
+        dependencies: [],
+        consequence: "stale",
+        summary:
+          "Current requirement record 'Slab concrete strength' cites the prior source.",
+      },
+      {
+        kind: "production_task",
+        object_id: "k".repeat(32),
+        object_version: 0,
+        dependencies: [],
+        consequence: "reopen",
+        summary:
+          "Production task 'cost_estimation_production' consumes the affected exact package/input.",
+      },
+    ],
+    affected_commitments: [],
+    proposed_rework: [
+      "Re-extract and re-verify only Tender Records bound to the superseded source Evidence.",
+    ],
+    unchanged_scope: [
+      "3 current Tender Records have no typed dependency on the prior source.",
+    ],
+    deadline_effect:
+      "One or more exact deadline commitments depend on the prior Source Artifact Version and must be revalidated before baseline approval.",
+    approval_consequences: [],
+    decision: null,
+    resolution_baseline_id: null,
+    resolution_baseline_version: null,
+    manifest_sha256: addendumAssessmentManifest,
+    created_at: "2026-08-30T12:00:00Z",
+  };
+}
+
+function changeAssessmentPage(): ChangeAssessmentPage {
+  const assessment = addendumAssessment();
+  return {
+    active: assessment,
+    items: [assessment],
+    next_before_sequence: null,
+  };
+}
+
+function reviewChangeAction(): ManagerWorkspaceProjection["current_action"] {
+  return {
+    kind: "review_change",
+    title: "Review the Tender change",
+    summary: "A source change needs an impact decision before work continues.",
+    action_label: "Review change",
+    requires_engineer: true,
+  };
+}
+
+function changeSummaryMessage() {
+  return {
+    message_id: "m".repeat(32),
+    sequence: 2,
+    author: "manager" as const,
+    kind: "finding" as const,
+    body: "A new addendum for '01 Instructions/ITT.pdf' arrived and was registered as '02 Addenda/Addendum-1.pdf'. The earlier version of the document stays preserved unchanged. It makes 1 tender record out of date, and the affected work needs targeted rework before the bid can continue. I need your decision on this change before work continues.",
+    created_at: "2026-08-30T12:00:00Z",
+    references: [],
   };
 }
 
@@ -4572,6 +4678,184 @@ describe("ManagerWorkspace", () => {
     });
     expect(
       screen.getByRole("button", { name: "Reply to Manager" }),
+    ).toBeTruthy();
+  });
+
+  it("groups registered files by package folder and lists prior versions in a History disclosure", async () => {
+    installResponsiveMatchMedia(760);
+    const conditionsDocument = {
+      artifact_id: "1".repeat(32),
+      version: 1,
+      package_path: "01 Conditions/conditions.pdf",
+      document_type: "pdf_document",
+      media_type: "application/pdf",
+      sha256: "a".repeat(64),
+      size_bytes: 2048n,
+      registration_state: "registered",
+      parse_state: "parsed",
+      exception: null,
+    };
+    host.inspectManagerWorkspace.mockResolvedValue({
+      ...projection,
+      files: {
+        tender_document_count: 2,
+        quantix_output_count: 1,
+        tender_documents: [
+          conditionsDocument,
+          {
+            artifact_id: "3".repeat(32),
+            version: 1,
+            package_path: "02 Addenda/Addendum-1.pdf",
+            document_type: "pdf_document",
+            media_type: "application/pdf",
+            sha256: "c".repeat(64),
+            size_bytes: 1024n,
+            registration_state: "registered",
+            parse_state: "parsed",
+            exception: null,
+          },
+        ],
+        quantix_outputs: [
+          {
+            artifact_id: "9".repeat(32),
+            version: 1,
+            production_task_id: "k".repeat(32),
+            author_run_id: "r".repeat(32),
+            payload_sha256: "p".repeat(64),
+            created_at: "2026-08-30T12:00:00Z",
+          },
+        ],
+      },
+    });
+    host.inspectArtifactVersions.mockResolvedValue({
+      versions: [
+        {
+          artifact_id: "3".repeat(32),
+          version: 1,
+          digest: "c".repeat(64),
+          created_at: "2026-08-31T08:00:00Z",
+        },
+        {
+          artifact_id: "1".repeat(32),
+          version: 1,
+          digest: "a".repeat(64),
+          created_at: "2026-08-30T07:00:00Z",
+        },
+      ],
+    });
+
+    render(<ManagerWorkspace />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Show Tender workspace" }),
+    );
+    const workspaceDrawer = await screen.findByRole("dialog", {
+      name: "Tender workspace",
+    });
+    fireEvent.click(
+      within(workspaceDrawer).getByRole("button", { name: "Files" }),
+    );
+    fireEvent.click(
+      within(workspaceDrawer).getByRole("button", {
+        name: "Close Tender workspace",
+      }),
+    );
+
+    expect(screen.getByRole("heading", { name: "01 Conditions" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "02 Addenda" })).toBeTruthy();
+    expect(
+      within(
+        screen.getByText("01 Conditions/conditions.pdf").closest("li")!,
+      ).getByText("Registered · parsed"),
+    ).toBeTruthy();
+
+    const addendumRow = screen
+      .getByText("02 Addenda/Addendum-1.pdf")
+      .closest("li")!;
+    fireEvent.click(within(addendumRow).getByText("History"));
+    expect(
+      await within(addendumRow).findByText(/Prior version · v1/),
+    ).toBeTruthy();
+    expect(within(addendumRow).getByText("a".repeat(64))).toBeTruthy();
+    expect(within(addendumRow).getByText(/Current version · v1/)).toBeTruthy();
+    expect(host.inspectArtifactVersions).toHaveBeenCalledWith(
+      tenderId,
+      "3".repeat(32),
+    );
+  });
+
+  it("opens the change review from the current action and records the exact decision", async () => {
+    host.inspectManagerWorkspace.mockResolvedValue({
+      ...projection,
+      current_action: reviewChangeAction(),
+    });
+    host.inspectChangeAssessments.mockResolvedValue(changeAssessmentPage());
+    host.decideChangeAssessment.mockResolvedValue({
+      ...addendumAssessment(),
+      status: "rework_required",
+    });
+
+    render(<ManagerWorkspace />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Review change" }),
+    );
+
+    const surface = await screen.findByTestId("change-review");
+    expect(within(surface).getByText("01 Instructions/ITT.pdf")).toBeTruthy();
+    expect(within(surface).getByText("02 Addenda/Addendum-1.pdf")).toBeTruthy();
+    expect(within(surface).getByText("What is now out of date")).toBeTruthy();
+    expect(within(surface).getByText("Affected work")).toBeTruthy();
+    expect(within(surface).getByText(/cites the prior source/)).toBeTruthy();
+    expect(within(surface).getByLabelText("Classification")).toBeTruthy();
+
+    fireEvent.change(within(surface).getByLabelText(/Decision rationale/), {
+      target: { value: "The addendum governs; rework the affected records." },
+    });
+    fireEvent.click(
+      within(surface).getByRole("button", { name: "Record decision" }),
+    );
+
+    await waitFor(() => {
+      expect(host.decideChangeAssessment).toHaveBeenCalledWith(
+        tenderId,
+        addendumAssessmentId,
+        addendumAssessmentManifest,
+        "material",
+        "The addendum governs; rework the affected records.",
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("change-review")).toBeNull();
+    });
+    await waitFor(() => {
+      expect(host.inspectManagerWorkspace.mock.calls.length).toBeGreaterThan(1);
+    });
+  });
+
+  it("shows the Manager change summary when an addendum opens a change assessment", async () => {
+    const summary = changeSummaryMessage();
+    host.inspectManagerWorkspace.mockResolvedValue({
+      ...projection,
+      current_action: reviewChangeAction(),
+      conversation: {
+        conversation_id: "c".repeat(32),
+        latest_meaningful_message_id: summary.message_id,
+        messages: [projection.conversation!.messages[0], summary],
+      },
+    });
+    host.inspectChangeAssessments.mockResolvedValue(changeAssessmentPage());
+
+    render(<ManagerWorkspace />);
+
+    expect(
+      await screen.findByText(
+        /A new addendum for '01 Instructions\/ITT\.pdf' arrived/,
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/It makes 1 tender record out of date/),
+    ).toBeTruthy();
+    expect(
+      await screen.findByRole("button", { name: "Review change" }),
     ).toBeTruthy();
   });
 });

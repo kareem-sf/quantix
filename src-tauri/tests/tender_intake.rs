@@ -7,11 +7,13 @@ use std::{
 
 use quantix_lib::{
     ensure_quantix_setup, ChangeAssessmentClassification, ConfirmSourceRelationshipCommand,
-    CreateTenderCommand, DecideChangeAssessmentCommand, ImportTenderPackageCommand,
-    InspectChangeAssessmentsCommand, IntakeExceptionCode, ParseSourceArtifactCommand, ParseState,
+    CreateTenderCommand, DecideChangeAssessmentCommand, DocumentRegisterEntry,
+    ImportTenderPackageCommand, InspectArtifactVersionsCommand, InspectChangeAssessmentsCommand,
+    InspectManagerWorkspaceCommand, IntakeExceptionCode, ParseSourceArtifactCommand, ParseState,
     QuantixHost, RegistrationState, RuntimeLayout, SetupPlatform, SetupState,
     SourceRelationshipKind, StoragePermissions, SupersessionState, TenderErrorCode,
-    TenderPackageSourceKind, MINIMUM_SETUP_FREE_SPACE_BYTES,
+    TenderOfficeMessageAuthor, TenderOfficeMessageKind, TenderPackageSourceKind,
+    WorkspaceActionKind, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
@@ -504,4 +506,161 @@ async fn confirmed_replacements_are_explicit_and_do_not_rewrite_history() {
         })
         .expect("explicit relationship");
     assert_eq!((versions, relationships), (3, 2));
+}
+
+async fn confirm_folder_addendum(
+    harness: &Harness,
+) -> (DocumentRegisterEntry, DocumentRegisterEntry) {
+    let source = harness._root.path().join("folder-package");
+    fs::create_dir_all(source.join("01 Conditions")).expect("conditions folder");
+    fs::create_dir_all(source.join("02 Addenda")).expect("addenda folder");
+    fs::write(
+        source.join("01 Conditions").join("conditions.pdf"),
+        pdf("conditions"),
+    )
+    .expect("conditions document");
+    fs::write(
+        source.join("02 Addenda").join("Addendum-1.pdf"),
+        pdf("addendum-1"),
+    )
+    .expect("addendum document");
+    let imported = harness.import(&source);
+    let original = imported
+        .documents
+        .iter()
+        .find(|document| document.package_path == "01 Conditions/conditions.pdf")
+        .expect("original conditions row")
+        .clone();
+    let addendum = imported
+        .documents
+        .iter()
+        .find(|document| document.package_path == "02 Addenda/Addendum-1.pdf")
+        .expect("addendum row")
+        .clone();
+    harness.parse(&original.artifact_id, original.version).await;
+    harness.parse(&addendum.artifact_id, addendum.version).await;
+
+    harness
+        .host
+        .confirm_source_relationship(ConfirmSourceRelationshipCommand {
+            tender_id: harness.tender_id.clone(),
+            prior_artifact_id: original.artifact_id.clone(),
+            prior_version: original.version,
+            replacement_artifact_id: addendum.artifact_id.clone(),
+            replacement_version: addendum.version,
+            relationship_kind: SourceRelationshipKind::Addendum,
+        })
+        .expect("confirm the immutable addendum relationship");
+    (original, addendum)
+}
+
+#[tokio::test]
+async fn addendum_history_preserves_the_prior_source_version_for_the_files_view() {
+    let harness = Harness::new();
+    let (original, addendum) = confirm_folder_addendum(&harness).await;
+
+    let history = harness
+        .host
+        .inspect_artifact_versions(InspectArtifactVersionsCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: addendum.artifact_id.clone(),
+        })
+        .expect("inspect the addendum version history");
+    assert_eq!(history.versions.len(), 2, "{history:#?}");
+    assert_eq!(history.versions[0].artifact_id, addendum.artifact_id);
+    assert_eq!(history.versions[0].digest, addendum.sha256);
+    assert_eq!(history.versions[1].artifact_id, original.artifact_id);
+    assert_eq!(history.versions[1].digest, original.sha256);
+
+    let reverse = harness
+        .host
+        .inspect_artifact_versions(InspectArtifactVersionsCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: original.artifact_id.clone(),
+        })
+        .expect("inspect the prior version history");
+    assert_eq!(reverse.versions.len(), 2, "{reverse:#?}");
+    assert_eq!(reverse.versions[0].artifact_id, addendum.artifact_id);
+    assert_eq!(reverse.versions[1].artifact_id, original.artifact_id);
+
+    let error = harness
+        .host
+        .inspect_artifact_versions(InspectArtifactVersionsCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: "f".repeat(32),
+        })
+        .expect_err("an unknown artifact has no version history");
+    assert_eq!(error.code, TenderErrorCode::InvalidCommand);
+}
+
+#[tokio::test]
+async fn confirmed_addendum_announces_a_manager_change_summary_in_the_conversation() {
+    let harness = Harness::new();
+    let (_original, _addendum) = confirm_folder_addendum(&harness).await;
+
+    let workspace = harness
+        .host
+        .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+            tender_id: Some(harness.tender_id.clone()),
+        })
+        .expect("inspect the Manager workspace after the addendum");
+    assert_eq!(
+        workspace.current_action.kind,
+        WorkspaceActionKind::ReviewChange
+    );
+    let conversation = workspace.conversation.expect("Manager conversation");
+    let summary = conversation
+        .messages
+        .iter()
+        .find(|message| {
+            message.author == TenderOfficeMessageAuthor::Manager
+                && message.kind == TenderOfficeMessageKind::Finding
+        })
+        .expect("one attributable Manager change summary message");
+    assert!(
+        summary
+            .body
+            .contains("A new addendum for '01 Conditions/conditions.pdf'"),
+        "{summary:#?}"
+    );
+    assert!(
+        summary
+            .body
+            .contains("registered as '02 Addenda/Addendum-1.pdf'"),
+        "{summary:#?}"
+    );
+    assert!(
+        summary
+            .body
+            .contains("The earlier version of the document stays preserved unchanged."),
+        "{summary:#?}"
+    );
+    assert!(
+        summary
+            .body
+            .contains("Nothing in the current bid cites the replaced document"),
+        "{summary:#?}"
+    );
+    assert!(summary.body.len() <= 4_000, "{summary:#?}");
+
+    let assessment = harness
+        .host
+        .inspect_change_assessments(InspectChangeAssessmentsCommand {
+            tender_id: harness.tender_id.clone(),
+            before_sequence: None,
+            limit: 4,
+        })
+        .expect("inspect the addendum assessment")
+        .active
+        .expect("pending addendum assessment");
+    harness
+        .host
+        .decide_change_assessment(DecideChangeAssessmentCommand {
+            tender_id: harness.tender_id.clone(),
+            assessment_id: assessment.assessment_id,
+            assessment_manifest_sha256: assessment.manifest_sha256,
+            classification: ChangeAssessmentClassification::Irrelevant,
+            rationale: "The addendum has no typed dependency on current Tender work.".into(),
+        })
+        .expect("classify the unrelated addendum");
 }

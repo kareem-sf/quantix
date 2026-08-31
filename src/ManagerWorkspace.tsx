@@ -57,6 +57,9 @@ import type { AgentRunInspection } from "./bindings/AgentRunInspection";
 import type { WorkspaceTaskRow } from "./bindings/WorkspaceTaskRow";
 import type { TenderRecordEvidence } from "./bindings/TenderRecordEvidence";
 import type { TenderRecordInspection } from "./bindings/TenderRecordInspection";
+import type { ChangeAssessmentClassification } from "./bindings/ChangeAssessmentClassification";
+import type { ChangeAssessmentPage } from "./bindings/ChangeAssessmentPage";
+import type { ArtifactVersionSummary } from "./bindings/ArtifactVersionSummary";
 import { ApplicationSettings } from "./ApplicationSettings";
 import { exactApplicationAiSelectionIsReady } from "./applicationAiSelectionReadiness";
 import { notifyAttentionRequired } from "./applicationNotifications";
@@ -89,7 +92,10 @@ import {
   cancelRuntimePreparation,
   chooseAndImportTenderPackage,
   createTenderBackup,
+  decideChangeAssessment,
   ensureQuantixSetup,
+  inspectArtifactVersions,
+  inspectChangeAssessments,
   inspectManagerWorkspace,
   inspectDeletionReceipts,
   inspectApplicationSettings,
@@ -942,6 +948,7 @@ function ManagerView({
   onOpenAction,
   onOpenFocusedAction,
   onOpenRecordDecision,
+  onOpenChangeReview,
   canDecideCitedRecords,
   onOpenReference,
   onOpenSearch,
@@ -970,6 +977,7 @@ function ManagerView({
   onOpenAction: () => void;
   onOpenFocusedAction: () => void;
   onOpenRecordDecision: () => void;
+  onOpenChangeReview: () => void;
   canDecideCitedRecords: boolean;
   onOpenReference: (reference: WorkspaceMessageReference) => void;
   onOpenSearch: () => void;
@@ -1077,6 +1085,9 @@ function ManagerView({
         onOpenFocusedAction();
         break;
       }
+      case "review_change":
+        onOpenChangeReview();
+        break;
       case "prepare_work_plan":
       case "review_work_plan":
         onOpenFocusedAction();
@@ -1096,6 +1107,7 @@ function ManagerView({
     "answer_manager_question",
     "retry_intake",
     "review_bid_decision",
+    "review_change",
     "prepare_work_plan",
     "review_work_plan",
     "review_work",
@@ -2040,6 +2052,55 @@ function TeamView({ projection }: { projection: ManagerWorkspaceProjection }) {
   );
 }
 
+function documentFolder(packagePath: string): string {
+  const separator = packagePath.lastIndexOf("/");
+  return separator === -1 ? "" : packagePath.slice(0, separator);
+}
+
+function ArtifactHistoryDisclosure({
+  tenderId,
+  artifactId,
+}: {
+  tenderId: string;
+  artifactId: string;
+}) {
+  const [versions, setVersions] = useState<ArtifactVersionSummary[] | null>(
+    null,
+  );
+  const [failed, setFailed] = useState(false);
+
+  return (
+    <details
+      className="workspace-documents__history"
+      onToggle={(event) => {
+        const open = event.currentTarget.open;
+        if (!open || versions !== null || failed) return;
+        inspectArtifactVersions(tenderId, artifactId)
+          .then((history) => setVersions(history.versions))
+          .catch(() => setFailed(true));
+      }}
+    >
+      <summary>History</summary>
+      {versions === null ? (
+        <p>{failed ? "Version history is unavailable." : "Loading history…"}</p>
+      ) : (
+        <ul>
+          {versions.map((version, index) => (
+            <li key={`${version.artifact_id}-${version.version}`}>
+              <strong>
+                {index === 0 ? "Current version" : "Prior version"} · v
+                {version.version}
+              </strong>
+              <code>{version.digest ?? "not registered"}</code>
+              <span>{new Date(version.created_at).toLocaleString()}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
+  );
+}
+
 function FilesView({
   projection,
   busy,
@@ -2051,6 +2112,7 @@ function FilesView({
   onImport: (kind: TenderPackageSourceKind) => void;
   readOnly: boolean;
 }) {
+  const tenderId = projection.selected_tender?.tender_id ?? null;
   const intakeWorking = ["working", "waiting"].includes(
     projection.intake?.status ?? "",
   );
@@ -2060,6 +2122,27 @@ function FilesView({
   const exceptionDocuments = projection.files.tender_documents.filter(
     (document) => document.registration_state === "exception",
   );
+  const registeredFolders = new Map<
+    string,
+    typeof projection.files.tender_documents
+  >();
+  for (const document of registeredDocuments) {
+    const folder = documentFolder(document.package_path);
+    const group = registeredFolders.get(folder);
+    if (group) {
+      group.push(document);
+    } else {
+      registeredFolders.set(folder, [document]);
+    }
+  }
+  const folders = [...registeredFolders.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  for (const [, documents] of folders) {
+    documents.sort((left, right) =>
+      left.package_path.localeCompare(right.package_path),
+    );
+  }
 
   const renderDocument = (
     document: (typeof projection.files.tender_documents)[number],
@@ -2074,7 +2157,7 @@ function FilesView({
           ) : (
             <>
               Registration exception
-              {document.exception ? ` · ${document.exception}` : null}
+              {document.exception ? ` · ${document.exception}` : ""}
             </>
           )}
         </span>
@@ -2119,6 +2202,12 @@ function FilesView({
             </div>
           </dl>
         </details>
+        {tenderId && document.registration_state === "registered" ? (
+          <ArtifactHistoryDisclosure
+            tenderId={tenderId}
+            artifactId={document.artifact_id}
+          />
+        ) : null}
       </div>
     </li>
   );
@@ -2158,7 +2247,16 @@ function FilesView({
       {registeredDocuments.length > 0 ? (
         <div className="workspace-documents">
           <h3>Registered source documents</h3>
-          <ul>{registeredDocuments.map(renderDocument)}</ul>
+          {folders.map(([folder, documents]) => (
+            <section
+              key={folder || "package-root"}
+              className="workspace-documents__folder"
+              aria-label={folder || "Package root"}
+            >
+              <h4>{folder || "Package root"}</h4>
+              <ul>{documents.map(renderDocument)}</ul>
+            </section>
+          ))}
         </div>
       ) : null}
       {exceptionDocuments.length > 0 ? (
@@ -2204,6 +2302,12 @@ function FilesView({
                       </div>
                     </dl>
                   </details>
+                  {tenderId ? (
+                    <ArtifactHistoryDisclosure
+                      tenderId={tenderId}
+                      artifactId={output.artifact_id}
+                    />
+                  ) : null}
                 </div>
               </li>
             ))}
@@ -2230,6 +2334,249 @@ function FilesView({
           </button>
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function ChangeReviewSurface({
+  tenderId,
+  busy,
+  reportCommandFailure,
+  onDecided,
+  onClose,
+}: {
+  tenderId: string;
+  busy: boolean;
+  reportCommandFailure: () => void;
+  onDecided: () => void;
+  onClose: () => void;
+}) {
+  const [page, setPage] = useState<ChangeAssessmentPage | null>(null);
+  const [classification, setClassification] =
+    useState<ChangeAssessmentClassification>("material");
+  const [rationale, setRationale] = useState("");
+  const [deciding, setDeciding] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const requestGeneration = useRef(0);
+
+  useEffect(() => {
+    const generation = ++requestGeneration.current;
+    setLoading(true);
+    inspectChangeAssessments(tenderId, null, 4)
+      .then((next) => {
+        if (generation === requestGeneration.current) setPage(next);
+      })
+      .catch(() => {
+        if (generation === requestGeneration.current) reportCommandFailure();
+      })
+      .finally(() => {
+        if (generation === requestGeneration.current) setLoading(false);
+      });
+    return () => {
+      requestGeneration.current += 1;
+    };
+  }, [reportCommandFailure, tenderId]);
+
+  const active = page?.active ?? null;
+
+  const decide = async () => {
+    if (!active || active.status !== "pending" || deciding || !rationale.trim())
+      return;
+    setDeciding(true);
+    try {
+      await decideChangeAssessment(
+        tenderId,
+        active.assessment_id,
+        active.manifest_sha256,
+        classification,
+        rationale.trim(),
+      );
+      onDecided();
+    } catch {
+      reportCommandFailure();
+      setDeciding(false);
+    }
+  };
+
+  return (
+    <section
+      className="change-review"
+      data-testid="change-review"
+      aria-labelledby="change-review-title"
+    >
+      <header className="change-review__header">
+        <div>
+          <h2 id="change-review-title">Review the Tender change</h2>
+          <p>
+            A new source document version is waiting for your decision. The
+            earlier version stays preserved unchanged, and work that depends on
+            it is explained below.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="manager-workspace__secondary"
+          onClick={onClose}
+        >
+          Back to Manager conversation
+        </button>
+      </header>
+      {loading ? (
+        <p className="change-review__loading">
+          <LoaderCircle size={16} aria-hidden="true" /> Loading the change
+          assessment…
+        </p>
+      ) : !active ? (
+        <p className="change-review__empty">
+          No change is waiting for a decision.
+        </p>
+      ) : (
+        <>
+          <article className="change-review__card">
+            <h3>What changed</h3>
+            <p>
+              {active.relationship_kind === "addendum" ? (
+                <>A new addendum arrived for </>
+              ) : (
+                <>A replacement document arrived for </>
+              )}
+              <strong>{active.prior_source.package_path}</strong> and is
+              registered as{" "}
+              <strong>{active.replacement_source.package_path}</strong>.
+            </p>
+            <dl>
+              <div>
+                <dt>Earlier version</dt>
+                <dd>
+                  <code>
+                    {active.prior_source.artifact_id} · v
+                    {active.prior_source.version}
+                  </code>
+                </dd>
+              </div>
+              <div>
+                <dt>New version</dt>
+                <dd>
+                  <code>
+                    {active.replacement_source.artifact_id} · v
+                    {active.replacement_source.version}
+                  </code>
+                </dd>
+              </div>
+              <div>
+                <dt>SHA-256</dt>
+                <dd>
+                  <code>{active.replacement_source.sha256}</code>
+                </dd>
+              </div>
+            </dl>
+          </article>
+          <article className="change-review__card">
+            <h3>What is now out of date</h3>
+            {active.impacts.length ? (
+              <ul className="change-review__impacts">
+                {active.impacts.map((impact) => (
+                  <li
+                    key={`${impact.kind}-${impact.object_id}-${impact.object_version}`}
+                  >
+                    <div>
+                      <strong>{impact.kind.replace(/_/g, " ")}</strong>
+                      <span>{impact.consequence.replace(/_/g, " ")}</span>
+                    </div>
+                    <p>{impact.summary}</p>
+                    <code>
+                      {impact.object_id}
+                      {impact.object_version
+                        ? ` · v${impact.object_version}`
+                        : ""}
+                    </code>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>
+                No current records, work, or calculations depend on the replaced
+                document.
+              </p>
+            )}
+          </article>
+          <article className="change-review__card">
+            <h3>Affected work</h3>
+            <ul>
+              {active.proposed_rework.map((item, index) => (
+                <li key={`${index}-${item}`}>{item}</li>
+              ))}
+            </ul>
+            <p>{active.deadline_effect}</p>
+            <h4>Unchanged</h4>
+            <ul>
+              {active.unchanged_scope.map((item, index) => (
+                <li key={`${index}-${item}`}>{item}</li>
+              ))}
+            </ul>
+            {active.approval_consequences.length ? (
+              <>
+                <h4>Approvals affected</h4>
+                <ul>
+                  {active.approval_consequences.map((item) => (
+                    <li key={item.reference}>
+                      {item.reference}: {item.consequence}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
+          </article>
+          {active.status === "pending" ? (
+            <form
+              className="change-review__form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void decide();
+              }}
+            >
+              <label>
+                Classification
+                <select
+                  value={classification}
+                  disabled={busy || deciding}
+                  onChange={(event) =>
+                    setClassification(
+                      event.target.value as ChangeAssessmentClassification,
+                    )
+                  }
+                >
+                  <option value="material">
+                    Material — targeted rework is required
+                  </option>
+                  <option value="irrelevant">
+                    Irrelevant — current work stays valid
+                  </option>
+                </select>
+              </label>
+              <label>
+                Decision rationale
+                <textarea
+                  value={rationale}
+                  disabled={busy || deciding}
+                  onChange={(event) => setRationale(event.target.value)}
+                />
+              </label>
+              <button
+                className="manager-workspace__primary"
+                type="submit"
+                disabled={busy || deciding || !rationale.trim()}
+              >
+                Record decision
+              </button>
+            </form>
+          ) : (
+            <p className="change-review__empty">
+              A decision was already recorded for this change.
+            </p>
+          )}
+        </>
+      )}
     </section>
   );
 }
@@ -2265,6 +2612,7 @@ export function ManagerWorkspace({
     useState<EvidenceReviewState | null>(null);
   const [recordDecision, setRecordDecision] =
     useState<RecordDecisionState | null>(null);
+  const [changeReviewOpen, setChangeReviewOpen] = useState(false);
   const [tenderViews, setTenderViews] = useState<Record<string, WorkspaceView>>(
     {},
   );
@@ -2389,20 +2737,22 @@ export function ManagerWorkspace({
   }, [contextOpen, contextRail]);
 
   useEffect(() => {
-    if (!evidenceReview && !recordDecision) return;
+    if (!evidenceReview && !recordDecision && !changeReviewOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !operationRef.current) {
         if (evidenceReview) setEvidenceReview(null);
-        else setRecordDecision(null);
+        else if (recordDecision) setRecordDecision(null);
+        else setChangeReviewOpen(false);
       }
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [evidenceReview, recordDecision]);
+  }, [evidenceReview, recordDecision, changeReviewOpen]);
 
   useEffect(() => {
     setEvidenceReview(null);
     setRecordDecision(null);
+    setChangeReviewOpen(false);
   }, [projection?.selected_tender?.tender_id]);
 
   useEffect(() => {
@@ -3385,6 +3735,11 @@ export function ManagerWorkspace({
 
   const closeEvidenceReview = useCallback(() => setEvidenceReview(null), []);
   const closeRecordDecision = useCallback(() => setRecordDecision(null), []);
+  const closeChangeReview = useCallback(() => setChangeReviewOpen(false), []);
+  const handleChangeDecided = useCallback(async () => {
+    setChangeReviewOpen(false);
+    await load();
+  }, [load]);
   const handleRecordDecided = useCallback(async () => {
     setRecordDecision(null);
     setEvidenceReview(null);
@@ -4340,6 +4695,7 @@ export function ManagerWorkspace({
                           onOpenRecordDecision={() =>
                             setRecordDecision({ focusTarget: null })
                           }
+                          onOpenChangeReview={() => setChangeReviewOpen(true)}
                           canDecideCitedRecords={canDecideCitedRecords}
                           onOpenReference={handleMessageReference}
                           onOpenSearch={() => {
@@ -4393,6 +4749,17 @@ export function ManagerWorkspace({
                       />
                     ) : null}
                   </main>
+                  {changeReviewOpen ? (
+                    <div className="manager-workspace__overlay">
+                      <ChangeReviewSurface
+                        tenderId={selected.tender_id}
+                        busy={isBusy}
+                        reportCommandFailure={reportFocusedCommandFailure}
+                        onDecided={() => void handleChangeDecided()}
+                        onClose={closeChangeReview}
+                      />
+                    </div>
+                  ) : null}
                   {recordDecision ? (
                     <div className="manager-workspace__overlay">
                       <TenderRecordDecision
