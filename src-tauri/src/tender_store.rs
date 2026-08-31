@@ -227,13 +227,13 @@ pub use tender_queries::{
 pub(crate) use tender_records::ManagerIntakeExtractionRecovery;
 pub use tender_records::{
     CreateTenderEngineerEntryCommand, DecideTenderRecordCommand, GenerationAuthoringMode,
-    GenerationRequirementKind, InspectTenderRecordsCommand, RunTenderRecordExtractionCommand,
-    RunTenderRecordReviewCommand, TenderEvidenceReference, TenderRecordAuthority,
-    TenderRecordAuthorityKind, TenderRecordAuthorityReference, TenderRecordBasisKind,
-    TenderRecordContradiction, TenderRecordDecisionResult, TenderRecordEngineerDecisionKind,
-    TenderRecordEvidence, TenderRecordExtractionResult, TenderRecordField,
-    TenderRecordGenerationInstruction, TenderRecordInspection, TenderRecordKind, TenderRecordPage,
-    TenderRecordReview, TenderRecordReviewOutcome, TenderRecordReviewResult,
+    GenerationRequirementKind, InspectTenderRecordCommand, InspectTenderRecordsCommand,
+    RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, TenderEvidenceReference,
+    TenderRecordAuthority, TenderRecordAuthorityKind, TenderRecordAuthorityReference,
+    TenderRecordBasisKind, TenderRecordContradiction, TenderRecordDecisionResult,
+    TenderRecordEngineerDecisionKind, TenderRecordEvidence, TenderRecordExtractionResult,
+    TenderRecordField, TenderRecordGenerationInstruction, TenderRecordInspection, TenderRecordKind,
+    TenderRecordPage, TenderRecordReview, TenderRecordReviewOutcome, TenderRecordReviewResult,
     TenderRecordSourceRelationship, TenderRecordTrustClass,
 };
 pub use workspace::{

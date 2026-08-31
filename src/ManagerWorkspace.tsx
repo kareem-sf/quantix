@@ -55,10 +55,21 @@ import type { WorkspaceSearchHit } from "./bindings/WorkspaceSearchHit";
 import type { WorkspaceMessageReference } from "./bindings/WorkspaceMessageReference";
 import type { AgentRunInspection } from "./bindings/AgentRunInspection";
 import type { WorkspaceTaskRow } from "./bindings/WorkspaceTaskRow";
+import type { TenderRecordEvidence } from "./bindings/TenderRecordEvidence";
+import type { TenderRecordInspection } from "./bindings/TenderRecordInspection";
 import { ApplicationSettings } from "./ApplicationSettings";
 import { exactApplicationAiSelectionIsReady } from "./applicationAiSelectionReadiness";
 import { notifyAttentionRequired } from "./applicationNotifications";
 import { TenderFocusedAction } from "./TenderFocusedAction";
+import {
+  type EvidenceReviewConflict,
+  type EvidenceReviewTarget,
+  TenderEvidenceReview,
+} from "./TenderEvidenceReview";
+import {
+  type TenderRecordDecisionTarget,
+  TenderRecordDecision,
+} from "./TenderRecordDecision";
 import { QuantixMark } from "./QuantixMark";
 import { QuantixWindow } from "./QuantixWindow";
 import { quantixSmoothEase } from "./motion/motionPresets";
@@ -100,6 +111,7 @@ import {
   restoreTrashedTender,
   selectManagerWorkspaceTender,
   startManagerTender,
+  inspectTenderRecord,
   trashRecoveryRequiredTender,
   trashTender,
   purgeRecoveryRequiredTender,
@@ -128,6 +140,13 @@ type TrashAction = {
   record: TrashedTenderRecord;
 } | null;
 type RecoveryRequestedAction = "move_to_trash" | "delete_permanently" | null;
+type EvidenceReviewState = {
+  target: EvidenceReviewTarget;
+  conflicts: EvidenceReviewConflict[];
+};
+type RecordDecisionState = {
+  focusTarget: TenderRecordDecisionTarget | null;
+};
 
 type WorkspaceOperationKind =
   | "start_tender"
@@ -211,6 +230,75 @@ function sameWorkspaceLocation(
     left.surface === right.surface &&
     left.settingsSection === right.settingsSection
   );
+}
+
+function latestManagerQuestion(
+  projection: ManagerWorkspaceProjection | null,
+): TenderOfficeMessage | null {
+  const messages = projection?.conversation?.messages ?? [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.author === "manager" && message.kind === "question") {
+      return message;
+    }
+  }
+  return null;
+}
+
+function citedRecordTargets(
+  projection: ManagerWorkspaceProjection | null,
+): TenderRecordDecisionTarget[] {
+  const question = latestManagerQuestion(projection);
+  if (!question) return [];
+  return question.references
+    .filter((reference) => reference.kind === "tender_record")
+    .map((reference) => ({
+      recordId: reference.reference,
+      version: reference.version,
+    }));
+}
+
+function evidenceMatchesTarget(
+  evidence: TenderRecordEvidence,
+  target: EvidenceReviewTarget,
+) {
+  return (
+    evidence.reference.artifact_id === target.artifactId &&
+    evidence.reference.version === target.version &&
+    (target.ordinal === null || evidence.reference.ordinal === target.ordinal)
+  );
+}
+
+function evidenceConflictsForTarget(
+  records: TenderRecordInspection[],
+  target: EvidenceReviewTarget,
+): EvidenceReviewConflict[] {
+  const conflicts: EvidenceReviewConflict[] = [];
+  const seen = new Set<string>();
+  for (const record of records) {
+    for (const contradiction of record.contradictions) {
+      if (
+        !contradiction.evidence.some((evidence) =>
+          evidenceMatchesTarget(evidence, target),
+        )
+      ) {
+        continue;
+      }
+      for (const evidence of contradiction.evidence) {
+        if (evidenceMatchesTarget(evidence, target)) continue;
+        const key = `${evidence.reference.artifact_id}:${evidence.reference.version}:${evidence.reference.ordinal}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        conflicts.push({
+          artifactId: evidence.reference.artifact_id,
+          version: evidence.reference.version,
+          ordinal: evidence.reference.ordinal,
+          label: evidence.package_path,
+        });
+      }
+    }
+  }
+  return conflicts;
 }
 
 function initialNavigationHistory(
@@ -749,9 +837,11 @@ function StartTender({
 function Message({
   message,
   meaningful,
+  onOpenReference,
 }: {
   message: TenderOfficeMessage;
   meaningful: boolean;
+  onOpenReference: (reference: WorkspaceMessageReference) => void;
 }) {
   const isEngineer = message.author === "engineer";
   const isSystem = message.author === "system";
@@ -786,20 +876,42 @@ function Message({
               {message.references.length === 1 ? "" : "s"}
             </summary>
             <ul>
-              {message.references.map((reference, index) => (
-                <li
-                  key={`${reference.kind}-${reference.reference}-${reference.version}-${reference.evidence_ordinal ?? 0}-${index}`}
-                >
-                  <strong>{reference.label}</strong>
-                  {reference.detail ? <span>{reference.detail}</span> : null}
-                  <code>
-                    {reference.reference} · v{reference.version}
-                    {reference.evidence_ordinal
-                      ? ` · evidence ${reference.evidence_ordinal}`
-                      : ""}
-                  </code>
-                </li>
-              ))}
+              {message.references.map((reference, index) => {
+                const opensReview = reference.kind === "source_evidence";
+                const opensDecision = reference.kind === "tender_record";
+                const referenceBody = (
+                  <>
+                    <strong>{reference.label}</strong>
+                    {reference.detail ? <span>{reference.detail}</span> : null}
+                    <code>
+                      {reference.reference} · v{reference.version}
+                      {reference.evidence_ordinal
+                        ? ` · evidence ${reference.evidence_ordinal}`
+                        : ""}
+                    </code>
+                  </>
+                );
+                return (
+                  <li
+                    key={`${reference.kind}-${reference.reference}-${reference.version}-${reference.evidence_ordinal ?? 0}-${index}`}
+                  >
+                    {opensReview || opensDecision ? (
+                      <button
+                        type="button"
+                        className="manager-message__reference"
+                        onClick={() => onOpenReference(reference)}
+                      >
+                        {referenceBody}
+                        <span className="manager-message__reference-action">
+                          {opensReview ? "Review evidence" : "Review record"}
+                        </span>
+                      </button>
+                    ) : (
+                      referenceBody
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </details>
         ) : null}
@@ -829,6 +941,9 @@ function ManagerView({
   onOpenSettings,
   onOpenAction,
   onOpenFocusedAction,
+  onOpenRecordDecision,
+  canDecideCitedRecords,
+  onOpenReference,
   onOpenSearch,
   contextRefs,
   onRemoveContext,
@@ -854,6 +969,9 @@ function ManagerView({
   onOpenSettings: () => void;
   onOpenAction: () => void;
   onOpenFocusedAction: () => void;
+  onOpenRecordDecision: () => void;
+  canDecideCitedRecords: boolean;
+  onOpenReference: (reference: WorkspaceMessageReference) => void;
   onOpenSearch: () => void;
   contextRefs: WorkspaceMessageReference[];
   onRemoveContext: (reference: string) => void;
@@ -1152,6 +1270,7 @@ function ManagerView({
               message.message_id ===
               projection.conversation?.latest_meaningful_message_id
             }
+            onOpenReference={onOpenReference}
           />
         ))}
         {!readOnly && !managerQuiet ? (
@@ -1227,6 +1346,15 @@ function ManagerView({
                     onClick={openCurrentAction}
                   >
                     {currentActionLabel}
+                  </button>
+                ) : null}
+                {canDecideCitedRecords ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={onOpenRecordDecision}
+                  >
+                    Review cited Tender records
                   </button>
                 ) : null}
                 {documentToolsRequired && showActionButton ? (
@@ -2133,6 +2261,10 @@ export function ManagerWorkspace({
   const [focusedActionTenderId, setFocusedActionTenderId] = useState<
     string | null
   >(null);
+  const [evidenceReview, setEvidenceReview] =
+    useState<EvidenceReviewState | null>(null);
+  const [recordDecision, setRecordDecision] =
+    useState<RecordDecisionState | null>(null);
   const [tenderViews, setTenderViews] = useState<Record<string, WorkspaceView>>(
     {},
   );
@@ -2255,6 +2387,23 @@ export function ManagerWorkspace({
     setContextOpen(next);
     if (next && !contextRail) setSidebarOpen(false);
   }, [contextOpen, contextRail]);
+
+  useEffect(() => {
+    if (!evidenceReview && !recordDecision) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !operationRef.current) {
+        if (evidenceReview) setEvidenceReview(null);
+        else setRecordDecision(null);
+      }
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [evidenceReview, recordDecision]);
+
+  useEffect(() => {
+    setEvidenceReview(null);
+    setRecordDecision(null);
+  }, [projection?.selected_tender?.tender_id]);
 
   useEffect(() => {
     const wasRail = previousContextRail.current;
@@ -3172,6 +3321,97 @@ export function ManagerWorkspace({
     );
     if (succeeded) await load();
   }, [load, projection?.selected_tender?.tender_id, run]);
+
+  const reportFocusedCommandFailure = useCallback(() => {
+    setOperationFailure({
+      message: "Quantix could not complete that action.",
+      label: "Tender decision workspace",
+    });
+  }, []);
+
+  const openEvidenceReview = useCallback(
+    (target: EvidenceReviewTarget, conflicts?: EvidenceReviewConflict[]) => {
+      const tenderId = projection?.selected_tender?.tender_id;
+      if (!tenderId) return;
+      setEvidenceReview({ target, conflicts: conflicts ?? [] });
+      if (conflicts) return;
+      const recordTargets = citedRecordTargets(projection);
+      if (recordTargets.length === 0) return;
+      void (async () => {
+        try {
+          const inspections = await Promise.all(
+            recordTargets.map((recordTarget) =>
+              inspectTenderRecord(
+                tenderId,
+                recordTarget.recordId,
+                recordTarget.version,
+              ),
+            ),
+          );
+          const nextConflicts = evidenceConflictsForTarget(inspections, target);
+          setEvidenceReview((current) =>
+            current && current.target === target
+              ? { target, conflicts: nextConflicts }
+              : current,
+          );
+        } catch {
+          // The review stays open without the conflicting-source context.
+        }
+      })();
+    },
+    [projection],
+  );
+
+  const handleMessageReference = useCallback(
+    (reference: WorkspaceMessageReference) => {
+      if (reference.kind === "source_evidence") {
+        openEvidenceReview({
+          artifactId: reference.reference,
+          version: reference.version,
+          ordinal: reference.evidence_ordinal,
+          label: reference.label,
+        });
+      } else if (reference.kind === "tender_record") {
+        setRecordDecision({
+          focusTarget: {
+            recordId: reference.reference,
+            version: reference.version,
+          },
+        });
+      }
+    },
+    [openEvidenceReview],
+  );
+
+  const closeEvidenceReview = useCallback(() => setEvidenceReview(null), []);
+  const closeRecordDecision = useCallback(() => setRecordDecision(null), []);
+  const handleRecordDecided = useCallback(async () => {
+    setRecordDecision(null);
+    setEvidenceReview(null);
+    await load();
+  }, [load]);
+
+  const decisionTargets = useMemo(() => {
+    const focus = recordDecision?.focusTarget;
+    const cited = citedRecordTargets(projection);
+    if (!focus) return cited;
+    return [
+      focus,
+      ...cited.filter(
+        (target) =>
+          !(
+            target.recordId === focus.recordId &&
+            target.version === focus.version
+          ),
+      ),
+    ];
+  }, [projection, recordDecision]);
+  const canDecideCitedRecords =
+    projection?.current_action.kind === "answer_manager_question" &&
+    citedRecordTargets(projection).length > 0;
+  const evidenceReviewOriginLabel = recordDecision
+    ? "record decision"
+    : "Manager conversation";
 
   const rebindIntakeProvider = useCallback(async () => {
     const tenderId = projection?.selected_tender?.tender_id;
@@ -4097,6 +4337,11 @@ export function ManagerWorkspace({
                           onOpenFocusedAction={() =>
                             setFocusedActionTenderId(selected.tender_id)
                           }
+                          onOpenRecordDecision={() =>
+                            setRecordDecision({ focusTarget: null })
+                          }
+                          canDecideCitedRecords={canDecideCitedRecords}
+                          onOpenReference={handleMessageReference}
                           onOpenSearch={() => {
                             searchInputRef.current?.focus();
                             searchInputRef.current?.scrollIntoView({
@@ -4148,6 +4393,31 @@ export function ManagerWorkspace({
                       />
                     ) : null}
                   </main>
+                  {recordDecision ? (
+                    <div className="manager-workspace__overlay">
+                      <TenderRecordDecision
+                        tenderId={selected.tender_id}
+                        recordTargets={decisionTargets}
+                        busy={isBusy}
+                        onReviewEvidence={openEvidenceReview}
+                        reportCommandFailure={reportFocusedCommandFailure}
+                        onDecided={() => void handleRecordDecided()}
+                        onClose={closeRecordDecision}
+                      />
+                    </div>
+                  ) : null}
+                  {evidenceReview ? (
+                    <div className="manager-workspace__overlay is-raised">
+                      <TenderEvidenceReview
+                        tenderId={selected.tender_id}
+                        target={evidenceReview.target}
+                        conflicts={evidenceReview.conflicts}
+                        originLabel={evidenceReviewOriginLabel}
+                        onOpenTarget={(target) => openEvidenceReview(target)}
+                        onClose={closeEvidenceReview}
+                      />
+                    </div>
+                  ) : null}
                 </>
               ) : projection ? (
                 <main className="manager-workspace__empty-main">

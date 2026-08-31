@@ -185,7 +185,7 @@ pub use tender_store::{
     InspectPricingWorkspaceCommand, InspectProductionTaskReviewCommand,
     InspectSubmissionArtifactContentCommand, InspectSubmissionPackageCommand,
     InspectSubmissionPackageItemContentCommand, InspectTenderQueriesCommand,
-    InspectTenderRecordsCommand, InterpretExternalRfiResponseCommand,
+    InspectTenderRecordCommand, InspectTenderRecordsCommand, InterpretExternalRfiResponseCommand,
     InvalidateBidDecisionApprovalCommand, MajorFindingPolicy, ManagerCapabilityDemandInput,
     ManagerConversation, ManagerIntakeStage, ManagerIntakeStatus, ManagerIntakeStatusKind,
     ManagerWorkspaceProjection, ManagerWorkspaceTender, ManagerWorkspaceTenderState,
@@ -473,7 +473,7 @@ mod tauri_commands {
         InspectProductionTaskReviewCommand, InspectQuantixDoctorCommand,
         InspectSubmissionArtifactContentCommand, InspectSubmissionPackageCommand,
         InspectSubmissionPackageItemContentCommand, InspectTenderAiExecutionCommand,
-        InspectTenderQueriesCommand, InspectTenderRecordsCommand,
+        InspectTenderQueriesCommand, InspectTenderRecordCommand, InspectTenderRecordsCommand,
         InterpretExternalRfiResponseCommand, InterruptAgentRunCommand,
         InvalidateBidDecisionApprovalCommand, LiveQualificationRun, ManagerWorkspaceProjection,
         OpenTenderCommand, PackageIntakeOperationKind, PackageIntakeProgress,
@@ -507,12 +507,13 @@ mod tauri_commands {
         TenderBackupRecord, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
         TenderIntegrityReport, TenderPackageImportResult, TenderPackageSourceKind,
         TenderProductionInspection, TenderQuery, TenderQueryPage, TenderRecordAuthority,
-        TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordPage,
-        TenderRecordReviewResult, TenderRecoveryRecord, TenderRetentionDecisionCommand,
-        TenderRetentionDecisionRecord, TenderSummary, TrashRecoveryRequiredTenderCommand,
-        TrashedTenderDecisionCommand, TrashedTenderRecord, UpdateAiExecutionSelectionCommand,
-        UpdateGeneralApplicationPreferencesCommand, UpdateTenderAiExecutionSelectionCommand,
-        WorkPlanProposalInspection, WorkspaceSearchProjection,
+        TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordInspection,
+        TenderRecordPage, TenderRecordReviewResult, TenderRecoveryRecord,
+        TenderRetentionDecisionCommand, TenderRetentionDecisionRecord, TenderSummary,
+        TrashRecoveryRequiredTenderCommand, TrashedTenderDecisionCommand, TrashedTenderRecord,
+        UpdateAiExecutionSelectionCommand, UpdateGeneralApplicationPreferencesCommand,
+        UpdateTenderAiExecutionSelectionCommand, WorkPlanProposalInspection,
+        WorkspaceSearchProjection,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -2170,6 +2171,19 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn inspect_tender_record(
+        host: tauri::State<'_, QuantixHost>,
+        command: InspectTenderRecordCommand,
+    ) -> Result<TenderRecordInspection, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.inspect_tender_record(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
     pub(super) async fn create_tender_engineer_entry(
         host: tauri::State<'_, QuantixHost>,
         command: CreateTenderEngineerEntryCommand,
@@ -3438,6 +3452,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::run_tender_record_extraction,
             tauri_commands::run_tender_record_review,
             tauri_commands::inspect_tender_records,
+            tauri_commands::inspect_tender_record,
             tauri_commands::create_tender_engineer_entry,
             tauri_commands::inspect_tender_record_authorities,
             tauri_commands::decide_tender_record,

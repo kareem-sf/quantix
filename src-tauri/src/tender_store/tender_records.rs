@@ -141,6 +141,18 @@ pub struct InspectTenderRecordsCommand {
     pub limit: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct InspectTenderRecordCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub record_id: String,
+    #[garde(range(min = 1))]
+    pub version: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]

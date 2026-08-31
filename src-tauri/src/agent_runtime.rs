@@ -30,18 +30,19 @@ use crate::{
         ComplianceMatrixPage, CostEstimatorBasisResult, CostEstimatorCalculationResult,
         CreateBidDecisionPackageCommand, CreateTenderEngineerEntryCommand,
         DecideBidDecisionPackageCommand, DecideTenderRecordCommand, ExternalRfiReviewResult,
-        InspectBidDecisionApprovalHistoryCommand, InvalidateBidDecisionApprovalCommand,
-        ManagerIntakeExtractionRecovery, ManagerIntakeStage, PricedCostBaselineReviewResult,
-        PricingAdjustmentReviewResult, ProductionTaskRunResult, ProductionTaskState,
-        ResolveBidDecisionReturnReworkCommand, RunBasisOfEstimateReviewCommand,
-        RunBidDecisionPackageReviewCommand, RunCalculationRuleReviewCommand,
-        RunCostEstimatorBasisCommand, RunCostEstimatorCalculationCommand,
-        RunExternalRfiReviewCommand, RunPricedCostBaselineReviewCommand,
-        RunPricingAdjustmentReviewCommand, RunProductionTaskCommand,
-        RunSubmissionSectionReviewCommand, RunTenderRecordExtractionCommand,
-        RunTenderRecordReviewCommand, SubmissionSectionReviewRunResult, TenderCommandError,
-        TenderErrorCode, TenderId, TenderRecordAuthority, TenderRecordDecisionResult,
-        TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult, TenderStore,
+        InspectBidDecisionApprovalHistoryCommand, InspectTenderRecordCommand,
+        InvalidateBidDecisionApprovalCommand, ManagerIntakeExtractionRecovery, ManagerIntakeStage,
+        PricedCostBaselineReviewResult, PricingAdjustmentReviewResult, ProductionTaskRunResult,
+        ProductionTaskState, ResolveBidDecisionReturnReworkCommand,
+        RunBasisOfEstimateReviewCommand, RunBidDecisionPackageReviewCommand,
+        RunCalculationRuleReviewCommand, RunCostEstimatorBasisCommand,
+        RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand,
+        RunPricedCostBaselineReviewCommand, RunPricingAdjustmentReviewCommand,
+        RunProductionTaskCommand, RunSubmissionSectionReviewCommand,
+        RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand,
+        SubmissionSectionReviewRunResult, TenderCommandError, TenderErrorCode, TenderId,
+        TenderRecordAuthority, TenderRecordDecisionResult, TenderRecordExtractionResult,
+        TenderRecordInspection, TenderRecordPage, TenderRecordReviewResult, TenderStore,
     },
     QuantixHost,
 };
@@ -2621,6 +2622,26 @@ impl QuantixHost {
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
             .inspect_tender_record_page(cursor, limit)?;
         Ok(page)
+    }
+
+    pub fn inspect_tender_record(
+        &self,
+        command: InspectTenderRecordCommand,
+    ) -> Result<TenderRecordInspection, TenderCommandError> {
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        if !valid_identifier(&command.record_id) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let store = self.tender_store(&tender_id)?;
+        let record = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .inspect_tender_record_version(&command.record_id, command.version)?;
+        Ok(record)
     }
 
     pub fn create_tender_engineer_entry(

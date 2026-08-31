@@ -12,7 +12,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
+import type { EvidenceDocument } from "./bindings/EvidenceDocument";
+import type { EvidenceLocation } from "./bindings/EvidenceLocation";
 import type { TenderProductionInspection } from "./bindings/TenderProductionInspection";
+import type { TenderQuery } from "./bindings/TenderQuery";
+import type { TenderQueryPage } from "./bindings/TenderQueryPage";
+import type { TenderRecordInspection } from "./bindings/TenderRecordInspection";
 import type { WorkPlanProposalInspection } from "./bindings/WorkPlanProposalInspection";
 
 const host = vi.hoisted(() => ({
@@ -22,13 +27,19 @@ const host = vi.hoisted(() => ({
   chooseAndImportTenderPackage: vi.fn(),
   createBidDecisionPackage: vi.fn(),
   decideBidDecisionPackage: vi.fn(),
+  decideTenderQueryTreatment: vi.fn(),
+  decideTenderRecord: vi.fn(),
   inspectBidDecisionApprovalHistory: vi.fn(),
   inspectBidDecisionPackageRecords: vi.fn(),
   inspectComplianceMatrix: vi.fn(),
   inspectCurrentBidDecisionPackage: vi.fn(),
+  inspectEvidence: vi.fn(),
+  inspectTenderQueries: vi.fn(),
+  inspectTenderRecord: vi.fn(),
   invalidateBidDecisionApproval: vi.fn(),
   resolveBidDecisionReturnRework: vi.fn(),
   runBidDecisionPackageReview: vi.fn(),
+  searchEvidence: vi.fn(),
   composeTenderOffice: vi.fn(),
   inspectCurrentWorkPlan: vi.fn(),
   inspectTenderProduction: vi.fn(),
@@ -425,6 +436,276 @@ function productionInspection(
     activated_by: "engineer_user",
     acting_role: "tendering_manager",
     created_at: "2026-08-30T09:05:00Z",
+  };
+}
+
+const evidenceArtifactId = "8".repeat(32);
+const conflictingArtifactId = "7".repeat(32);
+const citedRecordId = "6".repeat(32);
+const citedQueryId = "5".repeat(32);
+
+function evidenceLocation(ordinal: number, text: string): EvidenceLocation {
+  return {
+    ordinal,
+    kind: "paragraph",
+    structural_path: `pdf/page-3/paragraph-${ordinal}`,
+    provenance: [
+      {
+        page_number: 3,
+        char_start: 0,
+        char_end: text.length,
+        bounding_box: null,
+      },
+    ],
+    section: "Concrete works",
+    paragraph_number: ordinal,
+    table_number: null,
+    sheet_name: null,
+    cell_range: null,
+    original_text: text,
+    translated_text: null,
+    language: "english",
+    direction: "left_to_right",
+  };
+}
+
+function instructionsDocument(): EvidenceDocument {
+  return {
+    artifact_id: evidenceArtifactId,
+    version: 2,
+    state: "parsed",
+    exception: null,
+    language: "english",
+    direction: "left_to_right",
+    pipeline_version: "pipeline-v1",
+    markdown_sha256: "b".repeat(64),
+    locations: [
+      evidenceLocation(7, "Ground-floor slabs shall be concrete class C30/37."),
+      evidenceLocation(8, "Concrete cover shall be 40 mm to reinforcement."),
+    ],
+  };
+}
+
+function addendumDocument(): EvidenceDocument {
+  return {
+    artifact_id: conflictingArtifactId,
+    version: 1,
+    state: "parsed",
+    exception: null,
+    language: "english",
+    direction: "left_to_right",
+    pipeline_version: "pipeline-v1",
+    markdown_sha256: "c".repeat(64),
+    locations: [
+      evidenceLocation(2, "Amend ground-floor slabs to concrete class C35/45."),
+    ],
+  };
+}
+
+function proposedRecord(): TenderRecordInspection {
+  return {
+    record_id: citedRecordId,
+    stable_key: "slab-concrete-strength",
+    version: 1,
+    kind: "requirement",
+    title: "Slab concrete strength",
+    verification_status: "proposed",
+    trust_class: "ai_proposal",
+    fields: [
+      {
+        name: "concrete_class",
+        value: "C30/37",
+        basis_kind: "evidence",
+        basis_reference: null,
+        basis_description: null,
+        basis_authority: null,
+        original_expression: null,
+        normalized_value: null,
+        timezone: null,
+        uncertainty: null,
+        evidence: [
+          {
+            reference: {
+              artifact_id: evidenceArtifactId,
+              version: 2,
+              ordinal: 7,
+            },
+            package_path: "01 Instructions/ITT.pdf",
+            location: evidenceLocation(
+              7,
+              "Ground-floor slabs shall be concrete class C30/37.",
+            ),
+          },
+        ],
+      },
+    ],
+    generation_instruction: null,
+    contradictions: [
+      {
+        field_name: "concrete_class",
+        summary: "The addendum states C35/45 for the same slab.",
+        evidence: [
+          {
+            reference: {
+              artifact_id: evidenceArtifactId,
+              version: 2,
+              ordinal: 7,
+            },
+            package_path: "01 Instructions/ITT.pdf",
+            location: evidenceLocation(
+              7,
+              "Ground-floor slabs shall be concrete class C30/37.",
+            ),
+          },
+          {
+            reference: {
+              artifact_id: conflictingArtifactId,
+              version: 1,
+              ordinal: 2,
+            },
+            package_path: "02 Addenda/Addendum-1.pdf",
+            location: evidenceLocation(
+              2,
+              "Amend ground-floor slabs to concrete class C35/45.",
+            ),
+          },
+        ],
+      },
+    ],
+    source_relationships: [],
+    reviews: [],
+    author_run_id: "1".repeat(32),
+    author_profile_id: "2".repeat(32),
+    created_at: "2026-08-30T09:30:00Z",
+  };
+}
+
+function decidedRecord(): TenderRecordInspection {
+  return {
+    ...proposedRecord(),
+    verification_status: "verified",
+    trust_class: "engineer_verified",
+    reviews: [
+      {
+        review_id: "4".repeat(32),
+        outcome: "verified",
+        rationale: "Confirmed against the instructions.",
+        reviewer_kind: "engineer_user",
+        reviewer_run_id: null,
+        decided_by: "engineer_user",
+        created_at: "2026-08-30T10:30:00Z",
+      },
+    ],
+  };
+}
+
+function pendingQuery(): TenderQuery {
+  return {
+    query_id: citedQueryId,
+    version: 1,
+    query_type: "contradiction",
+    question: "Which concrete class applies to the ground-floor slab?",
+    ambiguity_or_gap: "The addendum contradicts the instructions.",
+    owner_profile_id: "3".repeat(32),
+    owner_profile_version: 1,
+    evidence: [
+      {
+        kind: "source_evidence",
+        reference: `${evidenceArtifactId}#7`,
+        version: 2,
+      },
+    ],
+    affected_records: [{ record_id: citedRecordId, version: 1 }],
+    affected_task_keys: ["cost_estimation_production"],
+    due_at: "2026-09-30T00:00:00Z",
+    material: true,
+    release_blocking: false,
+    proposed_treatments: [
+      {
+        treatment: "approved_assumption",
+        rationale: "Carry the addendum value as a stated assumption.",
+        proposed_by: "engineer_user",
+        proposed_by_run_id: null,
+      },
+    ],
+    responses: [],
+    approved_treatment: null,
+    invalidations: [],
+    status: "treatment_proposed",
+    overdue: false,
+    current: true,
+    source_run_id: null,
+    created_by: "engineer_user",
+    manifest_sha256: "a".repeat(64),
+    created_at: "2026-08-30T10:05:00Z",
+  };
+}
+
+function emptyQueryPage(): TenderQueryPage {
+  return {
+    query_register_open: true,
+    owner_profiles: [],
+    production_task_keys: [],
+    items: [],
+    next_cursor: null,
+    total_current_count: 0,
+    overdue_count: 0,
+    release_blocking_count: 0,
+  };
+}
+
+function questionProjection(): ManagerWorkspaceProjection {
+  return {
+    ...projection,
+    current_action: {
+      kind: "answer_manager_question",
+      title: "Answer the Manager's question",
+      summary:
+        "Your answer will become an attributable Engineer input for the Tender intake.",
+      action_label: "Reply to Manager",
+      requires_engineer: true,
+    },
+    conversation: {
+      conversation_id: "c".repeat(32),
+      latest_meaningful_message_id: "m".repeat(32),
+      messages: [
+        {
+          message_id: messageId,
+          sequence: 1,
+          author: "system",
+          kind: "status",
+          body: "West Campus MEP workspace is ready.",
+          created_at: "2026-08-30T09:00:00Z",
+          references: [],
+        },
+        {
+          message_id: "m".repeat(32),
+          sequence: 2,
+          author: "manager",
+          kind: "question",
+          body: "Which concrete class applies to the ground-floor slab?",
+          created_at: "2026-08-30T10:00:00Z",
+          references: [
+            {
+              kind: "tender_record",
+              reference: citedRecordId,
+              version: 1,
+              evidence_ordinal: null,
+              label: "Slab concrete strength",
+              detail: "Proposed requirement",
+            },
+            {
+              kind: "source_evidence",
+              reference: evidenceArtifactId,
+              version: 2,
+              evidence_ordinal: 7,
+              label: "01 Instructions/ITT.pdf",
+              detail: "Concrete class passage",
+            },
+          ],
+        },
+      ],
+    },
   };
 }
 
@@ -4057,5 +4338,240 @@ describe("ManagerWorkspace", () => {
     await waitFor(() => {
       expect(host.startManagerTender).toHaveBeenCalledWith("directory", true);
     });
+  });
+
+  it("opens the exact source from a message evidence reference and restores the conversation on close", async () => {
+    host.inspectManagerWorkspace.mockResolvedValue(questionProjection());
+    host.inspectEvidence.mockResolvedValue(instructionsDocument());
+    host.inspectTenderRecord.mockResolvedValue(proposedRecord());
+
+    render(<ManagerWorkspace />);
+    fireEvent.click(await screen.findByText("2 references"));
+    fireEvent.click(screen.getByRole("button", { name: /Review evidence/ }));
+
+    const review = await screen.findByTestId("tender-evidence-review");
+    expect(host.inspectEvidence).toHaveBeenCalledWith(
+      tenderId,
+      evidenceArtifactId,
+      2,
+    );
+    const highlighted = within(review).getByText(
+      "Ground-floor slabs shall be concrete class C30/37.",
+    );
+    expect(
+      highlighted.closest(".tender-evidence__location")?.className,
+    ).toContain("is-highlighted");
+    expect(
+      screen.getByRole("button", { name: "Reply to Manager" }),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      within(review).getByRole("button", {
+        name: "Back to Manager conversation",
+      }),
+    );
+    expect(screen.queryByTestId("tender-evidence-review")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Reply to Manager" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Which concrete class applies to the ground-floor slab?",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("presents conflicting sources together when the cited record carries a contradiction", async () => {
+    host.inspectManagerWorkspace.mockResolvedValue(questionProjection());
+    host.inspectEvidence.mockImplementation(
+      (_tenderId: string, artifactId: string) =>
+        artifactId === conflictingArtifactId
+          ? Promise.resolve(addendumDocument())
+          : Promise.resolve(instructionsDocument()),
+    );
+    host.inspectTenderRecord.mockResolvedValue(proposedRecord());
+
+    render(<ManagerWorkspace />);
+    fireEvent.click(await screen.findByText("2 references"));
+    fireEvent.click(screen.getByRole("button", { name: /Review evidence/ }));
+
+    const conflicts = await screen.findByRole("region", {
+      name: "Sources that disagree",
+    });
+    expect(host.inspectTenderRecord).toHaveBeenCalledWith(
+      tenderId,
+      citedRecordId,
+      1,
+    );
+    expect(
+      await within(conflicts).findByText(
+        "Amend ground-floor slabs to concrete class C35/45.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(conflicts).getByText("02 Addenda/Addendum-1.pdf"),
+    ).toBeTruthy();
+  });
+
+  it("decides a cited record against its exact version and returns to the Manager conversation", async () => {
+    host.inspectManagerWorkspace.mockResolvedValue(questionProjection());
+    host.inspectTenderRecord.mockResolvedValue(proposedRecord());
+    host.inspectTenderQueries.mockResolvedValue(emptyQueryPage());
+    host.decideTenderRecord.mockResolvedValue({
+      record: decidedRecord(),
+      review: decidedRecord().reviews[0],
+    });
+
+    render(<ManagerWorkspace />);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Review cited Tender records",
+      }),
+    );
+
+    const surface = await screen.findByTestId("tender-record-decision");
+    expect(within(surface).getByText("Slab concrete strength")).toBeTruthy();
+    expect(host.inspectTenderRecord).toHaveBeenCalledWith(
+      tenderId,
+      citedRecordId,
+      1,
+    );
+    fireEvent.change(within(surface).getByLabelText(/Decision rationale/), {
+      target: { value: "Confirmed against the instructions." },
+    });
+    fireEvent.click(
+      within(surface).getByRole("button", {
+        name: "Verify against the source",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(host.decideTenderRecord).toHaveBeenCalledWith(
+        tenderId,
+        citedRecordId,
+        1,
+        "verify",
+        "Confirmed against the instructions.",
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("tender-record-decision")).toBeNull();
+    });
+    expect(
+      screen.getByRole("button", { name: "Reply to Manager" }),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(host.inspectManagerWorkspace.mock.calls.length).toBeGreaterThan(1);
+    });
+  });
+
+  it("takes query treatment decisions one at a time after the record decision", async () => {
+    host.inspectManagerWorkspace.mockResolvedValue(questionProjection());
+    host.inspectTenderQueries.mockResolvedValue({
+      ...emptyQueryPage(),
+      items: [pendingQuery()],
+      total_current_count: 1,
+    });
+    host.inspectTenderRecord
+      .mockResolvedValueOnce(proposedRecord())
+      .mockResolvedValueOnce(decidedRecord());
+    host.decideTenderRecord.mockResolvedValue({
+      record: decidedRecord(),
+      review: decidedRecord().reviews[0],
+    });
+    host.decideTenderQueryTreatment.mockResolvedValue({
+      ...pendingQuery(),
+      approved_treatment: {
+        decision_id: "0".repeat(32),
+        query_id: citedQueryId,
+        query_version: 1,
+        treatment: "approved_assumption",
+        rationale: "Carry the addendum value as a stated assumption.",
+        treatment_details: "C35/45 applies; pricing uses the addendum value.",
+        closes_query: false,
+        decided_by: "engineer_user",
+        acting_role: "tendering_manager",
+        manifest_sha256: "d".repeat(64),
+        created_at: "2026-08-30T11:00:00Z",
+      },
+    });
+
+    render(<ManagerWorkspace />);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Review cited Tender records",
+      }),
+    );
+
+    const surface = await screen.findByTestId("tender-record-decision");
+    expect(
+      within(surface).getByTestId("tender-record-decision-record"),
+    ).toBeTruthy();
+    expect(
+      within(surface).queryByTestId("tender-record-decision-query"),
+    ).toBeNull();
+
+    fireEvent.change(within(surface).getByLabelText(/Decision rationale/), {
+      target: { value: "The addendum governs; return for rework." },
+    });
+    fireEvent.click(
+      within(surface).getByRole("button", {
+        name: "Return to the Manager with this reason",
+      }),
+    );
+    await waitFor(() => {
+      expect(host.decideTenderRecord).toHaveBeenCalledWith(
+        tenderId,
+        citedRecordId,
+        1,
+        "reject",
+        "The addendum governs; return for rework.",
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("tender-record-decision")).toBeNull();
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Review cited Tender records",
+      }),
+    );
+    const reopened = await screen.findByTestId("tender-record-decision");
+    expect(
+      within(reopened).getByTestId("tender-record-decision-query"),
+    ).toBeTruthy();
+
+    fireEvent.change(within(reopened).getByLabelText("Treatment"), {
+      target: { value: "approved_assumption" },
+    });
+    fireEvent.change(within(reopened).getByLabelText(/Decision rationale/), {
+      target: { value: "Carry the addendum value as a stated assumption." },
+    });
+    fireEvent.change(
+      within(reopened).getByLabelText(/Exact treatment and consequence/),
+      { target: { value: "C35/45 applies; pricing uses the addendum value." } },
+    );
+    fireEvent.click(
+      within(reopened).getByRole("button", { name: "Approve treatment" }),
+    );
+
+    await waitFor(() => {
+      expect(host.decideTenderQueryTreatment).toHaveBeenCalledWith({
+        tender_id: tenderId,
+        query_id: citedQueryId,
+        query_version: 1,
+        treatment: "approved_assumption",
+        rationale: "Carry the addendum value as a stated assumption.",
+        treatment_details: "C35/45 applies; pricing uses the addendum value.",
+        closes_query: false,
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("tender-record-decision")).toBeNull();
+    });
+    expect(
+      screen.getByRole("button", { name: "Reply to Manager" }),
+    ).toBeTruthy();
   });
 });

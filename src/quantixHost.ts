@@ -98,6 +98,7 @@ import type { ExternalRfiResponseCandidatePage } from "./bindings/ExternalRfiRes
 import type { ExternalRfiReviewResult } from "./bindings/ExternalRfiReviewResult";
 import type { InterruptAgentRunCommand } from "./bindings/InterruptAgentRunCommand";
 import type { InspectTenderRecordsCommand } from "./bindings/InspectTenderRecordsCommand";
+import type { InspectTenderRecordCommand } from "./bindings/InspectTenderRecordCommand";
 import type { InspectTenderQueriesCommand } from "./bindings/InspectTenderQueriesCommand";
 import type { InspectExternalRfisCommand } from "./bindings/InspectExternalRfisCommand";
 import type { InspectExternalRfiEligibleQueriesCommand } from "./bindings/InspectExternalRfiEligibleQueriesCommand";
@@ -183,6 +184,7 @@ import type { TenderRecordAuthorityReference } from "./bindings/TenderRecordAuth
 import type { TenderRecordEngineerDecisionKind } from "./bindings/TenderRecordEngineerDecisionKind";
 import type { TenderRecordExtractionResult } from "./bindings/TenderRecordExtractionResult";
 import type { TenderRecordPage } from "./bindings/TenderRecordPage";
+import type { TenderRecordInspection } from "./bindings/TenderRecordInspection";
 import type { TenderRecordReviewResult } from "./bindings/TenderRecordReviewResult";
 import type { TenderQuery } from "./bindings/TenderQuery";
 import type { TenderQueryPage } from "./bindings/TenderQueryPage";
@@ -1112,6 +1114,19 @@ export function inspectTenderRecords(
   return invoke<TenderRecordPage>("inspect_tender_records", {
     command,
   });
+}
+
+export function inspectTenderRecord(
+  tenderId: string,
+  recordId: string,
+  version: number,
+): Promise<TenderRecordInspection> {
+  const command: InspectTenderRecordCommand = {
+    tender_id: tenderId,
+    record_id: recordId,
+    version,
+  };
+  return invoke<TenderRecordInspection>("inspect_tender_record", { command });
 }
 
 export function decideTenderRecord(

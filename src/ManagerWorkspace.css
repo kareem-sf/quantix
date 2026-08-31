@@ -1968,6 +1968,7 @@ button {
 }
 
 .manager-workspace__surface {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
@@ -3798,6 +3799,480 @@ html.quantix-reduced-motion *::after {
   .application-settings,
   .retention-view {
     padding: 30px 18px 60px;
+  }
+}
+
+.manager-workspace__overlay {
+  position: absolute;
+  z-index: 30;
+  inset: 0;
+  overflow: auto;
+  background: var(--qx-wash-main);
+}
+
+.manager-workspace__overlay.is-raised {
+  z-index: 40;
+}
+
+.tender-evidence,
+.tender-record-decision {
+  width: min(100% - 40px, var(--conversation-width));
+  margin: 0 auto;
+  padding: 34px 0 46px;
+}
+
+.tender-evidence__header,
+.tender-record-decision__header {
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  padding: 22px 24px;
+  border: 1px solid var(--qx-border);
+  border-radius: 14px;
+  background: var(--qx-surface);
+}
+
+.tender-evidence__header h2,
+.tender-record-decision__header h2 {
+  margin: 8px 0 10px;
+  font-size: clamp(1.4rem, 3vw, 1.9rem);
+  letter-spacing: -0.03em;
+}
+
+.tender-evidence__header p,
+.tender-record-decision__header p:last-of-type {
+  max-width: 680px;
+  margin: 0;
+  color: var(--qx-text-muted);
+  line-height: 1.55;
+}
+
+.tender-evidence__error,
+.tender-record-decision__empty {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 14px;
+  padding: 12px 16px;
+  border: 1px solid var(--qx-border);
+  border-radius: 10px;
+  color: var(--qx-warning);
+  background: var(--qx-warning-soft);
+  font-size: 0.8125rem;
+}
+
+.tender-evidence__loading,
+.tender-record-decision__loading {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--qx-text-muted);
+  font-size: 0.8125rem;
+}
+
+.tender-evidence__loading svg {
+  animation: manager-spin 900ms linear infinite;
+}
+
+.tender-evidence__search {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+
+.tender-evidence__search label {
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.tender-evidence__search div {
+  display: flex;
+  gap: 10px;
+}
+
+.tender-evidence__search input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--qx-border);
+  border-radius: 8px;
+  background: var(--qx-surface-raised);
+  font: inherit;
+  font-size: 0.8125rem;
+}
+
+.tender-evidence__search-results {
+  margin: 0 0 18px;
+  padding: 12px 16px;
+  border: 1px solid var(--qx-border);
+  border-radius: 10px;
+  background: var(--qx-surface-panel, var(--qx-surface));
+  font-size: 0.8125rem;
+}
+
+.tender-evidence__search-results > p {
+  margin: 0 0 10px;
+  color: var(--qx-text-muted);
+}
+
+.tender-evidence__search-results ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tender-evidence__search-results button {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--qx-border);
+  border-radius: 8px;
+  background: var(--qx-surface-raised);
+  cursor: pointer;
+  text-align: start;
+}
+
+.tender-evidence__search-results button:hover {
+  border-color: rgb(var(--qx-focus-rgb) / 55%);
+}
+
+.tender-evidence__search-results span {
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+}
+
+.tender-evidence__search-results q {
+  white-space: pre-wrap;
+}
+
+.tender-evidence__locations {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tender-evidence__location {
+  padding: 14px 16px;
+  border: 1px solid var(--qx-border);
+  border-radius: 10px;
+  background: var(--qx-surface-panel, var(--qx-surface));
+}
+
+.tender-evidence__location.is-highlighted {
+  border-color: rgb(var(--qx-focus-rgb) / 62%);
+  background: var(--qx-surface-raised);
+  box-shadow: 0 0 0 3px rgb(var(--qx-focus-rgb) / 22%);
+}
+
+.tender-evidence__location-heading {
+  display: grid;
+  gap: 2px;
+  font-size: 0.8125rem;
+}
+
+.tender-evidence__location-heading span {
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+}
+
+.tender-evidence__location blockquote,
+.tender-evidence__conflict-source blockquote {
+  margin: 10px 0 0;
+  padding: 10px 14px;
+  border-inline-start: 3px solid var(--qx-border);
+  background: var(--qx-surface-subtle);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.tender-evidence__translation p {
+  margin: 8px 0 0;
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+}
+
+.tender-evidence__provenance {
+  margin-top: 8px;
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+}
+
+.tender-evidence__provenance summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.tender-evidence__provenance dl {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+}
+
+.tender-evidence__provenance dt {
+  font-weight: 650;
+}
+
+.tender-evidence__provenance dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tender-evidence__conflicts {
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--qx-border);
+}
+
+.tender-evidence__conflicts h3 {
+  margin: 0 0 6px;
+}
+
+.tender-evidence__conflicts > p {
+  margin: 0;
+  color: var(--qx-text-muted);
+  font-size: 0.8125rem;
+}
+
+.tender-evidence__conflict-list {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  margin-top: 14px;
+}
+
+.tender-evidence__conflict-source {
+  display: grid;
+  align-content: start;
+  gap: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--qx-warning);
+  border-radius: 10px;
+  background: var(--qx-surface);
+}
+
+.tender-evidence__conflict-source header {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+}
+
+.tender-evidence__conflict-source header div {
+  display: grid;
+  gap: 2px;
+  font-size: 0.8125rem;
+}
+
+.tender-evidence__conflict-source header span {
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+}
+
+.tender-record-decision__item {
+  display: grid;
+  gap: 16px;
+  margin: 0 0 18px;
+  padding: 20px 22px;
+  border: 1px solid var(--qx-border);
+  border-radius: 12px;
+  background: var(--qx-surface);
+}
+
+.tender-record-decision__item h3 {
+  margin: 8px 0 6px;
+  font-size: 1.125rem;
+  letter-spacing: -0.015em;
+}
+
+.tender-record-decision__item header p {
+  margin: 0;
+  color: var(--qx-text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.tender-record-decision__item header code {
+  margin-inline-start: 8px;
+  color: var(--qx-text-disabled);
+  font-family: var(--qx-font-mono);
+  font-size: 0.75rem;
+}
+
+.tender-record-decision__contradiction {
+  display: grid;
+  gap: 8px;
+  padding: 12px 16px;
+  border: 1px solid var(--qx-warning);
+  border-radius: 10px;
+  background: var(--qx-warning-soft);
+}
+
+.tender-record-decision__contradiction strong {
+  color: var(--qx-warning);
+  font-size: 0.8125rem;
+}
+
+.tender-record-decision__contradiction p {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.tender-record-decision__fields {
+  display: grid;
+  gap: 14px;
+}
+
+.tender-record-decision__fields h4 {
+  margin: 0 0 4px;
+  font-size: 0.8125rem;
+  letter-spacing: 0.01em;
+  text-transform: capitalize;
+}
+
+.tender-record-decision__value {
+  margin: 0;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.tender-record-decision__basis {
+  margin: 4px 0 0;
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+}
+
+.tender-record-decision__citation {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--qx-border);
+  border-radius: 8px;
+  background: var(--qx-surface-raised);
+  cursor: pointer;
+  font-size: 0.75rem;
+  text-align: start;
+}
+
+.tender-record-decision__citation:hover {
+  border-color: rgb(var(--qx-focus-rgb) / 55%);
+}
+
+.tender-record-decision__citation span {
+  color: var(--qx-text-muted);
+}
+
+.tender-record-decision__citation blockquote {
+  margin: 0;
+  padding-inline-start: 10px;
+  border-inline-start: 2px solid var(--qx-border);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.tender-record-decision__citation-link {
+  color: rgb(var(--qx-focus-rgb));
+}
+
+.tender-record-decision__query-evidence ul,
+.tender-record-decision__item ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-inline-start: 18px;
+  font-size: 0.8125rem;
+}
+
+.tender-record-decision__form {
+  display: grid;
+  gap: 12px;
+}
+
+.tender-record-decision__form label {
+  display: grid;
+  gap: 6px;
+  color: var(--qx-text-muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.tender-record-decision__form textarea,
+.tender-record-decision__form select {
+  padding: 9px 12px;
+  border: 1px solid var(--qx-border);
+  border-radius: 8px;
+  background: var(--qx-surface-raised);
+  color: var(--qx-text);
+  font: inherit;
+  font-size: 0.8125rem;
+}
+
+.tender-record-decision__form label.tender-record-decision__checkbox {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--qx-text);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.tender-record-decision__actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tender-record-decision__review {
+  margin: 0;
+  color: var(--qx-text-muted);
+  font-size: 0.8125rem;
+}
+
+.manager-message__reference {
+  display: grid;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  padding-left: 11px;
+  border-left: 2px solid rgb(var(--qx-focus-rgb) / 55%);
+  background: transparent;
+  cursor: pointer;
+  text-align: start;
+  font: inherit;
+  color: inherit;
+}
+
+.manager-message__reference:hover .manager-message__reference-action {
+  text-decoration: underline;
+}
+
+.manager-message__reference-action {
+  color: rgb(var(--qx-focus-rgb));
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+@media (max-width: 640px) {
+  .tender-evidence,
+  .tender-record-decision {
+    width: min(100% - 28px, var(--conversation-width));
+    padding-top: 22px;
+  }
+
+  .tender-evidence__header,
+  .tender-record-decision__header {
+    flex-direction: column;
+    padding: 18px;
   }
 }
 
