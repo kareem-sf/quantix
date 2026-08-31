@@ -3753,10 +3753,24 @@ html.quantix-reduced-motion *::after {
   justify-content: space-between;
 }
 
-.workspace-team__runs li > div {
+.workspace-team__runs li .workspace-team__agent {
   display: grid;
   gap: 2px;
   min-width: 0;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  border: 0;
+  border-radius: 8px;
+  color: inherit;
+  background: transparent;
+  font-size: inherit;
+  font-weight: 400;
+  text-align: left;
+}
+
+.workspace-team__runs li .workspace-team__agent:hover {
+  color: inherit;
+  background: var(--qx-hover);
 }
 
 .workspace-team__runs li strong {
@@ -3901,6 +3915,179 @@ html.quantix-reduced-motion *::after {
 
 .agent-workroom__events li span {
   color: var(--qx-text-muted);
+}
+
+.agent-workroom__context {
+  gap: 14px;
+}
+
+.agent-workroom__context section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-workroom__context section > p {
+  overflow-wrap: anywhere;
+}
+
+.agent-workroom__context h5 {
+  margin: 6px 0 0;
+  color: var(--qx-text);
+  font-size: 0.72rem;
+}
+
+.agent-workroom__context dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.agent-workroom__context dl div {
+  display: grid;
+  gap: 2px;
+}
+
+.agent-workroom__context dt {
+  color: var(--qx-text);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.agent-workroom__context dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-workroom__views li {
+  display: grid;
+  gap: 2px;
+}
+
+.agent-workroom__views li span {
+  overflow-wrap: anywhere;
+  color: var(--qx-text-muted);
+  font-size: 0.72rem;
+}
+
+.agent-workroom__ceiling {
+  padding: 12px;
+  border: 1px dashed var(--qx-border-strong);
+  border-radius: 10px;
+  background: var(--qx-surface-subtle);
+}
+
+.agent-workroom__prior-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-workroom__prior-list button {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--qx-border);
+  border-radius: 8px;
+  color: var(--qx-text-muted);
+  background: var(--qx-surface-subtle);
+  font-size: 0.75rem;
+  text-align: left;
+}
+
+.agent-workroom__prior-list button:hover {
+  color: var(--qx-text);
+  background: var(--qx-hover);
+}
+
+.agent-workroom__prior-list button[aria-current="true"] {
+  border-color: var(--qx-brand-blue);
+  color: var(--qx-text);
+}
+
+.agent-workroom__prior-list button strong {
+  color: inherit;
+  font-size: 0.75rem;
+}
+
+.agent-workroom__prior-paging {
+  display: flex;
+  gap: 8px;
+}
+
+.agent-workroom__prior-paging button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--qx-border-strong);
+  border-radius: 8px;
+  color: var(--qx-text-muted);
+  background: var(--qx-surface-subtle);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.agent-workroom__prior-paging button:disabled {
+  opacity: 0.55;
+}
+
+.agent-workroom__comparison dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.agent-workroom__comparison dl > div {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--qx-border);
+  border-radius: 8px;
+}
+
+.agent-workroom__comparison dl > div.is-changed {
+  border-color: var(--qx-brand-blue);
+  background: var(--qx-accent-soft);
+}
+
+.agent-workroom__comparison dt {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--qx-text);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.agent-workroom__comparison dt span {
+  padding: 1px 7px;
+  border: 1px solid var(--qx-border-strong);
+  border-radius: 999px;
+  color: var(--qx-text-muted);
+  font-size: 0.62rem;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.agent-workroom__comparison dl > div.is-changed dt span {
+  border-color: var(--qx-brand-blue);
+  color: var(--qx-brand-blue);
+}
+
+.agent-workroom__comparison dd {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-workroom__comparison dd strong {
+  color: var(--qx-text-muted);
+  font-size: 0.68rem;
+  font-weight: 650;
 }
 
 .workspace-outputs {
@@ -5008,6 +5195,11 @@ html.quantix-reduced-motion *::after {
   .qx-ui-dialog .retention-dialog__actions button {
     border: 1px solid ButtonText !important;
     background: ButtonFace;
+  }
+
+  .workspace-team__runs li .workspace-team__agent {
+    border: 0 !important;
+    background: transparent;
   }
 
   .application-settings__device-code,

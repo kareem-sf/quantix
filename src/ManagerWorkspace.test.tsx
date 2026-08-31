@@ -11,6 +11,9 @@ import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
+import type { AgentRunHistoryPage } from "./bindings/AgentRunHistoryPage";
+import type { AgentRunInspection } from "./bindings/AgentRunInspection";
+import type { AgentRunSummary } from "./bindings/AgentRunSummary";
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
 import type { BasisOfEstimateVersion } from "./bindings/BasisOfEstimateVersion";
 import type { CalculationWorkspaceInspection } from "./bindings/CalculationWorkspaceInspection";
@@ -91,6 +94,7 @@ const host = vi.hoisted(() => ({
   inspectDeletionReceipts: vi.fn(),
   inspectApplicationSettings: vi.fn(),
   inspectAgentRun: vi.fn(),
+  inspectAgentRunHistory: vi.fn(),
   inspectDiagnosticTimeline: vi.fn(),
   inspectDiagnosticsStatus: vi.fn(),
   inspectTrashedTenders: vi.fn(),
@@ -6279,6 +6283,401 @@ describe("ManagerWorkspace", () => {
       within(log).getByText("Produce the verified estimate."),
     ).toBeTruthy();
     expect(within(log).getByText("Cost estimate v2")).toBeTruthy();
+  });
+
+  const workroomProviderSelection = {
+    connection_id: "codex_chatgpt",
+    provider: "codex" as const,
+    model_id: "gpt-live-a",
+    reasoning: { kind: "provider_default" } as const,
+    catalogue_fetched_at: "2026-08-30T09:00:00Z",
+    adapter_version: "1",
+  };
+
+  function workroomAgentRun(
+    runId: string,
+    overrides: Partial<AgentRunInspection> = {},
+  ): AgentRunInspection {
+    return {
+      run_id: runId,
+      retry_of_run_id: null,
+      linked_retry_supported: false,
+      state: "running",
+      provider_selection: workroomProviderSelection,
+      profile: {
+        profile_id: "e".repeat(32),
+        version: 1,
+        identity: "Cost Estimator",
+        profession: "Senior Construction Cost Estimator",
+        seniority: "senior",
+        capabilities: ["cost_estimation"],
+        objective: "Produce the verified estimate.",
+        behavior: "Works only from verified records.",
+        skepticism: "Challenges unsupported inputs.",
+        risk_tolerance: "low",
+        instructions:
+          "Estimate only from the supplied data views; never quote unregistered figures.",
+        output_contract_json: "{}",
+        review_policy: "self_review",
+        permissions: {
+          data_scopes: ["estimate"],
+          data_classifications: ["tender_internal" as const],
+          allowed_actions: ["read"],
+          allowed_tools: [],
+          network_allowed: false,
+          workspace_write_allowed: false,
+        },
+        prohibited_actions: [],
+        resource_budget: planBudget,
+      },
+      task: {
+        task_id: "2".repeat(32),
+        profile_id: "e".repeat(32),
+        profile_version: 1,
+        objective: "Produce the verified estimate.",
+        exact_inputs: [
+          {
+            kind: "artifact",
+            reference: "artifact-000000000000000000000000000",
+            version: 2,
+          },
+        ],
+        output_contract_json: "{}",
+        review_policy: "self_review",
+        deadline: "2026-09-15T00:00:00Z",
+        permissions: {
+          data_scopes: ["estimate"],
+          data_classifications: ["tender_internal" as const],
+          allowed_actions: ["read"],
+          allowed_tools: [],
+          network_allowed: false,
+          workspace_write_allowed: false,
+        },
+        resource_budget: planBudget,
+        repair_feedback: null,
+      },
+      permission_grant: {
+        grant_id: "g".repeat(32),
+        policy_version: 1,
+        capability_catalogue_version: 1,
+        work_plan_version: 1,
+        profile_id: "e".repeat(32),
+        profile_version: 1,
+        task_id: "2".repeat(32),
+        purpose: "Produce the verified estimate.",
+        data_scopes: ["estimate"],
+        data_classifications: ["tender_internal" as const],
+        allowed_actions: ["read"],
+        typed_tools: [],
+        network_allowed: false,
+        workspace_write_allowed: false,
+        data_views: [
+          {
+            view_id: "view-1",
+            schema_version: 1,
+            relative_path: "views/boq-summary.csv",
+            sha256: "f".repeat(64),
+            data_scope: "estimate",
+            data_classification: "tender_internal" as const,
+            exact_inputs: [],
+          },
+        ],
+        thread_exposure: {
+          exact_inputs: [
+            {
+              kind: "artifact",
+              reference: "artifact-thread-exposed",
+              version: 2,
+            },
+          ],
+          data_scopes: ["estimate"],
+          data_classifications: ["tender_internal" as const],
+        },
+        workspace: {
+          workspace_id: "w".repeat(32),
+          read_only_inputs: "read-only inputs",
+          working_area: "working area",
+          staged_outputs: "staged outputs",
+        },
+        access_ceiling: {
+          exact_inputs: [],
+          data_scopes: ["estimate", "schedule"],
+          data_classifications: [
+            "tender_internal" as const,
+            "sensitive" as const,
+          ],
+          allowed_actions: ["read", "write"],
+          allowed_tools: ["boq_editor"],
+        },
+        resource_budget: planBudget,
+        issued_at: "2026-08-30T09:00:00Z",
+        expires_at: "2026-08-31T09:00:00Z",
+      },
+      access_requests: [],
+      provider_thread_ref: "thread-1",
+      provider_turn_ref: null,
+      events: [],
+      usage: {
+        input_tokens: 10n,
+        cached_input_tokens: null,
+        output_tokens: 5n,
+        reasoning_output_tokens: null,
+        total_tokens: 15n,
+        context_window: null,
+        elapsed_milliseconds: 1_000n,
+        rate_limit: null,
+      },
+      failure: null,
+      proposed_result: null,
+      recovery_decision: null,
+      started_at: "2026-08-30T09:10:00Z",
+      completed_at: null,
+      ...overrides,
+    };
+  }
+
+  function workroomHistoryRun(
+    runId: string,
+    overrides: Partial<AgentRunSummary> = {},
+  ): AgentRunSummary {
+    return {
+      run_id: runId,
+      retry_of_run_id: null,
+      has_linked_retry: false,
+      linked_retry_supported: false,
+      state: "completed",
+      provider_selection: workroomProviderSelection,
+      profile_identity: "Cost Estimator",
+      profile_profession: "Senior Construction Cost Estimator",
+      profile_version: 1,
+      task_id: "2".repeat(32),
+      provider_thread_ref: "thread-1",
+      provider_turn_ref: null,
+      usage: {
+        input_tokens: 10n,
+        cached_input_tokens: null,
+        output_tokens: 5n,
+        reasoning_output_tokens: null,
+        total_tokens: 15n,
+        context_window: null,
+        elapsed_milliseconds: 1_000n,
+        rate_limit: null,
+      },
+      failure: null,
+      has_proposed_result: false,
+      recovery_decision: null,
+      started_at: "2026-08-28T09:00:00Z",
+      completed_at: "2026-08-28T09:30:00Z",
+      ...overrides,
+    };
+  }
+
+  function workroomHistoryPage(runs: AgentRunSummary[]): AgentRunHistoryPage {
+    return {
+      items: runs.map((run, index) => ({
+        run_sequence: BigInt(index + 1),
+        run,
+      })),
+      next_before_sequence: null,
+      total_count: BigInt(runs.length),
+    };
+  }
+
+  async function openAgentWorkroom() {
+    fireEvent.click(screen.getByRole("button", { name: "Open workroom" }));
+    const workroom = await screen.findByLabelText("Agent workroom");
+    fireEvent.click(within(workroom).getByRole("button", { name: "Context" }));
+    return workroom;
+  }
+
+  it("opens the workroom from the Agent identity", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(teamRoomProjection());
+    host.inspectAgentRun.mockResolvedValue(workroomAgentRun("5".repeat(32)));
+    host.inspectAgentRunHistory.mockResolvedValue(workroomHistoryPage([]));
+
+    render(<ManagerWorkspace />);
+    await openTeamRoom();
+
+    const identityButtons = screen.getAllByRole("button", {
+      name: /Cost Estimator/,
+    });
+    expect(identityButtons).toHaveLength(1);
+    fireEvent.click(identityButtons[0]);
+
+    expect(host.inspectAgentRun).toHaveBeenCalledWith(tenderId, "5".repeat(32));
+    const workroom = await screen.findByLabelText("Agent workroom");
+    expect(within(workroom).getByText("Cost Estimator")).toBeTruthy();
+    expect(
+      within(workroom).getByText("Produce the verified estimate."),
+    ).toBeTruthy();
+    expect(
+      within(workroom)
+        .getByRole("button", { name: "Conversation" })
+        .getAttribute("aria-current"),
+    ).toBe("page");
+    expect(
+      within(workroom).getByRole("button", { name: "Close" }),
+    ).toBeTruthy();
+  });
+
+  it("shows the exact supplied context for the selected run", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(teamRoomProjection());
+    host.inspectAgentRun.mockResolvedValue(workroomAgentRun("5".repeat(32)));
+    host.inspectAgentRunHistory.mockResolvedValue(workroomHistoryPage([]));
+
+    render(<ManagerWorkspace />);
+    await openTeamRoom();
+    const workroom = await openAgentWorkroom();
+
+    const supplied = within(workroom).getByLabelText(
+      "What this run actually received",
+    );
+    expect(
+      within(supplied).getByText(
+        "Estimate only from the supplied data views; never quote unregistered figures.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(supplied).getByText("artifact-000000000000000000000000000"),
+    ).toBeTruthy();
+    expect(within(supplied).getByText("views/boq-summary.csv")).toBeTruthy();
+    expect(within(supplied).getByText("estimate")).toBeTruthy();
+    expect(within(supplied).getByText(/artifact-thread-exposed/)).toBeTruthy();
+    expect(within(supplied).getByText("Data scopes: estimate")).toBeTruthy();
+    expect(
+      within(supplied).getByText("Classifications: tender_internal"),
+    ).toBeTruthy();
+  });
+
+  it("keeps the permission ceiling visually distinct from the supplied context", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(teamRoomProjection());
+    host.inspectAgentRun.mockResolvedValue(workroomAgentRun("5".repeat(32)));
+    host.inspectAgentRunHistory.mockResolvedValue(workroomHistoryPage([]));
+
+    render(<ManagerWorkspace />);
+    await openTeamRoom();
+    const workroom = await openAgentWorkroom();
+
+    const supplied = within(workroom).getByLabelText(
+      "What this run actually received",
+    );
+    const requests = within(workroom).getByLabelText(
+      "Requested but not granted",
+    );
+    const ceiling = within(workroom).getByLabelText(
+      "What this Agent could request",
+    );
+    expect(supplied.className).toBe("agent-workroom__supplied");
+    expect(requests.className).toBe("agent-workroom__requests");
+    expect(ceiling.className).toBe("agent-workroom__ceiling");
+    expect(supplied.contains(ceiling)).toBe(false);
+    expect(requests.contains(ceiling)).toBe(false);
+    expect(within(ceiling).getByText("estimate, schedule")).toBeTruthy();
+    expect(within(ceiling).getByText("read, write")).toBeTruthy();
+    expect(within(supplied).queryByText("estimate, schedule")).toBeNull();
+  });
+
+  it("lists prior runs for the same Agent and task from history", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(teamRoomProjection());
+    host.inspectAgentRun.mockResolvedValue(workroomAgentRun("5".repeat(32)));
+    host.inspectAgentRunHistory.mockResolvedValue(
+      workroomHistoryPage([
+        workroomHistoryRun("5".repeat(32), {
+          state: "running",
+          completed_at: null,
+        }),
+        workroomHistoryRun("7".repeat(32), {
+          profile_version: 2,
+        }),
+        workroomHistoryRun("9".repeat(32), {
+          task_id: "3".repeat(32),
+        }),
+      ]),
+    );
+
+    render(<ManagerWorkspace />);
+    await openTeamRoom();
+    const workroom = await openAgentWorkroom();
+
+    expect(host.inspectAgentRunHistory).toHaveBeenCalledWith(tenderId, null, 4);
+    const prior = within(workroom).getByLabelText("Prior runs");
+    const list = await within(prior).findByRole("list");
+    await waitFor(() => {
+      expect(
+        within(list).getByRole("button", { name: /completed/ }),
+      ).toBeTruthy();
+    });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(list).queryByRole("button", { name: /running/ })).toBeNull();
+  });
+
+  it("compares context with a selected prior run and highlights changes", async () => {
+    const priorRunId = "7".repeat(32);
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(teamRoomProjection());
+    const currentRun = workroomAgentRun("5".repeat(32));
+    host.inspectAgentRun.mockImplementation(
+      (_tenderId: string, runId: string) =>
+        Promise.resolve(
+          runId === priorRunId
+            ? workroomAgentRun(priorRunId, {
+                state: "completed",
+                started_at: "2026-08-28T09:00:00Z",
+                completed_at: "2026-08-28T09:30:00Z",
+                profile: {
+                  ...currentRun.profile,
+                  version: 2,
+                  instructions:
+                    "Estimate only from the prior data views; ask before using schedule scopes.",
+                },
+                permission_grant: {
+                  ...currentRun.permission_grant,
+                  data_scopes: ["estimate", "schedule"],
+                  thread_exposure: {
+                    ...currentRun.permission_grant.thread_exposure,
+                    data_scopes: ["estimate", "schedule"],
+                  },
+                },
+              })
+            : currentRun,
+        ),
+    );
+    host.inspectAgentRunHistory.mockResolvedValue(
+      workroomHistoryPage([
+        workroomHistoryRun(priorRunId, { profile_version: 2 }),
+      ]),
+    );
+
+    render(<ManagerWorkspace />);
+    await openTeamRoom();
+    const workroom = await openAgentWorkroom();
+
+    const prior = within(workroom).getByLabelText("Prior runs");
+    fireEvent.click(
+      await within(prior).findByRole("button", { name: /completed/ }),
+    );
+
+    const comparisonHeading = await within(workroom).findByText(
+      "What changed against the selected prior run",
+    );
+    const comparison = comparisonHeading.closest("div") as HTMLElement;
+    expect(within(comparison).getAllByText("Changed")).toHaveLength(3);
+    expect(within(comparison).getAllByText("Same")).toHaveLength(2);
+    expect(
+      within(comparison).getByText(
+        "Estimate only from the prior data views; ask before using schedule scopes.",
+      ),
+    ).toBeTruthy();
+    expect(within(comparison).getByText("estimate, schedule")).toBeTruthy();
+    expect(
+      prior
+        .querySelector('button[aria-current="true"]')
+        ?.getAttribute("aria-current"),
+    ).toBe("true");
   });
 
   function estimateBasisFixture(

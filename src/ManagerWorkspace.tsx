@@ -54,6 +54,10 @@ import type { WorkspaceSearchProjection } from "./bindings/WorkspaceSearchProjec
 import type { WorkspaceSearchHit } from "./bindings/WorkspaceSearchHit";
 import type { WorkspaceMessageReference } from "./bindings/WorkspaceMessageReference";
 import type { AgentRunInspection } from "./bindings/AgentRunInspection";
+import type { AgentRunHistoryPage } from "./bindings/AgentRunHistoryPage";
+import type { AgentTaskInputReference } from "./bindings/AgentTaskInputReference";
+import type { DataViewManifest } from "./bindings/DataViewManifest";
+import type { ThreadExposureSet } from "./bindings/ThreadExposureSet";
 import type { WorkspaceTaskRow } from "./bindings/WorkspaceTaskRow";
 import type { WorkspaceTaskState } from "./bindings/WorkspaceTaskState";
 import type { ProductionArtifactVersion } from "./bindings/ProductionArtifactVersion";
@@ -109,6 +113,7 @@ import {
   inspectDeletionReceipts,
   inspectApplicationSettings,
   inspectAgentRun,
+  inspectAgentRunHistory,
   inspectRuntimePreparationProgress,
   inspectRuntimeReadiness,
   inspectPackageIntakeProgress,
@@ -2618,9 +2623,6 @@ function TeamRoom({
     null,
   );
   const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
-  const [workroomTab, setWorkroomTab] = useState<
-    "conversation" | "context" | "activity" | "outputs"
-  >("conversation");
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const conversationRef = useRef<HTMLDivElement>(null);
 
@@ -2649,7 +2651,6 @@ function TeamRoom({
     setLoadingRunId(runId);
     try {
       setSelectedRun(await inspectAgentRun(tenderId, runId));
-      setWorkroomTab("conversation");
     } finally {
       setLoadingRunId(null);
     }
@@ -2748,11 +2749,16 @@ function TeamRoom({
             <ul className="workspace-team__runs">
               {projection.team.agent_runs.map((run) => (
                 <li key={run.run_id}>
-                  <div>
+                  <button
+                    type="button"
+                    className="workspace-team__agent"
+                    disabled={loadingRunId === run.run_id}
+                    onClick={() => void openWorkroom(run.run_id)}
+                  >
                     <strong>{run.agent.identity}</strong>
                     <span>{run.agent.profession}</span>
                     <small>{run.state.replace(/_/g, " ")}</small>
-                  </div>
+                  </button>
                   <button
                     type="button"
                     disabled={loadingRunId === run.run_id}
@@ -2766,98 +2772,13 @@ function TeamRoom({
           ) : (
             <p className="team-room__empty">No Agent Runs yet.</p>
           )}
-          {selectedRun ? (
-            <section className="agent-workroom" aria-label="Agent workroom">
-              <div className="agent-workroom__heading">
-                <div>
-                  <strong>{selectedRun.profile.identity}</strong>
-                  <span>{selectedRun.task.objective}</span>
-                </div>
-                <button type="button" onClick={() => setSelectedRun(null)}>
-                  Close
-                </button>
-              </div>
-              <nav aria-label="Agent workroom sections">
-                {(
-                  ["conversation", "context", "activity", "outputs"] as const
-                ).map((tab) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    aria-current={workroomTab === tab ? "page" : undefined}
-                    onClick={() => setWorkroomTab(tab)}
-                  >
-                    {tab[0].toUpperCase() + tab.slice(1)}
-                  </button>
-                ))}
-              </nav>
-              {workroomTab === "conversation" ? (
-                <div className="agent-workroom__panel">
-                  <p>
-                    Run <code>{selectedRun.run_id}</code> is{" "}
-                    {selectedRun.state.replace(/_/g, " ")}.
-                  </p>
-                  <p>
-                    {selectedRun.failure?.required_user_action ??
-                      "No provider failure recorded."}
-                  </p>
-                </div>
-              ) : null}
-              {workroomTab === "context" ? (
-                <div className="agent-workroom__panel">
-                  <h4>Exact inputs</h4>
-                  <ul>
-                    {selectedRun.task.exact_inputs.map((input) => (
-                      <li
-                        key={`${input.kind}-${input.reference}-${input.version}`}
-                      >
-                        {input.kind}: <code>{input.reference}</code> · v
-                        {input.version}
-                      </li>
-                    ))}
-                  </ul>
-                  <h4>Granted access</h4>
-                  <p>
-                    {selectedRun.permission_grant.data_scopes.join(", ") ||
-                      "No data scopes"}
-                  </p>
-                  <h4>Requested but not granted</h4>
-                  <p>
-                    {selectedRun.access_requests
-                      .filter((request) => request.status !== "approved")
-                      .flatMap((request) => request.request.data_scopes)
-                      .join(", ") || "None"}
-                  </p>
-                </div>
-              ) : null}
-              {workroomTab === "activity" ? (
-                <ol className="agent-workroom__panel agent-workroom__events">
-                  {selectedRun.events.map((event) => (
-                    <li key={event.sequence}>
-                      <strong>{event.kind.replace(/_/g, " ")}</strong>
-                      <span>{event.summary}</span>
-                    </li>
-                  ))}
-                </ol>
-              ) : null}
-              {workroomTab === "outputs" ? (
-                <div className="agent-workroom__panel">
-                  {selectedRun.proposed_result ? (
-                    <>
-                      <strong>
-                        {selectedRun.proposed_result.verification_status.replace(
-                          /_/g,
-                          " ",
-                        )}
-                      </strong>
-                      <pre>{selectedRun.proposed_result.payload_json}</pre>
-                    </>
-                  ) : (
-                    <p>No output has been proposed.</p>
-                  )}
-                </div>
-              ) : null}
-            </section>
+          {selectedRun && tenderId ? (
+            <AgentWorkroom
+              key={selectedRun.run_id}
+              tenderId={tenderId}
+              run={selectedRun}
+              onClose={() => setSelectedRun(null)}
+            />
           ) : null}
         </aside>
       </div>
@@ -2916,6 +2837,461 @@ function TeamRoom({
               <Send size={18} aria-hidden="true" />
             </button>
           </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+const WORKROOM_TABS = [
+  "conversation",
+  "context",
+  "activity",
+  "outputs",
+] as const;
+type WorkroomTab = (typeof WORKROOM_TABS)[number];
+
+type PriorRunsState =
+  | { kind: "loading" }
+  | { kind: "ready"; page: AgentRunHistoryPage }
+  | { kind: "error" };
+
+const PRIOR_RUNS_PAGE_SIZE = 4;
+
+function formatInputReferences(inputs: AgentTaskInputReference[]): string {
+  if (inputs.length === 0) return "None";
+  return inputs
+    .map((input) => `${input.kind} ${input.reference} · v${input.version}`)
+    .join(", ");
+}
+
+function formatDataViews(views: DataViewManifest[]): string {
+  if (views.length === 0) return "None";
+  return views
+    .map((view) => `${view.relative_path} · ${view.data_scope}`)
+    .join(", ");
+}
+
+function formatThreadExposure(exposure: ThreadExposureSet): string {
+  return [
+    `Inputs: ${formatInputReferences(exposure.exact_inputs)}`,
+    `Data scopes: ${exposure.data_scopes.join(", ") || "none"}`,
+    `Classifications: ${exposure.data_classifications.join(", ") || "none"}`,
+  ].join(" · ");
+}
+
+type AgentContextComparisonRow = {
+  label: string;
+  changed: boolean;
+  current: string;
+  prior: string;
+};
+
+function agentContextComparisonRows(
+  current: AgentRunInspection,
+  prior: AgentRunInspection,
+): AgentContextComparisonRow[] {
+  const rows = [
+    {
+      label: "Instructions",
+      current: current.profile.instructions,
+      prior: prior.profile.instructions,
+    },
+    {
+      label: "Exact inputs",
+      current: formatInputReferences(current.task.exact_inputs),
+      prior: formatInputReferences(prior.task.exact_inputs),
+    },
+    {
+      label: "Data views",
+      current: formatDataViews(current.permission_grant.data_views),
+      prior: formatDataViews(prior.permission_grant.data_views),
+    },
+    {
+      label: "Granted data scopes",
+      current: current.permission_grant.data_scopes.join(", ") || "None",
+      prior: prior.permission_grant.data_scopes.join(", ") || "None",
+    },
+    {
+      label: "Conversation exposure",
+      current: formatThreadExposure(current.permission_grant.thread_exposure),
+      prior: formatThreadExposure(prior.permission_grant.thread_exposure),
+    },
+  ];
+  return rows.map((row) => ({ ...row, changed: row.current !== row.prior }));
+}
+
+function AgentWorkroom({
+  tenderId,
+  run,
+  onClose,
+}: {
+  tenderId: string;
+  run: AgentRunInspection;
+  onClose: () => void;
+}) {
+  const [tab, setTab] = useState<WorkroomTab>("conversation");
+  const [priorState, setPriorState] = useState<PriorRunsState>({
+    kind: "loading",
+  });
+  const [beforeSequence, setBeforeSequence] = useState<bigint | null>(null);
+  const [cursorStack, setCursorStack] = useState<(bigint | null)[]>([]);
+  const [pageLoading, setPageLoading] = useState(false);
+  const [selectedPriorRunId, setSelectedPriorRunId] = useState<string | null>(
+    null,
+  );
+  const [selectedPriorRun, setSelectedPriorRun] =
+    useState<AgentRunInspection | null>(null);
+  const [priorRunFailed, setPriorRunFailed] = useState(false);
+  const pageRequestGeneration = useRef(0);
+
+  const loadPriorPage = useCallback(
+    async (cursor: bigint | null, nextCursorStack: (bigint | null)[]) => {
+      const generation = ++pageRequestGeneration.current;
+      setPageLoading(true);
+      try {
+        const page = await inspectAgentRunHistory(
+          tenderId,
+          cursor,
+          PRIOR_RUNS_PAGE_SIZE,
+        );
+        if (generation !== pageRequestGeneration.current) return;
+        setBeforeSequence(cursor);
+        setCursorStack(nextCursorStack);
+        setPriorState({ kind: "ready", page });
+      } catch {
+        if (generation !== pageRequestGeneration.current) return;
+        setPriorState({ kind: "error" });
+      } finally {
+        if (generation === pageRequestGeneration.current) {
+          setPageLoading(false);
+        }
+      }
+    },
+    [tenderId],
+  );
+
+  useEffect(() => {
+    void loadPriorPage(null, []);
+  }, [loadPriorPage]);
+
+  const loadOlderPriorRuns = async () => {
+    if (priorState.kind !== "ready" || pageLoading) return;
+    const next = priorState.page.next_before_sequence;
+    if (next === null) return;
+    await loadPriorPage(next, [...cursorStack, beforeSequence]);
+  };
+
+  const loadNewerPriorRuns = async () => {
+    if (pageLoading) return;
+    const previous = cursorStack[cursorStack.length - 1];
+    if (previous === undefined) return;
+    await loadPriorPage(previous, cursorStack.slice(0, -1));
+  };
+
+  const selectPriorRun = async (runId: string) => {
+    setSelectedPriorRunId(runId);
+    setSelectedPriorRun(null);
+    setPriorRunFailed(false);
+    try {
+      setSelectedPriorRun(await inspectAgentRun(tenderId, runId));
+    } catch {
+      setPriorRunFailed(true);
+    }
+  };
+
+  const priorRuns =
+    priorState.kind === "ready"
+      ? priorState.page.items.filter(
+          (item) =>
+            item.run.run_id !== run.run_id &&
+            item.run.task_id === run.task.task_id &&
+            item.run.profile_identity === run.profile.identity,
+        )
+      : [];
+  const morePriorRuns =
+    priorState.kind === "ready" &&
+    priorState.page.next_before_sequence !== null;
+  const comparison = selectedPriorRun
+    ? agentContextComparisonRows(run, selectedPriorRun)
+    : null;
+
+  return (
+    <section className="agent-workroom" aria-label="Agent workroom">
+      <div className="agent-workroom__heading">
+        <div>
+          <strong>{run.profile.identity}</strong>
+          <span>{run.task.objective}</span>
+        </div>
+        <button type="button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+      <nav aria-label="Agent workroom sections">
+        {WORKROOM_TABS.map((candidate) => (
+          <button
+            key={candidate}
+            type="button"
+            aria-current={tab === candidate ? "page" : undefined}
+            onClick={() => setTab(candidate)}
+          >
+            {candidate[0].toUpperCase() + candidate.slice(1)}
+          </button>
+        ))}
+      </nav>
+      {tab === "conversation" ? (
+        <div className="agent-workroom__panel">
+          <p>
+            Run <code>{run.run_id}</code> is {run.state.replace(/_/g, " ")}.
+          </p>
+          <p>
+            {run.failure?.required_user_action ??
+              "No provider failure recorded."}
+          </p>
+        </div>
+      ) : null}
+      {tab === "context" ? (
+        <div className="agent-workroom__panel agent-workroom__context">
+          <section
+            className="agent-workroom__supplied"
+            aria-label="What this run actually received"
+          >
+            <h4>What this run actually received</h4>
+            <h5>Exact inputs</h5>
+            {run.task.exact_inputs.length ? (
+              <ul>
+                {run.task.exact_inputs.map((input) => (
+                  <li key={`${input.kind}-${input.reference}-${input.version}`}>
+                    {input.kind}: <code>{input.reference}</code> · v
+                    {input.version}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>None</p>
+            )}
+            <h5>Agent instructions (version {run.profile.version})</h5>
+            <p>{run.profile.instructions}</p>
+            <h5>Data views supplied</h5>
+            {run.permission_grant.data_views.length ? (
+              <ul className="agent-workroom__views">
+                {run.permission_grant.data_views.map((view) => (
+                  <li key={view.view_id}>
+                    <code>{view.relative_path}</code>
+                    <span>
+                      {view.data_scope} ·{" "}
+                      {view.data_classification.replace(/_/g, " ")} · digest{" "}
+                      {view.sha256.slice(0, 12)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>None</p>
+            )}
+            <h5>Granted access</h5>
+            <p>
+              {run.permission_grant.data_scopes.join(", ") || "No data scopes"}
+            </p>
+            <h5>Conversation exposure</h5>
+            <p>
+              Everything the provider conversation has been exposed to during
+              this run.
+            </p>
+            <ul>
+              <li>
+                {formatInputReferences(
+                  run.permission_grant.thread_exposure.exact_inputs,
+                )}
+              </li>
+              <li>
+                Data scopes:{" "}
+                {run.permission_grant.thread_exposure.data_scopes.join(", ") ||
+                  "none"}
+              </li>
+              <li>
+                Classifications:{" "}
+                {run.permission_grant.thread_exposure.data_classifications.join(
+                  ", ",
+                ) || "none"}
+              </li>
+            </ul>
+          </section>
+          <section
+            className="agent-workroom__requests"
+            aria-label="Requested but not granted"
+          >
+            <h4>Requested but not granted</h4>
+            <p>
+              {run.access_requests
+                .filter((request) => request.status !== "approved")
+                .flatMap((request) => request.request.data_scopes)
+                .join(", ") || "None"}
+            </p>
+          </section>
+          <section
+            className="agent-workroom__ceiling"
+            aria-label="What this Agent could request"
+          >
+            <h4>What this Agent could request</h4>
+            <p>
+              The permission ceiling for this Agent Profile. This is the most
+              the Agent may ask for on any run — not what this run received.
+            </p>
+            <dl>
+              <div>
+                <dt>Exact inputs</dt>
+                <dd>
+                  {formatInputReferences(
+                    run.permission_grant.access_ceiling.exact_inputs,
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Data scopes</dt>
+                <dd>
+                  {run.permission_grant.access_ceiling.data_scopes.join(", ") ||
+                    "None"}
+                </dd>
+              </div>
+              <div>
+                <dt>Data classifications</dt>
+                <dd>
+                  {run.permission_grant.access_ceiling.data_classifications.join(
+                    ", ",
+                  ) || "None"}
+                </dd>
+              </div>
+              <div>
+                <dt>Allowed actions</dt>
+                <dd>
+                  {run.permission_grant.access_ceiling.allowed_actions.join(
+                    ", ",
+                  ) || "None"}
+                </dd>
+              </div>
+              <div>
+                <dt>Allowed tools</dt>
+                <dd>
+                  {run.permission_grant.access_ceiling.allowed_tools.join(
+                    ", ",
+                  ) || "None"}
+                </dd>
+              </div>
+            </dl>
+          </section>
+          <section className="agent-workroom__prior" aria-label="Prior runs">
+            <h4>Prior runs</h4>
+            {priorState.kind === "loading" ? (
+              <p role="status">Loading prior runs…</p>
+            ) : null}
+            {priorState.kind === "error" ? (
+              <p role="alert">Prior runs are unavailable.</p>
+            ) : null}
+            {priorState.kind === "ready" && priorRuns.length === 0 ? (
+              <p>No prior runs for this Agent and task.</p>
+            ) : null}
+            {priorRuns.length ? (
+              <ul className="agent-workroom__prior-list">
+                {priorRuns.map((item) => (
+                  <li key={item.run.run_id}>
+                    <button
+                      type="button"
+                      aria-current={
+                        selectedPriorRunId === item.run.run_id
+                          ? "true"
+                          : undefined
+                      }
+                      onClick={() => void selectPriorRun(item.run.run_id)}
+                    >
+                      <strong>{item.run.state.replace(/_/g, " ")}</strong>
+                      <small>
+                        {new Date(
+                          item.run.completed_at ?? item.run.started_at,
+                        ).toLocaleString()}
+                      </small>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {morePriorRuns || cursorStack.length > 0 ? (
+              <div className="agent-workroom__prior-paging">
+                <button
+                  type="button"
+                  disabled={pageLoading || cursorStack.length === 0}
+                  onClick={() => void loadNewerPriorRuns()}
+                >
+                  Newer runs
+                </button>
+                <button
+                  type="button"
+                  disabled={pageLoading || !morePriorRuns}
+                  onClick={() => void loadOlderPriorRuns()}
+                >
+                  Older runs
+                </button>
+              </div>
+            ) : null}
+            {selectedPriorRunId && !selectedPriorRun && !priorRunFailed ? (
+              <p role="status">Loading the selected prior run…</p>
+            ) : null}
+            {priorRunFailed ? (
+              <p role="alert">The selected prior run is unavailable.</p>
+            ) : null}
+            {comparison ? (
+              <div className="agent-workroom__comparison">
+                <h5>What changed against the selected prior run</h5>
+                <dl>
+                  {comparison.map((row) => (
+                    <div
+                      key={row.label}
+                      className={row.changed ? "is-changed" : "is-same"}
+                    >
+                      <dt>
+                        {row.label}
+                        <span>{row.changed ? "Changed" : "Same"}</span>
+                      </dt>
+                      <dd>
+                        <strong>This run</strong>
+                        <span>{row.current}</span>
+                      </dd>
+                      {row.changed ? (
+                        <dd>
+                          <strong>Prior run</strong>
+                          <span>{row.prior}</span>
+                        </dd>
+                      ) : null}
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            ) : null}
+          </section>
+        </div>
+      ) : null}
+      {tab === "activity" ? (
+        <ol className="agent-workroom__panel agent-workroom__events">
+          {run.events.map((event) => (
+            <li key={event.sequence}>
+              <strong>{event.kind.replace(/_/g, " ")}</strong>
+              <span>{event.summary}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      {tab === "outputs" ? (
+        <div className="agent-workroom__panel">
+          {run.proposed_result ? (
+            <>
+              <strong>
+                {run.proposed_result.verification_status.replace(/_/g, " ")}
+              </strong>
+              <pre>{run.proposed_result.payload_json}</pre>
+            </>
+          ) : (
+            <p>No output has been proposed.</p>
+          )}
         </div>
       ) : null}
     </section>
