@@ -12,8 +12,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProjection";
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
+import type { BasisOfEstimateVersion } from "./bindings/BasisOfEstimateVersion";
+import type { CalculationWorkspaceInspection } from "./bindings/CalculationWorkspaceInspection";
 import type { ChangeAssessment } from "./bindings/ChangeAssessment";
 import type { ChangeAssessmentPage } from "./bindings/ChangeAssessmentPage";
+import type { EstimateWorkspaceInspection } from "./bindings/EstimateWorkspaceInspection";
 import type { ExternalRfiDraft } from "./bindings/ExternalRfiDraft";
 import type { EvidenceDocument } from "./bindings/EvidenceDocument";
 import type { EvidenceLocation } from "./bindings/EvidenceLocation";
@@ -29,6 +32,7 @@ import type { WorkspaceTaskRow } from "./bindings/WorkspaceTaskRow";
 
 const host = vi.hoisted(() => ({
   archiveTender: vi.fn(),
+  approveBasisOfEstimate: vi.fn(),
   approveProductionFindingException: vi.fn(),
   approveExternalRfiForIssue: vi.fn(),
   cancelChatGptLogin: vi.fn(),
@@ -46,6 +50,8 @@ const host = vi.hoisted(() => ({
   inspectBidDecisionPackageRecords: vi.fn(),
   inspectChangeAssessments: vi.fn(),
   inspectComplianceMatrix: vi.fn(),
+  inspectCalculationWorkspace: vi.fn(),
+  inspectEstimateWorkspace: vi.fn(),
   inspectCurrentBidDecisionPackage: vi.fn(),
   inspectEvidence: vi.fn(),
   inspectExternalRfis: vi.fn(),
@@ -61,6 +67,7 @@ const host = vi.hoisted(() => ({
   resolveBidDecisionReturnRework: vi.fn(),
   reviseExternalRfiDraft: vi.fn(),
   runBidDecisionPackageReview: vi.fn(),
+  runBasisOfEstimateReview: vi.fn(),
   runExternalRfiReview: vi.fn(),
   runProductionTask: vi.fn(),
   searchEvidence: vi.fn(),
@@ -287,6 +294,7 @@ const projection: ManagerWorkspaceProjection = {
     agent_runs: [],
   },
   external_rfis: [],
+  estimate: null,
   intake: null,
   ai_execution: {
     revision: 1n,
@@ -4579,6 +4587,7 @@ describe("ManagerWorkspace", () => {
       ai_execution: null,
       capability_readiness: null,
       external_rfis: [],
+      estimate: null,
       doctor_blockers: [],
     };
     host.inspectManagerWorkspace.mockResolvedValue(empty);
@@ -6270,5 +6279,491 @@ describe("ManagerWorkspace", () => {
       within(log).getByText("Produce the verified estimate."),
     ).toBeTruthy();
     expect(within(log).getByText("Cost estimate v2")).toBeTruthy();
+  });
+
+  function estimateBasisFixture(
+    overrides: Partial<BasisOfEstimateVersion> = {},
+  ): BasisOfEstimateVersion {
+    return {
+      basis_id: "3".repeat(32),
+      version: 1,
+      tender_revision: 4,
+      author_run_id: "7".repeat(32),
+      author_profile_id: "e".repeat(32),
+      author_profile_version: 1,
+      scope: "Ground-floor concrete works",
+      pricing_date: "2026-08-10",
+      currencies: ["EGP"],
+      taxes: [],
+      rate_sources: ["Supplier quotation"],
+      productivity: ["One crew basis"],
+      design_maturity: "detailed_design",
+      gaps: [],
+      exclusions: ["VAT"],
+      supersedes_basis_manifest_sha256: null,
+      remediates_review_manifest_sha256: null,
+      boq_inventory_sha256: "a".repeat(64),
+      query_inventory_sha256: "b".repeat(64),
+      query_inventory: [],
+      boq_rows: [
+        {
+          row_key: "BOQ-001",
+          description: "Cable containment trunking",
+          disposition: "priced" as const,
+          evidence: [],
+          calculation_run_id: "4".repeat(32),
+          affected_queries: [],
+        },
+      ],
+      cbs_components: [],
+      resource_build_ups: [],
+      quotations: [],
+      allowances: [],
+      material_assumptions: [],
+      comparison_total_calculation_run_id: "6".repeat(32),
+      aggregate_calculation: {
+        aggregate_run_id: "1".repeat(32),
+        author_run_id: "7".repeat(32),
+        comparison_total_calculation_run_id: "6".repeat(32),
+        comparison_total_manifest_sha256: "0".repeat(64),
+        comparison_total_amount: "12345.68",
+        rule_id: "1".repeat(32),
+        rule_version: 1,
+        rule_approval_id: "2".repeat(32),
+        scenario_id: "9".repeat(32),
+        scenario_version: 1,
+        precision: 2,
+        rounding_mode: "midpoint_away_from_zero" as const,
+        engine_version: "calc-engine-1",
+        inputs: [
+          {
+            build_up_id: "2".repeat(32),
+            cbs_component_id: "5".repeat(32),
+            calculation_run_id: "4".repeat(32),
+            calculation_manifest_sha256: "0".repeat(64),
+            amount: "12345.68",
+            currency: "EGP",
+          },
+        ],
+        final_amount: "12345.68",
+        currency: "EGP",
+        manifest_sha256: "0".repeat(64),
+        approved_for_reliance: false,
+      },
+      total_amount: "12345.68",
+      total_currency: "EGP",
+      complete: true,
+      reconciled: true,
+      blockers: [],
+      current: true,
+      relied_upon: false,
+      review: null,
+      approval: null,
+      manifest_sha256: "d".repeat(64),
+      created_at: "2026-08-30T09:30:00Z",
+      ...overrides,
+    };
+  }
+
+  function estimateWorkspaceFixture(
+    basis: BasisOfEstimateVersion | null,
+  ): EstimateWorkspaceInspection {
+    return {
+      basis,
+      boq_table_candidates: [],
+      boq_table_candidate_next_cursor: null,
+      basis_offset: 0,
+      total_basis_version_count: basis ? 1 : 0,
+      has_newer_basis: false,
+      has_older_basis: false,
+    };
+  }
+
+  function calculationWorkspaceFixture(): CalculationWorkspaceInspection {
+    return {
+      rule: null,
+      recent_scenarios: [
+        {
+          scenario_id: "9".repeat(32),
+          version: 1,
+          name: "BOQ account base",
+          quantity_unit: "mm",
+          rate_basis_unit: "m",
+          rate_currency: "USD",
+          exchange_rate_id: "8".repeat(32),
+          exchange_rate_version: 1,
+          exchange_rate: {
+            state: "provided" as const,
+            value: "50",
+            evidence: [],
+          },
+          exchange_rate_effective_date: "2026-08-01",
+          pricing_date: "2026-08-10",
+          exchange_rate_type: "spot" as const,
+          output_currency: "EGP",
+          rounding_policy_id: "7".repeat(32),
+          rounding_policy_version: 1,
+          precision: 2,
+          rounding_mode: "midpoint_away_from_zero" as const,
+          rationale: "Bind the exact pricing basis.",
+          approved_by: "engineer_user",
+          acting_role: "engineer_in_the_loop",
+          manifest_sha256: "c".repeat(64),
+          created_at: "2026-08-30T08:00:00Z",
+        },
+        {
+          scenario_id: "6".repeat(32),
+          version: 1,
+          name: "Escalated FX",
+          quantity_unit: "mm",
+          rate_basis_unit: "m",
+          rate_currency: "USD",
+          exchange_rate_id: "8".repeat(32),
+          exchange_rate_version: 1,
+          exchange_rate: {
+            state: "provided" as const,
+            value: "55",
+            evidence: [],
+          },
+          exchange_rate_effective_date: "2026-09-01",
+          pricing_date: "2026-09-10",
+          exchange_rate_type: "budget" as const,
+          output_currency: "EGP",
+          rounding_policy_id: "7".repeat(32),
+          rounding_policy_version: 1,
+          precision: 2,
+          rounding_mode: "midpoint_away_from_zero" as const,
+          rationale: "Escalated exchange-rate basis.",
+          approved_by: "engineer_user",
+          acting_role: "engineer_in_the_loop",
+          manifest_sha256: "c".repeat(64),
+          created_at: "2026-08-30T08:30:00Z",
+        },
+      ],
+      recent_runs: [
+        {
+          calculation_run_id: "4".repeat(32),
+          cost_estimator_run_id: "5".repeat(32),
+          tender_revision: 4,
+          rule_id: "1".repeat(32),
+          rule_version: 1,
+          rule_approval_id: "2".repeat(32),
+          description: "BOQ-001 cable containment",
+          scenario_id: "9".repeat(32),
+          scenario_version: 1,
+          scenario_name: "BOQ account base",
+          scenario_manifest_sha256: "c".repeat(64),
+          exchange_rate_id: "8".repeat(32),
+          exchange_rate_version: 1,
+          rounding_policy_id: "7".repeat(32),
+          rounding_policy_version: 1,
+          quantity: {
+            state: "provided" as const,
+            value: "12000",
+            evidence: [],
+          },
+          quantity_unit: "mm",
+          unit_rate: { state: "provided" as const, value: "0.5", evidence: [] },
+          rate_basis_unit: "m",
+          rate_currency: "USD",
+          exchange_rate: {
+            state: "provided" as const,
+            value: "50",
+            evidence: [],
+          },
+          exchange_rate_effective_date: "2026-08-01",
+          pricing_date: "2026-08-10",
+          exchange_rate_type: "spot" as const,
+          output_currency: "EGP",
+          precision: 2,
+          rounding_mode: "midpoint_away_from_zero" as const,
+          engine_version: "calc-engine-1",
+          normalized_quantity: "12",
+          unrounded_source_amount: "6000.00",
+          unrounded_output_amount: "300000.0000",
+          final_amount: "300000.00",
+          status: "completed" as const,
+          diagnostic_code: null,
+          manifest_sha256: "d".repeat(64),
+          approval: null,
+          created_at: "2026-08-30T09:30:00Z",
+        },
+        {
+          calculation_run_id: "0".repeat(32),
+          cost_estimator_run_id: "a".repeat(32),
+          tender_revision: 4,
+          rule_id: "1".repeat(32),
+          rule_version: 1,
+          rule_approval_id: "2".repeat(32),
+          description: "BOQ-001 cable containment at escalated FX",
+          scenario_id: "6".repeat(32),
+          scenario_version: 1,
+          scenario_name: "Escalated FX",
+          scenario_manifest_sha256: "c".repeat(64),
+          exchange_rate_id: "8".repeat(32),
+          exchange_rate_version: 1,
+          rounding_policy_id: "7".repeat(32),
+          rounding_policy_version: 1,
+          quantity: {
+            state: "provided" as const,
+            value: "12000",
+            evidence: [],
+          },
+          quantity_unit: "mm",
+          unit_rate: { state: "provided" as const, value: "0.5", evidence: [] },
+          rate_basis_unit: "m",
+          rate_currency: "USD",
+          exchange_rate: {
+            state: "provided" as const,
+            value: "55",
+            evidence: [],
+          },
+          exchange_rate_effective_date: "2026-09-01",
+          pricing_date: "2026-09-10",
+          exchange_rate_type: "budget" as const,
+          output_currency: "EGP",
+          precision: 2,
+          rounding_mode: "midpoint_away_from_zero" as const,
+          engine_version: "calc-engine-1",
+          normalized_quantity: "12",
+          unrounded_source_amount: "6000.00",
+          unrounded_output_amount: "330000.0000",
+          final_amount: "330000.00",
+          status: "completed" as const,
+          diagnostic_code: null,
+          manifest_sha256: "d".repeat(64),
+          approval: null,
+          created_at: "2026-08-30T10:30:00Z",
+        },
+      ],
+      total_scenario_count: 2,
+      total_run_count: 2,
+      scenario_offset: 0,
+      run_offset: 0,
+      has_older_scenarios: false,
+      has_older_runs: false,
+    };
+  }
+
+  function estimateReviewProjection(): ManagerWorkspaceProjection {
+    return {
+      ...projection,
+      selected_tender: {
+        ...projection.selected_tender!,
+        phase: "active_production" as const,
+      },
+      current_action: {
+        kind: "review_basis_of_estimate" as const,
+        title: "Approve the Basis of Estimate",
+        summary:
+          "The independent review passed. Your approval binds the exact basis version before any pricing may rely on it.",
+        action_label: "Review estimate basis",
+        requires_engineer: true,
+      },
+      estimate: {
+        basis_id: "3".repeat(32),
+        version: 1,
+        status: "awaiting_approval" as const,
+        boq_row_count: 1,
+        finding_count: 1,
+        calculation_run_count: 3,
+      },
+    };
+  }
+
+  it("opens the Basis of Estimate review from the action and approves bound to exact versions", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(estimateReviewProjection());
+    host.inspectEstimateWorkspace.mockResolvedValue(
+      estimateWorkspaceFixture(
+        estimateBasisFixture({
+          review: {
+            review_id: "8".repeat(32),
+            reviewer_run_id: "9".repeat(32),
+            reviewer_profile_id: "f".repeat(32),
+            reviewer_profile_version: 1,
+            outcome: "passed" as const,
+            findings: [
+              {
+                code: "minor_rounding_note",
+                summary:
+                  "One BOQ row rounds within the approved midpoint policy.",
+                affected_boq_row_keys: ["BOQ-001"],
+              },
+            ],
+            manifest_sha256: "b".repeat(64),
+            created_at: "2026-08-30T10:00:00Z",
+          },
+        }),
+      ),
+    );
+
+    render(<ManagerWorkspace />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Review estimate basis" }),
+    );
+    const surface = await screen.findByTestId("tender-estimate-review");
+    expect(
+      await within(surface).findByText("Cable containment trunking"),
+    ).toBeTruthy();
+    expect(within(surface).getByText("Reconciled total:")).toBeTruthy();
+    expect(within(surface).getByText("12345.68 EGP")).toBeTruthy();
+    const findings = await within(surface).findByTestId(
+      "estimate-review-findings",
+    );
+    expect(within(findings).getByText("minor_rounding_note")).toBeTruthy();
+    expect(
+      within(findings).getByText(
+        "One BOQ row rounds within the approved midpoint policy.",
+      ),
+    ).toBeTruthy();
+    expect(within(findings).getByText(/Affected rows: BOQ-001/)).toBeTruthy();
+
+    fireEvent.change(within(surface).getByLabelText("Approval rationale"), {
+      target: {
+        value:
+          "The reviewed basis asks for the exact reconciliation the bid needs.",
+      },
+    });
+    fireEvent.click(
+      within(surface).getByRole("button", {
+        name: "Approve basis for reliance",
+      }),
+    );
+    await waitFor(() =>
+      expect(host.approveBasisOfEstimate).toHaveBeenCalledWith({
+        tender_id: tenderId,
+        basis_id: "3".repeat(32),
+        version: 1,
+        manifest_sha256: "d".repeat(64),
+        rationale:
+          "The reviewed basis asks for the exact reconciliation the bid needs.",
+      }),
+    );
+  });
+
+  it("links the estimator task detail to the readable controlled calculation tables", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue(
+      workTasksProjection([
+        workTask({
+          production_task_id: focusedProductionTaskId,
+          task_key: "cost_estimation_production",
+          objective: "Develop the evidence-linked estimate.",
+          state: "working",
+          status_detail: "running",
+          current_run_id: "5".repeat(32),
+        }),
+      ]),
+    );
+    const estimatorProduction = focusedProductionInspection();
+    estimatorProduction.tasks = [
+      {
+        ...estimatorProduction.tasks[0],
+        task: {
+          ...estimatorProduction.tasks[0].task,
+          task_key: "cost_estimation_production",
+          objective: "Develop the evidence-linked estimate.",
+          exact_inputs: [
+            {
+              kind: "calculation_scenario_version",
+              reference: "9".repeat(32),
+              version: 1,
+            },
+          ],
+        },
+      },
+    ];
+    host.inspectTenderProduction.mockResolvedValue(estimatorProduction);
+    host.inspectProductionTaskReview.mockResolvedValue(focusedTaskReview());
+    host.inspectCalculationWorkspace.mockResolvedValue(
+      calculationWorkspaceFixture(),
+    );
+    host.inspectEstimateWorkspace.mockResolvedValue(
+      estimateWorkspaceFixture(estimateBasisFixture()),
+    );
+
+    render(<ManagerWorkspace />);
+    await openWorkView();
+    fireEvent.click(
+      within(
+        screen.getByRole("complementary", { name: "Tender workspace" }),
+      ).getByRole("button", { name: "Work" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Develop the evidence-linked estimate/,
+      }),
+    );
+    const detail = await screen.findByTestId("work-task-detail");
+    const estimating = await within(detail).findByTestId(
+      "work-task-detail__estimating",
+    );
+    fireEvent.click(
+      within(estimating).getByRole("button", {
+        name: "Open controlled calculations",
+      }),
+    );
+
+    const calculations = await screen.findByTestId("controlled-calculations");
+    const differences = await within(calculations).findByTestId(
+      "calculation-scenario-differences",
+    );
+    expect(within(differences).getByText("BOQ account base · v1")).toBeTruthy();
+    expect(within(differences).getByText("Escalated FX · v1")).toBeTruthy();
+    expect(within(differences).getByText("50 from 2026-08-01")).toBeTruthy();
+    expect(within(differences).getByText("55 from 2026-09-01")).toBeTruthy();
+    expect(within(calculations).getByText("300000.00 EGP")).toBeTruthy();
+    expect(within(calculations).getByText("330000.00 EGP")).toBeTruthy();
+    expect(within(calculations).getAllByText("12000 mm")).toHaveLength(2);
+    expect(within(calculations).getAllByText("0.5 USD/m")).toHaveLength(2);
+    expect(within(calculations).getByText("12345.68 EGP")).toBeTruthy();
+    fireEvent.click(within(calculations).getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("controlled-calculations")).toBeNull(),
+    );
+    expect(screen.getByTestId("work-task-detail")).toBeTruthy();
+  });
+
+  it("shows the Manager explanation when the estimator completes its publication", async () => {
+    installResponsiveMatchMedia(1440);
+    host.inspectManagerWorkspace.mockResolvedValue({
+      ...projection,
+      conversation: {
+        conversation_id: "c".repeat(32),
+        latest_meaningful_message_id: messageId,
+        messages: [
+          {
+            message_id: messageId,
+            sequence: 1,
+            author: "system",
+            kind: "status",
+            body: "West Campus MEP workspace is ready.",
+            created_at: "2026-08-30T09:00:00Z",
+            references: [],
+          },
+          {
+            message_id: "m".repeat(32),
+            sequence: 2,
+            author: "manager",
+            kind: "output",
+            body: "The Cost Estimator completed the Basis of Estimate v1 with a reconciled total of 12345.68 EGP. Independent review is next.",
+            created_at: "2026-08-30T10:00:00Z",
+            references: [],
+          },
+        ],
+      },
+    });
+
+    render(<ManagerWorkspace />);
+    const conversation = await screen.findByRole("log", {
+      name: "Tender conversation",
+    });
+    expect(
+      await within(conversation).findByText(
+        "The Cost Estimator completed the Basis of Estimate v1 with a reconciled total of 12345.68 EGP. Independent review is next.",
+      ),
+    ).toBeTruthy();
+    expect(within(conversation).getByText("Output")).toBeTruthy();
   });
 });

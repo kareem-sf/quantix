@@ -5031,3 +5031,319 @@ html.quantix-reduced-motion *::after {
     box-shadow: 0 0 0 3px Canvas;
   }
 }
+
+.tender-estimate {
+  width: min(100% - 40px, var(--conversation-width));
+  margin: 0 auto;
+  padding: 34px 0 46px;
+}
+
+.tender-estimate__header {
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  padding: 22px 24px;
+  border: 1px solid var(--qx-border);
+  border-radius: 14px;
+  background: var(--qx-surface);
+}
+
+.tender-estimate__header h2 {
+  margin: 8px 0 10px;
+  font-size: clamp(1.4rem, 3vw, 1.9rem);
+  letter-spacing: -0.03em;
+}
+
+.tender-estimate__header p {
+  max-width: 680px;
+  margin: 0;
+  color: var(--qx-text-muted);
+  line-height: 1.55;
+}
+
+.tender-estimate__loading,
+.tender-estimate__empty {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--qx-text-muted);
+  font-size: 0.8125rem;
+}
+
+.tender-estimate__loading svg {
+  animation: manager-spin 900ms linear infinite;
+}
+
+.tender-estimate__card {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 18px 20px;
+  border: 1px solid var(--qx-border);
+  border-radius: 12px;
+  background: var(--qx-surface);
+  font-size: 0.8125rem;
+}
+
+.tender-estimate__card h3 {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.tender-estimate__card h4 {
+  margin: 4px 0 0;
+  font-size: 0.8125rem;
+}
+
+.tender-estimate__card p {
+  margin: 0;
+  color: var(--qx-text-muted);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.tender-estimate__status {
+  font-weight: 650;
+  color: var(--qx-text) !important;
+}
+
+.tender-estimate__card code {
+  font-family: var(--qx-font-mono);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.tender-estimate__facts {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.tender-estimate__facts div {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 10px;
+}
+
+.tender-estimate__facts dt {
+  color: var(--qx-text-muted);
+}
+
+.tender-estimate__facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tender-estimate__table,
+.controlled-calculations__table {
+  width: 100%;
+  border: 1px solid var(--qx-border);
+  border-radius: 9px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.75rem;
+  overflow: hidden;
+}
+
+.tender-estimate__table th,
+.tender-estimate__table td,
+.controlled-calculations__table th,
+.controlled-calculations__table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--qx-border);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.tender-estimate__table thead th,
+.controlled-calculations__table thead th {
+  background: var(--qx-surface-raised, var(--qx-surface));
+  color: var(--qx-text-muted);
+  font-weight: 650;
+}
+
+.tender-estimate__table tbody th,
+.controlled-calculations__table tbody th {
+  color: var(--qx-text-muted);
+  font-weight: 600;
+}
+
+.tender-estimate__table tr:last-child td,
+.controlled-calculations__table tr:last-child td {
+  border-bottom: none;
+}
+
+.tender-estimate__links ul,
+.tender-estimate__findings ul {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tender-estimate__links li,
+.tender-estimate__findings li {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--qx-border);
+  border-radius: 9px;
+  background: var(--qx-surface-raised, var(--qx-surface));
+}
+
+.tender-estimate__links li span,
+.tender-estimate__findings li span {
+  color: var(--qx-text-muted);
+}
+
+.tender-estimate__form label {
+  display: grid;
+  gap: 6px;
+  color: var(--qx-text-muted);
+}
+
+.tender-estimate__form textarea {
+  min-height: 84px;
+  padding: 10px 12px;
+  border: 1px solid var(--qx-border);
+  border-radius: 9px;
+  background: var(--qx-surface-raised, var(--qx-surface));
+  color: var(--qx-text);
+  font: inherit;
+  resize: vertical;
+}
+
+.controlled-calculations {
+  width: min(100% - 40px, var(--conversation-width));
+  margin: 0 auto;
+  padding: 34px 0 46px;
+}
+
+.controlled-calculations__header {
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  padding: 22px 24px;
+  border: 1px solid var(--qx-border);
+  border-radius: 14px;
+  background: var(--qx-surface);
+}
+
+.controlled-calculations__header h2 {
+  margin: 8px 0 10px;
+  font-size: clamp(1.4rem, 3vw, 1.9rem);
+  letter-spacing: -0.03em;
+}
+
+.controlled-calculations__header p {
+  max-width: 680px;
+  margin: 0;
+  color: var(--qx-text-muted);
+  line-height: 1.55;
+}
+
+.controlled-calculations__loading {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--qx-text-muted);
+  font-size: 0.8125rem;
+}
+
+.controlled-calculations__loading svg {
+  animation: manager-spin 900ms linear infinite;
+}
+
+.controlled-calculations__section {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 18px 20px;
+  border: 1px solid var(--qx-border);
+  border-radius: 12px;
+  background: var(--qx-surface);
+  font-size: 0.8125rem;
+}
+
+.controlled-calculations__section h3 {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.controlled-calculations__section h4 {
+  margin: 8px 0 0;
+  font-size: 0.8125rem;
+}
+
+.controlled-calculations__section p {
+  margin: 0;
+  color: var(--qx-text-muted);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.controlled-calculations__section code {
+  font-family: var(--qx-font-mono);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.controlled-calculations__group {
+  display: grid;
+  gap: 10px;
+}
+
+.controlled-calculations__approved {
+  display: block;
+  margin-top: 4px;
+  color: var(--qx-text);
+  font-weight: 600;
+}
+
+.controlled-calculations__approved + span {
+  color: var(--qx-text-muted);
+}
+
+.controlled-calculations__group
+  td
+  span:not(.controlled-calculations__approved) {
+  display: block;
+  color: var(--qx-text-muted);
+}
+
+.controlled-calculations__run-details summary {
+  margin-top: 6px;
+  color: var(--qx-text-muted);
+  cursor: pointer;
+}
+
+.controlled-calculations__run-details dl {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+}
+
+.controlled-calculations__run-details div {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 10px;
+}
+
+.controlled-calculations__run-details dt {
+  color: var(--qx-text-muted);
+}
+
+.controlled-calculations__run-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}

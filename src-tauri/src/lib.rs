@@ -256,11 +256,12 @@ pub use tender_store::{
     WorkPlanProfileBinding, WorkPlanProposalInspection, WorkPlanRevisionAction, WorkPlanTask,
     WorkPlanWorkstream, WorkspaceActionKind, WorkspaceAgentReference, WorkspaceAgentRunReference,
     WorkspaceCapabilityReadiness, WorkspaceCapabilityReadinessState, WorkspaceCurrentAction,
-    WorkspaceDoctorBlockerArea, WorkspaceDoctorBlockerSummary, WorkspaceExternalRfiStatus,
-    WorkspaceExternalRfiSummary, WorkspaceFilesSummary, WorkspaceMessageReference,
-    WorkspaceMessageReferenceKind, WorkspaceOutputReference, WorkspaceSearchGroup,
-    WorkspaceSearchHit, WorkspaceSearchProjection, WorkspaceSearchResultKind, WorkspaceTaskRow,
-    WorkspaceTaskState, WorkspaceTeamSummary, WorkspaceTenderDocument, WorkspaceWorkSummary,
+    WorkspaceDoctorBlockerArea, WorkspaceDoctorBlockerSummary, WorkspaceEstimateStatus,
+    WorkspaceEstimateSummary, WorkspaceExternalRfiStatus, WorkspaceExternalRfiSummary,
+    WorkspaceFilesSummary, WorkspaceMessageReference, WorkspaceMessageReferenceKind,
+    WorkspaceOutputReference, WorkspaceSearchGroup, WorkspaceSearchHit, WorkspaceSearchProjection,
+    WorkspaceSearchResultKind, WorkspaceTaskRow, WorkspaceTaskState, WorkspaceTeamSummary,
+    WorkspaceTenderDocument, WorkspaceWorkSummary,
 };
 pub use update::{
     current_application_artifact_is_restorable, current_update_platform,

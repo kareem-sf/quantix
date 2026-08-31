@@ -1,7 +1,7 @@
 use std::{fs, path::Path, thread, time::Duration};
 
 use jiff::Timestamp;
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
 
@@ -32,7 +32,8 @@ use super::bid_decisions::{
 use super::calculations::{
     calculation_rule_review_target_is_open, cost_estimator_calculation_target_is_open,
     publish_calculation_rule_review, publish_cost_estimator_calculation,
-    CalculationRuleReviewCandidate, CostEstimatorCalculationCandidate,
+    CalculationRuleReviewCandidate, ControlledBoqCalculationRun, ControlledBoqCalculationStatus,
+    CostEstimatorCalculationCandidate,
 };
 use super::estimates::{
     publish_basis_of_estimate, publish_basis_of_estimate_review, BasisOfEstimateCandidate,
@@ -67,7 +68,8 @@ use super::tender_records::{
 };
 use super::{
     append_audit_event, metadata_is_unsafe_storage_link, random_identifier, sha256_hex, sql_error,
-    sqlite_timestamp, store_unavailable, BidPackageOperationBudget, TenderCommandError,
+    sqlite_timestamp, store_unavailable, workspace::append_manager_message,
+    workspace::TenderOfficeMessageKind, BidPackageOperationBudget, TenderCommandError,
     TenderErrorCode, TenderId, TenderStore,
 };
 
@@ -125,6 +127,105 @@ fn task_is_pricing_adjustment_review(task: &TenderTaskView) -> bool {
     task.exact_inputs
         .iter()
         .any(|input| input.kind == "pricing_adjustment_version")
+}
+
+fn calculation_status_label(status: ControlledBoqCalculationStatus) -> &'static str {
+    match status {
+        ControlledBoqCalculationStatus::Completed => "completed",
+        ControlledBoqCalculationStatus::MissingInput => "missing input",
+        ControlledBoqCalculationStatus::UnavailableInput => "unavailable input",
+        ControlledBoqCalculationStatus::AmbiguousInput => "ambiguous input",
+        ControlledBoqCalculationStatus::InvalidInput => "invalid input",
+        ControlledBoqCalculationStatus::DimensionMismatch => "dimension mismatch",
+    }
+}
+
+fn append_estimator_calculation_message(
+    transaction: &Transaction<'_>,
+    calculation: &ControlledBoqCalculationRun,
+    created_at: &str,
+) -> Result<(), TenderCommandError> {
+    let completed = calculation.final_amount.as_deref();
+    let body = match completed {
+        Some(final_amount) => format!(
+            "The Cost Estimator completed the controlled calculation for \"{}\": {} {} at {} {}/{} = {} {}. Exact inputs and rounding are in the controlled record; your approval of the exact value is next.",
+            calculation.description,
+            calculation.quantity.value.as_deref().unwrap_or("an unstated quantity"),
+            calculation.quantity_unit,
+            calculation.unit_rate.value.as_deref().unwrap_or("an unstated rate"),
+            calculation.rate_currency,
+            calculation.rate_basis_unit,
+            final_amount,
+            calculation.output_currency,
+        ),
+        None => format!(
+            "The Cost Estimator could not complete the controlled calculation for \"{}\": the run recorded {}. Exact inputs and the reason stay in the controlled record.",
+            calculation.description,
+            calculation
+                .diagnostic_code
+                .as_deref()
+                .unwrap_or_else(|| calculation_status_label(calculation.status)),
+        ),
+    };
+    append_manager_message(
+        transaction,
+        if completed.is_some() {
+            TenderOfficeMessageKind::Output
+        } else {
+            TenderOfficeMessageKind::Finding
+        },
+        &body,
+        created_at,
+    )?;
+    Ok(())
+}
+
+fn append_estimator_basis_message(
+    transaction: &Transaction<'_>,
+    author_run_id: &str,
+    created_at: &str,
+) -> Result<(), TenderCommandError> {
+    let basis: Option<(u32, String, String, bool, bool)> = transaction
+        .query_row(
+            "SELECT version,
+                    json_extract(manifest_json, '$.total_amount'),
+                    json_extract(manifest_json, '$.total_currency'),
+                    json_extract(manifest_json, '$.complete') = 1,
+                    json_extract(manifest_json, '$.reconciled') = 1
+             FROM basis_of_estimate_versions
+             WHERE author_run_id = ?1",
+            [author_run_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let Some((version, total_amount, total_currency, complete, reconciled)) = basis else {
+        return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
+    };
+    let body = if complete && reconciled {
+        format!(
+            "The Cost Estimator completed the Basis of Estimate v{version} with a reconciled total of {total_amount} {total_currency}. Independent review is next."
+        )
+    } else {
+        format!(
+            "The Cost Estimator published the Basis of Estimate v{version} ({total_amount} {total_currency}) with disclosed gaps. It needs completion before independent review."
+        )
+    };
+    append_manager_message(
+        transaction,
+        TenderOfficeMessageKind::Output,
+        &body,
+        created_at,
+    )?;
+    Ok(())
 }
 
 fn profile_supports_linked_retry(profile: &AgentProfileVersionView, task: &TenderTaskView) -> bool {
@@ -1598,7 +1699,7 @@ impl TenderStore {
             if result_id.is_none() {
                 return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
             }
-            publish_cost_estimator_calculation(
+            let calculation = publish_cost_estimator_calculation(
                 &transaction,
                 tender_id,
                 tender_revision,
@@ -1608,6 +1709,7 @@ impl TenderStore {
                 candidate,
                 &completed_at,
             )?;
+            append_estimator_calculation_message(&transaction, &calculation, &completed_at)?;
         }
         if let Some(candidate) = cost_estimator_basis.as_ref() {
             if result_id.is_none() {
@@ -1624,6 +1726,7 @@ impl TenderStore {
                 &completed_at,
                 &mut || operation_budget.check(),
             )?;
+            append_estimator_basis_message(&transaction, &prepared.run_id, &completed_at)?;
         }
         if let Some(candidate) = basis_review.as_ref() {
             if result_id.is_none() {

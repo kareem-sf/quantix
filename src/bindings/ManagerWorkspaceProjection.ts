@@ -6,9 +6,10 @@ import type { TenderAiExecutionBinding } from "./TenderAiExecutionBinding";
 import type { WorkspaceCapabilityReadiness } from "./WorkspaceCapabilityReadiness";
 import type { WorkspaceCurrentAction } from "./WorkspaceCurrentAction";
 import type { WorkspaceDoctorBlockerSummary } from "./WorkspaceDoctorBlockerSummary";
+import type { WorkspaceEstimateSummary } from "./WorkspaceEstimateSummary";
 import type { WorkspaceExternalRfiSummary } from "./WorkspaceExternalRfiSummary";
 import type { WorkspaceFilesSummary } from "./WorkspaceFilesSummary";
 import type { WorkspaceTeamSummary } from "./WorkspaceTeamSummary";
 import type { WorkspaceWorkSummary } from "./WorkspaceWorkSummary";
 
-export type ManagerWorkspaceProjection = { catalogue: Array<ManagerWorkspaceTender>, selected_tender: ManagerWorkspaceTender | null, conversation: ManagerConversation | null, current_action: WorkspaceCurrentAction, work: WorkspaceWorkSummary, files: WorkspaceFilesSummary, team: WorkspaceTeamSummary, external_rfis: Array<WorkspaceExternalRfiSummary>, intake: ManagerIntakeStatus | null, ai_execution: TenderAiExecutionBinding | null, capability_readiness: WorkspaceCapabilityReadiness | null, doctor_blockers: Array<WorkspaceDoctorBlockerSummary>, };
+export type ManagerWorkspaceProjection = { catalogue: Array<ManagerWorkspaceTender>, selected_tender: ManagerWorkspaceTender | null, conversation: ManagerConversation | null, current_action: WorkspaceCurrentAction, work: WorkspaceWorkSummary, files: WorkspaceFilesSummary, team: WorkspaceTeamSummary, external_rfis: Array<WorkspaceExternalRfiSummary>, estimate: WorkspaceEstimateSummary | null, intake: ManagerIntakeStatus | null, ai_execution: TenderAiExecutionBinding | null, capability_readiness: WorkspaceCapabilityReadiness | null, doctor_blockers: Array<WorkspaceDoctorBlockerSummary>, };

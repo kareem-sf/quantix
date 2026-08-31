@@ -197,6 +197,7 @@ pub enum WorkspaceActionKind {
     DraftExternalRfi,
     ReviewExternalRfi,
     InterpretExternalRfiResponse,
+    ReviewBasisOfEstimate,
     TenderDeclined,
 }
 
@@ -223,6 +224,28 @@ pub struct WorkspaceExternalRfiSummary {
     pub approval_pending: bool,
     pub export_pending: bool,
     pub interpretation_pending: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum WorkspaceEstimateStatus {
+    AwaitingReview,
+    ReviewFailed,
+    AwaitingApproval,
+    Approved,
+    Incomplete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceEstimateSummary {
+    pub basis_id: String,
+    pub version: u32,
+    pub status: WorkspaceEstimateStatus,
+    pub boq_row_count: u32,
+    pub finding_count: u32,
+    pub calculation_run_count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -404,6 +427,7 @@ pub struct ManagerWorkspaceProjection {
     pub files: WorkspaceFilesSummary,
     pub team: WorkspaceTeamSummary,
     pub external_rfis: Vec<WorkspaceExternalRfiSummary>,
+    pub estimate: Option<WorkspaceEstimateSummary>,
     pub intake: Option<ManagerIntakeStatus>,
     pub ai_execution: Option<TenderAiExecutionBinding>,
     pub capability_readiness: Option<WorkspaceCapabilityReadiness>,
@@ -549,6 +573,7 @@ struct WorkspaceSnapshot {
     files: WorkspaceFilesSummary,
     team: WorkspaceTeamSummary,
     external_rfis: Vec<WorkspaceExternalRfiSummary>,
+    estimate: Option<WorkspaceEstimateSummary>,
     intake: Option<ManagerIntakeStatus>,
     ai_execution: TenderAiExecutionBinding,
     capability_readiness: WorkspaceCapabilityReadiness,
@@ -575,11 +600,13 @@ impl TenderStore {
         let capability_readiness = self.workspace_capability_readiness()?;
         let doctor_blockers = workspace_doctor_blockers(&ai_execution, &capability_readiness);
         let external_rfis = self.workspace_external_rfi_summaries()?;
+        let estimate = self.workspace_estimate_summary()?;
         let current_action = self.workspace_current_action(
             summary.lifecycle_phase,
             &work,
             intake.as_ref(),
             &external_rfis,
+            estimate.as_ref(),
         )?;
         let safe_terminal_boundary = self.retention_boundary_is_safe()?;
         let tender = ManagerWorkspaceTender {
@@ -605,6 +632,7 @@ impl TenderStore {
             files,
             team,
             external_rfis,
+            estimate,
             intake,
             ai_execution,
             capability_readiness,
@@ -1387,8 +1415,12 @@ impl TenderStore {
         work: &WorkspaceWorkSummary,
         intake: Option<&ManagerIntakeStatus>,
         external_rfis: &[WorkspaceExternalRfiSummary],
+        estimate: Option<&WorkspaceEstimateSummary>,
     ) -> Result<WorkspaceCurrentAction, TenderCommandError> {
         if let Some(action) = self.workspace_external_rfi_action(external_rfis)? {
+            return Ok(action);
+        }
+        if let Some(action) = self.workspace_estimate_action(estimate) {
             return Ok(action);
         }
         let action = match phase {
@@ -1791,6 +1823,118 @@ impl TenderStore {
             )));
         }
         Ok(None)
+    }
+
+    fn workspace_estimate_summary(
+        &self,
+    ) -> Result<Option<WorkspaceEstimateSummary>, TenderCommandError> {
+        let basis: Option<(String, u32, i64, bool, bool)> = self
+            .connection
+            .query_row(
+                "SELECT basis_id, version,
+                        json_array_length(manifest_json, '$.boq_rows'),
+                        json_extract(manifest_json, '$.complete') = 1,
+                        json_extract(manifest_json, '$.reconciled') = 1
+                 FROM basis_of_estimate_versions
+                 ORDER BY version DESC LIMIT 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let Some((basis_id, version, boq_row_count, complete, reconciled)) = basis else {
+            return Ok(None);
+        };
+        let review: Option<(String, i64)> = self
+            .connection
+            .query_row(
+                "SELECT outcome, json_array_length(findings_json)
+                 FROM basis_of_estimate_reviews
+                 WHERE basis_id = ?1 AND basis_version = ?2",
+                params![basis_id, version],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let approved: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM basis_of_estimate_approvals
+                   WHERE basis_id = ?1 AND basis_version = ?2
+                 )",
+                params![basis_id, version],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        let calculation_run_count: i64 = self
+            .connection
+            .query_row("SELECT COUNT(*) FROM calculation_runs", [], |row| {
+                row.get(0)
+            })
+            .map_err(sql_error)?;
+        let status = if approved {
+            WorkspaceEstimateStatus::Approved
+        } else if review
+            .as_ref()
+            .is_some_and(|(outcome, _)| outcome == "passed")
+        {
+            WorkspaceEstimateStatus::AwaitingApproval
+        } else if review
+            .as_ref()
+            .is_some_and(|(outcome, _)| outcome == "failed")
+        {
+            WorkspaceEstimateStatus::ReviewFailed
+        } else if complete && reconciled {
+            WorkspaceEstimateStatus::AwaitingReview
+        } else {
+            WorkspaceEstimateStatus::Incomplete
+        };
+        Ok(Some(WorkspaceEstimateSummary {
+            basis_id,
+            version,
+            status,
+            boq_row_count: to_u32(boq_row_count)?,
+            finding_count: to_u32(review.map(|(_, findings)| findings).unwrap_or(0))?,
+            calculation_run_count: to_u32(calculation_run_count)?,
+        }))
+    }
+
+    fn workspace_estimate_action(
+        &self,
+        estimate: Option<&WorkspaceEstimateSummary>,
+    ) -> Option<WorkspaceCurrentAction> {
+        let estimate = estimate?;
+        let (title, summary_text) = match estimate.status {
+            WorkspaceEstimateStatus::AwaitingReview => (
+                "Review the Basis of Estimate",
+                "The Cost Estimator published a complete, reconciled Basis of Estimate. It needs independent review before you approve it for reliance.",
+            ),
+            WorkspaceEstimateStatus::ReviewFailed => (
+                "Resolve the estimate review findings",
+                "The independent review found problems in the Basis of Estimate. A revised basis must remediate them before a new review can run.",
+            ),
+            WorkspaceEstimateStatus::AwaitingApproval => (
+                "Approve the Basis of Estimate",
+                "The independent review passed. Your approval binds the exact basis version before any pricing may rely on it.",
+            ),
+            WorkspaceEstimateStatus::Approved | WorkspaceEstimateStatus::Incomplete => return None,
+        };
+        Some(action(
+            WorkspaceActionKind::ReviewBasisOfEstimate,
+            title,
+            summary_text,
+            "Review estimate basis",
+            true,
+        ))
     }
 }
 
@@ -2344,6 +2488,7 @@ fn projection_from_snapshot(
         files: snapshot.files,
         team: snapshot.team,
         external_rfis: snapshot.external_rfis,
+        estimate: snapshot.estimate,
         intake: snapshot.intake,
         ai_execution: Some(snapshot.ai_execution),
         capability_readiness: Some(snapshot.capability_readiness),
@@ -2539,6 +2684,7 @@ fn empty_projection(catalogue: Vec<ManagerWorkspaceTender>) -> ManagerWorkspaceP
         files: WorkspaceFilesSummary::default(),
         team: WorkspaceTeamSummary::default(),
         external_rfis: Vec::new(),
+        estimate: None,
         intake: None,
         ai_execution: None,
         capability_readiness: None,

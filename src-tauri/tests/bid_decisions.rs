@@ -61,7 +61,7 @@ use quantix_lib::{
     TenderQuery, TenderQueryTreatment, TenderQueryTreatmentProposalInput, TenderQueryType,
     TenderRecordEngineerDecisionKind, TenderRecordInspection, TenderRecordKind,
     TenderRecordVersionReference, VerificationStatus, WorkPlanDecision, WorkPlanRevisionAction,
-    MINIMUM_SETUP_FREE_SPACE_BYTES,
+    WorkspaceActionKind, WorkspaceEstimateStatus, MINIMUM_SETUP_FREE_SPACE_BYTES,
 };
 
 #[tokio::test]
@@ -16410,5 +16410,396 @@ fn executable_name(name: &str) -> String {
         name.to_owned()
     } else {
         format!("{name}.{}", std::env::consts::EXE_EXTENSION)
+    }
+}
+
+async fn estimate_workspace_fixture_basis(harness: &Harness) -> BasisOfEstimateVersion {
+    let rule = harness
+        .host
+        .propose_boq_calculation_rule(ProposeBoqCalculationRuleCommand {
+            tender_id: harness.tender_id.clone(),
+            supported_rounding: vec![CalculationRoundingMode::MidpointAwayFromZero],
+            change_rationale: "Establish the exact estimate arithmetic policy.".into(),
+        })
+        .expect("propose estimate Calculation Rule");
+    harness.set_agent_scenario("calculation-rule-review");
+    harness
+        .host
+        .run_calculation_rule_review(RunCalculationRuleReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            rule_id: rule.rule_id.clone(),
+            version: rule.version,
+        })
+        .await
+        .expect("independently review estimate Calculation Rule");
+    harness
+        .host
+        .approve_calculation_rule(ApproveCalculationRuleCommand {
+            tender_id: harness.tender_id.clone(),
+            rule_id: rule.rule_id,
+            version: rule.version,
+            manifest_sha256: rule.manifest_sha256,
+            rationale: "Activate only the exact independently reviewed rule.".into(),
+        })
+        .expect("activate estimate Calculation Rule");
+
+    let source = harness
+        .host
+        .inspect_document_register(&harness.tender_id)
+        .expect("inspect estimate source")
+        .documents
+        .into_iter()
+        .next()
+        .expect("registered estimate source");
+    let locations = harness
+        .host
+        .inspect_evidence(ParseSourceArtifactCommand {
+            tender_id: harness.tender_id.clone(),
+            artifact_id: source.artifact_id.clone(),
+            version: source.version,
+        })
+        .expect("inspect estimate Evidence")
+        .locations;
+    let boq_location = locations.first().expect("BOQ row Evidence");
+    let quote_location = locations.get(1).unwrap_or(boq_location);
+    let quote_evidence = TenderEvidenceReference {
+        artifact_id: source.artifact_id.clone(),
+        version: source.version,
+        ordinal: quote_location.ordinal,
+    };
+    let calculation_evidence = AgentTaskInputReference {
+        kind: "source_evidence".into(),
+        reference: format!("{}#{}", source.artifact_id, boq_location.ordinal),
+        version: source.version,
+    };
+    let boq_evidence = import_exact_boq_table(harness).await;
+    let boq_calculation_evidence = boq_evidence
+        .iter()
+        .map(|reference| AgentTaskInputReference {
+            kind: "source_evidence".into(),
+            reference: format!("{}#{}", reference.artifact_id, reference.ordinal),
+            version: reference.version,
+        })
+        .collect::<Vec<_>>();
+    let quotation_calculation_evidence = std::iter::once(AgentTaskInputReference {
+        kind: "source_evidence".into(),
+        reference: format!("{}#{}", quote_evidence.artifact_id, quote_evidence.ordinal),
+        version: quote_evidence.version,
+    })
+    .chain(boq_calculation_evidence.iter().cloned())
+    .collect::<Vec<_>>();
+    let scenario = harness
+        .host
+        .create_calculation_scenario(CreateCalculationScenarioCommand {
+            tender_id: harness.tender_id.clone(),
+            name: "BOQ account base".into(),
+            quantity_unit: "mm".into(),
+            rate_basis_unit: "m".into(),
+            rate_currency: "USD".into(),
+            exchange_rate: CalculationDecimalInput {
+                state: CalculationInputState::Provided,
+                value: Some("50".into()),
+                evidence: vec![calculation_evidence.clone()],
+            },
+            exchange_rate_effective_date: Some("2026-08-01".into()),
+            pricing_date: "2026-08-10".into(),
+            exchange_rate_type: Some(ExchangeRateType::Spot),
+            output_currency: "EGP".into(),
+            precision: 2,
+            rounding_mode: CalculationRoundingMode::MidpointAwayFromZero,
+            rationale: "Bind the exact pricing date, currency, FX and rounding basis.".into(),
+        })
+        .expect("approve estimate Calculation Scenario");
+    let calculated = run_cost_estimator_fixture_with_evidence(
+        harness,
+        "cost-estimator-calculation",
+        scenario.scenario_id.clone(),
+        scenario.version,
+        "BOQ-001 cable containment",
+        &boq_calculation_evidence,
+    )
+    .await;
+    let calculated_run_id = calculated.calculation_run_id.clone();
+    harness
+        .host
+        .approve_controlled_boq_calculation_run(ApproveControlledBoqCalculationRunCommand {
+            tender_id: harness.tender_id.clone(),
+            calculation_run_id: calculated.calculation_run_id,
+            manifest_sha256: calculated.manifest_sha256,
+            rationale: "Approve the exact BOQ row build-up and canonical total.".into(),
+        })
+        .expect("approve exact estimate Calculation Run");
+    let quotation_calculation = run_cost_estimator_fixture_with_evidence(
+        harness,
+        "cost-estimator-calculation",
+        scenario.scenario_id.clone(),
+        scenario.version,
+        "Supplier quotation normalization for BOQ-001",
+        &quotation_calculation_evidence,
+    )
+    .await;
+    let quotation_run_id = quotation_calculation.calculation_run_id.clone();
+    harness
+        .host
+        .approve_controlled_boq_calculation_run(ApproveControlledBoqCalculationRunCommand {
+            tender_id: harness.tender_id.clone(),
+            calculation_run_id: quotation_calculation.calculation_run_id,
+            manifest_sha256: quotation_calculation.manifest_sha256,
+            rationale: "Approve the distinct quotation-normalization run.".into(),
+        })
+        .expect("approve quotation-normalization run");
+    let comparison_total = run_cost_estimator_fixture(
+        harness,
+        "cost-estimator-calculation",
+        scenario.scenario_id,
+        scenario.version,
+        "Independent comparison total for BOQ-001",
+        &calculation_evidence,
+    )
+    .await;
+    let comparison_run_id = comparison_total.calculation_run_id.clone();
+    harness
+        .host
+        .approve_controlled_boq_calculation_run(ApproveControlledBoqCalculationRunCommand {
+            tender_id: harness.tender_id.clone(),
+            calculation_run_id: comparison_total.calculation_run_id,
+            manifest_sha256: comparison_total.manifest_sha256,
+            rationale: "Approve the distinct comparison-total run.".into(),
+        })
+        .expect("approve comparison-total run");
+
+    let query_page = harness
+        .host
+        .inspect_tender_queries(InspectTenderQueriesCommand {
+            tender_id: harness.tender_id.clone(),
+            cursor: None,
+            limit: 8,
+        })
+        .expect("inspect estimate Query Register");
+    let owner = query_page
+        .owner_profiles
+        .first()
+        .expect("approved Query owner");
+    let assumption = harness
+        .host
+        .create_tender_query(CreateTenderQueryCommand {
+            tender_id: harness.tender_id.clone(),
+            query_type: TenderQueryType::MissingInformation,
+            question: "Which productivity basis governs BOQ-001?".into(),
+            ambiguity_or_gap: "The source does not state the installation productivity basis."
+                .into(),
+            owner_profile_id: owner.profile_id.clone(),
+            owner_profile_version: owner.version,
+            evidence: vec![calculation_evidence],
+            affected_records: Vec::new(),
+            affected_task_keys: vec!["*".into()],
+            due_at: "2099-01-01T00:00:00.000Z".into(),
+            material: false,
+            release_blocking: false,
+            proposed_treatments: vec![TenderQueryTreatmentProposalInput {
+                treatment: TenderQueryTreatment::ApprovedAssumption,
+                rationale:
+                    "Use the stated conservative productivity basis for this estimate version."
+                        .into(),
+            }],
+        })
+        .expect("register material estimate assumption");
+    harness
+        .host
+        .decide_tender_query_treatment(DecideTenderQueryTreatmentCommand {
+            tender_id: harness.tender_id.clone(),
+            query_id: assumption.query_id,
+            query_version: assumption.version,
+            treatment: TenderQueryTreatment::ApprovedAssumption,
+            rationale: "EITL approves this exact material estimating assumption.".into(),
+            treatment_details: "Use one conservative crew productivity basis only for BOQ-001."
+                .into(),
+            closes_query: true,
+        })
+        .expect("approve exact material assumption");
+
+    harness.set_agent_scenario("cost-estimator-basis");
+    let proposed = harness
+        .host
+        .run_cost_estimator_basis(RunCostEstimatorBasisCommand {
+            tender_id: harness.tender_id.clone(),
+            quotation_evidence: vec![quote_evidence],
+            calculation_run_ids: vec![calculated_run_id, quotation_run_id, comparison_run_id],
+        })
+        .await
+        .expect("Cost Estimator publishes one exact Basis of Estimate");
+    assert_eq!(proposed.run.state, AgentRunState::Completed);
+    let basis = proposed.basis.expect("canonical Basis of Estimate");
+    assert!(basis.complete);
+    assert!(basis.reconciled);
+    basis
+}
+
+#[tokio::test]
+async fn manager_workspace_surfaces_the_basis_of_estimate_review_action_and_summary() {
+    let harness = Harness::new("record-extraction");
+    active_production(&harness).await;
+    let before = harness
+        .host
+        .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+            tender_id: Some(harness.tender_id.clone()),
+        })
+        .expect("inspect Manager workspace before estimating");
+    assert_ne!(
+        before.current_action.kind,
+        WorkspaceActionKind::ReviewBasisOfEstimate
+    );
+    assert!(before.estimate.is_none());
+
+    let basis = estimate_workspace_fixture_basis(&harness).await;
+    let projection = harness
+        .host
+        .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+            tender_id: Some(harness.tender_id.clone()),
+        })
+        .expect("inspect Manager workspace with a published basis");
+    assert_eq!(
+        projection.current_action.kind,
+        WorkspaceActionKind::ReviewBasisOfEstimate,
+        "a complete, reconciled basis awaits independent review"
+    );
+    assert!(projection.current_action.requires_engineer);
+    assert!(
+        projection
+            .selected_tender
+            .expect("selected Tender")
+            .needs_engineer
+    );
+    let summary = projection.estimate.as_ref().expect("estimate summary");
+    assert_eq!(summary.basis_id, basis.basis_id);
+    assert_eq!(summary.version, basis.version);
+    assert_eq!(summary.status, WorkspaceEstimateStatus::AwaitingReview);
+    assert_eq!(
+        summary.boq_row_count,
+        u32::try_from(basis.boq_rows.len()).unwrap()
+    );
+    assert_eq!(summary.finding_count, 0);
+    assert_eq!(summary.calculation_run_count, 3);
+
+    harness.set_agent_scenario("basis-of-estimate-review");
+    let reviewed = harness
+        .host
+        .run_basis_of_estimate_review(RunBasisOfEstimateReviewCommand {
+            tender_id: harness.tender_id.clone(),
+            basis_id: basis.basis_id.clone(),
+            version: basis.version,
+        })
+        .await
+        .expect("independently review exact estimate basis");
+    assert_eq!(reviewed.run.state, AgentRunState::Completed);
+    let reviewed_projection = harness
+        .host
+        .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+            tender_id: Some(harness.tender_id.clone()),
+        })
+        .expect("inspect Manager workspace after review");
+    assert_eq!(
+        reviewed_projection.current_action.kind,
+        WorkspaceActionKind::ReviewBasisOfEstimate,
+        "a passed review still needs the Manager approval decision"
+    );
+    let reviewed_summary = reviewed_projection
+        .estimate
+        .as_ref()
+        .expect("estimate summary after review");
+    assert_eq!(
+        reviewed_summary.status,
+        WorkspaceEstimateStatus::AwaitingApproval
+    );
+    assert_eq!(reviewed_summary.finding_count, 0);
+
+    let approved = harness
+        .host
+        .approve_basis_of_estimate(ApproveBasisOfEstimateCommand {
+            tender_id: harness.tender_id.clone(),
+            basis_id: basis.basis_id.clone(),
+            version: basis.version,
+            manifest_sha256: basis.manifest_sha256.clone(),
+            rationale: "EITL approves the exact reviewed Basis.".into(),
+        })
+        .expect("approve exact Basis of Estimate");
+    assert!(approved.relied_upon);
+    let approved_projection = harness
+        .host
+        .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+            tender_id: Some(harness.tender_id.clone()),
+        })
+        .expect("inspect Manager workspace after approval");
+    assert_ne!(
+        approved_projection.current_action.kind,
+        WorkspaceActionKind::ReviewBasisOfEstimate,
+        "an approved basis no longer asks for an estimate decision"
+    );
+    assert_eq!(
+        approved_projection
+            .estimate
+            .expect("estimate summary after approval")
+            .status,
+        WorkspaceEstimateStatus::Approved
+    );
+}
+
+#[tokio::test]
+async fn estimator_completion_records_one_attributable_manager_message_per_publication() {
+    let harness = Harness::new("record-extraction");
+    active_production(&harness).await;
+    let basis = estimate_workspace_fixture_basis(&harness).await;
+
+    let projection = harness
+        .host
+        .inspect_manager_workspace(InspectManagerWorkspaceCommand {
+            tender_id: Some(harness.tender_id.clone()),
+        })
+        .expect("inspect Manager workspace after estimator completions");
+    let messages = projection
+        .conversation
+        .expect("Manager conversation")
+        .messages;
+    let basis_messages = messages
+        .iter()
+        .filter(|message| {
+            message.author == TenderOfficeMessageAuthor::Manager
+                && message.body.contains("Basis of Estimate")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(basis_messages.len(), 1, "exactly one basis message");
+    assert_eq!(basis_messages[0].kind, TenderOfficeMessageKind::Output);
+    assert!(basis_messages[0].body.contains(&basis.version.to_string()));
+    assert!(basis_messages[0].body.contains(&basis.total_amount));
+    assert!(basis_messages[0].body.contains(&basis.total_currency));
+    assert!(basis_messages[0]
+        .body
+        .contains("Independent review is next."));
+
+    for description in [
+        "BOQ-001 cable containment",
+        "Supplier quotation normalization for BOQ-001",
+        "Independent comparison total for BOQ-001",
+    ] {
+        let calculation_messages = messages
+            .iter()
+            .filter(|message| {
+                message.author == TenderOfficeMessageAuthor::Manager
+                    && message.body.contains("controlled calculation")
+                    && message.body.contains(description)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calculation_messages.len(),
+            1,
+            "exactly one message for the calculation run {description}"
+        );
+        assert_eq!(
+            calculation_messages[0].kind,
+            TenderOfficeMessageKind::Output
+        );
+        assert!(calculation_messages[0]
+            .body
+            .contains("your approval of the exact value is next"));
     }
 }

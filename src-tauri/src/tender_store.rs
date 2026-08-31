@@ -245,10 +245,11 @@ pub use workspace::{
     TenderOfficeMessage, TenderOfficeMessageAuthor, TenderOfficeMessageKind, WorkspaceActionKind,
     WorkspaceAgentReference, WorkspaceAgentRunReference, WorkspaceCapabilityReadiness,
     WorkspaceCapabilityReadinessState, WorkspaceCurrentAction, WorkspaceDoctorBlockerArea,
-    WorkspaceDoctorBlockerSummary, WorkspaceExternalRfiStatus, WorkspaceExternalRfiSummary,
-    WorkspaceFilesSummary, WorkspaceOutputReference, WorkspaceSearchGroup, WorkspaceSearchHit,
-    WorkspaceSearchProjection, WorkspaceSearchResultKind, WorkspaceTaskRow, WorkspaceTaskState,
-    WorkspaceTeamSummary, WorkspaceWorkSummary,
+    WorkspaceDoctorBlockerSummary, WorkspaceEstimateStatus, WorkspaceEstimateSummary,
+    WorkspaceExternalRfiStatus, WorkspaceExternalRfiSummary, WorkspaceFilesSummary,
+    WorkspaceOutputReference, WorkspaceSearchGroup, WorkspaceSearchHit, WorkspaceSearchProjection,
+    WorkspaceSearchResultKind, WorkspaceTaskRow, WorkspaceTaskState, WorkspaceTeamSummary,
+    WorkspaceWorkSummary,
 };
 
 #[cfg(test)]

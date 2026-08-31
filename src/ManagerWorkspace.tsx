@@ -69,6 +69,8 @@ import type { ArtifactVersionSummary } from "./bindings/ArtifactVersionSummary";
 import { ApplicationSettings } from "./ApplicationSettings";
 import { exactApplicationAiSelectionIsReady } from "./applicationAiSelectionReadiness";
 import { notifyAttentionRequired } from "./applicationNotifications";
+import { ControlledCalculationView } from "./ControlledCalculationView";
+import { TenderEstimateReview } from "./TenderEstimateReview";
 import { TenderFocusedAction } from "./TenderFocusedAction";
 import { TenderRfiReview } from "./TenderRfiReview";
 import {
@@ -236,6 +238,15 @@ function isRfiActionKind(
   kind: WorkspaceCurrentAction["kind"],
 ): kind is RfiActionKind {
   return (RFI_ACTION_KINDS as readonly string[]).includes(kind);
+}
+
+const ESTIMATE_REVIEW_ACTION_KINDS = ["review_basis_of_estimate"] as const;
+type EstimateReviewActionKind = (typeof ESTIMATE_REVIEW_ACTION_KINDS)[number];
+
+function isEstimateReviewActionKind(
+  kind: WorkspaceCurrentAction["kind"],
+): kind is EstimateReviewActionKind {
+  return (ESTIMATE_REVIEW_ACTION_KINDS as readonly string[]).includes(kind);
 }
 
 const LOADING_TITLE_BAR_MENUS: readonly WindowTitleBarMenu[] = [
@@ -991,6 +1002,7 @@ function ManagerView({
   onOpenAction,
   onOpenFocusedAction,
   onOpenRfiReview,
+  onOpenEstimateReview,
   onOpenRecordDecision,
   onOpenChangeReview,
   canDecideCitedRecords,
@@ -1021,6 +1033,7 @@ function ManagerView({
   onOpenAction: () => void;
   onOpenFocusedAction: () => void;
   onOpenRfiReview: () => void;
+  onOpenEstimateReview: () => void;
   onOpenRecordDecision: () => void;
   onOpenChangeReview: () => void;
   canDecideCitedRecords: boolean;
@@ -1135,6 +1148,9 @@ function ManagerView({
       case "interpret_external_rfi_response":
         onOpenRfiReview();
         break;
+      case "review_basis_of_estimate":
+        onOpenEstimateReview();
+        break;
       case "review_change":
         onOpenChangeReview();
         break;
@@ -1162,6 +1178,7 @@ function ManagerView({
     "review_work_plan",
     "review_work",
     ...RFI_ACTION_KINDS,
+    ...ESTIMATE_REVIEW_ACTION_KINDS,
   ].includes(projection.current_action.kind);
   const intakeWorking =
     !documentToolsRequired &&
@@ -2017,6 +2034,7 @@ function WorkTaskDetail({
   onStart,
   onStop,
   onRequestChange,
+  onOpenCalculations,
   reportCommandFailure,
   onClose,
 }: {
@@ -2029,6 +2047,7 @@ function WorkTaskDetail({
   onStart: () => Promise<boolean>;
   onStop: () => Promise<boolean>;
   onRequestChange: () => Promise<boolean>;
+  onOpenCalculations: () => void;
   reportCommandFailure: () => void;
   onClose: () => void;
 }) {
@@ -2051,6 +2070,12 @@ function WorkTaskDetail({
     production?.tasks.find(
       (candidate) => candidate.production_task_id === task.production_task_id,
     ) ?? null;
+  const isEstimatorTask =
+    productionTask?.task.exact_inputs.some(
+      (input) =>
+        input.kind === "calculation_scenario_version" ||
+        input.kind === "basis_of_estimate_request",
+    ) ?? false;
   const canStart = !readOnly && task.status_detail === "ready";
   const canRequestQueryControl =
     !readOnly &&
@@ -2264,6 +2289,29 @@ function WorkTaskDetail({
         </section>
       ) : null}
 
+      {isEstimatorTask ? (
+        <section
+          className="work-task-detail__section"
+          aria-label="Controlled estimating"
+          data-testid="work-task-detail__estimating"
+        >
+          <h3>Controlled estimating</h3>
+          <p>
+            This task records its quantities, rates, and results as controlled
+            calculation records. Open the controlled calculations to read the
+            exact inputs, rounding, and results as the engine produced them.
+          </p>
+          <button
+            type="button"
+            className="manager-workspace__secondary"
+            disabled={busy}
+            onClick={onOpenCalculations}
+          >
+            Open controlled calculations
+          </button>
+        </section>
+      ) : null}
+
       {evidenceReferences.length > 0 ? (
         <section className="work-task-detail__section">
           <h3>Evidence used</h3>
@@ -2291,6 +2339,11 @@ function WorkTaskDetail({
                   ? " · latest"
                   : ""}
               </strong>
+              {isEstimatorTask ? (
+                <p>
+                  Published by Agent Run <code>{artifact.author_run_id}</code>.
+                </p>
+              ) : null}
               <p>{artifact.payload.summary}</p>
               <p>
                 Output checks{" "}
@@ -3431,6 +3484,8 @@ export function ManagerWorkspace({
     useState<RecordDecisionState | null>(null);
   const [changeReviewOpen, setChangeReviewOpen] = useState(false);
   const [rfiReviewOpen, setRfiReviewOpen] = useState(false);
+  const [estimateReviewOpen, setEstimateReviewOpen] = useState(false);
+  const [calculationsOpen, setCalculationsOpen] = useState(false);
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
   const [tenderViews, setTenderViews] = useState<Record<string, WorkspaceView>>(
     {},
@@ -3567,19 +3622,33 @@ export function ManagerWorkspace({
 
   useEffect(() => {
     if (
+      estimateReviewOpen &&
+      (!projection?.selected_tender ||
+        !isEstimateReviewActionKind(projection.current_action.kind))
+    ) {
+      setEstimateReviewOpen(false);
+    }
+  }, [estimateReviewOpen, projection]);
+
+  useEffect(() => {
+    if (
       !evidenceReview &&
       !recordDecision &&
       !changeReviewOpen &&
       !rfiReviewOpen &&
+      !estimateReviewOpen &&
+      !calculationsOpen &&
       !focusedTaskId
     )
       return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !operationRef.current) {
-        if (evidenceReview) setEvidenceReview(null);
+        if (calculationsOpen) setCalculationsOpen(false);
+        else if (evidenceReview) setEvidenceReview(null);
         else if (recordDecision) setRecordDecision(null);
         else if (changeReviewOpen) setChangeReviewOpen(false);
         else if (rfiReviewOpen) setRfiReviewOpen(false);
+        else if (estimateReviewOpen) setEstimateReviewOpen(false);
         else setFocusedTaskId(null);
       }
     };
@@ -3590,6 +3659,8 @@ export function ManagerWorkspace({
     recordDecision,
     changeReviewOpen,
     rfiReviewOpen,
+    estimateReviewOpen,
+    calculationsOpen,
     focusedTaskId,
   ]);
 
@@ -3598,6 +3669,8 @@ export function ManagerWorkspace({
     setRecordDecision(null);
     setChangeReviewOpen(false);
     setRfiReviewOpen(false);
+    setEstimateReviewOpen(false);
+    setCalculationsOpen(false);
     setFocusedTaskId(null);
   }, [projection?.selected_tender?.tender_id]);
 
@@ -5590,6 +5663,18 @@ export function ManagerWorkspace({
                           onRefresh={load}
                           onClose={() => setRfiReviewOpen(false)}
                         />
+                      ) : estimateReviewOpen &&
+                        isEstimateReviewActionKind(
+                          projection.current_action.kind,
+                        ) ? (
+                        <TenderEstimateReview
+                          tenderId={selected.tender_id}
+                          runtimeReady={runtimeStatus === "ready"}
+                          reportCommandFailure={reportFocusedCommandFailure}
+                          onRefresh={load}
+                          onOpenCalculations={() => setCalculationsOpen(true)}
+                          onClose={() => setEstimateReviewOpen(false)}
+                        />
                       ) : focusedActionTenderId === selected.tender_id &&
                         isFocusedActionKind(projection.current_action.kind) ? (
                         <TenderFocusedAction
@@ -5636,6 +5721,9 @@ export function ManagerWorkspace({
                             setFocusedActionTenderId(selected.tender_id)
                           }
                           onOpenRfiReview={() => setRfiReviewOpen(true)}
+                          onOpenEstimateReview={() =>
+                            setEstimateReviewOpen(true)
+                          }
                           onOpenRecordDecision={() =>
                             setRecordDecision({ focusTarget: null })
                           }
@@ -5768,8 +5856,18 @@ export function ManagerWorkspace({
                         onStart={() => startFocusedTask()}
                         onStop={() => stopFocusedTask()}
                         onRequestChange={() => requestFocusedTaskChange()}
+                        onOpenCalculations={() => setCalculationsOpen(true)}
                         reportCommandFailure={reportFocusedCommandFailure}
                         onClose={() => setFocusedTaskId(null)}
+                      />
+                    </div>
+                  ) : null}
+                  {calculationsOpen ? (
+                    <div className="manager-workspace__overlay is-raised">
+                      <ControlledCalculationView
+                        tenderId={selected.tender_id}
+                        reportCommandFailure={reportFocusedCommandFailure}
+                        onClose={() => setCalculationsOpen(false)}
                       />
                     </div>
                   ) : null}
