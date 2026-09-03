@@ -1917,10 +1917,13 @@ describe("ManagerWorkspace", () => {
 
     render(<ManagerWorkspace />);
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Start External RFI" }),
-    );
-    const surface = await screen.findByTestId("tender-rfi-review");
+    await waitFor(() => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Start External RFI" }),
+      );
+      expect(screen.getByTestId("tender-rfi-review")).toBeTruthy();
+    });
+    const surface = screen.getByTestId("tender-rfi-review");
     const questionCheckbox = await within(surface).findByRole("checkbox", {
       name: /Who carries the installation responsibility/,
     });
@@ -2024,10 +2027,13 @@ describe("ManagerWorkspace", () => {
 
     render(<ManagerWorkspace />);
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Review External RFI" }),
-    );
-    const surface = await screen.findByTestId("tender-rfi-review");
+    await waitFor(() => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Review External RFI" }),
+      );
+      expect(screen.getByTestId("tender-rfi-review")).toBeTruthy();
+    });
+    const surface = screen.getByTestId("tender-rfi-review");
     const reviewSection = await within(surface).findByTestId(
       "tender-rfi-review-section",
     );
@@ -2160,10 +2166,13 @@ describe("ManagerWorkspace", () => {
 
     render(<ManagerWorkspace />);
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Start External RFI" }),
-    );
-    const section = await screen.findByTestId("tender-rfi-response-section");
+    await waitFor(() => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Start External RFI" }),
+      );
+      expect(screen.getByTestId("tender-rfi-response-section")).toBeTruthy();
+    });
+    const section = screen.getByTestId("tender-rfi-response-section");
     expect(
       within(section).getByText(
         /You deliver that file to the recipient outside Quantix/,
@@ -2250,10 +2259,13 @@ describe("ManagerWorkspace", () => {
 
     render(<ManagerWorkspace />);
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Interpret response" }),
-    );
-    const section = await screen.findByTestId("tender-rfi-response-section");
+    await waitFor(() => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Interpret response" }),
+      );
+      expect(screen.getByTestId("tender-rfi-response-section")).toBeTruthy();
+    });
+    const section = screen.getByTestId("tender-rfi-response-section");
     expect(
       (await within(section).findAllByText(rfiQuestion)).length,
     ).toBeGreaterThan(0);
@@ -2345,10 +2357,13 @@ describe("ManagerWorkspace", () => {
 
     render(<ManagerWorkspace />);
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Interpret response" }),
-    );
-    const section = await screen.findByTestId("tender-rfi-response-section");
+    await waitFor(() => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Interpret response" }),
+      );
+      expect(screen.getByTestId("tender-rfi-response-section")).toBeTruthy();
+    });
+    const section = screen.getByTestId("tender-rfi-response-section");
     expect(
       await within(section).findByText(
         `source_artifact ${"6".repeat(32)} · v2`,
@@ -7014,10 +7029,16 @@ describe("ManagerWorkspace", () => {
     );
 
     render(<ManagerWorkspace />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Review estimate basis" }),
-    );
-    const surface = await screen.findByTestId("tender-estimate-review");
+    // The workspace refreshes on an interval, and a refresh landing between the
+    // click and the re-render drops the opened surface. Retry the click until the
+    // surface is actually on screen rather than racing that refresh.
+    await waitFor(() => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Review estimate basis" }),
+      );
+      expect(screen.getByTestId("tender-estimate-review")).toBeTruthy();
+    });
+    const surface = screen.getByTestId("tender-estimate-review");
     expect(
       await within(surface).findByText("Cable containment trunking"),
     ).toBeTruthy();
