@@ -122,7 +122,13 @@ fn initialized_private_home(name: &str) -> TestApplicationHome {
         .prefix(name)
         .tempdir()
         .expect("temporary application-home parent");
-    let path = root.path().join(".quantix");
+    // Canonicalize the parent before building the home path. The vault requires an
+    // Application Home spelled the way the operating system spells it, and a build
+    // machine's temporary directory is often the 8.3 short form
+    // (C:\Users\RUNNER~1\...), which canonicalizes to something else and is rejected.
+    let path = std::fs::canonicalize(root.path())
+        .expect("canonical temporary parent")
+        .join(".quantix");
     let host = QuantixHost::with_setup_platform(&path, Arc::new(ReadySetupPlatform));
     let outcome = ensure_quantix_setup(&host);
     assert_eq!(outcome.state, SetupState::Ready);
