@@ -1388,17 +1388,21 @@ fn secure_created_directory(path: &Path) -> io::Result<()> {
         LocalBox, SecurityDescriptor,
     };
 
+    // Name the Engineer explicitly rather than relying on the Owner Rights ACE. An
+    // OWNER RIGHTS entry defines the owner's access entirely, and on a machine whose
+    // process runs with a filtered administrator token that left Quantix unable to
+    // even open the directory it had just created. An explicit entry for the account
+    // that will use the home does not depend on how the owner is resolved.
+    let owner = current_process_sid()?;
     let descriptor: LocalBox<SecurityDescriptor> =
-        "D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)".parse()?;
+        format!("D:P(A;OICI;FA;;;{owner})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)").parse()?;
     let dacl = descriptor
         .dacl()
         .ok_or_else(|| io::Error::other("private directory DACL is missing"))?;
-    // Claim ownership explicitly. Windows gives objects created by a member of the
-    // Administrators group an owner of BUILTIN\Administrators rather than the user
-    // that created them, and the storage check below requires the Engineer to own
-    // their own Application Home. Without this the directory Quantix just created
-    // and locked down would still read as unsafe.
-    let owner = current_process_sid()?;
+    // Claim ownership too. Windows gives objects created by a member of the
+    // Administrators group an owner of BUILTIN\Administrators rather than the account
+    // that created them, and the storage check requires the Engineer to own their own
+    // Application Home.
     SetNamedSecurityInfo(
         path.as_os_str(),
         SeObjectType::SE_FILE_OBJECT,
