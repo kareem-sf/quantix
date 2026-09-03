@@ -564,18 +564,36 @@ async fn engineer_retry_preserves_partial_provider_retry_consumption() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
-    let preserved: (String, u32, u32) = Connection::open(&database)
+    // Report why the run stopped, not just that it is in the wrong stage. A bare
+    // comparison says "reading_documents, expected waiting_for_provider" and leaves
+    // no way to tell a stalled retry from a failed one.
+    let preserved: (String, u32, u32, Option<String>, Option<String>) = Connection::open(&database)
         .expect("open queued Manager retry")
         .query_row(
             "SELECT stage, provider_retry_attempt_count,
-                    (SELECT COUNT(*)
-                     FROM manager_intake_provider_rate_limit_consumptions)
-             FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
+                        (SELECT COUNT(*)
+                         FROM manager_intake_provider_rate_limit_consumptions),
+                        failure_summary, blocking_agent_run_id
+                 FROM manager_intake_runs ORDER BY intake_run_sequence DESC LIMIT 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .expect("inspect preserved partial retry count");
-    assert_eq!(preserved, ("waiting_for_provider".into(), 1, 1));
+    assert_eq!(
+        (preserved.0.as_str(), preserved.1, preserved.2),
+        ("waiting_for_provider", 1, 1),
+        "retry stalled: failure_summary={:?} blocking_agent_run_id={:?}",
+        preserved.3,
+        preserved.4
+    );
     drop(host);
 
     let reopened = QuantixHost::with_setup_platform_and_runtime(
