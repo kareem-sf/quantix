@@ -23,7 +23,7 @@ fn effective_reasoning(request: &WorkerRunRequest) -> Option<&str> {
     request.reasoning.as_deref()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerFailureCategory {
     Auth,
     RateLimited,
@@ -117,7 +117,7 @@ pub async fn run_worker_operation(
     application_home: &Path,
     request: &WorkerRunRequest,
     cancellation: CancellationToken,
-    mut on_approval: impl FnMut(&str, &Value) -> WorkerApproval,
+    mut on_approval: impl FnMut(&str, &str, &Value) -> WorkerApproval,
 ) -> Result<WorkerOutcome, WorkerDriverError> {
     let staging_directory = application_home.join("staging");
     std::fs::create_dir_all(&staging_directory)
@@ -187,7 +187,7 @@ async fn start_worker(
 async fn exchange(
     conversation: &mut SupervisedConversation,
     request: &WorkerRunRequest,
-    on_approval: &mut impl FnMut(&str, &Value) -> WorkerApproval,
+    on_approval: &mut impl FnMut(&str, &str, &Value) -> WorkerApproval,
 ) -> Result<WorkerOutcome, WorkerDriverError> {
     conversation
         .begin_operation(request.timeout, WORKER_OUTPUT_LIMIT, WORKER_OUTPUT_LIMIT)
@@ -257,7 +257,7 @@ async fn exchange(
                 let tool_call_id = string_field(&frame, "tool_call_id")?;
                 let tool_name = string_field(&frame, "tool_name")?;
                 let arguments = frame.get("arguments").cloned().unwrap_or(json!({}));
-                let answer = on_approval(&tool_name, &arguments);
+                let answer = on_approval(&tool_call_id, &tool_name, &arguments);
                 let reply = match answer {
                     WorkerApproval::Approved(result) => json!({
                         "kind": "approval",

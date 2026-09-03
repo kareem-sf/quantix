@@ -15,18 +15,27 @@ use crate::{
 };
 
 pub(crate) const CODEX_CONNECTION_ID: &str = "codex_chatgpt";
+/// A model provider has no catalogue Quantix fetched and no adapter it downloaded, so
+/// both fields record the lane rather than a version that would imply otherwise.
+const MODEL_PROVIDER_CATALOGUE: &str = "engineer-configured-v1";
+const MODEL_PROVIDER_ADAPTER: &str = "quantix-ai-worker-v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum AiProviderKind {
     Codex,
+    /// A connection the Engineer configured themselves, executed through the AI
+    /// worker rather than the Codex app server. Its endpoint, model and key live in
+    /// the Application Home's `.env`, keyed by the selection's connection id.
+    ModelProvider,
 }
 
 impl AiProviderKind {
     fn as_str(self) -> &'static str {
         match self {
             Self::Codex => "codex",
+            Self::ModelProvider => "model_provider",
         }
     }
 }
@@ -797,6 +806,49 @@ fn mutate_ai_execution_selection_projection(
     load_application_settings(application_home)
 }
 
+/// Point newly created Tenders at a connection the Engineer configured themselves.
+///
+/// This deliberately does not go through the Codex selection path: that one validates
+/// against a provider catalogue Quantix fetches, and a model provider has no catalogue
+/// beyond the model id the Engineer typed. The approval is recorded here for the same
+/// reason it is recorded there — so a later change of endpoint or model stops runs
+/// until the Engineer agrees to the new destination.
+pub(crate) fn select_model_provider(
+    application_home: &Path,
+    connection_id: &str,
+    model_id: &str,
+    data_destination: &str,
+    account_fingerprint: &str,
+) -> Result<(), TenderCommandError> {
+    let mut database = settings_connection(application_home)?;
+    let transaction = database
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(settings_store_error)?;
+    let mut settings = load_stored_settings(&transaction)?;
+    let selection = AiExecutionSelection {
+        connection_id: connection_id.to_owned(),
+        provider: AiProviderKind::ModelProvider,
+        model_id: model_id.to_owned(),
+        // The endpoint decides its own effort; Quantix does not send one, because
+        // several routes reject the setting outright.
+        reasoning: ProviderReasoningSelection::ProviderDefault,
+        catalogue_fetched_at: MODEL_PROVIDER_CATALOGUE.to_owned(),
+        adapter_version: MODEL_PROVIDER_ADAPTER.to_owned(),
+    };
+    settings.ai_execution_approval = Some(AiExecutionApproval {
+        connection_id: selection.connection_id.clone(),
+        provider: selection.provider,
+        account_fingerprint: account_fingerprint.to_owned(),
+        model_id: selection.model_id.clone(),
+        reasoning: selection.reasoning.clone(),
+        data_destination: data_destination.to_owned(),
+        approved_at: Timestamp::now().to_string(),
+    });
+    settings.ai_execution_selection = Some(selection);
+    store_application_settings(&transaction, &settings)?;
+    transaction.commit().map_err(settings_store_error)
+}
+
 pub(crate) fn save_live_connection(
     application_home: &Path,
     connection: &ProviderConnectionView,
@@ -849,15 +901,23 @@ fn save_live_connection_unlocked(
         }
         None => None,
     };
-    let approval_is_current = had_selection
-        && settings
-            .ai_execution_selection
-            .as_ref()
-            .zip(settings.ai_execution_approval.as_ref())
-            .is_some_and(|(selection, approval)| {
-                selection_is_supported(&persisted, selection)
-                    && approval_matches(&persisted, selection, approval)
-            });
+    // This saves one connection's live view. A selection pointing at a different
+    // connection cannot be judged against it, so leave that approval alone rather than
+    // revoking it every time the Codex connection refreshes.
+    let selection_targets_this_connection = settings
+        .ai_execution_selection
+        .as_ref()
+        .is_some_and(|selection| selection.connection_id == persisted.connection_id);
+    let approval_is_current = !selection_targets_this_connection
+        || (had_selection
+            && settings
+                .ai_execution_selection
+                .as_ref()
+                .zip(settings.ai_execution_approval.as_ref())
+                .is_some_and(|(selection, approval)| {
+                    selection_is_supported(&persisted, selection)
+                        && approval_matches(&persisted, selection, approval)
+                }));
     if settings.ai_execution_approval.is_some() && !approval_is_current {
         settings.ai_execution_approval = None;
     }
@@ -940,6 +1000,9 @@ fn selection_is_supported(
 fn data_destination(provider: AiProviderKind) -> &'static str {
     match provider {
         AiProviderKind::Codex => "ChatGPT subscription",
+        // The exact endpoint is part of the connection, not the kind, so the approval
+        // records the class of destination the Engineer agreed to.
+        AiProviderKind::ModelProvider => "Configured model provider",
     }
 }
 

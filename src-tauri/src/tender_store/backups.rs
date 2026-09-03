@@ -2351,6 +2351,10 @@ impl QuantixHost {
                         None => false,
                     }
                 }
+                // The worker lane keeps no conversation, so a run through a configured
+                // model provider leaves nothing on the provider to delete. Treat the
+                // job as settled rather than retrying it forever.
+                AiProviderKind::ModelProvider => true,
             };
             self.record_provider_cleanup_attempt(&job, deleted)?;
         }
@@ -3615,6 +3619,7 @@ fn insert_provider_cleanup_jobs(
     for (target_ordinal, target) in targets.iter().enumerate() {
         let provider_kind = match target.provider {
             AiProviderKind::Codex => "codex",
+            AiProviderKind::ModelProvider => "model_provider",
         };
         transaction
             .execute(

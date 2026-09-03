@@ -302,6 +302,35 @@ impl QuantixHost {
         .await
     }
 
+    /// Point newly created Tenders at one of the Engineer's own model providers.
+    /// The connection must carry a key, because a selection that cannot execute is
+    /// worse than no selection at all.
+    pub fn use_model_provider(&self, id: &str) -> Result<(), TenderCommandError> {
+        let connection = crate::provider_env::resolve_connection(self.application_home(), id)?;
+        // The fingerprint binds the approval to where the work will actually go, so
+        // changing the endpoint or the model requires agreeing again.
+        let fingerprint = crate::tender_store::sha256_hex(
+            format!(
+                "{}|{}|{}",
+                connection.route.as_str(),
+                connection.base_url.as_deref().unwrap_or(""),
+                connection.model_id
+            )
+            .as_bytes(),
+        );
+        let destination = connection
+            .base_url
+            .clone()
+            .unwrap_or_else(|| connection.route.as_str().to_owned());
+        crate::application_settings::select_model_provider(
+            self.application_home(),
+            &connection.id,
+            &connection.model_id,
+            &destination,
+            &fingerprint,
+        )
+    }
+
     /// Send the smallest possible request to a stored provider so the Engineer can
     /// see whether the endpoint, model and key actually work before a Tender depends
     /// on them. A probe calls no tools, so it needs none of the approval plumbing a
@@ -345,7 +374,7 @@ impl QuantixHost {
             &self.inner.application_home,
             &request,
             cancellation,
-            |_, _| unreachable!("a probe never calls tools"),
+            |_, _, _| unreachable!("a probe never calls tools"),
         )
         .await;
 
@@ -360,6 +389,7 @@ impl QuantixHost {
         request: crate::agent_runtime::worker_lane::WorkerRunRequest,
         cancellation: tokio_util::sync::CancellationToken,
         on_approval: impl FnMut(
+            &str,
             &str,
             &serde_json::Value,
         ) -> crate::agent_runtime::worker_lane::WorkerApproval,

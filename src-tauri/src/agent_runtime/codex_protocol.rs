@@ -845,7 +845,7 @@ fn account_state_loss_outcome_unknown(auth_mode: Option<&str>) -> ProviderFailur
     )
 }
 
-fn rate_limit_failure() -> ProviderFailure {
+pub(super) fn rate_limit_failure() -> ProviderFailure {
     ProviderFailure::new(
         ProviderFailureCategory::RateLimited,
         true,
@@ -866,7 +866,7 @@ fn require_turn(params: &Value, expected: &str) -> Result<(), ProviderFailure> {
     }
 }
 
-fn output_failure() -> ProviderFailure {
+pub(super) fn output_failure() -> ProviderFailure {
     ProviderFailure::new(
         ProviderFailureCategory::OutputInvalid,
         true,

@@ -8163,7 +8163,7 @@ fn random_identifier(connection: &Connection) -> Result<String, TenderCommandErr
         .map_err(sql_error)
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))

@@ -902,6 +902,16 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) fn use_model_provider(
+        host: tauri::State<'_, QuantixHost>,
+        id: String,
+    ) -> Result<ApplicationSettingsView, TenderCommandError> {
+        let host = host.inner();
+        host.use_model_provider(&id)?;
+        host.inspect_application_settings()
+    }
+
+    #[tauri::command]
     pub(super) async fn probe_ai_provider(
         host: tauri::State<'_, QuantixHost>,
         id: String,
@@ -3440,6 +3450,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::save_ai_provider,
             tauri_commands::remove_ai_provider,
             tauri_commands::probe_ai_provider,
+            tauri_commands::use_model_provider,
             tauri_commands::set_active_ai_provider,
             tauri_commands::update_general_application_preferences,
             tauri_commands::update_ai_execution_selection,

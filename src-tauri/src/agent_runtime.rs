@@ -55,6 +55,7 @@ mod codex_actor;
 mod codex_protocol;
 pub(crate) mod permissions;
 pub mod worker_lane;
+mod worker_provider;
 pub(crate) use bootstrap_profile::{bootstrap_profile, bootstrap_task};
 pub(crate) use codex_actor::{ChatGptLoginType, CodexProvider, LoginOutcome, LoginStartInfo};
 use codex_protocol::{
@@ -3481,6 +3482,30 @@ async fn execute_provider_turn_from(
                 .expect("Codex provider initialized above")
                 .run_turn(prepared.clone(), operation_limit, cancellation, callbacks)
                 .await
+        }
+        AiProviderKind::ModelProvider => {
+            // The key lives in the Application Home's `.env` and is read per turn, so
+            // an Engineer who removes a connection stops its runs at the next turn
+            // rather than leaving a copy behind in memory.
+            match crate::provider_env::resolve_connection(
+                host.application_home(),
+                &prepared.provider_selection.connection_id,
+            ) {
+                Ok(connection) => {
+                    worker_provider::run_worker_turn(
+                        host.process_supervisor(),
+                        &crate::managed_runtime::worker_python_path(host.application_home()),
+                        host.application_home(),
+                        &connection,
+                        prepared.clone(),
+                        operation_limit,
+                        cancellation,
+                        callbacks,
+                    )
+                    .await
+                }
+                Err(_) => failed_execution(authentication_failure(), started),
+            }
         }
     };
     host.observe_provider_usage(&execution.usage);

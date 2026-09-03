@@ -128,7 +128,7 @@ async fn probe_reports_usage_and_text() {
         .run_worker_operation_for_test(
             request(WorkerOperation::Probe),
             tokio_util::sync::CancellationToken::new(),
-            |_, _| unreachable!("a probe never calls tools"),
+            |_, _, _| unreachable!("a probe never calls tools"),
         )
         .await
         .expect("probe succeeds");
@@ -152,7 +152,7 @@ async fn probe_surfaces_provider_auth_failures() {
         .run_worker_operation_for_test(
             request(WorkerOperation::Probe),
             tokio_util::sync::CancellationToken::new(),
-            |_, _| unreachable!("a probe never calls tools"),
+            |_, _, _| unreachable!("a probe never calls tools"),
         )
         .await
         .expect_err("auth failure");
@@ -169,7 +169,7 @@ async fn turn_produces_text_and_usage() {
         .run_worker_operation_for_test(
             request(WorkerOperation::Turn),
             tokio_util::sync::CancellationToken::new(),
-            |_, _| unreachable!("no tools were offered"),
+            |_, _, _| unreachable!("no tools were offered"),
         )
         .await
         .expect("turn succeeds");
@@ -203,7 +203,7 @@ async fn structured_output_reaches_the_host_as_json() {
         .run_worker_operation_for_test(
             request,
             tokio_util::sync::CancellationToken::new(),
-            |_, _| unreachable!("no tools were offered"),
+            |_, _, _| unreachable!("no tools were offered"),
         )
         .await
         .expect("structured turn succeeds");
@@ -227,7 +227,10 @@ async fn tool_calls_pause_for_the_host_and_relay_results() {
         .run_worker_operation_for_test(
             request,
             tokio_util::sync::CancellationToken::new(),
-            |name, arguments| {
+            |tool_call_id, name, arguments| {
+                // The correlation id is what lets the host write an audit record for
+                // the call it is approving.
+                assert!(!tool_call_id.is_empty());
                 assert_eq!(name, "lookup_item");
                 assert_eq!(arguments, &json!({"query": "fixture"}));
                 WorkerApproval::Approved(json!({"item": "fixture-item"}))
@@ -262,7 +265,7 @@ async fn denied_tool_calls_reach_the_worker_with_the_denial_message() {
         .run_worker_operation_for_test(
             request,
             tokio_util::sync::CancellationToken::new(),
-            |name, _| {
+            |_, name, _| {
                 assert_eq!(name, "lookup_item");
                 WorkerApproval::Denied(
                     "Denied by Quantix: outside this run's permissions".to_owned(),
@@ -301,7 +304,7 @@ async fn tool_round_ceiling_fails_closed() {
         .run_worker_operation_for_test(
             request,
             tokio_util::sync::CancellationToken::new(),
-            |_, _| WorkerApproval::Approved(json!({})),
+            |_, _, _| WorkerApproval::Approved(json!({})),
         )
         .await
         .expect_err("round ceiling");
@@ -318,7 +321,7 @@ async fn malformed_worker_output_fails_closed() {
         .run_worker_operation_for_test(
             request(WorkerOperation::Probe),
             tokio_util::sync::CancellationToken::new(),
-            |_, _| unreachable!("a probe never calls tools"),
+            |_, _, _| unreachable!("a probe never calls tools"),
         )
         .await
         .expect_err("malformed frame");
@@ -334,7 +337,7 @@ async fn cancellation_stops_the_worker() {
     let operation = harness.host.run_worker_operation_for_test(
         request(WorkerOperation::Turn),
         cancellation.clone(),
-        |_, _| unreachable!("no tools were offered"),
+        |_, _, _| unreachable!("no tools were offered"),
     );
     cancellation.cancel();
     let error = operation.await.expect_err("cancelled operation");
