@@ -1482,6 +1482,58 @@ mod tests {
     }
 
     #[test]
+    fn choosing_a_model_provider_records_an_approved_destination() {
+        let home = initialized_home("model-provider-selection");
+        select_model_provider(
+            &home,
+            "OPENROUTER",
+            "anthropic/claude-sonnet-4.5",
+            "https://openrouter.ai/api/v1",
+            "fingerprint-1",
+        )
+        .expect("select the model provider");
+
+        let view = load_application_settings(&home).expect("settings");
+        let selection = view.ai_execution_selection.expect("a selection");
+        assert_eq!(selection.provider, AiProviderKind::ModelProvider);
+        assert_eq!(selection.connection_id, "OPENROUTER");
+        assert_eq!(selection.model_id, "anthropic/claude-sonnet-4.5");
+        let approval = view.ai_execution_approval.expect("an approval");
+        assert_eq!(approval.data_destination, "https://openrouter.ai/api/v1");
+        assert_eq!(approval.account_fingerprint, "fingerprint-1");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_codex_refresh_leaves_a_model_provider_approval_alone() {
+        // The Codex connection refreshes on every settings load. It has no standing to
+        // judge an approval that points somewhere else, and revoking one would stop
+        // the Engineer's own provider working for reasons they never see.
+        let home = initialized_home("model-provider-survives-refresh");
+        select_model_provider(
+            &home,
+            "OPENROUTER",
+            "anthropic/claude-sonnet-4.5",
+            "https://openrouter.ai/api/v1",
+            "fingerprint-1",
+        )
+        .expect("select the model provider");
+
+        save_live_connection(&home, &fixture_connection("account-1")).expect("refresh Codex");
+
+        let view = load_application_settings(&home).expect("settings");
+        let approval = view
+            .ai_execution_approval
+            .expect("the model provider approval survives a Codex refresh");
+        assert_eq!(approval.connection_id, "OPENROUTER");
+        assert_eq!(
+            view.ai_execution_selection.expect("a selection").provider,
+            AiProviderKind::ModelProvider
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
     fn codex_catalogue_is_versioned_by_the_pinned_codex_release() {
         let connection = fixture_connection("account-77");
         assert_eq!(

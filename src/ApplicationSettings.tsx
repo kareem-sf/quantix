@@ -51,6 +51,7 @@ import {
   removeAiProvider,
   saveAiProvider,
   setActiveAiProvider,
+  useModelProvider,
   openChatGptDeviceLoginPage,
   repairQuantixDoctor,
   refreshApplicationSettings,
@@ -1720,14 +1721,25 @@ export function ApplicationSettings({
                         {connection.is_active ? null : (
                           <button
                             type="button"
-                            disabled={providerBusy}
+                            disabled={providerBusy || !connection.has_api_key}
                             onClick={() => {
-                              void runProviderAction(() =>
-                                setActiveAiProvider(connection.id),
-                              );
+                              void runProviderAction(async () => {
+                                // Two records, deliberately: the .env marks which
+                                // connection the Engineer prefers, and the settings
+                                // store records the approved destination that new
+                                // Tenders will actually run against.
+                                const view = await setActiveAiProvider(
+                                  connection.id,
+                                );
+                                const settings = await useModelProvider(
+                                  connection.id,
+                                );
+                                acceptSettings(settings);
+                                return view;
+                              });
                             }}
                           >
-                            Make default
+                            Use for new Tenders
                           </button>
                         )}
                         <button

@@ -252,3 +252,77 @@ pub(super) async fn run_worker_turn(
         Some(started.elapsed().as_millis().try_into().unwrap_or(u64::MAX));
     execution
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_worker_that_died_leaves_the_turn_indeterminate() {
+        // The difference matters: Failed says the turn ran and did not work, which
+        // permits a clean retry. A worker that died may have reached the provider
+        // first, so the Agent Run has to record that the outcome is unknown.
+        assert_eq!(
+            state_for(WorkerFailureCategory::Process),
+            AgentRunState::Indeterminate
+        );
+        assert_eq!(
+            transport_for(WorkerFailureCategory::Process),
+            ProviderTransportDisposition::Indeterminate
+        );
+    }
+
+    #[test]
+    fn a_cancelled_turn_is_interrupted_rather_than_failed() {
+        assert_eq!(
+            state_for(WorkerFailureCategory::Cancelled),
+            AgentRunState::Interrupted
+        );
+        assert_eq!(
+            transport_for(WorkerFailureCategory::Cancelled),
+            ProviderTransportDisposition::Interrupted
+        );
+    }
+
+    #[test]
+    fn a_budget_refusal_never_reached_the_provider() {
+        // LocalRejected is what tells the Agent Run this turn was never charged.
+        assert_eq!(
+            transport_for(WorkerFailureCategory::Budget),
+            ProviderTransportDisposition::LocalRejected
+        );
+        assert_eq!(
+            provider_failure_for(WorkerFailureCategory::Budget).category,
+            ProviderFailureCategory::RequestBudgetExceeded
+        );
+    }
+
+    #[test]
+    fn a_rejected_key_asks_the_engineer_to_reconnect() {
+        assert_eq!(
+            provider_failure_for(WorkerFailureCategory::Auth).category,
+            ProviderFailureCategory::AuthenticationRequired
+        );
+    }
+
+    #[test]
+    fn every_transport_failure_carries_a_failure_to_report() {
+        for category in [
+            WorkerFailureCategory::Auth,
+            WorkerFailureCategory::RateLimited,
+            WorkerFailureCategory::Network,
+            WorkerFailureCategory::InvalidOutput,
+            WorkerFailureCategory::Budget,
+            WorkerFailureCategory::Protocol,
+            WorkerFailureCategory::Provider,
+            WorkerFailureCategory::Cancelled,
+            WorkerFailureCategory::Process,
+        ] {
+            let failure = provider_failure_for(category);
+            assert!(
+                !failure.required_user_action.is_empty(),
+                "{category:?} must tell the Engineer what to do"
+            );
+        }
+    }
+}

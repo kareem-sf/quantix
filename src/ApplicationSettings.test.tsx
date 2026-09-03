@@ -28,6 +28,7 @@ const host = vi.hoisted(() => ({
   repairQuantixDoctor: vi.fn(),
   saveAiProvider: vi.fn(),
   setActiveAiProvider: vi.fn(),
+  useModelProvider: vi.fn(),
   startChatGptDeviceLogin: vi.fn(),
   startChatGptLogin: vi.fn(),
   startTenderDeepDiagnostics: vi.fn(),
@@ -1309,5 +1310,66 @@ describe("ApplicationSettings ChatGPT connection", () => {
         "The provider rejected the API key. Check the key and try again.",
       ),
     ).toBeTruthy();
+  });
+
+  it("points new Tenders at a model provider when it is chosen", async () => {
+    const stored = {
+      connections: [
+        {
+          id: "OPENROUTER",
+          display_name: "OpenRouter",
+          route: "openai_compatible" as const,
+          base_url: "https://openrouter.ai/api/v1",
+          model_id: "anthropic/claude-sonnet-4.5",
+          has_api_key: true,
+          is_active: false,
+        },
+      ],
+      active_id: null,
+      file_path: "C:\Users\engineer\.quantix\.env",
+    };
+    host.inspectAiProviders.mockResolvedValue(stored);
+    host.setActiveAiProvider.mockResolvedValue({
+      ...stored,
+      active_id: "OPENROUTER",
+    });
+    host.useModelProvider.mockResolvedValue(disconnectedView());
+    renderSettings();
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use for new Tenders" }),
+    );
+
+    // Marking the preference is not the same as approving where work will run,
+    // so both records have to be written.
+    await waitFor(() => {
+      expect(host.setActiveAiProvider).toHaveBeenCalledWith("OPENROUTER");
+      expect(host.useModelProvider).toHaveBeenCalledWith("OPENROUTER");
+    });
+  });
+
+  it("cannot choose a provider that has no key to run with", async () => {
+    host.inspectAiProviders.mockResolvedValue({
+      connections: [
+        {
+          id: "GROQ",
+          display_name: "Groq",
+          route: "openai_compatible" as const,
+          base_url: "https://api.groq.com/openai/v1",
+          model_id: "llama-3.3-70b-versatile",
+          has_api_key: false,
+          is_active: false,
+        },
+      ],
+      active_id: null,
+      file_path: "C:\Users\engineer\.quantix\.env",
+    });
+    renderSettings();
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
+
+    const choose = await screen.findByRole("button", {
+      name: "Use for new Tenders",
+    });
+    expect(choose).toHaveProperty("disabled", true);
   });
 });

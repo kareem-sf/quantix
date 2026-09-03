@@ -340,6 +340,10 @@ export function probeAiProvider(id: string): Promise<AiProviderProbeResult> {
   return invoke<AiProviderProbeResult>("probe_ai_provider", { id });
 }
 
+export function useModelProvider(id: string): Promise<ApplicationSettingsView> {
+  return invoke<ApplicationSettingsView>("use_model_provider", { id });
+}
+
 export function updateGeneralApplicationPreferences(
   command: UpdateGeneralApplicationPreferencesCommand,
 ): Promise<ApplicationSettingsView> {
