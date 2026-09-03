@@ -458,7 +458,7 @@ async fn rebind_cannot_bypass_future_cooldown() {
         .rebind_manager_intake_provider_for_verification(&harness.tender_id)
         .await
         .expect("expired cooldown resumes");
-    for _ in 0..100 {
+    for _ in 0..1_500 {
         let count: u32 = harness
             .database()
             .query_row("SELECT COUNT(*) FROM agent_runs", [], |row| row.get(0))

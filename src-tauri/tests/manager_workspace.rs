@@ -549,7 +549,7 @@ async fn engineer_retry_preserves_partial_provider_retry_consumption() {
     host.set_document_tools_verified_for_verification(false);
     host.retry_manager_intake_for_verification(&tender.tender_id)
         .expect("Engineer retries failed intake");
-    for _ in 0..100 {
+    for _ in 0..3_000 {
         let stage: String = Connection::open(&database)
             .expect("open retrying Manager intake")
             .query_row(

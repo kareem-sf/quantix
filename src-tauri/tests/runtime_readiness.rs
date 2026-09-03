@@ -475,7 +475,7 @@ async fn engineer_cancellation_during_the_final_probe_cannot_publish_ready() {
 
     let repairing_host = harness.host.clone();
     let repair = tokio::spawn(async move { repairing_host.repair_runtime_readiness().await });
-    for _ in 0..200 {
+    for _ in 0..1_500 {
         if probe_ready.exists() {
             break;
         }

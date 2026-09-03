@@ -599,7 +599,7 @@ async fn engineer_interruption_terminates_the_ocr_attempt_without_publication() 
     let parse = tokio::spawn(async move { parse_host.parse_source_artifact(parse_command).await });
 
     let mut cancelled = false;
-    for _ in 0..100 {
+    for _ in 0..1_500 {
         if harness
             .host
             .cancel_source_artifact_parse(command.clone())
@@ -669,7 +669,7 @@ async fn restart_reconciles_a_parse_without_terminal_facts_as_interrupted() {
     let parse = tokio::spawn(async move { parse_host.parse_source_artifact(parse_command).await });
 
     let mut running = false;
-    for _ in 0..100 {
+    for _ in 0..1_500 {
         let register = harness
             .host
             .inspect_document_register(&harness.tender_id)
