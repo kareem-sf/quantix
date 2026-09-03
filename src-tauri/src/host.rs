@@ -302,6 +302,58 @@ impl QuantixHost {
         .await
     }
 
+    /// Send the smallest possible request to a stored provider so the Engineer can
+    /// see whether the endpoint, model and key actually work before a Tender depends
+    /// on them. A probe calls no tools, so it needs none of the approval plumbing a
+    /// real Agent Run does.
+    pub async fn probe_ai_provider(
+        &self,
+        id: &str,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<crate::provider_env::AiProviderProbeResult, TenderCommandError> {
+        use crate::agent_runtime::worker_lane::{WorkerOperation, WorkerRunRequest};
+
+        let connection = crate::provider_env::resolve_connection(self.application_home(), id)?;
+        let prepared = self
+            .prepare_worker_runtime(cancellation.clone())
+            .await
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::LocalDocumentToolsRequired))?;
+        if prepared.state != crate::managed_runtime::ManagedWorkerRuntimeState::Ready {
+            return Err(TenderCommandError::new(
+                TenderErrorCode::LocalDocumentToolsRequired,
+            ));
+        }
+
+        let request = WorkerRunRequest {
+            route: connection.route.as_str().to_owned(),
+            base_url: connection.base_url.clone(),
+            api_key: connection.api_key.clone(),
+            model_id: connection.model_id.clone(),
+            // Reasoning is a per-run choice, and several routes reject it outright.
+            reasoning: None,
+            instructions: "Reply with the single word OK.".to_owned(),
+            output_schema: None,
+            tools: Vec::new(),
+            input: "Reply with the single word OK.".to_owned(),
+            operation: WorkerOperation::Probe,
+            timeout: std::time::Duration::from_secs(60),
+        };
+
+        let outcome = crate::agent_runtime::worker_lane::run_worker_operation(
+            self.process_supervisor(),
+            &crate::managed_runtime::worker_python_path(&self.inner.application_home),
+            &self.inner.application_home,
+            &request,
+            cancellation,
+            |_, _| unreachable!("a probe never calls tools"),
+        )
+        .await;
+
+        Ok(crate::provider_env::AiProviderProbeResult::from_outcome(
+            outcome,
+        ))
+    }
+
     #[cfg(feature = "runtime-fixture")]
     pub async fn run_worker_operation_for_test(
         &self,

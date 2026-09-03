@@ -18,12 +18,27 @@ from pydantic_ai.output import StructuredDict
 MAX_LINE_BYTES = 8 * 1024 * 1024
 OPENAI_COMPATIBLE_BASE_URLS = {
     "openai": None,
+    "openai_compatible": None,
     "xai": "https://api.x.ai/v1",
 }
+
+# Routes that carry no built-in destination, so the host must supply one. Without
+# this check an "openai_compatible" request with no base_url would silently talk to
+# api.openai.com with a key meant for somewhere else.
+ROUTES_REQUIRING_BASE_URL = ("openai_compatible", "anthropic_compatible")
 
 
 class ProtocolError(Exception):
     pass
+
+
+class UnsupportedRequest(Exception):
+    """A well-formed request asking for something this route cannot do.
+
+    Distinct from ProtocolError: the host spoke correctly, so it gets a failure
+    frame explaining why rather than a process that exits with only a stderr line.
+    """
+
 
 
 class Worker:
@@ -89,6 +104,8 @@ def build_model(request):
     route = request["route"]
     base_url = request.get("base_url")
     api_key = request["api_key"]
+    if route in ROUTES_REQUIRING_BASE_URL and not base_url:
+        raise ProtocolError(f"route {route} requires a base_url")
     timeout_ms = int(request["budgets"]["timeout_ms"])
     http_client = httpx2.AsyncClient(
         trust_env=False,
@@ -141,7 +158,7 @@ def build_model_settings(request):
         return None
     if route in ("openai", "xai", "openai_compatible"):
         return {"openai_reasoning_effort": reasoning}
-    raise ProtocolError("reasoning control is not supported on this route yet")
+    raise UnsupportedRequest(f"reasoning control is not supported on route {route}")
 
 
 def run_probe(worker):
@@ -215,7 +232,7 @@ def run_turn(worker):
                 worker.failure("budget", "tool round limit reached")
                 return
             messages = run.all_messages()
-            deferred_results = gather_results(worker, run.output)
+            deferred_results = gather_results(worker, run.output, rounds)
             continue
         usage = run.usage
         worker.emit(
@@ -240,13 +257,14 @@ def run_turn(worker):
         return
 
 
-def gather_results(worker, requests):
+def gather_results(worker, requests, round_number):
     results = DeferredToolResults()
     pending = {call.tool_call_id: call for call in requests.calls}
     for call in requests.calls:
         worker.emit(
             {
                 "kind": "approval_request",
+                "round": round_number,
                 "tool_call_id": call.tool_call_id,
                 "tool_name": call.tool_name,
                 "arguments": call.args,
@@ -295,10 +313,17 @@ def main():
         watchdog(int(request["budgets"]["timeout_ms"]) / 1000 + 60)
         try:
             run_operation(request, worker)
-        except ProtocolError:
-            raise
         except SystemExit:
             raise
+        except UnsupportedRequest as error:
+            worker.failure("protocol", str(error))
+        except ProtocolError as error:
+            # Once the worker exists the host is listening, so report the reason on
+            # the wire. Exiting here instead would reach Rust as an opaque process
+            # failure with the detail only on stderr.
+            if worker.finished:
+                raise
+            worker.failure("protocol", str(error))
         except Exception as error:
             worker.failure("provider", f"{type(error).__name__}: {error}")
         return

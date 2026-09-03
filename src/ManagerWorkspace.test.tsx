@@ -103,7 +103,11 @@ const host = vi.hoisted(() => ({
   disconnectChatGpt: vi.fn(),
   rebindManagerIntakeProvider: vi.fn(),
   recordEngineerWorkspaceMessage: vi.fn(),
+  inspectAiProviders: vi.fn(),
   refreshApplicationSettings: vi.fn(),
+  removeAiProvider: vi.fn(),
+  saveAiProvider: vi.fn(),
+  setActiveAiProvider: vi.fn(),
   repairRuntimeReadiness: vi.fn(),
   reviseTender: vi.fn(),
   resumeManagerIntakes: vi.fn(),
@@ -299,6 +303,7 @@ const projection: ManagerWorkspaceProjection = {
   },
   external_rfis: [],
   estimate: null,
+  pricing: null,
   intake: null,
   ai_execution: {
     revision: 1n,
@@ -1405,6 +1410,11 @@ function readyApplicationSettings(): ApplicationSettingsView {
 }
 
 beforeEach(() => {
+  host.inspectAiProviders.mockResolvedValue({
+    connections: [],
+    active_id: null,
+    file_path: "C:\Users\engineer\.quantix\.env",
+  });
   host.inspectPackageIntakeProgress.mockResolvedValue(null);
   host.inspectCurrentBidDecisionPackage.mockResolvedValue(null);
   host.inspectCurrentWorkPlan.mockResolvedValue(null);
@@ -3582,15 +3592,13 @@ describe("ManagerWorkspace", () => {
     expect(
       screen.getByRole("button", { name: "About & Diagnostics" }),
     ).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "ChatGPT & Models" }));
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
     fireEvent.click(screen.getByText("Advanced model settings"));
     fireEvent.click(screen.getByRole("button", { name: /Live model A/ }));
     expect(screen.getByRole("option", { name: /^Live model A/ })).toBeTruthy();
     expect(screen.getByRole("option", { name: /^Live model B/ })).toBeTruthy();
     fireEvent.click(screen.getByRole("option", { name: /^Live model B/ }));
-    expect(
-      screen.getByRole("heading", { name: "ChatGPT & Models" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "AI Providers" })).toBeTruthy();
 
     await waitFor(() => {
       expect(host.updateAiExecutionSelection).toHaveBeenCalledWith({
@@ -3797,7 +3805,7 @@ describe("ManagerWorkspace", () => {
     render(<ManagerWorkspace />);
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     fireEvent.click(
-      await screen.findByRole("button", { name: "ChatGPT & Models" }),
+      await screen.findByRole("button", { name: "AI Providers" }),
     );
     expect(
       await screen.findByText("ChatGPT is ready for new Tenders."),
@@ -4142,7 +4150,7 @@ describe("ManagerWorkspace", () => {
     render(<ManagerWorkspace />);
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     fireEvent.click(
-      await screen.findByRole("button", { name: "ChatGPT & Models" }),
+      await screen.findByRole("button", { name: "AI Providers" }),
     );
     fireEvent.click(
       await screen.findByRole("button", { name: "Connect ChatGPT" }),
@@ -4202,7 +4210,7 @@ describe("ManagerWorkspace", () => {
     render(<ManagerWorkspace />);
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     fireEvent.click(
-      await screen.findByRole("button", { name: "ChatGPT & Models" }),
+      await screen.findByRole("button", { name: "AI Providers" }),
     );
     fireEvent.click(await screen.findByText("Having trouble signing in?"));
     fireEvent.click(
@@ -4214,7 +4222,14 @@ describe("ManagerWorkspace", () => {
     expect(
       screen.getByRole("button", { name: "Open OpenAI sign-in page" }),
     ).toBeTruthy();
-    expect(document.body.textContent).not.toMatch(/API key|accessToken|OAuth/i);
+    // Scoped to the ChatGPT card: that sign-in flow must never show credential
+    // jargon or token material. The separate model-provider section on this pane
+    // does legitimately carry an "API key" field for bring-your-own-key providers.
+    const chatgptCard = document.querySelector(
+      ".application-settings__chatgpt-card",
+    );
+    expect(chatgptCard).toBeTruthy();
+    expect(chatgptCard?.textContent).not.toMatch(/API key|accessToken|OAuth/i);
   });
 
   it("keeps the Host-designated meaningful message visible after routine chatter", async () => {
@@ -4592,6 +4607,7 @@ describe("ManagerWorkspace", () => {
       capability_readiness: null,
       external_rfis: [],
       estimate: null,
+      pricing: null,
       doctor_blockers: [],
     };
     host.inspectManagerWorkspace.mockResolvedValue(empty);

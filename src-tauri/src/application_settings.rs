@@ -47,6 +47,13 @@ pub enum ProviderConnectionStatus {
 #[ts(export)]
 pub enum ProviderReasoningSelection {
     ProviderDefault,
+    /// Persisted as `codex_effort` before the provider-neutral rename in 162dfac. The
+    /// tag is part of the on-disk settings format, so the old spelling has to keep
+    /// parsing or every installation written before that commit fails to load its
+    /// settings — which fails every connection save and leaves the UI with nothing to
+    /// show. Serialization always uses the current name, so stored rows heal on the
+    /// next write.
+    #[serde(alias = "codex_effort")]
     Effort(String),
 }
 
@@ -1353,6 +1360,58 @@ mod tests {
             .ai_execution_approval
             .is_none());
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn settings_written_before_the_reasoning_rename_still_load() {
+        // Verbatim shape of an installation written before 162dfac renamed
+        // CodexEffort to Effort. Losing this compatibility silently breaks every
+        // pre-existing installation: the settings row stops parsing, so saving a
+        // provider connection fails and Settings never receives one to display.
+        let stored = r#"{
+            "general_preferences": {
+                "appearance": "system",
+                "reduced_motion": false,
+                "larger_text": false,
+                "notify_when_attention_needed": true
+            },
+            "ai_execution_selection": {
+                "connection_id": "codex_chatgpt",
+                "provider": "codex",
+                "model_id": "gpt-5.3-codex-spark",
+                "reasoning": { "kind": "codex_effort", "value": "low" },
+                "catalogue_fetched_at": "chatgpt-direct-v1",
+                "adapter_version": "chatgpt-direct-v1"
+            },
+            "ai_execution_approval": {
+                "connection_id": "codex_chatgpt",
+                "provider": "codex",
+                "account_fingerprint": "967e4e50",
+                "model_id": "gpt-5.3-codex-spark",
+                "reasoning": { "kind": "codex_effort", "value": "low" },
+                "data_destination": "ChatGPT subscription",
+                "approved_at": "2026-08-23T03:39:43.1440419Z"
+            }
+        }"#;
+
+        let settings: StoredApplicationSettings =
+            serde_json::from_str(stored).expect("settings predating the rename still parse");
+        assert_eq!(
+            settings.ai_execution_selection.unwrap().reasoning,
+            ProviderReasoningSelection::Effort("low".to_owned())
+        );
+        assert_eq!(
+            settings.ai_execution_approval.unwrap().reasoning,
+            ProviderReasoningSelection::Effort("low".to_owned())
+        );
+    }
+
+    #[test]
+    fn reasoning_selection_serializes_under_the_current_tag() {
+        // The alias is read-only compatibility; new writes must use the current name.
+        let json = serde_json::to_string(&ProviderReasoningSelection::Effort("high".to_owned()))
+            .expect("reasoning selection serializes");
+        assert_eq!(json, r#"{"kind":"effort","value":"high"}"#);
     }
 
     #[test]

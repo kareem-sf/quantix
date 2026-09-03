@@ -787,6 +787,133 @@ button {
   background: var(--qx-hover);
 }
 
+.application-settings__providers {
+  display: grid;
+  gap: 14px;
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid var(--qx-border);
+}
+
+.application-settings__providers-heading {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.application-settings__providers-heading > button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.application-settings__providers-heading h3 {
+  font-size: 0.9rem;
+  font-weight: 620;
+}
+
+.application-settings__providers-heading p {
+  margin-top: 3px;
+  color: var(--qx-text-muted);
+  font-size: 0.78rem;
+}
+
+.application-settings__provider-list {
+  display: grid;
+  gap: 8px;
+}
+
+.application-settings__provider-list > li {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 14px;
+  border-radius: 12px;
+  background: var(--qx-surface);
+}
+
+.application-settings__provider-list > li > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.application-settings__provider-list span {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.application-settings__provider-list em {
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--qx-action);
+  background: var(--qx-selected);
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.application-settings__provider-list small {
+  overflow: hidden;
+  color: var(--qx-text-muted);
+  font-size: 0.73rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.application-settings__provider-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.application-settings__provider-form {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--qx-surface);
+}
+
+.application-settings__provider-form label,
+.application-settings__provider-field {
+  display: grid;
+  gap: 5px;
+}
+
+.application-settings__provider-form label > span {
+  font-size: 0.78rem;
+  font-weight: 560;
+}
+
+.application-settings__provider-form label > small {
+  color: var(--qx-text-muted);
+  font-size: 0.72rem;
+}
+
+.application-settings__provider-form input {
+  padding: 9px 11px;
+  border: 1px solid var(--qx-border);
+  border-radius: 9px;
+  background: var(--qx-background);
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.application-settings__provider-form input:read-only {
+  color: var(--qx-text-muted);
+  background: var(--qx-hover);
+}
+
+.application-settings__provider-form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
 .application-settings__disclosure svg {
   flex: 0 0 auto;
   margin-top: 2px;

@@ -1,8 +1,11 @@
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -14,6 +17,8 @@ use crate::process_supervisor::{ProcessSpec, ProcessSupervisor};
 use crate::runtime_readiness::RuntimeLayout;
 
 const MAX_BINARY_BYTES: u64 = 400 * 1024 * 1024;
+const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const DOWNLOAD_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const STAGING_PREFIX: &str = ".staging-";
 const PROVENANCE_FILE: &str = "provenance.json";
 
@@ -179,8 +184,15 @@ impl Download {
 
 pub fn network_fetch(url: &'static str) -> FetchFuture {
     Box::pin(async move {
+        // reqwest applies no timeout by default. Without these a proxy that accepts the
+        // connection and then goes silent parks the download forever, and the polled
+        // cancellation check between chunks never gets a chance to run. Bound the
+        // handshake and each read rather than the whole transfer, which is ~300 MB and
+        // legitimately slow on a poor link.
         let client = reqwest::Client::builder()
             .user_agent(concat!("quantix/", env!("CARGO_PKG_VERSION")))
+            .connect_timeout(DOWNLOAD_CONNECT_TIMEOUT)
+            .read_timeout(DOWNLOAD_READ_TIMEOUT)
             .build()
             .map_err(|error| error.to_string())?;
         let response = client
@@ -200,7 +212,7 @@ pub async fn prepare_release_from(
     cancellation: CancellationToken,
 ) -> Result<ManagedCodexRuntimeStatus, ManagedRuntimeError> {
     let binary = codex_binary_path(application_home, release.version);
-    if let Some(digest) = binary_sha256(&binary) {
+    if let Some(digest) = binary_sha256_async(&binary).await {
         if digest == release.sha256 {
             return Ok(inspect_release(application_home, release));
         }
@@ -218,7 +230,9 @@ pub async fn prepare_release_from(
         let _ = fs::remove_file(&staging);
         return Err(error);
     }
-    let digest = binary_sha256(&staging).ok_or(ManagedRuntimeError::IntegrityFailed)?;
+    let digest = binary_sha256_async(&staging)
+        .await
+        .ok_or(ManagedRuntimeError::IntegrityFailed)?;
     if digest != release.sha256 {
         let _ = fs::remove_file(&staging);
         return Err(ManagedRuntimeError::IntegrityFailed);
@@ -227,6 +241,11 @@ pub async fn prepare_release_from(
         fs::remove_file(&binary).map_err(ManagedRuntimeError::Io)?;
     }
     fs::rename(&staging, &binary).map_err(ManagedRuntimeError::Io)?;
+    // The bytes just passed their integrity check, so record the digest against the
+    // installed file rather than reading all of it back a second time below.
+    if let Some(identity) = binary_identity(&binary) {
+        remember_digest(identity, &digest);
+    }
     let provenance = serde_json::json!({
         "version": release.version,
         "sha256": release.sha256,
@@ -306,15 +325,91 @@ async fn download_to_staging(
     Err(ManagedRuntimeError::DownloadFailed(last_error))
 }
 
-fn binary_sha256(path: &Path) -> Option<String> {
-    let bytes = fs::read(path).ok()?;
-    Some(hex_sha256(&bytes))
+/// Cheaply observable identity of an installed binary. The managed Codex binary is
+/// ~300 MB, so hashing it on every readiness check is far too expensive to repeat;
+/// length plus modification time is enough to notice that a replacement happened,
+/// because Quantix is the only writer and always installs by rename.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct BinaryIdentity {
+    path: PathBuf,
+    len: u64,
+    modified: Option<Duration>,
 }
 
+fn binary_identity(path: &Path) -> Option<BinaryIdentity> {
+    let metadata = fs::metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|at| at.duration_since(UNIX_EPOCH).ok());
+    Some(BinaryIdentity {
+        path: path.to_path_buf(),
+        len: metadata.len(),
+        modified,
+    })
+}
+
+fn verified_digests() -> &'static Mutex<HashMap<BinaryIdentity, String>> {
+    static VERIFIED: OnceLock<Mutex<HashMap<BinaryIdentity, String>>> = OnceLock::new();
+    VERIFIED.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remember_digest(identity: BinaryIdentity, digest: &str) {
+    if let Ok(mut cache) = verified_digests().lock() {
+        // The cache only ever holds the handful of runtime binaries Quantix installs.
+        if cache.len() > 32 {
+            cache.clear();
+        }
+        cache.insert(identity, digest.to_owned());
+    }
+}
+
+/// Hash a file by streaming it, and remember the result against its identity so a
+/// repeated check costs one `stat` instead of re-reading hundreds of megabytes.
+fn binary_sha256(path: &Path) -> Option<String> {
+    let identity = binary_identity(path)?;
+    if let Ok(cache) = verified_digests().lock() {
+        if let Some(digest) = cache.get(&identity) {
+            return Some(digest.clone());
+        }
+    }
+    let mut file = fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1024 * 1024];
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => hasher.update(&buffer[..read]),
+            Err(_) => return None,
+        }
+    }
+    let digest = hex_digest(hasher.finalize());
+    remember_digest(identity, &digest);
+    Some(digest)
+}
+
+/// `binary_sha256` off the async runtime. Hashing a 300 MB binary takes seconds, and
+/// doing it inline on a worker thread starves every other task on the runtime.
+async fn binary_sha256_async(path: &Path) -> Option<String> {
+    let owned = path.to_path_buf();
+    tokio::task::spawn_blocking(move || binary_sha256(&owned))
+        .await
+        .ok()
+        .flatten()
+}
+
+#[cfg(test)]
 fn hex_sha256(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    let digest = hasher.finalize();
+    hex_digest(hasher.finalize())
+}
+
+fn hex_digest(digest: impl AsRef<[u8]>) -> String {
+    let digest = digest.as_ref();
     let mut hex = String::with_capacity(digest.len() * 2);
     for byte in digest {
         use std::fmt::Write;

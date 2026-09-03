@@ -11,6 +11,18 @@ use crate::process_supervisor::{
 pub(crate) const WORKER_MAX_TOOL_ROUNDS: u32 = 32;
 const WORKER_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 
+/// Routes whose SDKs accept no reasoning-effort setting. Sending one fails the whole
+/// operation, so it is dropped here — the single point every caller passes through —
+/// rather than trusted to each call site.
+const ROUTES_WITHOUT_REASONING_CONTROL: [&str; 3] = ["anthropic", "anthropic_compatible", "google"];
+
+fn effective_reasoning(request: &WorkerRunRequest) -> Option<&str> {
+    if ROUTES_WITHOUT_REASONING_CONTROL.contains(&request.route.as_str()) {
+        return None;
+    }
+    request.reasoning.as_deref()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkerFailureCategory {
     Auth,
@@ -190,7 +202,7 @@ async fn exchange(
         "base_url": request.base_url,
         "api_key": request.api_key,
         "model_id": request.model_id,
-        "reasoning": request.reasoning,
+        "reasoning": effective_reasoning(request),
         "instructions": request.instructions,
         "output_schema": request.output_schema,
         "tools": request
@@ -226,7 +238,16 @@ async fn exchange(
                 saw_ready = true;
             }
             Some("approval_request") => {
-                rounds += 1;
+                // The worker emits one frame per tool call but budgets per round, so
+                // counting frames here would trip the ceiling N times too fast whenever
+                // a turn requests several tools at once. Track the round the worker
+                // reports instead, and fall back to counting frames only if an older
+                // worker omits it.
+                let reported_round = frame
+                    .get("round")
+                    .and_then(Value::as_u64)
+                    .map(|round| round as u32);
+                rounds = reported_round.unwrap_or(rounds + 1).max(rounds);
                 if rounds > WORKER_MAX_TOOL_ROUNDS {
                     return Err(WorkerDriverError {
                         category: WorkerFailureCategory::Budget,

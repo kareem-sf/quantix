@@ -9,3 +9,5 @@ src-tauri/target*
 *.md
 
 src-tauri/runtime/ai-worker/.venv/
+
+.remember/tmp

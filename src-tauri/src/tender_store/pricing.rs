@@ -29,8 +29,9 @@ use super::{
         EstimateRunIntegrityRequest, PlannedRunRequest,
     },
     lock_mutex_with_check, random_identifier, sha256_hex, sql_error, sqlite_timestamp,
+    workspace::append_manager_message,
     BidPackageOperationBudget, QuantixHost, TenderCommandError, TenderErrorCode, TenderId,
-    TenderStore,
+    TenderOfficeMessageKind, TenderStore,
 };
 
 const MAX_BASELINE_VERSIONS: u32 = 32;
@@ -3660,6 +3661,15 @@ impl TenderStore {
                 ],
             )
             .map_err(sql_error)?;
+        append_manager_message(
+            &transaction,
+            TenderOfficeMessageKind::Status,
+            &format!(
+                "Approved Priced Cost Baseline {} v{} at {} {} after its independent review passed. Reviewed cost adjustments and the commercial strategy can now be built on this exact baseline.",
+                baseline.baseline_id, baseline.version, baseline.amount, baseline.currency
+            ),
+            &created_at,
+        )?;
         transaction.commit().map_err(sql_error)?;
         load_priced_cost_baseline_with_check(
             &self.connection,
@@ -4619,6 +4629,17 @@ impl TenderStore {
                 ],
             )
             .map_err(sql_error)?;
+        append_manager_message(
+            &transaction,
+            TenderOfficeMessageKind::Status,
+            &format!(
+                "Approved the commercial strategy from reviewed adjustment {} v{} with the exact appetite \"{}\". Pricing scenarios can now be created from this strategy.",
+                strategy.reviewed_input.adjustment_id,
+                strategy.reviewed_input.version,
+                strategy.commercial_appetite
+            ),
+            &created_at,
+        )?;
         transaction.commit().map_err(sql_error)?;
         load_strategy_with_check(&self.connection, &command.strategy_id, &mut || {
             budget.check()
@@ -4886,6 +4907,15 @@ impl TenderStore {
                 [&selection_id],
             )
             .map_err(sql_error)?;
+        append_manager_message(
+            &transaction,
+            TenderOfficeMessageKind::Status,
+            &format!(
+                "Selected pricing scenario \"{}\" v{} at {} {} from its exact reviewed inputs. The Tender Price can now be approved from this scenario.",
+                scenario.name, scenario.version, scenario.calculation.final_amount, scenario.calculation.currency
+            ),
+            &created_at,
+        )?;
         transaction.commit().map_err(sql_error)?;
         load_scenario_with_check(
             &self.connection,
@@ -4975,8 +5005,17 @@ impl TenderStore {
         transaction.execute(
             "INSERT INTO approved_tender_prices (approval_id, pricing_scenario_id, pricing_scenario_version, scenario_manifest_sha256, selection_id, strategy_approval_id, pricing_calculation_run_id, calculation_manifest_sha256, final_amount, currency, rationale, approved_by, acting_role, audit_sequence, manifest_json, manifest_sha256, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'engineer_user', 'engineer_in_the_loop', ?12, ?13, ?14, ?15)",
-            params![approval_id, scenario.pricing_scenario_id, scenario.version, scenario.manifest_sha256, selection.selection_id, strategy_approval.approval_id, scenario.calculation.pricing_calculation_run_id, scenario.calculation.manifest_sha256, scenario.calculation.final_amount, scenario.calculation.currency, command.rationale.trim(), audit_sequence, manifest_json, manifest_sha256, created_at],
+             params![approval_id, scenario.pricing_scenario_id, scenario.version, scenario.manifest_sha256, selection.selection_id, strategy_approval.approval_id, scenario.calculation.pricing_calculation_run_id, scenario.calculation.manifest_sha256, scenario.calculation.final_amount, scenario.calculation.currency, command.rationale.trim(), audit_sequence, manifest_json, manifest_sha256, created_at],
         ).map_err(sql_error)?;
+        append_manager_message(
+            &transaction,
+            TenderOfficeMessageKind::Status,
+            &format!(
+                "Approved the Tender Price at {} {} from pricing scenario \"{}\" v{}. This exact price and its complete calculation basis are now the approved price of record for this Tender.",
+                scenario.calculation.final_amount, scenario.calculation.currency, scenario.name, scenario.version
+            ),
+            &created_at,
+        )?;
         transaction.commit().map_err(sql_error)?;
         load_scenario_with_check(
             &self.connection,

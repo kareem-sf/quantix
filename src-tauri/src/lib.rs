@@ -12,6 +12,7 @@ mod embedding;
 mod host;
 mod managed_runtime;
 mod process_supervisor;
+mod provider_env;
 mod release_gate;
 mod runtime_readiness;
 mod setup;
@@ -259,9 +260,10 @@ pub use tender_store::{
     WorkspaceDoctorBlockerArea, WorkspaceDoctorBlockerSummary, WorkspaceEstimateStatus,
     WorkspaceEstimateSummary, WorkspaceExternalRfiStatus, WorkspaceExternalRfiSummary,
     WorkspaceFilesSummary, WorkspaceMessageReference, WorkspaceMessageReferenceKind,
-    WorkspaceOutputReference, WorkspaceSearchGroup, WorkspaceSearchHit, WorkspaceSearchProjection,
-    WorkspaceSearchResultKind, WorkspaceTaskRow, WorkspaceTaskState, WorkspaceTeamSummary,
-    WorkspaceTenderDocument, WorkspaceWorkSummary,
+    WorkspaceOutputReference, WorkspacePricingBaselineStatus, WorkspacePricingSummary,
+    WorkspaceSearchGroup, WorkspaceSearchHit, WorkspaceSearchProjection, WorkspaceSearchResultKind,
+    WorkspaceTaskRow, WorkspaceTaskState, WorkspaceTeamSummary, WorkspaceTenderDocument,
+    WorkspaceTenderPriceState, WorkspaceWorkSummary,
 };
 pub use update::{
     current_application_artifact_is_restorable, current_update_platform,
@@ -874,6 +876,47 @@ mod tauri_commands {
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
         host.inner().inspect_application_settings()
+    }
+
+    #[tauri::command]
+    pub(super) fn inspect_ai_providers(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<crate::provider_env::AiProviderSettingsView, TenderCommandError> {
+        crate::provider_env::inspect(host.inner().application_home())
+    }
+
+    #[tauri::command]
+    pub(super) fn save_ai_provider(
+        host: tauri::State<'_, QuantixHost>,
+        command: crate::provider_env::SaveAiProviderCommand,
+    ) -> Result<crate::provider_env::AiProviderSettingsView, TenderCommandError> {
+        crate::provider_env::save_connection(host.inner().application_home(), command)
+    }
+
+    #[tauri::command]
+    pub(super) fn remove_ai_provider(
+        host: tauri::State<'_, QuantixHost>,
+        id: String,
+    ) -> Result<crate::provider_env::AiProviderSettingsView, TenderCommandError> {
+        crate::provider_env::remove_connection(host.inner().application_home(), &id)
+    }
+
+    #[tauri::command]
+    pub(super) async fn probe_ai_provider(
+        host: tauri::State<'_, QuantixHost>,
+        id: String,
+    ) -> Result<crate::provider_env::AiProviderProbeResult, TenderCommandError> {
+        let host = host.inner().clone();
+        host.probe_ai_provider(&id, tokio_util::sync::CancellationToken::new())
+            .await
+    }
+
+    #[tauri::command]
+    pub(super) fn set_active_ai_provider(
+        host: tauri::State<'_, QuantixHost>,
+        id: String,
+    ) -> Result<crate::provider_env::AiProviderSettingsView, TenderCommandError> {
+        crate::provider_env::set_active_connection(host.inner().application_home(), &id)
     }
 
     #[tauri::command]
@@ -3393,6 +3436,11 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::list_tenders,
             tauri_commands::refresh_application_settings,
             tauri_commands::inspect_application_settings,
+            tauri_commands::inspect_ai_providers,
+            tauri_commands::save_ai_provider,
+            tauri_commands::remove_ai_provider,
+            tauri_commands::probe_ai_provider,
+            tauri_commands::set_active_ai_provider,
             tauri_commands::update_general_application_preferences,
             tauri_commands::update_ai_execution_selection,
             tauri_commands::inspect_tender_ai_execution,

@@ -10,11 +10,12 @@ use crate::tender_intake::PackageIntakeControl;
 use crate::{QuantixHost, TenderPackageSourceKind};
 
 use super::{
-    append_audit_event, metadata_is_unsafe_storage_link, random_identifier, require_setup,
-    sha256_hex, sql_error, sqlite_timestamp, storage_publication_failpoint, store_unavailable,
-    tender_records::insert_engineer_entry, ManagerIntakeStage, ManagerIntakeStatus,
-    TenderAiExecutionBinding, TenderAiSelectionReadiness, TenderCommandError, TenderErrorCode,
-    TenderId, TenderLifecyclePhase, TenderStore, WorkPlanCapabilityGap, WorkspaceMessageReference,
+    append_audit_event, metadata_is_unsafe_storage_link, pricing::PricedCostBaselineReviewOutcome,
+    random_identifier, require_setup, sha256_hex, sql_error, sqlite_timestamp,
+    storage_publication_failpoint, store_unavailable, tender_records::insert_engineer_entry,
+    BidPackageOperationBudget, ManagerIntakeStage, ManagerIntakeStatus, TenderAiExecutionBinding,
+    TenderAiSelectionReadiness, TenderCommandError, TenderErrorCode, TenderId,
+    TenderLifecyclePhase, TenderStore, WorkPlanCapabilityGap, WorkspaceMessageReference,
     WorkspaceTenderDocument, MAX_TENDER_NAME_BYTES,
 };
 
@@ -198,6 +199,7 @@ pub enum WorkspaceActionKind {
     ReviewExternalRfi,
     InterpretExternalRfiResponse,
     ReviewBasisOfEstimate,
+    ReviewPricing,
     TenderDeclined,
 }
 
@@ -246,6 +248,45 @@ pub struct WorkspaceEstimateSummary {
     pub boq_row_count: u32,
     pub finding_count: u32,
     pub calculation_run_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum WorkspacePricingBaselineStatus {
+    AwaitingReview,
+    ReviewFailed,
+    AwaitingApproval,
+    Approved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum WorkspaceTenderPriceState {
+    AwaitingApproval,
+    Approved,
+    Revoked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspacePricingSummary {
+    pub baseline_id: String,
+    pub baseline_version: u32,
+    pub baseline_current: bool,
+    pub baseline_status: WorkspacePricingBaselineStatus,
+    pub baseline_finding_count: u32,
+    pub baseline_amount: String,
+    pub baseline_currency: String,
+    pub strategy_awaiting_approval: bool,
+    pub adjustments_awaiting_review: u32,
+    pub adjustments_awaiting_approval: u32,
+    pub scenario_selection_pending: bool,
+    pub selected_scenario_name: Option<String>,
+    pub tender_price_state: Option<WorkspaceTenderPriceState>,
+    pub tender_price_amount: Option<String>,
+    pub tender_price_currency: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -428,6 +469,7 @@ pub struct ManagerWorkspaceProjection {
     pub team: WorkspaceTeamSummary,
     pub external_rfis: Vec<WorkspaceExternalRfiSummary>,
     pub estimate: Option<WorkspaceEstimateSummary>,
+    pub pricing: Option<WorkspacePricingSummary>,
     pub intake: Option<ManagerIntakeStatus>,
     pub ai_execution: Option<TenderAiExecutionBinding>,
     pub capability_readiness: Option<WorkspaceCapabilityReadiness>,
@@ -574,6 +616,7 @@ struct WorkspaceSnapshot {
     team: WorkspaceTeamSummary,
     external_rfis: Vec<WorkspaceExternalRfiSummary>,
     estimate: Option<WorkspaceEstimateSummary>,
+    pricing: Option<WorkspacePricingSummary>,
     intake: Option<ManagerIntakeStatus>,
     ai_execution: TenderAiExecutionBinding,
     capability_readiness: WorkspaceCapabilityReadiness,
@@ -601,12 +644,14 @@ impl TenderStore {
         let doctor_blockers = workspace_doctor_blockers(&ai_execution, &capability_readiness);
         let external_rfis = self.workspace_external_rfi_summaries()?;
         let estimate = self.workspace_estimate_summary()?;
+        let pricing = self.workspace_pricing_summary()?;
         let current_action = self.workspace_current_action(
             summary.lifecycle_phase,
             &work,
             intake.as_ref(),
             &external_rfis,
             estimate.as_ref(),
+            pricing.as_ref(),
         )?;
         let safe_terminal_boundary = self.retention_boundary_is_safe()?;
         let tender = ManagerWorkspaceTender {
@@ -633,6 +678,7 @@ impl TenderStore {
             team,
             external_rfis,
             estimate,
+            pricing,
             intake,
             ai_execution,
             capability_readiness,
@@ -1416,11 +1462,15 @@ impl TenderStore {
         intake: Option<&ManagerIntakeStatus>,
         external_rfis: &[WorkspaceExternalRfiSummary],
         estimate: Option<&WorkspaceEstimateSummary>,
+        pricing: Option<&WorkspacePricingSummary>,
     ) -> Result<WorkspaceCurrentAction, TenderCommandError> {
         if let Some(action) = self.workspace_external_rfi_action(external_rfis)? {
             return Ok(action);
         }
         if let Some(action) = self.workspace_estimate_action(estimate) {
+            return Ok(action);
+        }
+        if let Some(action) = workspace_pricing_action(pricing) {
             return Ok(action);
         }
         let action = match phase {
@@ -1935,6 +1985,121 @@ impl TenderStore {
             "Review estimate basis",
             true,
         ))
+    }
+
+    fn workspace_pricing_summary(
+        &self,
+    ) -> Result<Option<WorkspacePricingSummary>, TenderCommandError> {
+        let pricing_exists: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM priced_cost_baselines)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if !pricing_exists {
+            return Ok(None);
+        }
+        let budget = BidPackageOperationBudget::from_connection(&self.connection)?;
+        let inspection =
+            super::pricing::inspect_pricing_workspace_in_connection(&self.connection, budget)?;
+        let Some(baseline) = inspection.baseline else {
+            return Ok(None);
+        };
+        let baseline_status = if baseline.approval.is_some() {
+            WorkspacePricingBaselineStatus::Approved
+        } else {
+            match baseline.review.as_ref().map(|review| review.outcome) {
+                Some(PricedCostBaselineReviewOutcome::Passed) => {
+                    WorkspacePricingBaselineStatus::AwaitingApproval
+                }
+                Some(PricedCostBaselineReviewOutcome::Failed) => {
+                    WorkspacePricingBaselineStatus::ReviewFailed
+                }
+                None => WorkspacePricingBaselineStatus::AwaitingReview,
+            }
+        };
+        let strategy_awaiting_approval = inspection
+            .strategies
+            .iter()
+            .any(|strategy| strategy.current && strategy.approval.is_none());
+        let mut adjustments_awaiting_review = 0_u32;
+        let mut adjustments_awaiting_approval = 0_u32;
+        for adjustment in &inspection.adjustments {
+            if !adjustment.current || adjustment.approval.is_some() {
+                continue;
+            }
+            match adjustment.review.as_ref().map(|review| review.outcome) {
+                None => adjustments_awaiting_review += 1,
+                Some(PricedCostBaselineReviewOutcome::Passed) => adjustments_awaiting_approval += 1,
+                Some(PricedCostBaselineReviewOutcome::Failed) => {}
+            }
+        }
+        let head_selection: Option<(String, String, u32)> = self
+            .connection
+            .query_row(
+                "SELECT selections.selection_id, selections.pricing_scenario_id,
+                        selections.pricing_scenario_version
+                 FROM pricing_selection_head AS heads
+                 JOIN pricing_scenario_selections AS selections
+                   ON selections.selection_id = heads.selection_id
+                 WHERE heads.singleton = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let selected_scenario =
+            head_selection
+                .as_ref()
+                .and_then(|(_, scenario_id, scenario_version)| {
+                    inspection.scenarios.iter().find(|scenario| {
+                        scenario.pricing_scenario_id == *scenario_id
+                            && scenario.version == *scenario_version
+                    })
+                });
+        let scenario_selection_pending = head_selection.is_none()
+            && inspection.scenarios.iter().any(|scenario| scenario.current);
+        let (tender_price_state, tender_price_amount, tender_price_currency) =
+            match selected_scenario {
+                None => (None, None, None),
+                Some(scenario) if !scenario.current => {
+                    (Some(WorkspaceTenderPriceState::Revoked), None, None)
+                }
+                Some(scenario) => match scenario.approved_tender_price.as_ref() {
+                    Some(price) => (
+                        Some(WorkspaceTenderPriceState::Approved),
+                        Some(price.amount.clone()),
+                        Some(price.currency.clone()),
+                    ),
+                    None => (
+                        Some(WorkspaceTenderPriceState::AwaitingApproval),
+                        None,
+                        None,
+                    ),
+                },
+            };
+        Ok(Some(WorkspacePricingSummary {
+            baseline_id: baseline.baseline_id.clone(),
+            baseline_version: baseline.version,
+            baseline_current: baseline.current,
+            baseline_status,
+            baseline_finding_count: baseline
+                .review
+                .as_ref()
+                .map_or(0, |review| review.findings.len() as u32),
+            baseline_amount: baseline.amount.clone(),
+            baseline_currency: baseline.currency.clone(),
+            strategy_awaiting_approval,
+            adjustments_awaiting_review,
+            adjustments_awaiting_approval,
+            scenario_selection_pending,
+            selected_scenario_name: selected_scenario.map(|scenario| scenario.name.clone()),
+            tender_price_state,
+            tender_price_amount,
+            tender_price_currency,
+        }))
     }
 }
 
@@ -2489,6 +2654,7 @@ fn projection_from_snapshot(
         team: snapshot.team,
         external_rfis: snapshot.external_rfis,
         estimate: snapshot.estimate,
+        pricing: snapshot.pricing,
         intake: snapshot.intake,
         ai_execution: Some(snapshot.ai_execution),
         capability_readiness: Some(snapshot.capability_readiness),
@@ -2668,6 +2834,68 @@ fn workspace_doctor_blockers(
     blockers
 }
 
+fn workspace_pricing_action(
+    pricing: Option<&WorkspacePricingSummary>,
+) -> Option<WorkspaceCurrentAction> {
+    let pricing = pricing?;
+    let (title, summary_text) = if !pricing.baseline_current {
+        (
+            "Replace the stale priced cost baseline",
+            "The priced cost baseline was built on an older Basis of Estimate, so it can no longer support pricing. Establish a new baseline version from the current approved basis.",
+        )
+    } else {
+        match pricing.baseline_status {
+            WorkspacePricingBaselineStatus::AwaitingReview => (
+                "Review the priced cost baseline",
+                "The expected delivery cost is recorded as a controlled baseline tied to the approved Basis of Estimate. It needs independent review before you approve it for commercial pricing.",
+            ),
+            WorkspacePricingBaselineStatus::ReviewFailed => (
+                "Resolve the baseline review findings",
+                "The independent review found problems in the priced cost baseline. Establish a corrected baseline version that remediates the exact findings.",
+            ),
+            WorkspacePricingBaselineStatus::AwaitingApproval => (
+                "Approve the priced cost baseline",
+                "The independent review passed. Your approval binds the exact baseline version and its expected cost before commercial pricing may rely on it.",
+            ),
+            WorkspacePricingBaselineStatus::Approved if pricing.strategy_awaiting_approval => (
+                "Approve the commercial strategy",
+                "The commercial strategy is built from an exact reviewed adjustment. Your approval binds its stated appetite, exclusions, and qualifications before pricing scenarios can use it.",
+            ),
+            WorkspacePricingBaselineStatus::Approved
+                if pricing.adjustments_awaiting_review > 0 =>
+            (
+                "Review the pricing adjustment",
+                "A cost or commercial adjustment is waiting for its independent review. Every adjustment must be a reviewed, attributable input before a pricing scenario can use it.",
+            ),
+            WorkspacePricingBaselineStatus::Approved
+                if pricing.adjustments_awaiting_approval > 0 =>
+            (
+                "Approve the pricing adjustment",
+                "The independent review passed for a pricing adjustment. Your approval binds the exact adjustment version and amount before scenarios can include it.",
+            ),
+            WorkspacePricingBaselineStatus::Approved if pricing.scenario_selection_pending => (
+                "Choose the pricing scenario",
+                "The calculated pricing scenarios are ready. Compare their exact results and select the one the Tender will stand on.",
+            ),
+            WorkspacePricingBaselineStatus::Approved
+                if pricing.tender_price_state
+                    == Some(WorkspaceTenderPriceState::AwaitingApproval) =>
+            (
+                "Approve the Tender Price",
+                "The selected scenario is calculated and current. Your approval records the exact Tender Price and its complete calculation basis.",
+            ),
+            WorkspacePricingBaselineStatus::Approved => return None,
+        }
+    };
+    Some(action(
+        WorkspaceActionKind::ReviewPricing,
+        title,
+        summary_text,
+        "Review pricing",
+        true,
+    ))
+}
+
 fn empty_projection(catalogue: Vec<ManagerWorkspaceTender>) -> ManagerWorkspaceProjection {
     ManagerWorkspaceProjection {
         catalogue,
@@ -2685,6 +2913,7 @@ fn empty_projection(catalogue: Vec<ManagerWorkspaceTender>) -> ManagerWorkspaceP
         team: WorkspaceTeamSummary::default(),
         external_rfis: Vec::new(),
         estimate: None,
+        pricing: None,
         intake: None,
         ai_execution: None,
         capability_readiness: None,

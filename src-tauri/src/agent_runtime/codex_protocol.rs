@@ -765,8 +765,33 @@ fn normalize_rpc_error(message: &Value, turn_accepted: bool) -> ProviderFailure 
     match codex_error_info(message.get("error")) {
         Some("unauthorized") => authentication_lost_failure(),
         Some("usageLimitExceeded" | "serverOverloaded") => rate_limit_failure(),
+        _ if rpc_error_reports_lost_authentication(message.get("error")) => {
+            authentication_lost_failure()
+        }
         _ => process_failure(turn_accepted),
     }
+}
+
+/// Codex tags most failures with `codexErrorInfo`, but it reports some authentication
+/// problems as a plain JSON-RPC error instead. A ChatGPT session whose token has expired
+/// answers `account/read` with "plan type is required for chatgpt authentication" — the
+/// plan is unreadable because the token is stale, not because the account lacks one.
+/// Untagged, that becomes an opaque process failure and the caller retries forever
+/// instead of offering to sign in again, so recognise the shape here.
+///
+/// Matching on wording is unavoidably brittle; it is a fallback for untagged errors only,
+/// and every tagged error is still classified above.
+fn rpc_error_reports_lost_authentication(error: Option<&Value>) -> bool {
+    error
+        .and_then(|value| value.get("message"))
+        .and_then(Value::as_str)
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|message| {
+            message.contains("chatgpt authentication")
+                || message.contains("not logged in")
+                || message.contains("login required")
+                || message.contains("re-authenticate")
+        })
 }
 
 fn normalize_turn_error(params: &Value) -> ProviderFailure {
@@ -880,5 +905,49 @@ mod tests {
 
         assert!(specification.get("inputSchema").is_some());
         assert!(specification.get("parameters").is_none());
+    }
+
+    #[test]
+    fn untagged_stale_session_errors_are_reported_as_lost_authentication() {
+        // Verbatim reply from codex 0.151.0 `account/read` when the stored ChatGPT
+        // token has expired. It carries no codexErrorInfo, so without the message
+        // fallback it degrades to an opaque process failure and Settings can never
+        // offer to sign in again.
+        let message = json!({
+            "id": 1,
+            "error": { "code": -32600, "message": "plan type is required for chatgpt authentication" }
+        });
+        assert_eq!(
+            normalize_rpc_error(&message, false).category,
+            ProviderFailureCategory::AuthenticationRequired
+        );
+    }
+
+    #[test]
+    fn untagged_unrelated_errors_stay_process_failures() {
+        let message = json!({
+            "id": 1,
+            "error": { "code": -32603, "message": "internal error while reading the thread" }
+        });
+        assert_eq!(
+            normalize_rpc_error(&message, false).category,
+            ProviderFailureCategory::ProcessFailed
+        );
+    }
+
+    #[test]
+    fn tagged_errors_still_win_over_the_message_fallback() {
+        let message = json!({
+            "id": 1,
+            "error": {
+                "code": -32600,
+                "message": "not logged in",
+                "codexErrorInfo": "usageLimitExceeded"
+            }
+        });
+        assert_eq!(
+            normalize_rpc_error(&message, false).category,
+            ProviderFailureCategory::RateLimited
+        );
     }
 }

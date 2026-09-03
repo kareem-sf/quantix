@@ -16,6 +16,10 @@ pub const MINIMUM_SETUP_FREE_SPACE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 pub(crate) const INSTALLATION_SCHEMA_VERSION: i64 = 25;
 const SETUP_MARKER: &str = ".setup-in-progress";
+/// Plain-text provider settings the Engineer may edit by hand. It lives in the
+/// Application Home, so it has to be a recognised entry — an unlisted file here
+/// fails the home inspection and blocks startup with "unrecognized data".
+pub(crate) const PROVIDER_ENVIRONMENT_FILE: &str = ".env";
 const INSTALLATION_DATABASE: &str = "installation.sqlite";
 const INSTALLATION_DATABASE_COMPANIONS: [&str; 3] = [
     "installation.sqlite-journal",
@@ -737,6 +741,7 @@ fn is_known_application_entry(name: &OsStr) -> bool {
         .any(|directory| name == OsStr::new(directory))
         || [
             SETUP_MARKER,
+            PROVIDER_ENVIRONMENT_FILE,
             INSTALLATION_DATABASE,
             STAGED_INSTALLATION_DATABASE,
         ]

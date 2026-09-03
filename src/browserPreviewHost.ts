@@ -94,6 +94,7 @@ const emptyWorkspace: ManagerWorkspaceProjection = {
   capability_readiness: null,
   external_rfis: [],
   estimate: null,
+  pricing: null,
   doctor_blockers: [],
 };
 
@@ -431,6 +432,7 @@ function previewWorkspace(): ManagerWorkspaceProjection {
     },
     external_rfis: [],
     estimate: null,
+    pricing: null,
     doctor_blockers: [
       {
         code: "ai_selection_required",

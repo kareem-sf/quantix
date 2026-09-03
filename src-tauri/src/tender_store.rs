@@ -247,8 +247,9 @@ pub use workspace::{
     WorkspaceCapabilityReadinessState, WorkspaceCurrentAction, WorkspaceDoctorBlockerArea,
     WorkspaceDoctorBlockerSummary, WorkspaceEstimateStatus, WorkspaceEstimateSummary,
     WorkspaceExternalRfiStatus, WorkspaceExternalRfiSummary, WorkspaceFilesSummary,
-    WorkspaceOutputReference, WorkspaceSearchGroup, WorkspaceSearchHit, WorkspaceSearchProjection,
-    WorkspaceSearchResultKind, WorkspaceTaskRow, WorkspaceTaskState, WorkspaceTeamSummary,
+    WorkspaceOutputReference, WorkspacePricingBaselineStatus, WorkspacePricingSummary,
+    WorkspaceSearchGroup, WorkspaceSearchHit, WorkspaceSearchProjection, WorkspaceSearchResultKind,
+    WorkspaceTaskRow, WorkspaceTaskState, WorkspaceTeamSummary, WorkspaceTenderPriceState,
     WorkspaceWorkSummary,
 };
 

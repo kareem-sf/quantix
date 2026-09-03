@@ -16,13 +16,18 @@ const host = vi.hoisted(() => ({
   disconnectChatGpt: vi.fn(),
   exportDiagnosticsSupportBundle: vi.fn(),
   inspectDiagnosticTimeline: vi.fn(),
+  inspectAiProviders: vi.fn(),
+  probeAiProvider: vi.fn(),
   inspectDiagnosticsStatus: vi.fn(),
   inspectQuantixDoctor: vi.fn(),
   inspectRuntimeReadiness: vi.fn(),
   openChatGptDeviceLoginPage: vi.fn(),
   openDiagnosticLogs: vi.fn(),
   refreshApplicationSettings: vi.fn(),
+  removeAiProvider: vi.fn(),
   repairQuantixDoctor: vi.fn(),
+  saveAiProvider: vi.fn(),
+  setActiveAiProvider: vi.fn(),
   startChatGptDeviceLogin: vi.fn(),
   startChatGptLogin: vi.fn(),
   startTenderDeepDiagnostics: vi.fn(),
@@ -183,7 +188,7 @@ function renderSettings(onAiAvailabilityChange = vi.fn()) {
       onClose={vi.fn()}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: "ChatGPT & Models" }));
+  fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
   return rendered;
 }
 
@@ -199,8 +204,15 @@ function ClosableSettings() {
   );
 }
 
+const noProviders = () => ({
+  connections: [],
+  active_id: null,
+  file_path: "C:\\Users\\engineer\\.quantix\\.env",
+});
+
 beforeEach(() => {
   host.refreshApplicationSettings.mockResolvedValue(disconnectedView());
+  host.inspectAiProviders.mockResolvedValue(noProviders());
   host.cancelChatGptLogin.mockResolvedValue(undefined);
   host.openChatGptDeviceLoginPage.mockResolvedValue(undefined);
   Object.defineProperty(navigator, "clipboard", {
@@ -275,11 +287,11 @@ describe("ApplicationSettings ChatGPT connection", () => {
     renderSettings();
 
     expect(
-      await screen.findByRole("heading", { name: "ChatGPT & Models" }),
+      await screen.findByRole("heading", { name: "AI Providers" }),
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "Quantix opens ChatGPT in your browser and reconnects automatically when you finish signing in.",
+        "Connect the AI accounts Quantix may use for Tender work. Sign-in always completes in your browser, with the provider.",
       ),
     ).toBeTruthy();
     expect(
@@ -360,7 +372,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
       }),
     );
     render(<ClosableSettings />);
-    fireEvent.click(screen.getByRole("button", { name: "ChatGPT & Models" }));
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
     fireEvent.click(await screen.findByText("Having trouble signing in?"));
     fireEvent.click(
       screen.getByRole("button", { name: "Sign in on another device" }),
@@ -836,7 +848,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
     await waitFor(() => expect(host.checkQuantixUpdate).toHaveBeenCalledWith());
     expect(screen.queryByRole("alert")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "ChatGPT & Models" }));
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
     expect(
       screen.getByText(/Quantix could not open the OpenAI sign-in page\./),
     ).toBeTruthy();
@@ -873,7 +885,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
       ),
     ).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "ChatGPT & Models" }));
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
     expect(screen.getAllByRole("alert")).toHaveLength(2);
     expect(
       screen.getByText(/Quantix could not open the OpenAI sign-in page\./),
@@ -1147,5 +1159,155 @@ describe("ApplicationSettings ChatGPT connection", () => {
         reasoning: { kind: "effort", value: "high" },
       });
     });
+  });
+
+  it("lists model providers and marks the default", async () => {
+    host.inspectAiProviders.mockResolvedValue({
+      connections: [
+        {
+          id: "OPENROUTER",
+          display_name: "OpenRouter",
+          route: "openai_compatible",
+          base_url: "https://openrouter.ai/api/v1",
+          model_id: "anthropic/claude-sonnet-4.5",
+          has_api_key: true,
+          is_active: true,
+        },
+        {
+          id: "GROQ",
+          display_name: "Groq",
+          route: "openai_compatible",
+          base_url: "https://api.groq.com/openai/v1",
+          model_id: "llama-3.3-70b-versatile",
+          has_api_key: false,
+          is_active: false,
+        },
+      ],
+      active_id: "OPENROUTER",
+      file_path: "C:\\Users\\engineer\\.quantix\\.env",
+    });
+    renderSettings();
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
+
+    expect(await screen.findByText("OpenRouter")).toBeTruthy();
+    expect(screen.getByText("Default")).toBeTruthy();
+    // A provider with no key cannot run, so the interface has to say so.
+    expect(
+      screen.getByText("No API key stored. Edit this provider to add one."),
+    ).toBeTruthy();
+    // The storage trade-off is stated wherever keys are managed.
+    expect(screen.getByText(/stored as plain text/)).toBeTruthy();
+  });
+
+  it("saves a new provider from the add form", async () => {
+    host.saveAiProvider.mockResolvedValue({
+      connections: [],
+      active_id: null,
+      file_path: "C:\\Users\\engineer\\.quantix\\.env",
+    });
+    renderSettings();
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Add provider/ }),
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "OpenRouter" },
+    });
+    fireEvent.change(screen.getByLabelText("Id"), {
+      target: { value: "openrouter" },
+    });
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://openrouter.ai/api/v1" },
+    });
+    fireEvent.change(screen.getByLabelText("Model id"), {
+      target: { value: "anthropic/claude-sonnet-4.5" },
+    });
+    fireEvent.change(screen.getByLabelText("API key"), {
+      target: { value: "sk-or-secret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Save provider/ }));
+
+    await waitFor(() => {
+      expect(host.saveAiProvider).toHaveBeenCalledWith({
+        id: "openrouter",
+        display_name: "OpenRouter",
+        route: "openai_compatible",
+        base_url: "https://openrouter.ai/api/v1",
+        model_id: "anthropic/claude-sonnet-4.5",
+        api_key: "sk-or-secret",
+      });
+    });
+  });
+
+  it("keeps the stored key when an edit leaves the key field blank", async () => {
+    const stored = {
+      connections: [
+        {
+          id: "OPENROUTER",
+          display_name: "OpenRouter",
+          route: "openai_compatible" as const,
+          base_url: "https://openrouter.ai/api/v1",
+          model_id: "anthropic/claude-sonnet-4.5",
+          has_api_key: true,
+          is_active: true,
+        },
+      ],
+      active_id: "OPENROUTER",
+      file_path: "C:\\Users\\engineer\\.quantix\\.env",
+    };
+    host.inspectAiProviders.mockResolvedValue(stored);
+    host.saveAiProvider.mockResolvedValue(stored);
+    renderSettings();
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Edit OpenRouter" }),
+    );
+
+    fireEvent.change(screen.getByLabelText("Model id"), {
+      target: { value: "openai/gpt-5.3" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Save provider/ }));
+
+    await waitFor(() => {
+      expect(host.saveAiProvider).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "OPENROUTER", api_key: null }),
+      );
+    });
+  });
+
+  it("reports what a provider test found", async () => {
+    host.inspectAiProviders.mockResolvedValue({
+      connections: [
+        {
+          id: "OPENROUTER",
+          display_name: "OpenRouter",
+          route: "openai_compatible",
+          base_url: "https://openrouter.ai/api/v1",
+          model_id: "anthropic/claude-sonnet-4.5",
+          has_api_key: true,
+          is_active: true,
+        },
+      ],
+      active_id: "OPENROUTER",
+      file_path: "C:\Users\engineer\.quantix\.env",
+    });
+    host.probeAiProvider.mockResolvedValue({
+      reached: false,
+      summary:
+        "The provider rejected the API key. Check the key and try again.",
+    });
+    renderSettings();
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Test/ }));
+
+    await waitFor(() => {
+      expect(host.probeAiProvider).toHaveBeenCalledWith("OPENROUTER");
+    });
+    expect(
+      await screen.findByText(
+        "The provider rejected the API key. Check the key and try again.",
+      ),
+    ).toBeTruthy();
   });
 });

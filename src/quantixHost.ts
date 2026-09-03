@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import type { AiProviderProbeResult } from "./bindings/AiProviderProbeResult";
+import type { AiProviderSettingsView } from "./bindings/AiProviderSettingsView";
+import type { SaveAiProviderCommand } from "./bindings/SaveAiProviderCommand";
 import type { ApproveCalculationRuleCommand } from "./bindings/ApproveCalculationRuleCommand";
 import type { ApproveBasisOfEstimateCommand } from "./bindings/ApproveBasisOfEstimateCommand";
 import type { ApproveCommercialStrategyCommand } from "./bindings/ApproveCommercialStrategyCommand";
@@ -311,6 +314,30 @@ export function refreshApplicationSettings(): Promise<ApplicationSettingsView> {
 
 export function inspectApplicationSettings(): Promise<ApplicationSettingsView> {
   return invoke<ApplicationSettingsView>("inspect_application_settings");
+}
+
+export function inspectAiProviders(): Promise<AiProviderSettingsView> {
+  return invoke<AiProviderSettingsView>("inspect_ai_providers");
+}
+
+export function saveAiProvider(
+  command: SaveAiProviderCommand,
+): Promise<AiProviderSettingsView> {
+  return invoke<AiProviderSettingsView>("save_ai_provider", { command });
+}
+
+export function removeAiProvider(id: string): Promise<AiProviderSettingsView> {
+  return invoke<AiProviderSettingsView>("remove_ai_provider", { id });
+}
+
+export function setActiveAiProvider(
+  id: string,
+): Promise<AiProviderSettingsView> {
+  return invoke<AiProviderSettingsView>("set_active_ai_provider", { id });
+}
+
+export function probeAiProvider(id: string): Promise<AiProviderProbeResult> {
+  return invoke<AiProviderProbeResult>("probe_ai_provider", { id });
 }
 
 export function updateGeneralApplicationPreferences(

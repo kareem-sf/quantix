@@ -1495,7 +1495,6 @@ impl QuantixHost {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "runtime-fixture"))]
     pub async fn run_manager_intake_for_verification(
         &self,
         tender_id: &str,
