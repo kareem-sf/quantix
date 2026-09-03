@@ -1383,6 +1383,7 @@ fn secure_created_directory(path: &Path) -> io::Result<()> {
 fn secure_created_directory(path: &Path) -> io::Result<()> {
     use windows_permissions::{
         constants::{SeObjectType, SecurityInformation},
+        utilities::current_process_sid,
         wrappers::SetNamedSecurityInfo,
         LocalBox, SecurityDescriptor,
     };
@@ -1392,11 +1393,17 @@ fn secure_created_directory(path: &Path) -> io::Result<()> {
     let dacl = descriptor
         .dacl()
         .ok_or_else(|| io::Error::other("private directory DACL is missing"))?;
+    // Claim ownership explicitly. Windows gives objects created by a member of the
+    // Administrators group an owner of BUILTIN\Administrators rather than the user
+    // that created them, and the storage check below requires the Engineer to own
+    // their own Application Home. Without this the directory Quantix just created
+    // and locked down would still read as unsafe.
+    let owner = current_process_sid()?;
     SetNamedSecurityInfo(
         path.as_os_str(),
         SeObjectType::SE_FILE_OBJECT,
-        SecurityInformation::Dacl | SecurityInformation::ProtectedDacl,
-        None,
+        SecurityInformation::Owner | SecurityInformation::Dacl | SecurityInformation::ProtectedDacl,
+        Some(&owner),
         None,
         Some(dacl),
         None,

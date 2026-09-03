@@ -194,6 +194,33 @@ fn low_space_does_not_block_opening_the_application_home() {
 }
 
 #[test]
+fn a_home_quantix_creates_passes_its_own_storage_check() {
+    // Exercised against the real platform on purpose. Setup hardens an Application
+    // Home only when it creates the directory, and on Windows an object created by a
+    // member of the Administrators group is owned by BUILTIN\Administrators unless
+    // ownership is claimed, which the storage check rejects. Both mistakes make a
+    // freshly created home read as unsafe, which is how this surfaced: ten unrelated
+    // tests failing on a hardened machine with UnsafeStoragePermissions.
+    let parent = tempfile::tempdir().expect("temporary user home");
+    let application_home = parent.path().join(".quantix");
+    let host = quantix_lib::QuantixHost::new(&application_home, parent.path());
+
+    let outcome = ensure_quantix_setup(&host);
+
+    assert!(
+        matches!(outcome.state, SetupState::Ready | SetupState::Warning),
+        "a home Quantix just created must pass its own check: {outcome:?}"
+    );
+    assert!(
+        !outcome
+            .issues
+            .contains(&SetupIssue::UnsafeStoragePermissions),
+        "{:?}",
+        outcome.issues
+    );
+}
+
+#[test]
 fn a_provider_environment_file_does_not_look_like_unrecognized_data() {
     // Provider settings live in ~/.quantix/.env. The home inspection rejects any entry
     // it does not know, so an unregistered file here blocks startup behind

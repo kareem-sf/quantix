@@ -2584,13 +2584,16 @@ mod tests {
 
     #[test]
     fn live_environment_qualifies_the_managed_codex_connection_without_exposing_tokens() {
-        let home = tempfile::tempdir().unwrap();
-        let host = QuantixHost::new(home.path(), home.path());
+        let root = tempfile::tempdir().unwrap();
+        // Setup only hardens an Application Home it creates itself, so point it at a
+        // path inside the temporary directory rather than at the directory.
+        let home = root.path().join(".quantix");
+        let host = QuantixHost::new(&home, root.path());
         assert!(matches!(
             crate::ensure_quantix_setup(&host).state,
             crate::SetupState::Ready | crate::SetupState::Warning
         ));
-        save_live_connection(home.path(), &seeded_connection()).unwrap();
+        save_live_connection(&home, &seeded_connection()).unwrap();
 
         let environment = host
             .measure_live_qualification_environment("windows_11_x64".into(), "a".repeat(64))

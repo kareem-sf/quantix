@@ -1217,11 +1217,15 @@ mod tests {
     use super::*;
 
     fn temp_home(name: &str) -> PathBuf {
-        let dir =
+        // Setup hardens an Application Home's permissions only when it creates the
+        // directory itself. Handing it a directory that already exists leaves the
+        // inherited access control in place, which a hardened machine correctly
+        // reports as unsafe storage, so return a path Setup will create.
+        let root =
             std::env::temp_dir().join(format!("quantix-settings-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root.join(".quantix")
     }
 
     fn fixture_connection(account_id: &str) -> ProviderConnectionView {
