@@ -8,9 +8,7 @@ use serde_json::{json, Value};
 use ts_rs::TS;
 
 use crate::{
-    agent_backend::{build_request_body, DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES},
     agent_runtime::{
-        build_direct_backend_request,
         permissions::{
             derive_pre_bid_data_grant, permission_duration, prepare_pre_bid_data_grant,
             PermissionDenialReason, PreBidAdditionalDataView, PreBidDataGrantRequest,
@@ -72,7 +70,7 @@ pub(crate) enum ManagerIntakeExtractionRecovery {
 }
 
 pub(crate) fn record_extraction_request_hard_cap_bytes() -> u64 {
-    DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES
+    u64::try_from(crate::process_supervisor::MAX_STDIN_BYTES).unwrap_or(u64::MAX)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS, Validate)]
@@ -141,6 +139,18 @@ pub struct InspectTenderRecordsCommand {
     pub cursor: Option<String>,
     #[garde(range(min = 1, max = 4))]
     pub limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS, Validate)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct InspectTenderRecordCommand {
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub tender_id: String,
+    #[garde(length(bytes, min = 32, max = 32))]
+    pub record_id: String,
+    #[garde(range(min = 1))]
+    pub version: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -1291,22 +1301,6 @@ impl TenderStore {
             return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
         }
         let run = self.inspect_agent_run(run_id)?;
-        let expected_initial_request_body_bytes = self
-            .connection
-            .query_row(
-                "SELECT json_extract(run_request_context_json, '$.request_body_bytes')
-                 FROM manager_intake_extraction_plan_run_bindings
-                 WHERE extraction_run_id = ?1",
-                [run_id],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(sql_error)
-            .and_then(|bytes| {
-                u64::try_from(bytes)
-                    .ok()
-                    .filter(|bytes| *bytes > 0)
-                    .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))
-            })?;
         let application_home = self
             .root
             .parent()
@@ -1348,7 +1342,6 @@ impl TenderStore {
             permission_grant: run.permission_grant,
             provider_thread_ref,
             provider_thread_to_archive,
-            expected_initial_request_body_bytes: Some(expected_initial_request_body_bytes),
             workspace,
         })
     }
@@ -1570,7 +1563,7 @@ impl TenderStore {
                 &required_selection,
                 &created_at,
             )?;
-            let expected_initial_request_body_bytes = bind_manager_intake_extraction_plan(
+            bind_manager_intake_extraction_plan(
                 &transaction,
                 &PreparedAgentRun {
                     run_id: run_id.clone(),
@@ -1580,7 +1573,6 @@ impl TenderStore {
                     permission_grant: permission_grant.clone(),
                     provider_thread_ref: None,
                     provider_thread_to_archive: None,
-                    expected_initial_request_body_bytes: None,
                     workspace: workspace.clone(),
                 },
                 Some(prior_run_id),
@@ -1623,7 +1615,6 @@ impl TenderStore {
                 permission_grant,
                 provider_thread_ref,
                 provider_thread_to_archive,
-                expected_initial_request_body_bytes,
                 workspace: workspace.clone(),
             }))
         })();
@@ -1902,7 +1893,7 @@ impl TenderStore {
                 &provider_selection,
                 &created_at,
             )?;
-            let expected_initial_request_body_bytes = bind_manager_intake_extraction_plan(
+            bind_manager_intake_extraction_plan(
                 &transaction,
                 &PreparedAgentRun {
                     run_id: run_id.clone(),
@@ -1912,7 +1903,6 @@ impl TenderStore {
                     permission_grant: permission_grant.clone(),
                     provider_thread_ref: None,
                     provider_thread_to_archive: None,
-                    expected_initial_request_body_bytes: None,
                     workspace: workspace.clone(),
                 },
                 None,
@@ -1955,7 +1945,6 @@ impl TenderStore {
                 permission_grant,
                 provider_thread_ref,
                 provider_thread_to_archive,
-                expected_initial_request_body_bytes,
                 workspace: workspace.clone(),
             })
         })();
@@ -2212,7 +2201,7 @@ impl TenderStore {
                 &required_selection,
                 &created_at,
             )?;
-            let expected_initial_request_body_bytes = bind_manager_intake_extraction_plan(
+            bind_manager_intake_extraction_plan(
                 &transaction,
                 &PreparedAgentRun {
                     run_id: run_id.clone(),
@@ -2222,7 +2211,6 @@ impl TenderStore {
                     permission_grant: permission_grant.clone(),
                     provider_thread_ref: None,
                     provider_thread_to_archive: None,
-                    expected_initial_request_body_bytes: None,
                     workspace: workspace.clone(),
                 },
                 Some(rejected_run_id),
@@ -2265,7 +2253,6 @@ impl TenderStore {
                 permission_grant,
                 provider_thread_ref,
                 provider_thread_to_archive,
-                expected_initial_request_body_bytes,
                 workspace: workspace.clone(),
             }))
         })();
@@ -2557,7 +2544,6 @@ impl TenderStore {
                 permission_grant,
                 provider_thread_ref,
                 provider_thread_to_archive,
-                expected_initial_request_body_bytes: None,
                 workspace: workspace.clone(),
             })
         })();
@@ -4734,7 +4720,6 @@ pub(crate) fn estimate_record_extraction_request_bytes(
         permission_grant: prepared_grant.grant,
         provider_thread_ref: None,
         provider_thread_to_archive: None,
-        expected_initial_request_body_bytes: None,
         workspace: prepared_grant.workspace,
     };
     let output_contract: Value = serde_json::from_str(&prepared.task.output_contract_json)
@@ -4745,10 +4730,11 @@ pub(crate) fn estimate_record_extraction_request_bytes(
     })];
     let instructions = provider_instruction_bundle_from_data_views(&prepared, provider_data_views)
         .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-    let backend_request =
-        build_direct_backend_request(&prepared, instructions, Vec::new(), output_contract)
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
-    let request_body_json = canonical_json(&build_request_body(&backend_request))?;
+    let request_body_json = canonical_json(&record_extraction_actor_request_body(
+        &prepared,
+        &instructions,
+        &output_contract,
+    )?)?;
     let request_body_bytes = u64::try_from(request_body_json.len())
         .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
     let estimated_request_bytes = estimated_record_extraction_request_bytes(request_body_bytes)?;
@@ -4790,7 +4776,7 @@ pub(crate) fn record_extraction_request_context_for_prepared_with_stored_data_vi
     let request_body: Value = serde_json::from_str(&stored.request_body_json)
         .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
     let stored_instructions: Value = request_body
-        .get("instructions")
+        .pointer("/input/0/text")
         .and_then(Value::as_str)
         .and_then(|instructions| serde_json::from_str(instructions).ok())
         .ok_or_else(|| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
@@ -4828,16 +4814,36 @@ fn normalize_record_extraction_prepared_request(prepared: &PreparedAgentRun) -> 
     normalized
 }
 
+fn record_extraction_actor_request_body(
+    prepared: &PreparedAgentRun,
+    instructions: &str,
+    output_contract: &Value,
+) -> Result<Value, TenderCommandError> {
+    let effort = match &prepared.provider_selection.reasoning {
+        crate::application_settings::ProviderReasoningSelection::Effort(value) => {
+            json!(value.as_str())
+        }
+        crate::application_settings::ProviderReasoningSelection::ProviderDefault => Value::Null,
+    };
+    Ok(json!({
+        "input": [{ "type": "text", "text": instructions }],
+        "model": prepared.provider_selection.model_id,
+        "effort": effort,
+        "outputSchema": output_contract,
+    }))
+}
+
 fn record_extraction_request_context_with_instructions(
     normalized: &PreparedAgentRun,
     instructions: String,
 ) -> Result<RecordExtractionRequestPlanContext, TenderCommandError> {
     let output_contract: Value = serde_json::from_str(&normalized.task.output_contract_json)
         .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-    let backend_request =
-        build_direct_backend_request(normalized, instructions, Vec::new(), output_contract)
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
-    let request_body_json = canonical_json(&build_request_body(&backend_request))?;
+    let request_body_json = canonical_json(&record_extraction_actor_request_body(
+        normalized,
+        &instructions,
+        &output_contract,
+    )?)?;
     let request_body_bytes = u64::try_from(request_body_json.len())
         .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
     record_extraction_request_plan_context(

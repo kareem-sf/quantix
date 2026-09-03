@@ -4,6 +4,10 @@ dist
 node_modules
 src/bindings
 src-tauri/gen
-src-tauri/tests/fixtures/codex_app_server_protocol.schemas.json
+src-tauri/src/agent_runtime/codex_app_server_protocol.schemas.json
 src-tauri/target*
 *.md
+
+src-tauri/runtime/ai-worker/.venv/
+
+.remember/tmp

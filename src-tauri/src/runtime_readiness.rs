@@ -49,13 +49,21 @@ impl RuntimeLayout {
     }
 
     #[cfg(feature = "runtime-fixture")]
-    pub(crate) fn codex_executable(&self) -> PathBuf {
+    pub(crate) fn codex_executable(&self, _application_home: &Path) -> PathBuf {
         self.runtime_resources
             .join("bin")
             .join(executable_name("codex"))
     }
 
-    fn uv_executable(&self) -> PathBuf {
+    #[cfg(not(feature = "runtime-fixture"))]
+    pub(crate) fn codex_executable(&self, application_home: &Path) -> PathBuf {
+        crate::managed_runtime::codex_binary_path(
+            application_home,
+            crate::agent_runtime::CODEX_VERSION,
+        )
+    }
+
+    pub(crate) fn uv_executable(&self) -> PathBuf {
         self.runtime_resources
             .join("bin")
             .join(executable_name("uv"))
@@ -63,6 +71,10 @@ impl RuntimeLayout {
 
     pub(crate) fn ocr_project(&self) -> PathBuf {
         self.runtime_resources.join("ocr")
+    }
+
+    pub(crate) fn ai_worker_project(&self) -> PathBuf {
+        self.runtime_resources.join("ai-worker")
     }
 
     fn readiness_document(&self) -> PathBuf {

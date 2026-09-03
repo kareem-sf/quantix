@@ -87,7 +87,7 @@ fn run_codex(
         "id": initialize.get("id").cloned().ok_or("initialize id")?,
         "result": {
             "codexHome": executable.parent().ok_or("missing fixture parent")?,
-            "userAgent": "quantix/0.147.0 (fixture; runtime-readiness) (quantix; 0.1.0)",
+            "userAgent": "quantix/0.151.0 (fixture; runtime-readiness) (quantix; 0.1.0)",
             "platformFamily": if cfg!(windows) { "windows" } else { "unix" },
             "platformOs": env::consts::OS,
         }
@@ -252,9 +252,9 @@ fn run_agent_codex(
         "result": {
             "codexHome": executable.parent().ok_or("missing fixture parent")?,
             "userAgent": if scenario == "unsupported-provider-version" {
-                "Codex Desktop/0.146.0 (fixture; agent-runtime) (quantix; 0.1.0)"
+                "Codex Desktop/0.150.0 (fixture; agent-runtime) (quantix; 0.1.0)"
             } else {
-                "Codex Desktop/0.147.0 (fixture; agent-runtime) (quantix; 0.1.0)"
+                "Codex Desktop/0.151.0 (fixture; agent-runtime) (quantix; 0.1.0)"
             },
             "platformFamily": if cfg!(windows) { "windows" } else { "unix" },
             "platformOs": env::consts::OS,
@@ -465,7 +465,7 @@ fn run_managed_login_codex(
                             "result": {
                                 "type": "chatgpt",
                                 "loginId": "fixture-browser-login",
-                                "authUrl": "https://chatgpt.com/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"
+                                "authUrl": "https://fixture.invalid/auth/callback"
                             }
                         }))?;
                         authenticated = true;
@@ -3770,7 +3770,8 @@ fn fixture_thread(thread_id: &str, cwd: &str) -> serde_json::Value {
         "updatedAt": 1_780_000_000_i64,
         "cwd": cwd,
         "source": "appServer",
-        "cliVersion": "0.147.0",
+        "cliVersion": "0.151.0",
+        "projectId": null,
         "status": { "type": "idle" },
         "turns": [],
     })
@@ -3866,9 +3867,13 @@ fn run_uv(
         env::consts::ARCH
     ));
     #[cfg(windows)]
-    junction::create(&concrete_python, &minor_python)?;
+    if !minor_python.exists() {
+        junction::create(&concrete_python, &minor_python)?;
+    }
     #[cfg(unix)]
-    std::os::unix::fs::symlink(&concrete_python, &minor_python)?;
+    if !minor_python.exists() {
+        std::os::unix::fs::symlink(&concrete_python, &minor_python)?;
+    }
     #[cfg(unix)]
     {
         let library = environment.join("lib");
@@ -3900,6 +3905,13 @@ fn run_python(
     assert_isolated_python_environment()?;
     if arguments.len() == 3
         && arguments[0] == "-I"
+        && arguments[1] == "-m"
+        && arguments[2] == "quantix_ai_worker"
+    {
+        return run_worker(executable);
+    }
+    if arguments.len() == 3
+        && arguments[0] == "-I"
         && arguments[1] == "-c"
         && arguments[2] == "from importlib.metadata import version; print(version('rapidocr'))"
     {
@@ -3917,6 +3929,161 @@ fn run_python(
         Some("ocr_document.py") => run_ocr_document(arguments),
         _ => Err("unexpected managed Python script".into()),
     }
+}
+
+fn read_worker_frame() -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
+    let mut line = String::new();
+    let bytes = std::io::stdin().lock().read_line(&mut line)?;
+    if bytes == 0 {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::from_str(line.trim())?))
+}
+
+fn write_worker_frame(frame: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+    println!("{}", serde_json::to_string(frame)?);
+    Ok(())
+}
+
+fn run_worker(executable: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let scenario = fs::read_to_string(executable.with_extension("agent-scenario"))?
+        .trim()
+        .to_owned();
+    let initialize =
+        read_worker_frame()?.ok_or("worker input ended before the initialize frame")?;
+    if initialize.get("kind").and_then(|kind| kind.as_str()) != Some("initialize") {
+        return Err("worker expected an initialize frame".into());
+    }
+    if initialize
+        .pointer("/budgets/max_tool_rounds")
+        .and_then(|value| value.as_u64())
+        != Some(32)
+    {
+        return Err("worker init must pin the 32-round tool ceiling".into());
+    }
+    if initialize
+        .get("api_key")
+        .and_then(|key| key.as_str())
+        .is_none_or(str::is_empty)
+    {
+        return Err("worker init must carry a credential".into());
+    }
+    let observed = executable.with_extension("worker-observed");
+    fs::write(&observed, serde_json::to_vec(&initialize)?)?;
+    write_worker_frame(&serde_json::json!({"kind": "ready"}))?;
+    let operation = initialize.get("op").and_then(|op| op.as_str());
+    let route = initialize.get("route").and_then(|route| route.as_str());
+    match (scenario.as_str(), operation) {
+        ("probe-success", Some("probe")) => {
+            write_worker_frame(&serde_json::json!({
+                "kind": "usage",
+                "input_tokens": 9,
+                "output_tokens": 3,
+            }))?;
+            write_worker_frame(&serde_json::json!({
+                "kind": "result",
+                "output": null,
+                "text": "OK",
+                "usage": {"input_tokens": 9, "output_tokens": 3},
+            }))?;
+        }
+        ("probe-auth-failure", Some("probe")) if route == Some("openai") => {
+            write_worker_frame(&serde_json::json!({
+                "kind": "failure",
+                "category": "auth",
+                "message": "the provider rejected the key",
+            }))?;
+        }
+        ("turn-success", Some("turn")) => {
+            write_worker_frame(&serde_json::json!({
+                "kind": "usage",
+                "input_tokens": 21,
+                "output_tokens": 11,
+            }))?;
+            if initialize
+                .get("output_schema")
+                .is_some_and(|schema| !schema.is_null())
+            {
+                write_worker_frame(&serde_json::json!({
+                    "kind": "result",
+                    "output": {"summary": "worker structured output"},
+                    "text": "",
+                    "usage": {"input_tokens": 21, "output_tokens": 11},
+                }))?;
+            } else {
+                write_worker_frame(&serde_json::json!({
+                    "kind": "result",
+                    "output": null,
+                    "text": "worker final text",
+                    "usage": {"input_tokens": 21, "output_tokens": 11},
+                }))?;
+            }
+        }
+        ("tool-roundtrip", Some("turn")) | ("tool-denied", Some("turn")) => {
+            let tools = initialize
+                .get("tools")
+                .and_then(|tools| tools.as_array())
+                .ok_or("tool scenarios require tools")?;
+            let mut approvals = Vec::new();
+            for tool in tools {
+                let name = tool
+                    .get("name")
+                    .and_then(|name| name.as_str())
+                    .ok_or("tool descriptor missing name")?;
+                let tool_call_id = format!("call-{name}");
+                write_worker_frame(&serde_json::json!({
+                    "kind": "approval_request",
+                    "tool_call_id": tool_call_id,
+                    "tool_name": name,
+                    "arguments": {"query": "fixture"},
+                }))?;
+                let answer = read_worker_frame()?.ok_or("host ended the approval stream")?;
+                if answer.get("tool_call_id").and_then(|id| id.as_str())
+                    != Some(tool_call_id.as_str())
+                {
+                    return Err("approval answer did not match the request".into());
+                }
+                approvals.push(answer);
+            }
+            fs::write(
+                executable.with_extension("worker-approvals"),
+                serde_json::to_vec(&approvals)?,
+            )?;
+            write_worker_frame(&serde_json::json!({
+                "kind": "usage",
+                "input_tokens": 30,
+                "output_tokens": 15,
+            }))?;
+            write_worker_frame(&serde_json::json!({
+                "kind": "result",
+                "output": null,
+                "text": "worker finished after tools",
+                "usage": {"input_tokens": 30, "output_tokens": 15},
+            }))?;
+        }
+        ("tool-round-loop", Some("turn")) => loop {
+            write_worker_frame(&serde_json::json!({
+                "kind": "approval_request",
+                "tool_call_id": "call-loop",
+                "tool_name": "lookup_item",
+                "arguments": {},
+            }))?;
+            let answer = read_worker_frame()?.ok_or("host ended the approval stream")?;
+            let _ = answer;
+        },
+        ("malformed-output", _) => {
+            println!("this is not json");
+        }
+        ("worker-hang", _) => loop {
+            if read_worker_frame()?.is_none() {
+                return Ok(());
+            }
+        },
+        (_, Some(_)) | (_, None) => {
+            return Err(format!("unexpected worker scenario {scenario}").into())
+        }
+    }
+    Ok(())
 }
 
 fn run_prepare_models(arguments: &[std::ffi::OsString]) -> Result<(), Box<dyn std::error::Error>> {

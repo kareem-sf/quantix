@@ -1,4 +1,4 @@
-use std::{fs, io, path::Path, sync::Arc, time::Duration};
+﻿use std::{fs, io, path::Path, sync::Arc, time::Duration};
 
 use quantix_lib::{
     configure_tauri_builder, current_update_platform, ensure_quantix_setup, QuantixHost,
@@ -115,7 +115,7 @@ fn application_only_update() -> UpdateCandidate {
         },
         compatibility: UpdateCompatibilityManifest {
             installation_schema_version: 25,
-            tender_schema_version: 45,
+            tender_schema_version: 46,
             ocr_version: "3.9.2".into(),
             runtime_manifest_schema_version: 3,
         },

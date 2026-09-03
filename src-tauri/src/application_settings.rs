@@ -1,8 +1,5 @@
 use std::{fs, path::Path, time::Duration};
 
-#[cfg(any(not(feature = "runtime-fixture"), test))]
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use garde::Validate;
 use jiff::Timestamp;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
@@ -11,19 +8,13 @@ use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
 use crate::{
-    agent_runtime::{ProviderFailure, ProviderFailureCategory},
-    chatgpt_oauth::{
-        force_refresh_connection_unlocked, load, needs_refresh, refresh_connection_unlocked,
-        with_connection_mutation, LoadState, StoredConnection, TokenClient,
-    },
+    agent_runtime::ProviderFailureCategory,
     setup::INSTALLATION_SCHEMA_VERSION,
     tender_store::{TenderCommandError, TenderErrorCode, TenderId, TENDER_SCHEMA_VERSION},
     QuantixHost,
 };
 
 pub(crate) const CODEX_CONNECTION_ID: &str = "codex_chatgpt";
-const CHATGPT_DIRECT_ADAPTER_VERSION: &str = "chatgpt-direct-v1";
-const CHATGPT_DIRECT_CATALOGUE_VERSION: &str = "chatgpt-direct-v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -56,7 +47,14 @@ pub enum ProviderConnectionStatus {
 #[ts(export)]
 pub enum ProviderReasoningSelection {
     ProviderDefault,
-    CodexEffort(String),
+    /// Persisted as `codex_effort` before the provider-neutral rename in 162dfac. The
+    /// tag is part of the on-disk settings format, so the old spelling has to keep
+    /// parsing or every installation written before that commit fails to load its
+    /// settings — which fails every connection save and leaves the UI with nothing to
+    /// show. Serialization always uses the current name, so stored rows heal on the
+    /// next write.
+    #[serde(alias = "codex_effort")]
+    Effort(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -307,26 +305,11 @@ impl QuantixHost {
     pub async fn refresh_application_settings(
         &self,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        #[cfg(all(feature = "runtime-fixture", not(test)))]
-        {
+        if cfg!(not(test)) {
             self.inspect_codex_subscription(tokio_util::sync::CancellationToken::new())
                 .await;
-            self.application_settings_with_chatgpt_phase()
         }
-        #[cfg(any(not(feature = "runtime-fixture"), test))]
-        {
-            let application_home = self.application_home().to_path_buf();
-            tokio::task::spawn_blocking(move || {
-                refresh_application_settings_projection(
-                    &application_home,
-                    crate::chatgpt_login::PRODUCTION_ISSUER,
-                    current_time_ms(),
-                )
-            })
-            .await
-            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))??;
-            self.application_settings_with_chatgpt_phase()
-        }
+        self.application_settings_with_chatgpt_phase()
     }
 
     pub(crate) async fn refresh_exact_ai_execution_selection(
@@ -336,12 +319,6 @@ impl QuantixHost {
         let application_home = self.application_home().to_path_buf();
         let preferred = preferred.cloned();
         tokio::task::spawn_blocking(move || {
-            #[cfg(all(feature = "runtime-fixture", not(test)))]
-            return refresh_fixture_ai_execution_selection_projection(
-                &application_home,
-                preferred.as_ref(),
-            );
-            #[cfg(any(not(feature = "runtime-fixture"), test))]
             refresh_exact_ai_execution_selection_projection(&application_home, preferred.as_ref())
         })
         .await
@@ -424,14 +401,7 @@ impl QuantixHost {
         }
         let application_home = self.application_home().to_path_buf();
         tokio::task::spawn_blocking(move || {
-            #[cfg(all(feature = "runtime-fixture", not(test)))]
-            return mutate_fixture_ai_execution_selection_projection(
-                &application_home,
-                &command,
-                false,
-            );
-            #[cfg(any(not(feature = "runtime-fixture"), test))]
-            update_ai_execution_selection_projection(&application_home, &command)
+            mutate_ai_execution_selection_projection(&application_home, &command, false)
         })
         .await
         .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
@@ -450,14 +420,7 @@ impl QuantixHost {
         let application_home = self.application_home().to_path_buf();
         let update_command = command.into();
         let view = tokio::task::spawn_blocking(move || {
-            #[cfg(all(feature = "runtime-fixture", not(test)))]
-            return mutate_fixture_ai_execution_selection_projection(
-                &application_home,
-                &update_command,
-                true,
-            );
-            #[cfg(any(not(feature = "runtime-fixture"), test))]
-            confirm_ai_execution_selection_projection(&application_home, &update_command)
+            mutate_ai_execution_selection_projection(&application_home, &update_command, true)
         })
         .await
         .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))??;
@@ -541,7 +504,6 @@ impl QuantixHost {
     }
 }
 
-#[cfg(feature = "runtime-fixture")]
 pub(crate) fn codex_failure_connection_status(
     category: ProviderFailureCategory,
 ) -> (ProviderConnectionStatus, &'static str) {
@@ -565,323 +527,47 @@ pub(crate) fn codex_failure_connection_status(
     }
 }
 
-pub(crate) fn chatgpt_authentication_failure() -> ProviderFailure {
-    ProviderFailure::new(
-        ProviderFailureCategory::AuthenticationRequired,
-        true,
-        "Connect your ChatGPT subscription in Settings before retrying.",
-        Some("No usable ChatGPT connection is stored."),
-    )
-}
-
-pub(crate) fn chatgpt_subscription_failure() -> ProviderFailure {
-    ProviderFailure::new(
-        ProviderFailureCategory::SubscriptionRequired,
-        true,
-        "Connect an eligible ChatGPT subscription in Settings before retrying.",
-        Some("The connected ChatGPT account is not an eligible subscription."),
-    )
-}
-
-/// Connection readiness for the Quantix-owned ChatGPT provider: a usable
-/// stored token connection whose `plan_type` claim names an eligible ChatGPT
-/// plan. An expired connection is refreshed through the issuer once; a failed
-/// refresh surfaces as `AuthenticationRequired`.
-pub(crate) fn chatgpt_connection_readiness(
-    application_home: &Path,
-    issuer: &str,
-    now_ms: u64,
-) -> Result<StoredConnection, ProviderFailure> {
-    with_connection_mutation(|| {
-        chatgpt_connection_readiness_unlocked(application_home, issuer, now_ms)
-    })
-}
-
-fn chatgpt_connection_readiness_unlocked(
-    application_home: &Path,
-    issuer: &str,
-    now_ms: u64,
-) -> Result<StoredConnection, ProviderFailure> {
-    let stored = match load(application_home) {
-        LoadState::Connected(connection) => *connection,
-        LoadState::Absent | LoadState::Unusable => return Err(chatgpt_authentication_failure()),
-    };
-    let connection = if needs_refresh(&stored, now_ms) {
-        let client = TokenClient::new(issuer).map_err(|_| chatgpt_authentication_failure())?;
-        refresh_connection_unlocked(application_home, &client, now_ms)
-            .map_err(|_| chatgpt_authentication_failure())?
-    } else {
-        stored
-    };
-    if !chatgpt_subscription_is_supported(connection.plan_type.as_deref()) {
-        return Err(chatgpt_subscription_failure());
-    }
-    Ok(connection)
-}
-
-#[cfg(any(not(feature = "runtime-fixture"), test))]
-fn refresh_application_settings_projection(
-    application_home: &Path,
-    issuer: &str,
-    now_ms: u64,
-) -> Result<(), TenderCommandError> {
-    project_chatgpt_connection_readiness_with(application_home, || {
-        chatgpt_connection_readiness_unlocked(application_home, issuer, now_ms)
-    })
-    .map(|_| ())
-}
-
-#[cfg(not(feature = "runtime-fixture"))]
-pub(crate) fn project_chatgpt_connection_readiness(
-    application_home: &Path,
-    issuer: &str,
-    now_ms: u64,
-) -> Result<StoredConnection, ProviderFailure> {
-    project_chatgpt_connection_readiness_with(application_home, || {
-        chatgpt_connection_readiness_unlocked(application_home, issuer, now_ms)
-    })
-    .map_err(|_| connection_task_error())?
-}
-
-#[cfg(any(not(feature = "runtime-fixture"), test))]
-fn project_chatgpt_connection_readiness_with(
-    application_home: &Path,
-    inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
-) -> Result<Result<StoredConnection, ProviderFailure>, TenderCommandError> {
-    with_connection_mutation(|| {
-        project_chatgpt_connection_readiness_unlocked_with(application_home, inspect)
-    })
-}
-
-fn project_chatgpt_connection_readiness_unlocked_with(
-    application_home: &Path,
-    inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
-) -> Result<Result<StoredConnection, ProviderFailure>, TenderCommandError> {
-    let readiness = inspect();
-    let projection = match readiness.as_ref() {
-        Ok(connection) => chatgpt_connection_view(connection),
-        Err(failure) => chatgpt_connection_failure_view(failure.category),
-    };
-    save_live_connection_unlocked(application_home, &projection)?;
-    Ok(readiness)
-}
-
-#[cfg(any(not(feature = "runtime-fixture"), test))]
-fn refresh_exact_ai_execution_selection_projection(
-    application_home: &Path,
-    preferred: Option<&AiExecutionSelection>,
-) -> Result<Option<AiExecutionSelection>, TenderCommandError> {
-    with_connection_mutation(|| {
-        let readiness =
-            project_chatgpt_connection_readiness_unlocked_with(application_home, || {
-                chatgpt_connection_readiness_unlocked(
-                    application_home,
-                    crate::chatgpt_login::PRODUCTION_ISSUER,
-                    current_time_ms(),
-                )
-            })?;
-        let Ok(connection) = readiness else {
-            return Ok(None);
-        };
-        exact_approved_selection_unlocked(
-            application_home,
-            &chatgpt_connection_view(&connection),
-            preferred,
-        )
-    })
-}
-
-pub(crate) fn project_approved_chatgpt_connection(
-    application_home: &Path,
-    issuer: &str,
-    now_ms: u64,
-    selection: &AiExecutionSelection,
-) -> Result<StoredConnection, ProviderFailure> {
-    project_approved_chatgpt_connection_with(application_home, selection, || {
-        chatgpt_connection_readiness_unlocked(application_home, issuer, now_ms)
-    })
-}
-
-/// Refreshes a provider turn after one authentication rejection without
-/// allowing a replacement account or revoked approval to inherit that retry.
-/// The account observation, refresh, settings projection, and exact approval
-/// check share the connection-mutation boundary.
-pub(crate) fn refresh_approved_chatgpt_connection(
-    application_home: &Path,
-    token_client: &TokenClient,
-    now_ms: u64,
-    expected_account_id: &str,
-    selection: &AiExecutionSelection,
-) -> Result<StoredConnection, ProviderFailure> {
-    with_connection_mutation(|| {
-        let current = match load(application_home) {
-            LoadState::Connected(connection) => *connection,
-            LoadState::Absent | LoadState::Unusable => return Err(chatgpt_authentication_failure()),
-        };
-        if current.account_id != expected_account_id {
-            return Err(chatgpt_authentication_failure());
-        }
-
-        let readiness =
-            project_chatgpt_connection_readiness_unlocked_with(application_home, || {
-                let connection = force_refresh_connection_unlocked(
-                    application_home,
-                    token_client,
-                    now_ms,
-                    expected_account_id,
-                )
-                .map_err(|_| chatgpt_authentication_failure())?;
-                if !chatgpt_subscription_is_supported(connection.plan_type.as_deref()) {
-                    return Err(chatgpt_subscription_failure());
-                }
-                Ok(connection)
-            })
-            .map_err(|_| connection_task_error())?;
-        let connection = readiness?;
-        if connection.account_id != expected_account_id {
-            return Err(chatgpt_authentication_failure());
-        }
-        let approved = exact_approved_selection_unlocked(
-            application_home,
-            &chatgpt_connection_view(&connection),
-            Some(selection),
-        )
-        .map_err(|_| connection_task_error())?;
-        if approved.as_ref() != Some(selection) {
-            return Err(chatgpt_authentication_failure());
-        }
-        Ok(connection)
-    })
-}
-
-fn project_approved_chatgpt_connection_with(
-    application_home: &Path,
-    selection: &AiExecutionSelection,
-    inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
-) -> Result<StoredConnection, ProviderFailure> {
-    with_connection_mutation(|| {
-        let readiness =
-            project_chatgpt_connection_readiness_unlocked_with(application_home, inspect)
-                .map_err(|_| connection_task_error())?;
-        let connection = readiness?;
-        let approved = exact_approved_selection_unlocked(
-            application_home,
-            &chatgpt_connection_view(&connection),
-            Some(selection),
-        )
-        .map_err(|_| connection_task_error())?;
-        if approved.as_ref() != Some(selection) {
-            return Err(chatgpt_authentication_failure());
-        }
-        Ok(connection)
-    })
-}
-
-fn exact_approved_selection_unlocked(
-    application_home: &Path,
-    connection: &ProviderConnectionView,
-    preferred: Option<&AiExecutionSelection>,
-) -> Result<Option<AiExecutionSelection>, TenderCommandError> {
-    let database = settings_connection(application_home)?;
-    let settings = load_stored_settings(&database)?;
-    let Some(preferred) = preferred.or(settings.ai_execution_selection.as_ref()) else {
-        return Ok(None);
-    };
-    if settings.ai_execution_selection.as_ref() != Some(preferred)
-        || !selection_is_supported(connection, preferred)
-        || !settings
-            .ai_execution_approval
-            .as_ref()
-            .is_some_and(|approval| approval_matches(connection, preferred, approval))
-    {
-        return Ok(None);
-    }
-    Ok(Some(preferred.clone()))
-}
-
-fn connection_task_error() -> ProviderFailure {
-    ProviderFailure::new(
-        ProviderFailureCategory::ProcessFailed,
-        true,
-        "ChatGPT connection verification could not complete.",
-        Some("The local connection task stopped unexpectedly."),
-    )
-}
-
-fn chatgpt_subscription_is_supported(plan_type: Option<&str>) -> bool {
-    matches!(
-        plan_type,
-        Some(
-            "go" | "plus"
-                | "pro"
-                | "prolite"
-                | "team"
-                | "self_serve_business_prolite"
-                | "self_serve_business_usage_based"
-                | "business"
-                | "ent26"
-                | "enterprise_cbp_automation"
-                | "enterprise_cbp_usage_based"
-                | "enterprise"
-                | "edu"
-        )
-    )
-}
-
-pub(crate) fn chatgpt_connection_view(connection: &StoredConnection) -> ProviderConnectionView {
-    ProviderConnectionView {
-        connection_id: CODEX_CONNECTION_ID.to_owned(),
-        provider: AiProviderKind::Codex,
-        display_name: "ChatGPT subscription".to_owned(),
-        status: ProviderConnectionStatus::Ready,
-        account_label: Some(connection.account_id.clone()),
-        account_plan: connection.plan_type.clone(),
-        models: chatgpt_direct_models(),
-        catalogue_fetched_at: Some(CHATGPT_DIRECT_CATALOGUE_VERSION.to_owned()),
-        adapter_version: CHATGPT_DIRECT_ADAPTER_VERSION.to_owned(),
-        status_summary: "Ready through the Quantix-owned ChatGPT connection.".to_owned(),
-    }
-}
-
-fn chatgpt_connection_failure_view(category: ProviderFailureCategory) -> ProviderConnectionView {
+fn codex_connection_failure_view(category: ProviderFailureCategory) -> ProviderConnectionView {
     let (status, status_summary) = match category {
         ProviderFailureCategory::SubscriptionRequired => (
             ProviderConnectionStatus::SubscriptionRequired,
-            "The connected ChatGPT account does not provide an eligible subscription.",
+            "The connected OpenAI account does not provide an eligible Codex subscription.",
         ),
         ProviderFailureCategory::AuthenticationRequired => (
             ProviderConnectionStatus::AuthenticationRequired,
-            "Connect your ChatGPT subscription in Settings before retrying.",
+            "Connect an OpenAI account to use Codex intelligence.",
+        ),
+        ProviderFailureCategory::ProtocolInvalid => (
+            ProviderConnectionStatus::Incompatible,
+            "The installed Codex runtime is incompatible with Quantix.",
         ),
         _ => (
             ProviderConnectionStatus::TemporarilyUnavailable,
-            "ChatGPT is temporarily unavailable. Tender records remain accessible.",
+            "Codex is temporarily unavailable. Tender records remain accessible.",
         ),
     };
     ProviderConnectionView {
         connection_id: CODEX_CONNECTION_ID.to_owned(),
         provider: AiProviderKind::Codex,
-        display_name: "ChatGPT subscription".to_owned(),
+        display_name: "OpenAI account via Codex".to_owned(),
         status,
         account_label: None,
         account_plan: None,
         models: Vec::new(),
         catalogue_fetched_at: None,
-        adapter_version: CHATGPT_DIRECT_ADAPTER_VERSION.to_owned(),
+        adapter_version: codex_connection_version(),
         status_summary: status_summary.to_owned(),
     }
 }
 
-pub(crate) fn save_chatgpt_disconnected_unlocked(
-    application_home: &Path,
-) -> Result<(), TenderCommandError> {
+pub(crate) fn save_codex_disconnected(application_home: &Path) -> Result<(), TenderCommandError> {
     let mut database = settings_connection(application_home)?;
     let transaction = database
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(settings_store_error)?;
     upsert_connection(
         &transaction,
-        &chatgpt_connection_failure_view(ProviderFailureCategory::AuthenticationRequired),
+        &codex_connection_failure_view(ProviderFailureCategory::AuthenticationRequired),
     )?;
     let mut stored = load_stored_settings(&transaction)?;
     if stored
@@ -900,41 +586,6 @@ pub(crate) fn save_chatgpt_disconnected_unlocked(
     }
     store_application_settings(&transaction, &stored)?;
     transaction.commit().map_err(settings_store_error)
-}
-
-fn chatgpt_direct_models() -> Vec<ProviderModelOption> {
-    [
-        ("gpt-5.5", "GPT-5.5", true),
-        ("gpt-5.4", "GPT-5.4", false),
-        ("gpt-5.4-mini", "GPT-5.4 mini", false),
-        ("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark", false),
-    ]
-    .into_iter()
-    .map(|(model_id, display_name, is_default)| ProviderModelOption {
-        model_id: model_id.to_owned(),
-        display_name: display_name.to_owned(),
-        description: "ChatGPT direct Responses API model.".to_owned(),
-        is_default,
-        input_modalities: vec!["text".to_owned()],
-        reasoning_options: ["none", "low", "medium", "high", "xhigh"]
-            .into_iter()
-            .map(|effort| ProviderReasoningOption {
-                selection: ProviderReasoningSelection::CodexEffort(effort.to_owned()),
-                label: effort.to_owned(),
-                description: format!("{effort} reasoning effort"),
-                is_default: effort == "medium",
-            })
-            .collect(),
-    })
-    .collect()
-}
-
-#[cfg(any(not(feature = "runtime-fixture"), test))]
-fn current_time_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or_default()
 }
 
 /// Returns the application-wide selection that should seed a new Tender.
@@ -1078,162 +729,95 @@ fn selection_from_command(
     })
 }
 
-#[cfg(any(not(feature = "runtime-fixture"), test))]
-fn update_ai_execution_selection_projection(
+fn exact_approved_selection_unlocked(
     application_home: &Path,
-    command: &UpdateAiExecutionSelectionCommand,
-) -> Result<ApplicationSettingsView, TenderCommandError> {
-    update_ai_execution_selection_projection_with(application_home, command, || {
-        chatgpt_connection_readiness_unlocked(
-            application_home,
-            crate::chatgpt_login::PRODUCTION_ISSUER,
-            current_time_ms(),
-        )
-    })
+    connection: &ProviderConnectionView,
+    preferred: Option<&AiExecutionSelection>,
+) -> Result<Option<AiExecutionSelection>, TenderCommandError> {
+    let database = settings_connection(application_home)?;
+    let settings = load_stored_settings(&database)?;
+    let Some(preferred) = preferred.or(settings.ai_execution_selection.as_ref()) else {
+        return Ok(None);
+    };
+    if settings.ai_execution_selection.as_ref() != Some(preferred)
+        || !selection_is_supported(connection, preferred)
+        || !settings
+            .ai_execution_approval
+            .as_ref()
+            .is_some_and(|approval| approval_matches(connection, preferred, approval))
+    {
+        return Ok(None);
+    }
+    Ok(Some(preferred.clone()))
 }
 
-#[cfg(any(not(feature = "runtime-fixture"), test))]
-fn update_ai_execution_selection_projection_with(
-    application_home: &Path,
-    command: &UpdateAiExecutionSelectionCommand,
-    inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
-) -> Result<ApplicationSettingsView, TenderCommandError> {
-    mutate_ai_execution_selection_projection_with(application_home, command, false, inspect)
-}
-
-#[cfg(any(not(feature = "runtime-fixture"), test))]
-fn confirm_ai_execution_selection_projection(
-    application_home: &Path,
-    command: &UpdateAiExecutionSelectionCommand,
-) -> Result<ApplicationSettingsView, TenderCommandError> {
-    confirm_ai_execution_selection_projection_with(application_home, command, || {
-        chatgpt_connection_readiness_unlocked(
-            application_home,
-            crate::chatgpt_login::PRODUCTION_ISSUER,
-            current_time_ms(),
-        )
-    })
-}
-
-#[cfg(any(not(feature = "runtime-fixture"), test))]
-fn confirm_ai_execution_selection_projection_with(
-    application_home: &Path,
-    command: &UpdateAiExecutionSelectionCommand,
-    inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
-) -> Result<ApplicationSettingsView, TenderCommandError> {
-    mutate_ai_execution_selection_projection_with(application_home, command, true, inspect)
-}
-
-#[cfg(any(not(feature = "runtime-fixture"), test))]
-fn mutate_ai_execution_selection_projection_with(
-    application_home: &Path,
-    command: &UpdateAiExecutionSelectionCommand,
-    confirm: bool,
-    inspect: impl FnOnce() -> Result<StoredConnection, ProviderFailure>,
-) -> Result<ApplicationSettingsView, TenderCommandError> {
-    with_connection_mutation(|| {
-        let stored_connection = match inspect() {
-            Ok(connection) => connection,
-            Err(failure) => {
-                save_live_connection_unlocked(
-                    application_home,
-                    &chatgpt_connection_failure_view(failure.category),
-                )?;
-                return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
-            }
-        };
-        let connection = chatgpt_connection_view(&stored_connection);
-        let selection = match selection_from_command(&connection, command) {
-            Ok(selection) => selection,
-            Err(error) => {
-                save_live_connection_unlocked(application_home, &connection)?;
-                return Err(error);
-            }
-        };
-        let approval = confirm.then(|| AiExecutionApproval {
-            connection_id: selection.connection_id.clone(),
-            provider: selection.provider,
-            account_fingerprint: account_fingerprint(&connection),
-            model_id: selection.model_id.clone(),
-            reasoning: selection.reasoning.clone(),
-            data_destination: data_destination(connection.provider).to_owned(),
-            approved_at: Timestamp::now().to_string(),
-        });
-        save_connection_and_selection_unlocked(
-            application_home,
-            &connection,
-            &selection,
-            approval,
-        )?;
-        load_application_settings(application_home)
-    })
-}
-
-#[cfg(all(feature = "runtime-fixture", not(test)))]
-fn refresh_fixture_ai_execution_selection_projection(
+fn refresh_exact_ai_execution_selection_projection(
     application_home: &Path,
     preferred: Option<&AiExecutionSelection>,
 ) -> Result<Option<AiExecutionSelection>, TenderCommandError> {
-    with_connection_mutation(|| {
-        let view = load_application_settings(application_home)?;
-        let Some(selection) = preferred.or(view.ai_execution_selection.as_ref()) else {
-            return Ok(None);
-        };
-        let Some(connection) = view
-            .provider_connections
-            .iter()
-            .find(|connection| connection.connection_id == selection.connection_id)
-        else {
-            return Ok(None);
-        };
-        exact_approved_selection_unlocked(application_home, connection, Some(selection))
-    })
+    let view = load_application_settings(application_home)?;
+    let Some(selection) = preferred.or(view.ai_execution_selection.as_ref()) else {
+        return Ok(None);
+    };
+    let Some(connection) = view
+        .provider_connections
+        .iter()
+        .find(|connection| connection.connection_id == selection.connection_id)
+    else {
+        return Ok(None);
+    };
+    exact_approved_selection_unlocked(application_home, connection, Some(selection))
 }
 
-#[cfg(all(feature = "runtime-fixture", not(test)))]
-fn mutate_fixture_ai_execution_selection_projection(
+fn mutate_ai_execution_selection_projection(
     application_home: &Path,
     command: &UpdateAiExecutionSelectionCommand,
     confirm: bool,
 ) -> Result<ApplicationSettingsView, TenderCommandError> {
-    with_connection_mutation(|| {
-        let view = load_application_settings(application_home)?;
-        let connection = view
-            .provider_connections
-            .iter()
-            .find(|connection| {
-                connection.connection_id == command.connection_id
-                    && connection.status == ProviderConnectionStatus::Ready
-            })
-            .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-        let selection = selection_from_command(connection, command)?;
-        let approval = confirm.then(|| AiExecutionApproval {
-            connection_id: selection.connection_id.clone(),
-            provider: selection.provider,
-            account_fingerprint: account_fingerprint(connection),
-            model_id: selection.model_id.clone(),
-            reasoning: selection.reasoning.clone(),
-            data_destination: data_destination(connection.provider).to_owned(),
-            approved_at: Timestamp::now().to_string(),
-        });
-        save_connection_and_selection_unlocked(application_home, connection, &selection, approval)?;
-        load_application_settings(application_home)
-    })
+    let view = load_application_settings(application_home)?;
+    let connection = view
+        .provider_connections
+        .iter()
+        .find(|connection| {
+            connection.connection_id == command.connection_id
+                && connection.status == ProviderConnectionStatus::Ready
+        })
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
+    let selection = selection_from_command(connection, command)?;
+    let approval = confirm.then(|| AiExecutionApproval {
+        connection_id: selection.connection_id.clone(),
+        provider: selection.provider,
+        account_fingerprint: account_fingerprint(connection),
+        model_id: selection.model_id.clone(),
+        reasoning: selection.reasoning.clone(),
+        data_destination: data_destination(connection.provider).to_owned(),
+        approved_at: Timestamp::now().to_string(),
+    });
+    save_connection_and_selection_unlocked(application_home, connection, &selection, approval)?;
+    load_application_settings(application_home)
 }
 
-#[cfg(any(test, feature = "runtime-fixture"))]
 pub(crate) fn save_live_connection(
     application_home: &Path,
     connection: &ProviderConnectionView,
 ) -> Result<(), TenderCommandError> {
-    with_connection_mutation(|| save_live_connection_unlocked(application_home, connection))
+    save_live_connection_unlocked(application_home, connection)
 }
 
-pub(crate) fn save_authorized_connection_projection_unlocked(
+pub(crate) fn load_codex_connection_view(
     application_home: &Path,
-    connection: &StoredConnection,
-) -> Result<(), TenderCommandError> {
-    save_live_connection_unlocked(application_home, &chatgpt_connection_view(connection))
+) -> Option<ProviderConnectionView> {
+    let database = settings_connection(application_home).ok()?;
+    let raw = database
+        .query_row(
+            "SELECT connection_json FROM provider_connections WHERE connection_id = ?1",
+            [CODEX_CONNECTION_ID],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .ok()?
+        .or(None)?;
+    serde_json::from_str(&raw).ok()
 }
 
 fn save_live_connection_unlocked(
@@ -1281,7 +865,6 @@ fn save_live_connection_unlocked(
     transaction.commit().map_err(settings_store_error)
 }
 
-#[cfg(feature = "runtime-fixture")]
 pub(crate) fn save_codex_connection_status(
     application_home: &Path,
     status: ProviderConnectionStatus,
@@ -1496,7 +1079,7 @@ fn runtime_fixture_connection_and_selection() -> (ProviderConnectionView, AiExec
             is_default: true,
             input_modalities: vec!["text".to_owned()],
             reasoning_options: vec![ProviderReasoningOption {
-                selection: ProviderReasoningSelection::CodexEffort("medium".to_owned()),
+                selection: ProviderReasoningSelection::Effort("medium".to_owned()),
                 label: "medium".to_owned(),
                 description: "Fixture reasoning effort".to_owned(),
                 is_default: true,
@@ -1510,7 +1093,7 @@ fn runtime_fixture_connection_and_selection() -> (ProviderConnectionView, AiExec
         connection_id: connection.connection_id.clone(),
         provider: connection.provider,
         model_id: "gpt-5.6-terra".to_owned(),
-        reasoning: ProviderReasoningSelection::CodexEffort("medium".to_owned()),
+        reasoning: ProviderReasoningSelection::Effort("medium".to_owned()),
         catalogue_fetched_at: "fixture-catalogue".to_owned(),
         adapter_version: connection.adapter_version.clone(),
     };
@@ -1531,14 +1114,12 @@ fn approve_runtime_fixture_ai_selection_projection(
         data_destination: data_destination(connection.provider).to_owned(),
         approved_at: Timestamp::now().to_string(),
     };
-    with_connection_mutation(|| {
-        save_connection_and_selection_unlocked(
-            application_home,
-            &connection,
-            &selection,
-            Some(approval),
-        )
-    })
+    save_connection_and_selection_unlocked(
+        application_home,
+        &connection,
+        &selection,
+        Some(approval),
+    )
 }
 
 pub(crate) fn load_application_settings(
@@ -1561,7 +1142,7 @@ pub(crate) fn load_application_settings(
         })
         .collect::<Result<Vec<ProviderConnectionView>, TenderCommandError>>()?;
     if provider_connections.is_empty() {
-        provider_connections.push(chatgpt_connection_failure_view(
+        provider_connections.push(codex_connection_failure_view(
             ProviderFailureCategory::AuthenticationRequired,
         ));
     }
@@ -1569,8 +1150,11 @@ pub(crate) fn load_application_settings(
         general_preferences: settings.general_preferences,
         ai_execution_selection: settings.ai_execution_selection,
         ai_execution_approval: settings.ai_execution_approval,
+        chatgpt: crate::chatgpt_login::chatgpt_connection_status_from_view(
+            &provider_connections.first().cloned(),
+            crate::chatgpt_login::ChatGptLoginPhase::Idle,
+        ),
         provider_connections,
-        chatgpt: crate::chatgpt_login::chatgpt_connection_status(application_home),
         storage: ApplicationStorageFacts {
             application_home: application_home.to_string_lossy().into_owned(),
             tender_backups_are_preserved: true,
@@ -1622,23 +1206,15 @@ fn settings_json_error(_: serde_json::Error) -> TenderCommandError {
     TenderCommandError::new(TenderErrorCode::IntegrityFailed)
 }
 
-#[cfg(any(test, feature = "runtime-fixture"))]
 pub(crate) fn codex_connection_version() -> String {
     crate::agent_runtime::CODEX_VERSION.to_owned()
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
     use std::path::PathBuf;
-    use std::sync::mpsc;
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
 
     use super::*;
-    use crate::chatgpt_login::PRODUCTION_ISSUER;
-    use crate::chatgpt_oauth::save;
 
     fn temp_home(name: &str) -> PathBuf {
         let dir =
@@ -1648,15 +1224,30 @@ mod tests {
         dir
     }
 
-    fn stored_connection(expires_at_ms: u64, plan_type: Option<&str>) -> StoredConnection {
-        StoredConnection {
-            access_token: "at-current".to_owned(),
-            refresh_token: "rt-current".to_owned(),
-            id_token: "idt-current".to_owned(),
-            expires_at_ms,
-            account_id: "acc-77".to_owned(),
-            plan_type: plan_type.map(str::to_owned),
-            compute_residency: None,
+    fn fixture_connection(account_id: &str) -> ProviderConnectionView {
+        ProviderConnectionView {
+            connection_id: CODEX_CONNECTION_ID.to_owned(),
+            provider: AiProviderKind::Codex,
+            display_name: "OpenAI account via Codex".to_owned(),
+            status: ProviderConnectionStatus::Ready,
+            account_label: Some(account_id.to_owned()),
+            account_plan: Some("plus".to_owned()),
+            models: vec![ProviderModelOption {
+                model_id: "gpt-5.6-terra".to_owned(),
+                display_name: "GPT-5.6 Terra".to_owned(),
+                description: "Fixture Codex model".to_owned(),
+                is_default: true,
+                input_modalities: vec!["text".to_owned()],
+                reasoning_options: vec![ProviderReasoningOption {
+                    selection: ProviderReasoningSelection::Effort("medium".to_owned()),
+                    label: "medium".to_owned(),
+                    description: "Fixture reasoning effort".to_owned(),
+                    is_default: true,
+                }],
+            }],
+            catalogue_fetched_at: Some("2026-08-30T00:00:00Z".to_owned()),
+            adapter_version: codex_connection_version(),
+            status_summary: "Ready to run Tender work.".to_owned(),
         }
     }
 
@@ -1672,18 +1263,6 @@ mod tests {
             "settings database ready: {outcome:?}"
         );
         home
-    }
-
-    fn ready_connection(account_id: &str) -> ProviderConnectionView {
-        chatgpt_connection_view(&StoredConnection {
-            access_token: format!("at-{account_id}"),
-            refresh_token: format!("rt-{account_id}"),
-            id_token: format!("idt-{account_id}"),
-            expires_at_ms: 9_999_999,
-            account_id: account_id.to_owned(),
-            plan_type: Some("plus".to_owned()),
-            compute_residency: None,
-        })
     }
 
     fn store_test_approval(
@@ -1716,497 +1295,51 @@ mod tests {
     }
 
     #[test]
-    fn ready_refresh_projection_cannot_finish_after_disconnect_projection() {
-        let home = initialized_home("refresh-disconnect-serialization");
-        let stored = stored_connection(9_999_999, Some("plus"));
-        save(&home, &stored).unwrap();
-        let (observed_tx, observed_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let refresh_home = home.clone();
-        let refresh = std::thread::spawn(move || {
-            project_chatgpt_connection_readiness_with(&refresh_home, || {
-                observed_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
-                Ok(stored)
-            })
-        });
-        observed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-
-        let (attempting_tx, attempting_rx) = mpsc::channel();
-        let (entered_tx, entered_rx) = mpsc::channel();
-        let disconnect_home = home.clone();
-        let disconnect = std::thread::spawn(move || {
-            attempting_tx.send(()).unwrap();
-            crate::chatgpt_oauth::with_connection_mutation(|| {
-                entered_tx.send(()).unwrap();
-                crate::chatgpt_oauth::clear_unlocked(&disconnect_home).unwrap();
-                save_chatgpt_disconnected_unlocked(&disconnect_home).unwrap();
-            });
-        });
-        attempting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(entered_rx.recv_timeout(Duration::from_millis(150)).is_err());
-
-        release_tx.send(()).unwrap();
-        assert_eq!(
-            refresh.join().unwrap().unwrap().unwrap().account_id,
-            "acc-77"
-        );
-        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        disconnect.join().unwrap();
-
-        assert!(matches!(load(&home), LoadState::Absent));
+    fn codex_connection_status_follows_the_persisted_connection_view() {
+        let home = initialized_home("status-derivation");
         let view = load_application_settings(&home).unwrap();
         assert_eq!(
-            view.provider_connections[0].status,
-            ProviderConnectionStatus::AuthenticationRequired
+            view.chatgpt.state,
+            crate::chatgpt_login::ChatGptConnectionState::Absent
         );
         assert!(view.ai_execution_selection.is_none());
-        assert!(view.ai_execution_approval.is_none());
-        let _ = std::fs::remove_dir_all(&home);
-    }
 
-    #[test]
-    fn runtime_failure_projection_cannot_finish_after_login_ready_projection() {
-        let home = initialized_home("refresh-login-serialization");
-        let connected = stored_connection(9_999_999, Some("plus"));
-        let (observed_tx, observed_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let refresh_home = home.clone();
-        let refresh = std::thread::spawn(move || {
-            project_chatgpt_connection_readiness_with(&refresh_home, || {
-                observed_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
-                Err(chatgpt_authentication_failure())
-            })
-        });
-        observed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-
-        let (attempting_tx, attempting_rx) = mpsc::channel();
-        let (entered_tx, entered_rx) = mpsc::channel();
-        let login_home = home.clone();
-        let login = std::thread::spawn(move || {
-            attempting_tx.send(()).unwrap();
-            crate::chatgpt_oauth::with_connection_mutation(|| {
-                entered_tx.send(()).unwrap();
-                crate::chatgpt_oauth::save_unlocked(&login_home, &connected).unwrap();
-                save_authorized_connection_projection_unlocked(&login_home, &connected).unwrap();
-            });
-        });
-        attempting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(entered_rx.recv_timeout(Duration::from_millis(150)).is_err());
-
-        release_tx.send(()).unwrap();
-        assert_eq!(
-            refresh.join().unwrap().unwrap().unwrap_err().category,
-            ProviderFailureCategory::AuthenticationRequired
-        );
-        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        login.join().unwrap();
-
-        assert!(matches!(load(&home), LoadState::Connected(_)));
+        save_live_connection(&home, &fixture_connection("account-77")).unwrap();
         let view = load_application_settings(&home).unwrap();
         assert_eq!(
             view.chatgpt.state,
             crate::chatgpt_login::ChatGptConnectionState::Connected
         );
-        assert_eq!(
-            view.provider_connections[0].status,
-            ProviderConnectionStatus::Ready
-        );
-        assert_eq!(
-            view.provider_connections[0].account_label.as_deref(),
-            Some("acc-77")
-        );
+        assert_eq!(view.chatgpt.account_id.as_deref(), Some("account-77"));
+        assert_eq!(view.chatgpt.plan_type.as_deref(), Some("plus"));
         assert!(view.ai_execution_selection.is_some());
-        assert!(view.ai_execution_approval.is_none());
-        let _ = std::fs::remove_dir_all(&home);
-    }
+        assert_eq!(
+            view.chatgpt.login_phase,
+            crate::chatgpt_login::ChatGptLoginPhase::Idle
+        );
 
-    #[test]
-    fn selection_update_cannot_publish_after_a_later_disconnect() {
-        let home = initialized_home("selection-update-disconnect-serialization");
-        let stored = stored_connection(9_999_999, Some("plus"));
-        save(&home, &stored).unwrap();
-        save_live_connection(&home, &chatgpt_connection_view(&stored)).unwrap();
-        let command = UpdateAiExecutionSelectionCommand {
-            connection_id: CODEX_CONNECTION_ID.to_owned(),
-            model_id: "gpt-5.4".to_owned(),
-            reasoning: ProviderReasoningSelection::CodexEffort("high".to_owned()),
-        };
-        let (observed_tx, observed_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let update_home = home.clone();
-        let update = std::thread::spawn(move || {
-            update_ai_execution_selection_projection_with(&update_home, &command, || {
-                observed_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
-                Ok(stored)
-            })
-        });
-        observed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-
-        let (attempting_tx, attempting_rx) = mpsc::channel();
-        let (entered_tx, entered_rx) = mpsc::channel();
-        let disconnect_home = home.clone();
-        let disconnect = std::thread::spawn(move || {
-            attempting_tx.send(()).unwrap();
-            crate::chatgpt_oauth::with_connection_mutation(|| {
-                entered_tx.send(()).unwrap();
-                crate::chatgpt_oauth::clear_unlocked(&disconnect_home).unwrap();
-                save_chatgpt_disconnected_unlocked(&disconnect_home).unwrap();
-            });
-        });
-        attempting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(entered_rx.recv_timeout(Duration::from_millis(150)).is_err());
-
-        release_tx.send(()).unwrap();
-        let selected = update.join().unwrap().unwrap();
-        assert_eq!(selected.ai_execution_selection.unwrap().model_id, "gpt-5.4");
-        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        disconnect.join().unwrap();
-
-        assert!(matches!(load(&home), LoadState::Absent));
+        save_codex_disconnected(&home).unwrap();
         let view = load_application_settings(&home).unwrap();
         assert_eq!(
-            view.provider_connections[0].status,
-            ProviderConnectionStatus::AuthenticationRequired
+            view.chatgpt.state,
+            crate::chatgpt_login::ChatGptConnectionState::Absent
         );
         assert!(view.ai_execution_selection.is_none());
         assert!(view.ai_execution_approval.is_none());
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn confirmation_cannot_publish_an_old_account_approval_after_account_replacement() {
-        let home = initialized_home("confirmation-account-serialization");
-        let original = StoredConnection {
-            account_id: "account-a".to_owned(),
-            ..stored_connection(9_999_999, Some("plus"))
-        };
-        save(&home, &original).unwrap();
-        save_live_connection(&home, &chatgpt_connection_view(&original)).unwrap();
-        let command = UpdateAiExecutionSelectionCommand {
-            connection_id: CODEX_CONNECTION_ID.to_owned(),
-            model_id: "gpt-5.5".to_owned(),
-            reasoning: ProviderReasoningSelection::CodexEffort("medium".to_owned()),
-        };
-        let (observed_tx, observed_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let confirmation_home = home.clone();
-        let confirmation = std::thread::spawn(move || {
-            confirm_ai_execution_selection_projection_with(&confirmation_home, &command, || {
-                observed_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
-                Ok(original)
-            })
-        });
-        observed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-
-        let replacement = StoredConnection {
-            account_id: "account-b".to_owned(),
-            ..stored_connection(9_999_999, Some("plus"))
-        };
-        let (attempting_tx, attempting_rx) = mpsc::channel();
-        let (entered_tx, entered_rx) = mpsc::channel();
-        let replacement_home = home.clone();
-        let replacement_thread = std::thread::spawn(move || {
-            attempting_tx.send(()).unwrap();
-            crate::chatgpt_oauth::with_connection_mutation(|| {
-                entered_tx.send(()).unwrap();
-                crate::chatgpt_oauth::save_unlocked(&replacement_home, &replacement).unwrap();
-                save_authorized_connection_projection_unlocked(&replacement_home, &replacement)
-                    .unwrap();
-            });
-        });
-        attempting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(entered_rx.recv_timeout(Duration::from_millis(150)).is_err());
-
-        release_tx.send(()).unwrap();
-        let approved = confirmation.join().unwrap().unwrap();
-        assert!(approved.ai_execution_approval.is_some());
-        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        replacement_thread.join().unwrap();
-
-        match load(&home) {
-            LoadState::Connected(connection) => assert_eq!(connection.account_id, "account-b"),
-            other => panic!("expected replacement connection, got {other:?}"),
-        }
-        let view = load_application_settings(&home).unwrap();
-        assert_eq!(
-            view.provider_connections[0].account_label.as_deref(),
-            Some("account-b")
-        );
-        assert!(view.ai_execution_selection.is_some());
-        assert!(view.ai_execution_approval.is_none());
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[tokio::test]
-    async fn stale_cached_tender_readiness_cannot_authorize_a_replacement_account() {
-        let home = initialized_home("stale-tender-ready-account-replacement");
-        let host = crate::QuantixHost::new(&home, &home);
-        let original = StoredConnection {
-            account_id: "account-a".to_owned(),
-            ..stored_connection(9_999_999_999, Some("plus"))
-        };
-        save(&home, &original).unwrap();
-        store_test_approval(
-            &home,
-            &chatgpt_connection_view(&original),
-            "ChatGPT subscription",
-        );
-        let tender = host
-            .create_tender(crate::tender_store::CreateTenderCommand {
-                name: "Cached ready tender".to_owned(),
-            })
-            .unwrap();
-        let tender_id = TenderId::parse(&tender.tender_id).unwrap();
-        assert_eq!(
-            host.inspect_tender_ai_execution(InspectTenderAiExecutionCommand {
-                tender_id: tender.tender_id.clone(),
-            })
-            .unwrap()
-            .readiness,
-            TenderAiSelectionReadiness::Ready
-        );
-
-        let replacement = StoredConnection {
-            account_id: "account-b".to_owned(),
-            ..stored_connection(9_999_999_999, Some("plus"))
-        };
-        save(&home, &replacement).unwrap();
-        save_live_connection(&home, &chatgpt_connection_view(&replacement)).unwrap();
-
-        assert_eq!(
-            host.require_current_tender_ai_selection(&tender_id)
-                .await
-                .unwrap_err()
-                .code,
-            TenderErrorCode::AiProviderRequired
-        );
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn provider_turn_rejects_a_selection_approved_for_another_account() {
-        let home = initialized_home("provider-turn-account-selection");
-        let original = StoredConnection {
-            account_id: "account-a".to_owned(),
-            ..stored_connection(9_999_999_999, Some("plus"))
-        };
-        save(&home, &original).unwrap();
-        let selection = store_test_approval(
-            &home,
-            &chatgpt_connection_view(&original),
-            "ChatGPT subscription",
-        );
-        let replacement = StoredConnection {
-            account_id: "account-b".to_owned(),
-            ..stored_connection(9_999_999_999, Some("plus"))
-        };
-        save(&home, &replacement).unwrap();
-
-        let failure =
-            project_approved_chatgpt_connection_with(&home, &selection, || Ok(replacement))
-                .unwrap_err();
-
-        assert_eq!(
-            failure.category,
-            ProviderFailureCategory::AuthenticationRequired
-        );
-        let view = load_application_settings(&home).unwrap();
-        assert_eq!(
-            view.provider_connections[0].account_label.as_deref(),
-            Some("account-b")
-        );
-        assert!(view.ai_execution_approval.is_none());
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn unauthorized_retry_forces_exchange_of_a_nonexpired_rejected_access_token() {
-        let home = initialized_home("provider-retry-forced-refresh");
-        let now_ms = 1_000_000;
-        let original = StoredConnection {
-            expires_at_ms: 2_000_000,
-            account_id: "account-a".to_owned(),
-            ..stored_connection(2_000_000, Some("plus"))
-        };
-        assert!(!needs_refresh(&original, now_ms));
-        save(&home, &original).unwrap();
-        let selection = store_test_approval(
-            &home,
-            &chatgpt_connection_view(&original),
-            "ChatGPT subscription",
-        );
-        let (issuer, requests) = mock_issuer(refresh_body("account-a", Some("plus"), None));
-        let token_client = TokenClient::new(&issuer).unwrap();
-
-        let refreshed = refresh_approved_chatgpt_connection(
-            &home,
-            &token_client,
-            now_ms,
-            "account-a",
-            &selection,
-        )
-        .expect("a 401 must force one exchange even before proactive refresh is due");
-
-        assert_eq!(refreshed.account_id, "account-a");
-        assert_eq!(refreshed.access_token, "at-new");
-        assert_ne!(refreshed.access_token, original.access_token);
-        let requests = requests.lock().unwrap();
-        assert_eq!(requests.len(), 1, "the rejected token is exchanged once");
-        assert!(requests[0].contains("grant_type=refresh_token"));
-        assert!(requests[0].contains("refresh_token=rt-current"));
-        drop(requests);
-        match load(&home) {
-            LoadState::Connected(current) => assert_eq!(current.access_token, "at-new"),
-            other => panic!("forced refresh must persist account A, got {other:?}"),
-        }
-        assert!(load_application_settings(&home)
-            .unwrap()
-            .ai_execution_approval
-            .is_some());
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn unauthorized_retry_never_persists_a_refreshed_different_account() {
-        let home = initialized_home("provider-retry-returned-account-mismatch");
-        let now_ms = 1_000_000;
-        let original = StoredConnection {
-            expires_at_ms: 2_000_000,
-            account_id: "account-a".to_owned(),
-            ..stored_connection(2_000_000, Some("plus"))
-        };
-        save(&home, &original).unwrap();
-        let selection = store_test_approval(
-            &home,
-            &chatgpt_connection_view(&original),
-            "ChatGPT subscription",
-        );
-        let (issuer, requests) = mock_issuer(refresh_body("account-b", Some("plus"), None));
-        let token_client = TokenClient::new(&issuer).unwrap();
-
-        let failure = refresh_approved_chatgpt_connection(
-            &home,
-            &token_client,
-            now_ms,
-            "account-a",
-            &selection,
-        )
-        .expect_err("a different returned identity must fail before persistence");
-
-        assert_eq!(
-            failure.category,
-            ProviderFailureCategory::AuthenticationRequired
-        );
-        assert_eq!(requests.lock().unwrap().len(), 1);
-        match load(&home) {
-            LoadState::Connected(current) => {
-                assert_eq!(current.account_id, "account-a");
-                assert_eq!(current.access_token, "at-current");
-                assert_eq!(current.refresh_token, "rt-current");
-            }
-            other => panic!("account A must remain stored, got {other:?}"),
-        }
-        let view = load_application_settings(&home).unwrap();
-        assert_eq!(
-            view.provider_connections[0].status,
-            ProviderConnectionStatus::AuthenticationRequired
-        );
-        assert!(view.ai_execution_approval.is_none());
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn unauthorized_retry_rejects_replacement_account_before_refresh() {
-        let home = initialized_home("provider-retry-account-replacement");
-        let original = StoredConnection {
-            account_id: "account-a".to_owned(),
-            ..stored_connection(9_999_999_999, Some("plus"))
-        };
-        save(&home, &original).unwrap();
-        let selection = store_test_approval(
-            &home,
-            &chatgpt_connection_view(&original),
-            "ChatGPT subscription",
-        );
-        let replacement = StoredConnection {
-            account_id: "account-b".to_owned(),
-            ..stored_connection(9_999_999_999, Some("plus"))
-        };
-        save(&home, &replacement).unwrap();
-        let (issuer, requests) = mock_issuer(refresh_body("account-b", Some("plus"), None));
-        let token_client = TokenClient::new(&issuer).unwrap();
-
-        let failure = refresh_approved_chatgpt_connection(
-            &home,
-            &token_client,
-            9_999_999_999,
-            "account-a",
-            &selection,
-        )
-        .unwrap_err();
-
-        assert_eq!(
-            failure.category,
-            ProviderFailureCategory::AuthenticationRequired
-        );
-        assert!(
-            requests.lock().unwrap().is_empty(),
-            "a replacement account must be rejected before spending its refresh credential"
-        );
-        match load(&home) {
-            LoadState::Connected(current) => assert_eq!(current.account_id, "account-b"),
-            other => panic!("replacement account remains stored, got {other:?}"),
-        }
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn projection_failure_never_restores_a_consumed_refresh_token() {
-        let home = initialized_home("projection-failure-forward-only-refresh");
-        let previous = stored_connection(1_000, Some("plus"));
-        save(&home, &previous).unwrap();
-        let database = rusqlite::Connection::open(home.join("installation.sqlite")).unwrap();
-        database
-            .execute("DROP TABLE provider_connections", [])
-            .unwrap();
-        drop(database);
-        let rotated = StoredConnection {
-            access_token: "at-rotated".to_owned(),
-            refresh_token: "rt-rotated".to_owned(),
-            expires_at_ms: 9_999_999_999,
-            ..previous
-        };
-
-        assert!(project_chatgpt_connection_readiness_with(&home, || {
-            crate::chatgpt_oauth::save_unlocked(&home, &rotated).unwrap();
-            Ok(rotated)
-        })
-        .is_err());
-        match load(&home) {
-            LoadState::Connected(connection) => {
-                assert_eq!(connection.access_token, "at-rotated");
-                assert_eq!(connection.refresh_token, "rt-rotated");
-            }
-            other => panic!("rotated connection must remain authoritative, got {other:?}"),
-        }
         let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
     fn live_connection_account_change_invalidates_execution_approval() {
         let home = initialized_home("approval-account-change");
-        let original = ready_connection("account-a");
+        let original = fixture_connection("account-a");
         let selection = store_test_approval(&home, &original, "ChatGPT subscription");
         assert!(load_application_settings(&home)
             .unwrap()
             .ai_execution_approval
             .is_some());
 
-        save_live_connection(&home, &ready_connection("account-b")).unwrap();
+        save_live_connection(&home, &fixture_connection("account-b")).unwrap();
 
         let view = load_application_settings(&home).unwrap();
         assert_eq!(view.ai_execution_selection.as_ref(), Some(&selection));
@@ -2217,7 +1350,7 @@ mod tests {
     #[test]
     fn live_connection_data_destination_mismatch_invalidates_execution_approval() {
         let home = initialized_home("approval-destination-change");
-        let connection = ready_connection("account-a");
+        let connection = fixture_connection("account-a");
         store_test_approval(&home, &connection, "A different destination");
 
         save_live_connection(&home, &connection).unwrap();
@@ -2230,296 +1363,65 @@ mod tests {
     }
 
     #[test]
-    fn direct_chatgpt_catalogue_uses_the_stored_account_and_stable_version() {
-        let connection = chatgpt_connection_view(&stored_connection(9_999_999, Some("plus")));
-
-        assert_eq!(connection.status, ProviderConnectionStatus::Ready);
-        assert_eq!(connection.account_label.as_deref(), Some("acc-77"));
-        assert_eq!(connection.account_plan.as_deref(), Some("plus"));
-        assert_eq!(connection.adapter_version, "chatgpt-direct-v1");
-        assert_eq!(
-            connection
-                .models
-                .iter()
-                .map(|model| model.model_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
-        );
-    }
-
-    fn jwt_id_token(
-        account_id: &str,
-        plan_type: Option<&str>,
-        compute_residency: Option<&str>,
-    ) -> String {
-        let header =
-            crate::chatgpt_oauth::crypto::base64url_encode(br#"{"alg":"RS256","typ":"JWT"}"#);
-        let mut claims = serde_json::Map::new();
-        claims.insert(
-            "chatgpt_account_id".to_owned(),
-            serde_json::Value::String(account_id.to_owned()),
-        );
-        if let Some(plan_type) = plan_type {
-            claims.insert(
-                "https://api.openai.com/auth".to_owned(),
-                serde_json::json!({
-                    "chatgpt_plan_type": plan_type,
-                    "chatgpt_compute_residency": compute_residency,
-                }),
-            );
-        }
-        let payload = crate::chatgpt_oauth::crypto::base64url_encode(
-            serde_json::Value::Object(claims).to_string().as_bytes(),
-        );
-        format!("{header}.{payload}.signature")
-    }
-
-    fn refresh_body(
-        account_id: &str,
-        plan_type: Option<&str>,
-        compute_residency: Option<&str>,
-    ) -> String {
-        serde_json::json!({
-            "access_token": "at-new",
-            "refresh_token": "rt-new",
-            "id_token": jwt_id_token(account_id, plan_type, compute_residency),
-            "expires_in": 3600,
-        })
-        .to_string()
-    }
-
-    fn mock_issuer(body: impl Into<String>) -> (String, Arc<Mutex<Vec<String>>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let bodies: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let shared = Arc::clone(&bodies);
-        let body = body.into();
-        std::thread::spawn(move || {
-            for mut stream in listener.incoming().flatten() {
-                if let Some(form) = read_form(&mut stream) {
-                    shared.lock().unwrap().push(form);
-                }
-                write_body(&mut stream, &body);
+    fn settings_written_before_the_reasoning_rename_still_load() {
+        // Verbatim shape of an installation written before 162dfac renamed
+        // CodexEffort to Effort. Losing this compatibility silently breaks every
+        // pre-existing installation: the settings row stops parsing, so saving a
+        // provider connection fails and Settings never receives one to display.
+        let stored = r#"{
+            "general_preferences": {
+                "appearance": "system",
+                "reduced_motion": false,
+                "larger_text": false,
+                "notify_when_attention_needed": true
+            },
+            "ai_execution_selection": {
+                "connection_id": "codex_chatgpt",
+                "provider": "codex",
+                "model_id": "gpt-5.3-codex-spark",
+                "reasoning": { "kind": "codex_effort", "value": "low" },
+                "catalogue_fetched_at": "chatgpt-direct-v1",
+                "adapter_version": "chatgpt-direct-v1"
+            },
+            "ai_execution_approval": {
+                "connection_id": "codex_chatgpt",
+                "provider": "codex",
+                "account_fingerprint": "967e4e50",
+                "model_id": "gpt-5.3-codex-spark",
+                "reasoning": { "kind": "codex_effort", "value": "low" },
+                "data_destination": "ChatGPT subscription",
+                "approved_at": "2026-08-23T03:39:43.1440419Z"
             }
-        });
-        (format!("http://127.0.0.1:{port}"), bodies)
-    }
+        }"#;
 
-    fn read_form(stream: &mut TcpStream) -> Option<String> {
-        let mut raw = Vec::new();
-        let mut chunk = [0u8; 512];
-        loop {
-            if raw.windows(4).any(|window| window == b"\r\n\r\n") {
-                break;
-            }
-            let read = stream.read(&mut chunk).ok()?;
-            if read == 0 {
-                break;
-            }
-            raw.extend_from_slice(&chunk[..read]);
-        }
-        let split = raw.windows(4).position(|window| window == b"\r\n\r\n")?;
-        Some(String::from_utf8_lossy(&raw[split + 4..]).to_string())
-    }
-
-    fn write_body(stream: &mut TcpStream, body: &str) {
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let _ = stream.write_all(response.as_bytes());
-        let _ = stream.flush();
-    }
-
-    #[test]
-    fn a_fresh_eligible_connection_is_ready_without_contacting_the_issuer() {
-        let home = temp_home("ready");
-        save(&home, &stored_connection(9_999_999, Some("plus"))).unwrap();
-
-        let connection = chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, 1_000_000)
-            .expect("fresh eligible connection is ready");
-
-        assert_eq!(connection.access_token, "at-current");
-        assert_eq!(connection.plan_type.as_deref(), Some("plus"));
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn an_expired_connection_refreshes_through_the_issuer_and_persists() {
-        let home = temp_home("refresh-required");
-        save(&home, &stored_connection(1_000_000, Some("team"))).unwrap();
-        let (issuer, bodies) = mock_issuer(refresh_body("acc-refreshed", Some("plus"), Some("eu")));
-
-        let connection = chatgpt_connection_readiness(&home, &issuer, 2_000_000)
-            .expect("expired connection must auto-refresh");
-
-        assert_eq!(connection.access_token, "at-new");
-        assert_eq!(connection.refresh_token, "rt-new");
-        assert_eq!(connection.account_id, "acc-refreshed");
-        assert_eq!(connection.plan_type.as_deref(), Some("plus"));
-        assert_eq!(connection.compute_residency.as_deref(), Some("eu"));
-        assert_eq!(connection.expires_at_ms, 2_000_000 + 3_600_000);
-        let forms = bodies.lock().unwrap();
-        assert_eq!(forms.len(), 1, "exactly one refresh call");
-        assert!(forms[0].contains("grant_type=refresh_token"));
-        drop(forms);
-        match load(&home) {
-            LoadState::Connected(persisted) => {
-                assert_eq!(persisted.refresh_token, "rt-new");
-                assert_eq!(persisted.account_id, "acc-refreshed");
-                assert_eq!(persisted.plan_type.as_deref(), Some("plus"));
-                assert_eq!(persisted.compute_residency.as_deref(), Some("eu"));
-            }
-            other => panic!("expected persisted refreshed store, got {other:?}"),
-        }
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn an_expired_stale_plan_refreshes_before_subscription_validation() {
-        let home = temp_home("stale-plan-refresh");
-        save(&home, &stored_connection(1_000, Some("free"))).unwrap();
-        let (issuer, bodies) = mock_issuer(refresh_body(
-            "acc-current",
-            Some("team"),
-            Some("no_constraint"),
-        ));
-
-        let connection = chatgpt_connection_readiness(&home, &issuer, 2_000_000)
-            .expect("the refreshed eligible identity is authoritative");
-
-        assert_eq!(connection.account_id, "acc-current");
-        assert_eq!(connection.plan_type.as_deref(), Some("team"));
-        assert_eq!(connection.compute_residency, None);
-        assert_eq!(bodies.lock().unwrap().len(), 1, "refresh is attempted");
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn an_absent_store_requires_authentication() {
-        let home = temp_home("absent");
-
-        let failure = chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, 1_000_000)
-            .expect_err("no store must block readiness");
-
+        let settings: StoredApplicationSettings =
+            serde_json::from_str(stored).expect("settings predating the rename still parse");
         assert_eq!(
-            failure.category,
-            ProviderFailureCategory::AuthenticationRequired
+            settings.ai_execution_selection.unwrap().reasoning,
+            ProviderReasoningSelection::Effort("low".to_owned())
         );
-        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(
+            settings.ai_execution_approval.unwrap().reasoning,
+            ProviderReasoningSelection::Effort("low".to_owned())
+        );
     }
 
     #[test]
-    fn an_unusable_store_requires_authentication() {
-        let home = temp_home("unusable");
-        std::fs::write(home.join("auth.json"), "<html>garbage</html>").unwrap();
-
-        let failure = chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, 1_000_000)
-            .expect_err("corrupt store must block readiness");
-
-        assert_eq!(
-            failure.category,
-            ProviderFailureCategory::AuthenticationRequired
-        );
-        let _ = std::fs::remove_dir_all(&home);
+    fn reasoning_selection_serializes_under_the_current_tag() {
+        // The alias is read-only compatibility; new writes must use the current name.
+        let json = serde_json::to_string(&ProviderReasoningSelection::Effort("high".to_owned()))
+            .expect("reasoning selection serializes");
+        assert_eq!(json, r#"{"kind":"effort","value":"high"}"#);
     }
 
     #[test]
-    fn a_fresh_ineligible_plan_requires_a_subscription_without_refresh() {
-        let home = temp_home("blocked-plan");
-        save(&home, &stored_connection(9_999_999, Some("free"))).unwrap();
-        let (issuer, bodies) = mock_issuer(refresh_body("acc-current", Some("team"), None));
-
-        let failure = chatgpt_connection_readiness(&home, &issuer, 2_000_000)
-            .expect_err("ineligible plans must not run");
-
+    fn codex_catalogue_is_versioned_by_the_pinned_codex_release() {
+        let connection = fixture_connection("account-77");
         assert_eq!(
-            failure.category,
-            ProviderFailureCategory::SubscriptionRequired
+            connection.adapter_version,
+            crate::agent_runtime::CODEX_VERSION
         );
-        assert!(
-            bodies.lock().unwrap().is_empty(),
-            "an ineligible plan must not spend a refresh call"
-        );
-        match load(&home) {
-            LoadState::Connected(persisted) => {
-                assert_eq!(persisted.refresh_token, "rt-current", "store untouched");
-            }
-            other => panic!("expected untouched store, got {other:?}"),
-        }
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn a_missing_plan_claim_requires_a_subscription() {
-        let home = temp_home("missing-plan");
-        save(&home, &stored_connection(9_999_999, None)).unwrap();
-
-        let failure = chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, 1_000_000)
-            .expect_err("a missing plan claim must block readiness");
-
-        assert_eq!(
-            failure.category,
-            ProviderFailureCategory::SubscriptionRequired
-        );
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn a_rejected_refresh_requires_authentication_without_clobbering_the_store() {
-        let home = temp_home("rejected-refresh");
-        save(&home, &stored_connection(1_000, Some("plus"))).unwrap();
-        let (issuer, _bodies) = mock_issuer(r#"{"error":"invalid_grant"}"#);
-
-        // The issuer answers HTTP 400 for invalid grants; the mock above always
-        // answers 200 with an unparseable success payload instead, which the
-        // token client also rejects as malformed.
-        let failure = chatgpt_connection_readiness(&home, &issuer, 2_000_000)
-            .expect_err("a failed refresh must block readiness");
-
-        assert_eq!(
-            failure.category,
-            ProviderFailureCategory::AuthenticationRequired
-        );
-        match load(&home) {
-            LoadState::Connected(persisted) => {
-                assert_eq!(persisted.refresh_token, "rt-current", "store preserved");
-            }
-            other => panic!("expected preserved store, got {other:?}"),
-        }
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn refreshed_tokens_without_identity_require_authentication_without_clobbering_the_store() {
-        let home = temp_home("refresh-missing-identity");
-        save(&home, &stored_connection(1_000, Some("plus"))).unwrap();
-        let (issuer, _bodies) = mock_issuer(
-            serde_json::json!({
-                "access_token": "at-new",
-                "refresh_token": "rt-new",
-                "id_token": "not-a-jwt",
-                "expires_in": 3600,
-            })
-            .to_string(),
-        );
-
-        let failure = chatgpt_connection_readiness(&home, &issuer, 2_000_000)
-            .expect_err("a refresh without authoritative identity must fail closed");
-
-        assert_eq!(
-            failure.category,
-            ProviderFailureCategory::AuthenticationRequired
-        );
-        match load(&home) {
-            LoadState::Connected(persisted) => {
-                assert_eq!(persisted.access_token, "at-current");
-                assert_eq!(persisted.refresh_token, "rt-current");
-                assert_eq!(persisted.account_id, "acc-77");
-                assert_eq!(persisted.plan_type.as_deref(), Some("plus"));
-            }
-            other => panic!("expected preserved store, got {other:?}"),
-        }
-        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(connection.models.len(), 1);
+        assert!(connection.models[0].is_default);
     }
 }

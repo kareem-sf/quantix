@@ -134,8 +134,8 @@ fn native_qualification_accepts_versioned_direct_provider_evidence() {
                 "release_candidate_manifest_sha256": hash('a'),
                 "signed_binary_sha256": hash('b'),
                 "dependency_lock_sha256": hash('c'),
-                "direct_provider_adapter_version": "chatgpt-direct-v1",
-                "direct_provider_catalogue_version": "chatgpt-direct-v1",
+                "direct_provider_adapter_version": "0.151.0",
+                "direct_provider_catalogue_version": "0.151.0",
                 "uv_binary_sha256": hash('d'),
                 "ocr_runtime_sha256": hash('e'),
                 "model_assets_sha256": hash('f'),
@@ -151,7 +151,7 @@ fn native_qualification_accepts_versioned_direct_provider_evidence() {
 
     assert!(
         command.is_ok(),
-        "native qualification must bind the stable direct-provider adapter and catalogue instead of a removed Codex binary: {command:?}",
+        "native qualification must bind the managed Codex runtime pin instead of a removed Codex binary: {command:?}",
     );
 }
 
@@ -168,8 +168,8 @@ fn native_qualification_rejects_removed_codex_binary_evidence() {
                 "release_candidate_manifest_sha256": hash('a'),
                 "signed_binary_sha256": hash('b'),
                 "dependency_lock_sha256": hash('c'),
-                "direct_provider_adapter_version": "chatgpt-direct-v1",
-                "direct_provider_catalogue_version": "chatgpt-direct-v1",
+                "direct_provider_adapter_version": "0.151.0",
+                "direct_provider_catalogue_version": "0.151.0",
                 "codex_binary_sha256": hash('d'),
                 "uv_binary_sha256": hash('e'),
                 "ocr_runtime_sha256": hash('f'),

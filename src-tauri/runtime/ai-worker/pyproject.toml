@@ -1,0 +1,11 @@
+[project]
+name = "quantix-ai-worker"
+version = "1.0.0"
+description = "Quantix disposable AI worker: one Pydantic AI operation per process"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic-ai-slim[openai,anthropic,google]==2.36.0",
+]
+
+[project.scripts]
+quantix-ai-worker = "quantix_ai_worker:main"

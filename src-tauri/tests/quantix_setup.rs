@@ -194,24 +194,25 @@ fn low_space_does_not_block_opening_the_application_home() {
 }
 
 #[test]
-fn quantix_chatgpt_auth_files_keep_an_installed_application_home_ready() {
+fn a_provider_environment_file_does_not_look_like_unrecognized_data() {
+    // Provider settings live in ~/.quantix/.env. The home inspection rejects any entry
+    // it does not know, so an unregistered file here blocks startup behind
+    // "unrecognized data" — which is exactly how a stray auth.json once bricked a home.
     let parent = tempfile::tempdir().expect("temporary user home");
     let application_home = parent.path().join(".quantix");
     let host = host(&application_home, FakeSetupPlatform::default());
     assert_eq!(ensure_quantix_setup(&host).state, SetupState::Ready);
 
-    std::fs::write(application_home.join("auth.json"), b"owned credentials")
-        .expect("Quantix auth store");
     std::fs::write(
-        application_home.join(".auth.json.123.0.tmp"),
-        b"atomic replacement",
+        application_home.join(".env"),
+        b"QUANTIX_ACTIVE_PROVIDER=OPENROUTER\n",
     )
-    .expect("Quantix temporary auth store");
+    .expect("provider environment file");
 
     let outcome = ensure_quantix_setup(&host);
-
     assert_eq!(outcome.state, SetupState::Ready);
     assert!(outcome.issues.is_empty());
+    assert!(application_home.join(".env").is_file());
 }
 
 #[test]

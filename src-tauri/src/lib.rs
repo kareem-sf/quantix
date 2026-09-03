@@ -2,19 +2,17 @@
 mod acceptance;
 pub mod ai;
 
-#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
-mod agent_backend;
-
 mod agent_runtime;
 mod application_settings;
 mod chatgpt_login;
-pub(crate) mod chatgpt_oauth;
 mod diagnostics;
 mod doctor;
 mod document_parsing;
 mod embedding;
 mod host;
+mod managed_runtime;
 mod process_supervisor;
+mod provider_env;
 mod release_gate;
 mod runtime_readiness;
 mod setup;
@@ -30,6 +28,10 @@ pub use acceptance::{
     LiveQualificationRun, PrivateQualificationRecord, ProductAcceptanceOutcome,
     ProductAcceptanceRecord, ProductAcceptanceRun, RecordLiveQualificationRunCommand,
     RunDeterministicAcceptanceCommand,
+};
+pub use agent_runtime::worker_lane::{
+    WorkerApproval, WorkerDriverError, WorkerFailureCategory, WorkerOperation, WorkerOutcome,
+    WorkerRunRequest, WorkerToolDescriptor, WorkerUsage,
 };
 pub use agent_runtime::{
     approve_one_run_access, AccessApproval, AccessRequest, AgentAccessRequestStatus,
@@ -58,8 +60,9 @@ pub use application_settings::{
     UpdateGeneralApplicationPreferencesCommand, UpdateTenderAiExecutionSelectionCommand,
 };
 pub use chatgpt_login::{
-    ChatGptConnectionState, ChatGptConnectionStatus, StartChatGptDeviceLoginResult,
-    StartChatGptLoginError, StartChatGptLoginResult, StartChatGptLoginStatus,
+    ChatGptConnectionState, ChatGptConnectionStatus, ChatGptLoginPhase,
+    StartChatGptDeviceLoginResult, StartChatGptLoginError, StartChatGptLoginResult,
+    StartChatGptLoginStatus,
 };
 pub(crate) use diagnostics::RecordDiagnosticFact;
 pub use diagnostics::{
@@ -86,6 +89,10 @@ pub use document_parsing::{
     TextDirection,
 };
 pub use host::QuantixHost;
+pub use managed_runtime::{
+    worker_python_path, ManagedCodexRuntimeState, ManagedCodexRuntimeStatus, ManagedRuntimeError,
+    ManagedWorkerRuntimeState, ManagedWorkerRuntimeStatus,
+};
 pub use release_gate::{
     release_candidate_manifest_sha256, ChatGptProductionAssuranceEvidence,
     EvaluatePublicReleaseGateCommand, IntegrationTermsDecision, LicenseDistributionReview,
@@ -115,24 +122,25 @@ pub use tender_store::{
     ApprovePackageFindingExceptionCommand, ApprovePricedCostBaselineCommand,
     ApprovePricingAdjustmentCommand, ApproveProductionFindingExceptionCommand,
     ApproveSubmissionReleaseCommand, ApproveTenderPriceCommand, ApprovedQueryTreatment,
-    ApprovedTenderPrice, AssembleCoordinatedBidBaselineCommand, AssembleSubmissionPackageCommand,
-    BasisOfEstimateReview, BasisOfEstimateReviewFinding, BasisOfEstimateReviewOutcome,
-    BasisOfEstimateReviewResult, BasisOfEstimateVersion, BidDecisionApprovalDecision,
-    BidDecisionApprovalHistoryPage, BidDecisionApprovalInvalidation,
-    BidDecisionApprovalInvalidationResult, BidDecisionApprovalRecord, BidDecisionApprovalResult,
-    BidDecisionGateBlocker, BidDecisionPackageChangeSummary, BidDecisionPackageInspection,
-    BidDecisionPackageRecordBinding, BidDecisionPackageRecordCategory,
-    BidDecisionPackageRecordPage, BidDecisionPackageReview, BidDecisionPackageReviewFinding,
-    BidDecisionPackageReviewOutcome, BidDecisionPackageReviewResult,
-    BidDecisionReturnReworkDisposition, BidDecisionReturnReworkItem, BidDecisionReturnReworkResult,
-    BidRecommendation, BidRecommendationOutcome, BoqAccountRow, BoqInventoryRow, BoqRowDisposition,
-    BoqTableCandidate, BoqTableDesignation, CalculationDecimalInput, CalculationInputState,
-    CalculationRoundingMode, CalculationRuleApproval, CalculationRuleReview,
-    CalculationRuleReviewFinding, CalculationRuleReviewOutcome, CalculationRuleReviewResult,
-    CalculationRuleTestResult, CalculationRuleVersion, CalculationScenarioVersion,
-    CalculationWorkspaceInspection, CapabilityDemand, CapabilityDemandClassification,
-    ChangeAssessment, ChangeAssessmentApprovalConsequence, ChangeAssessmentClassification,
-    ChangeAssessmentDecision, ChangeAssessmentDependencyKind, ChangeAssessmentDependencyReference,
+    ApprovedTenderPrice, ArtifactVersionHistory, ArtifactVersionSummary,
+    AssembleCoordinatedBidBaselineCommand, AssembleSubmissionPackageCommand, BasisOfEstimateReview,
+    BasisOfEstimateReviewFinding, BasisOfEstimateReviewOutcome, BasisOfEstimateReviewResult,
+    BasisOfEstimateVersion, BidDecisionApprovalDecision, BidDecisionApprovalHistoryPage,
+    BidDecisionApprovalInvalidation, BidDecisionApprovalInvalidationResult,
+    BidDecisionApprovalRecord, BidDecisionApprovalResult, BidDecisionGateBlocker,
+    BidDecisionPackageChangeSummary, BidDecisionPackageInspection, BidDecisionPackageRecordBinding,
+    BidDecisionPackageRecordCategory, BidDecisionPackageRecordPage, BidDecisionPackageReview,
+    BidDecisionPackageReviewFinding, BidDecisionPackageReviewOutcome,
+    BidDecisionPackageReviewResult, BidDecisionReturnReworkDisposition,
+    BidDecisionReturnReworkItem, BidDecisionReturnReworkResult, BidRecommendation,
+    BidRecommendationOutcome, BoqAccountRow, BoqInventoryRow, BoqRowDisposition, BoqTableCandidate,
+    BoqTableDesignation, CalculationDecimalInput, CalculationInputState, CalculationRoundingMode,
+    CalculationRuleApproval, CalculationRuleReview, CalculationRuleReviewFinding,
+    CalculationRuleReviewOutcome, CalculationRuleReviewResult, CalculationRuleTestResult,
+    CalculationRuleVersion, CalculationScenarioVersion, CalculationWorkspaceInspection,
+    CapabilityDemand, CapabilityDemandClassification, ChangeAssessment,
+    ChangeAssessmentApprovalConsequence, ChangeAssessmentClassification, ChangeAssessmentDecision,
+    ChangeAssessmentDependencyKind, ChangeAssessmentDependencyReference,
     ChangeAssessmentEvidenceExcerpt, ChangeAssessmentImpact, ChangeAssessmentImpactConsequence,
     ChangeAssessmentImpactKind, ChangeAssessmentObjectKind, ChangeAssessmentPage,
     ChangeAssessmentSource, ChangeAssessmentStatus, CommercialStrategy, CommercialStrategyApproval,
@@ -169,17 +177,17 @@ pub use tender_store::{
     FinalReviewInspection, FinalReviewPlan, FinalReviewReviewer, GenerateSubmissionSectionsCommand,
     GenerationAuthoringMode, GenerationRequirement, GenerationRequirementAvailability,
     GenerationRequirementKind, GenerationRequirementRecordReference,
-    ImportPortableTenderArchiveCommand, InspectBidDecisionApprovalHistoryCommand,
-    InspectBidDecisionPackageRecordsCommand, InspectCalculationWorkspaceCommand,
-    InspectChangeAssessmentsCommand, InspectComplianceMatrixCommand,
-    InspectCoordinatedBidBaselinesCommand, InspectDecisionCockpitCommand,
-    InspectEstimateWorkspaceCommand, InspectExternalRfiEligibleQueriesCommand,
-    InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
-    InspectManagerWorkspaceCommand, InspectPackageProductionCommand,
+    ImportPortableTenderArchiveCommand, InspectArtifactVersionsCommand,
+    InspectBidDecisionApprovalHistoryCommand, InspectBidDecisionPackageRecordsCommand,
+    InspectCalculationWorkspaceCommand, InspectChangeAssessmentsCommand,
+    InspectComplianceMatrixCommand, InspectCoordinatedBidBaselinesCommand,
+    InspectDecisionCockpitCommand, InspectEstimateWorkspaceCommand,
+    InspectExternalRfiEligibleQueriesCommand, InspectExternalRfiResponseCandidatesCommand,
+    InspectExternalRfisCommand, InspectManagerWorkspaceCommand, InspectPackageProductionCommand,
     InspectPricingWorkspaceCommand, InspectProductionTaskReviewCommand,
     InspectSubmissionArtifactContentCommand, InspectSubmissionPackageCommand,
     InspectSubmissionPackageItemContentCommand, InspectTenderQueriesCommand,
-    InspectTenderRecordsCommand, InterpretExternalRfiResponseCommand,
+    InspectTenderRecordCommand, InspectTenderRecordsCommand, InterpretExternalRfiResponseCommand,
     InvalidateBidDecisionApprovalCommand, MajorFindingPolicy, ManagerCapabilityDemandInput,
     ManagerConversation, ManagerIntakeStage, ManagerIntakeStatus, ManagerIntakeStatusKind,
     ManagerWorkspaceProjection, ManagerWorkspaceTender, ManagerWorkspaceTenderState,
@@ -249,11 +257,13 @@ pub use tender_store::{
     WorkPlanProfileBinding, WorkPlanProposalInspection, WorkPlanRevisionAction, WorkPlanTask,
     WorkPlanWorkstream, WorkspaceActionKind, WorkspaceAgentReference, WorkspaceAgentRunReference,
     WorkspaceCapabilityReadiness, WorkspaceCapabilityReadinessState, WorkspaceCurrentAction,
-    WorkspaceDoctorBlockerArea, WorkspaceDoctorBlockerSummary, WorkspaceFilesSummary,
-    WorkspaceMessageReference, WorkspaceMessageReferenceKind, WorkspaceOutputReference,
+    WorkspaceDoctorBlockerArea, WorkspaceDoctorBlockerSummary, WorkspaceEstimateStatus,
+    WorkspaceEstimateSummary, WorkspaceExternalRfiStatus, WorkspaceExternalRfiSummary,
+    WorkspaceFilesSummary, WorkspaceMessageReference, WorkspaceMessageReferenceKind,
+    WorkspaceOutputReference, WorkspacePricingBaselineStatus, WorkspacePricingSummary,
     WorkspaceSearchGroup, WorkspaceSearchHit, WorkspaceSearchProjection, WorkspaceSearchResultKind,
     WorkspaceTaskRow, WorkspaceTaskState, WorkspaceTeamSummary, WorkspaceTenderDocument,
-    WorkspaceWorkSummary,
+    WorkspaceTenderPriceState, WorkspaceWorkSummary,
 };
 pub use update::{
     current_application_artifact_is_restorable, current_update_platform,
@@ -431,7 +441,7 @@ mod tauri_commands {
         ApproveExternalRfiForIssueCommand, ApprovePackageFindingExceptionCommand,
         ApprovePricedCostBaselineCommand, ApprovePricingAdjustmentCommand,
         ApproveProductionFindingExceptionCommand, ApproveSubmissionReleaseCommand,
-        ApproveTenderPriceCommand, AssembleCoordinatedBidBaselineCommand,
+        ApproveTenderPriceCommand, ArtifactVersionHistory, AssembleCoordinatedBidBaselineCommand,
         AssembleSubmissionPackageCommand, BasisOfEstimateReviewResult, BasisOfEstimateVersion,
         BidDecisionApprovalHistoryPage, BidDecisionApprovalInvalidationResult,
         BidDecisionApprovalResult, BidDecisionPackageInspection, BidDecisionPackageRecordPage,
@@ -457,18 +467,18 @@ mod tauri_commands {
         ExternalRfiResponseCandidatePage, ExternalRfiReviewResult, FinalReviewInspection,
         GenerateSubmissionSectionsCommand, ImportPortableTenderArchiveCommand,
         ImportTenderPackageCommand, InspectAgentRunCommand, InspectAgentRunHistoryCommand,
-        InspectBidDecisionApprovalHistoryCommand, InspectBidDecisionPackageRecordsCommand,
-        InspectCalculationWorkspaceCommand, InspectChangeAssessmentsCommand,
-        InspectComplianceMatrixCommand, InspectCoordinatedBidBaselinesCommand,
-        InspectDecisionCockpitCommand, InspectEstimateWorkspaceCommand,
-        InspectExternalRfiEligibleQueriesCommand, InspectExternalRfiResponseCandidatesCommand,
-        InspectExternalRfisCommand, InspectManagerWorkspaceCommand,
-        InspectPackageProductionCommand, InspectPricingWorkspaceCommand,
-        InspectProductionTaskReviewCommand, InspectQuantixDoctorCommand,
-        InspectSubmissionArtifactContentCommand, InspectSubmissionPackageCommand,
-        InspectSubmissionPackageItemContentCommand, InspectTenderAiExecutionCommand,
-        InspectTenderQueriesCommand, InspectTenderRecordsCommand,
-        InterpretExternalRfiResponseCommand, InterruptAgentRunCommand,
+        InspectArtifactVersionsCommand, InspectBidDecisionApprovalHistoryCommand,
+        InspectBidDecisionPackageRecordsCommand, InspectCalculationWorkspaceCommand,
+        InspectChangeAssessmentsCommand, InspectComplianceMatrixCommand,
+        InspectCoordinatedBidBaselinesCommand, InspectDecisionCockpitCommand,
+        InspectEstimateWorkspaceCommand, InspectExternalRfiEligibleQueriesCommand,
+        InspectExternalRfiResponseCandidatesCommand, InspectExternalRfisCommand,
+        InspectManagerWorkspaceCommand, InspectPackageProductionCommand,
+        InspectPricingWorkspaceCommand, InspectProductionTaskReviewCommand,
+        InspectQuantixDoctorCommand, InspectSubmissionArtifactContentCommand,
+        InspectSubmissionPackageCommand, InspectSubmissionPackageItemContentCommand,
+        InspectTenderAiExecutionCommand, InspectTenderQueriesCommand, InspectTenderRecordCommand,
+        InspectTenderRecordsCommand, InterpretExternalRfiResponseCommand, InterruptAgentRunCommand,
         InvalidateBidDecisionApprovalCommand, LiveQualificationRun, ManagerWorkspaceProjection,
         OpenTenderCommand, PackageIntakeOperationKind, PackageIntakeProgress,
         PackageProductionGeneration, ParseSourceArtifactCommand, PortableTenderArchiveRecord,
@@ -495,18 +505,19 @@ mod tauri_commands {
         SearchEvidenceCommand, SearchEvidenceSemanticCommand, SearchManagerWorkspaceCommand,
         SelectManagerWorkspaceTenderCommand, SelectPricingScenarioCommand, SetupOutcome,
         SetupState, StartChatGptDeviceLoginResult, StartChatGptLoginError, StartChatGptLoginResult,
-        StartManagerTenderCommand, StartupSplashPreferences, StartupSplashState,
-        SubmissionArtifactContent, SubmissionItemContent, SubmissionPackageVersion,
-        SubmissionReleaseInspection, SubmissionSectionReviewRunResult, TenderBackupRecord,
-        TenderCatalogueEntry, TenderCommandError, TenderErrorCode, TenderIntegrityReport,
-        TenderPackageImportResult, TenderPackageSourceKind, TenderProductionInspection,
-        TenderQuery, TenderQueryPage, TenderRecordAuthority, TenderRecordDecisionResult,
-        TenderRecordExtractionResult, TenderRecordPage, TenderRecordReviewResult,
-        TenderRecoveryRecord, TenderRetentionDecisionCommand, TenderRetentionDecisionRecord,
-        TenderSummary, TrashRecoveryRequiredTenderCommand, TrashedTenderDecisionCommand,
-        TrashedTenderRecord, UpdateAiExecutionSelectionCommand,
-        UpdateGeneralApplicationPreferencesCommand, UpdateTenderAiExecutionSelectionCommand,
-        WorkPlanProposalInspection, WorkspaceSearchProjection,
+        StartManagerTenderCommand, StartupReconciliationReport, StartupSplashPreferences,
+        StartupSplashState, SubmissionArtifactContent, SubmissionItemContent,
+        SubmissionPackageVersion, SubmissionReleaseInspection, SubmissionSectionReviewRunResult,
+        TenderBackupRecord, TenderCatalogueEntry, TenderCommandError, TenderErrorCode,
+        TenderIntegrityReport, TenderPackageImportResult, TenderPackageSourceKind,
+        TenderProductionInspection, TenderQuery, TenderQueryPage, TenderRecordAuthority,
+        TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordInspection,
+        TenderRecordPage, TenderRecordReviewResult, TenderRecoveryRecord,
+        TenderRetentionDecisionCommand, TenderRetentionDecisionRecord, TenderSummary,
+        TrashRecoveryRequiredTenderCommand, TrashedTenderDecisionCommand, TrashedTenderRecord,
+        UpdateAiExecutionSelectionCommand, UpdateGeneralApplicationPreferencesCommand,
+        UpdateTenderAiExecutionSelectionCommand, WorkPlanProposalInspection,
+        WorkspaceSearchProjection,
     };
     use tauri_plugin_dialog::DialogExt;
 
@@ -683,7 +694,6 @@ mod tauri_commands {
                 return Err(error);
             }
         };
-        #[cfg(feature = "runtime-fixture")]
         if !host.quiesce_agent_provider_for_update().await {
             let _ = host.cancel_update_installation_authorization(&command.update_id);
             *pending.0.lock().map_err(|_| {
@@ -866,6 +876,47 @@ mod tauri_commands {
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
         host.inner().inspect_application_settings()
+    }
+
+    #[tauri::command]
+    pub(super) fn inspect_ai_providers(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<crate::provider_env::AiProviderSettingsView, TenderCommandError> {
+        crate::provider_env::inspect(host.inner().application_home())
+    }
+
+    #[tauri::command]
+    pub(super) fn save_ai_provider(
+        host: tauri::State<'_, QuantixHost>,
+        command: crate::provider_env::SaveAiProviderCommand,
+    ) -> Result<crate::provider_env::AiProviderSettingsView, TenderCommandError> {
+        crate::provider_env::save_connection(host.inner().application_home(), command)
+    }
+
+    #[tauri::command]
+    pub(super) fn remove_ai_provider(
+        host: tauri::State<'_, QuantixHost>,
+        id: String,
+    ) -> Result<crate::provider_env::AiProviderSettingsView, TenderCommandError> {
+        crate::provider_env::remove_connection(host.inner().application_home(), &id)
+    }
+
+    #[tauri::command]
+    pub(super) async fn probe_ai_provider(
+        host: tauri::State<'_, QuantixHost>,
+        id: String,
+    ) -> Result<crate::provider_env::AiProviderProbeResult, TenderCommandError> {
+        let host = host.inner().clone();
+        host.probe_ai_provider(&id, tokio_util::sync::CancellationToken::new())
+            .await
+    }
+
+    #[tauri::command]
+    pub(super) fn set_active_ai_provider(
+        host: tauri::State<'_, QuantixHost>,
+        id: String,
+    ) -> Result<crate::provider_env::AiProviderSettingsView, TenderCommandError> {
+        crate::provider_env::set_active_connection(host.inner().application_home(), &id)
     }
 
     #[tauri::command]
@@ -1208,25 +1259,22 @@ mod tauri_commands {
     pub(super) async fn start_chatgpt_login(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<StartChatGptLoginResult, StartChatGptLoginError> {
-        let host = host.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || host.start_chatgpt_login())
-            .await
-            .map_err(|_| StartChatGptLoginError::new(TenderErrorCode::StoreUnavailable))?
+        host.inner().start_chatgpt_login().await
     }
 
     #[tauri::command]
     pub(super) async fn start_chatgpt_device_login(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<StartChatGptDeviceLoginResult, StartChatGptLoginError> {
-        let host = host.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || host.start_chatgpt_device_login())
-            .await
-            .map_err(|_| StartChatGptLoginError::new(TenderErrorCode::StoreUnavailable))?
+        host.inner().start_chatgpt_device_login().await
     }
 
     #[tauri::command]
-    pub(super) async fn open_chatgpt_device_login_page() -> Result<(), TenderCommandError> {
-        tauri::async_runtime::spawn_blocking(crate::chatgpt_login::open_chatgpt_device_login_page)
+    pub(super) async fn open_chatgpt_device_login_page(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<(), TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.open_chatgpt_device_login_page())
             .await
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
     }
@@ -1235,27 +1283,15 @@ mod tauri_commands {
     pub(super) async fn cancel_chatgpt_login(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<(), TenderCommandError> {
-        let host = host.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            host.cancel_chatgpt_login();
-            Ok(())
-        })
-        .await
-        .map_err(|_| TenderCommandError {
-            code: TenderErrorCode::StoreUnavailable,
-        })?
+        host.inner().cancel_chatgpt_login().await;
+        Ok(())
     }
 
     #[tauri::command]
     pub(super) async fn disconnect_chatgpt(
         host: tauri::State<'_, QuantixHost>,
     ) -> Result<ApplicationSettingsView, TenderCommandError> {
-        let host = host.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || host.disconnect_chatgpt())
-            .await
-            .map_err(|_| TenderCommandError {
-                code: TenderErrorCode::StoreUnavailable,
-            })?
+        host.inner().disconnect_chatgpt().await
     }
 
     #[tauri::command]
@@ -1751,6 +1787,18 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn inspect_startup_reconciliation(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<StartupReconciliationReport, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || Ok(host.inspect_startup_reconciliation()))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
     pub(super) async fn restore_trashed_tender(
         host: tauri::State<'_, QuantixHost>,
         command: TrashedTenderDecisionCommand,
@@ -2087,6 +2135,44 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn inspect_codex_runtime(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<crate::managed_runtime::ManagedCodexRuntimeStatus, &'static str> {
+        Ok(crate::managed_runtime::inspect_managed_codex_runtime(
+            host.inner().application_home(),
+        ))
+    }
+
+    #[tauri::command]
+    pub(super) async fn prepare_codex_runtime(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<crate::managed_runtime::ManagedCodexRuntimeStatus, &'static str> {
+        crate::managed_runtime::prepare_managed_codex_runtime(
+            host.inner().application_home(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .map_err(|_| "codex_runtime_prepare_failed")
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_worker_runtime(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<crate::managed_runtime::ManagedWorkerRuntimeStatus, &'static str> {
+        Ok(host.inner().inspect_worker_runtime())
+    }
+
+    #[tauri::command]
+    pub(super) async fn prepare_worker_runtime(
+        host: tauri::State<'_, QuantixHost>,
+    ) -> Result<crate::managed_runtime::ManagedWorkerRuntimeStatus, &'static str> {
+        host.inner()
+            .prepare_worker_runtime(tokio_util::sync::CancellationToken::new())
+            .await
+            .map_err(|_| "worker_runtime_prepare_failed")
+    }
+
+    #[tauri::command]
     pub(super) async fn run_bootstrap_agent(
         host: tauri::State<'_, QuantixHost>,
         command: RunBootstrapAgentCommand,
@@ -2127,6 +2213,19 @@ mod tauri_commands {
         .map_err(|_| TenderCommandError {
             code: TenderErrorCode::StoreUnavailable,
         })?
+    }
+
+    #[tauri::command]
+    pub(super) async fn inspect_tender_record(
+        host: tauri::State<'_, QuantixHost>,
+        command: InspectTenderRecordCommand,
+    ) -> Result<TenderRecordInspection, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.inspect_tender_record(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
     }
 
     #[tauri::command]
@@ -2893,6 +2992,19 @@ mod tauri_commands {
     }
 
     #[tauri::command]
+    pub(super) async fn inspect_artifact_versions(
+        host: tauri::State<'_, QuantixHost>,
+        command: InspectArtifactVersionsCommand,
+    ) -> Result<ArtifactVersionHistory, TenderCommandError> {
+        let host = host.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || host.inspect_artifact_versions(command))
+            .await
+            .map_err(|_| TenderCommandError {
+                code: TenderErrorCode::StoreUnavailable,
+            })?
+    }
+
+    #[tauri::command]
     pub(super) async fn decide_change_assessment(
         host: tauri::State<'_, QuantixHost>,
         command: DecideChangeAssessmentCommand,
@@ -3324,6 +3436,11 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::list_tenders,
             tauri_commands::refresh_application_settings,
             tauri_commands::inspect_application_settings,
+            tauri_commands::inspect_ai_providers,
+            tauri_commands::save_ai_provider,
+            tauri_commands::remove_ai_provider,
+            tauri_commands::probe_ai_provider,
+            tauri_commands::set_active_ai_provider,
             tauri_commands::update_general_application_preferences,
             tauri_commands::update_ai_execution_selection,
             tauri_commands::inspect_tender_ai_execution,
@@ -3368,6 +3485,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::trash_tender,
             tauri_commands::trash_recovery_required_tender,
             tauri_commands::inspect_trashed_tenders,
+            tauri_commands::inspect_startup_reconciliation,
             tauri_commands::restore_trashed_tender,
             tauri_commands::purge_trashed_tender,
             tauri_commands::purge_recovery_required_tender,
@@ -3386,6 +3504,10 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::search_evidence_semantic,
             tauri_commands::inspect_document_tool_readiness,
             tauri_commands::prepare_document_tools,
+            tauri_commands::inspect_codex_runtime,
+            tauri_commands::prepare_codex_runtime,
+            tauri_commands::inspect_worker_runtime,
+            tauri_commands::prepare_worker_runtime,
             tauri_commands::repair_document_tools,
             tauri_commands::inspect_document_tool_preparation_progress,
             tauri_commands::cancel_document_tool_preparation,
@@ -3393,6 +3515,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::run_tender_record_extraction,
             tauri_commands::run_tender_record_review,
             tauri_commands::inspect_tender_records,
+            tauri_commands::inspect_tender_record,
             tauri_commands::create_tender_engineer_entry,
             tauri_commands::inspect_tender_record_authorities,
             tauri_commands::decide_tender_record,
@@ -3453,6 +3576,7 @@ pub fn configure_tauri_builder<R: tauri::Runtime>(builder: tauri::Builder<R>) ->
             tauri_commands::export_release_copy,
             tauri_commands::inspect_change_assessments,
             tauri_commands::decide_change_assessment,
+            tauri_commands::inspect_artifact_versions,
             tauri_commands::create_bid_decision_package,
             tauri_commands::inspect_current_bid_decision_package,
             tauri_commands::compose_tender_office,

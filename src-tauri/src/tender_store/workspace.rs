@@ -10,16 +10,17 @@ use crate::tender_intake::PackageIntakeControl;
 use crate::{QuantixHost, TenderPackageSourceKind};
 
 use super::{
-    append_audit_event, metadata_is_unsafe_storage_link, random_identifier, require_setup,
-    sha256_hex, sql_error, sqlite_timestamp, storage_publication_failpoint, store_unavailable,
-    tender_records::insert_engineer_entry, ManagerIntakeStage, ManagerIntakeStatus,
-    TenderAiExecutionBinding, TenderAiSelectionReadiness, TenderCommandError, TenderErrorCode,
-    TenderId, TenderLifecyclePhase, TenderStore, WorkPlanCapabilityGap, WorkspaceMessageReference,
+    append_audit_event, metadata_is_unsafe_storage_link, pricing::PricedCostBaselineReviewOutcome,
+    random_identifier, require_setup, sha256_hex, sql_error, sqlite_timestamp,
+    storage_publication_failpoint, store_unavailable, tender_records::insert_engineer_entry,
+    BidPackageOperationBudget, ManagerIntakeStage, ManagerIntakeStatus, TenderAiExecutionBinding,
+    TenderAiSelectionReadiness, TenderCommandError, TenderErrorCode, TenderId,
+    TenderLifecyclePhase, TenderStore, WorkPlanCapabilityGap, WorkspaceMessageReference,
     WorkspaceTenderDocument, MAX_TENDER_NAME_BYTES,
 };
 
 const MAX_CONVERSATION_MESSAGES: i64 = 100;
-const MAX_MESSAGE_BYTES: usize = 4_000;
+pub(super) const MAX_MESSAGE_BYTES: usize = 4_000;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
@@ -194,7 +195,98 @@ pub enum WorkspaceActionKind {
     ReviewChange,
     ReviewSubmissionPackage,
     ReviewFinalPackage,
+    DraftExternalRfi,
+    ReviewExternalRfi,
+    InterpretExternalRfiResponse,
+    ReviewBasisOfEstimate,
+    ReviewPricing,
     TenderDeclined,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum WorkspaceExternalRfiStatus {
+    AwaitingReview,
+    ReviewFailed,
+    AwaitingApproval,
+    ApprovedForIssue,
+    ResponseAwaitingInterpretation,
+    QueryBasisStale,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceExternalRfiSummary {
+    pub rfi_id: String,
+    pub version: u32,
+    pub status: WorkspaceExternalRfiStatus,
+    pub question_count: u32,
+    pub response_count: u32,
+    pub approval_pending: bool,
+    pub export_pending: bool,
+    pub interpretation_pending: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum WorkspaceEstimateStatus {
+    AwaitingReview,
+    ReviewFailed,
+    AwaitingApproval,
+    Approved,
+    Incomplete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceEstimateSummary {
+    pub basis_id: String,
+    pub version: u32,
+    pub status: WorkspaceEstimateStatus,
+    pub boq_row_count: u32,
+    pub finding_count: u32,
+    pub calculation_run_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum WorkspacePricingBaselineStatus {
+    AwaitingReview,
+    ReviewFailed,
+    AwaitingApproval,
+    Approved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum WorkspaceTenderPriceState {
+    AwaitingApproval,
+    Approved,
+    Revoked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspacePricingSummary {
+    pub baseline_id: String,
+    pub baseline_version: u32,
+    pub baseline_current: bool,
+    pub baseline_status: WorkspacePricingBaselineStatus,
+    pub baseline_finding_count: u32,
+    pub baseline_amount: String,
+    pub baseline_currency: String,
+    pub strategy_awaiting_approval: bool,
+    pub adjustments_awaiting_review: u32,
+    pub adjustments_awaiting_approval: u32,
+    pub scenario_selection_pending: bool,
+    pub selected_scenario_name: Option<String>,
+    pub tender_price_state: Option<WorkspaceTenderPriceState>,
+    pub tender_price_amount: Option<String>,
+    pub tender_price_currency: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -375,6 +467,9 @@ pub struct ManagerWorkspaceProjection {
     pub work: WorkspaceWorkSummary,
     pub files: WorkspaceFilesSummary,
     pub team: WorkspaceTeamSummary,
+    pub external_rfis: Vec<WorkspaceExternalRfiSummary>,
+    pub estimate: Option<WorkspaceEstimateSummary>,
+    pub pricing: Option<WorkspacePricingSummary>,
     pub intake: Option<ManagerIntakeStatus>,
     pub ai_execution: Option<TenderAiExecutionBinding>,
     pub capability_readiness: Option<WorkspaceCapabilityReadiness>,
@@ -457,6 +552,25 @@ pub(super) fn append_system_message(
     body: &str,
     created_at: &str,
 ) -> Result<String, TenderCommandError> {
+    append_office_message(transaction, "system", kind, body, created_at)
+}
+
+pub(super) fn append_manager_message(
+    transaction: &Transaction<'_>,
+    kind: TenderOfficeMessageKind,
+    body: &str,
+    created_at: &str,
+) -> Result<String, TenderCommandError> {
+    append_office_message(transaction, "manager", kind, body, created_at)
+}
+
+fn append_office_message(
+    transaction: &Transaction<'_>,
+    author: &str,
+    kind: TenderOfficeMessageKind,
+    body: &str,
+    created_at: &str,
+) -> Result<String, TenderCommandError> {
     if body.is_empty() || body.len() > MAX_MESSAGE_BYTES || kind == TenderOfficeMessageKind::Routine
     {
         return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
@@ -473,10 +587,11 @@ pub(super) fn append_system_message(
         .execute(
             "INSERT INTO tender_office_messages (
                message_id, conversation_id, author, kind, body, created_at
-             ) VALUES (?1, ?2, 'system', ?3, ?4, ?5)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 message_id,
                 conversation_id,
+                author,
                 message_kind_value(kind),
                 body,
                 created_at
@@ -499,6 +614,9 @@ struct WorkspaceSnapshot {
     work: WorkspaceWorkSummary,
     files: WorkspaceFilesSummary,
     team: WorkspaceTeamSummary,
+    external_rfis: Vec<WorkspaceExternalRfiSummary>,
+    estimate: Option<WorkspaceEstimateSummary>,
+    pricing: Option<WorkspacePricingSummary>,
     intake: Option<ManagerIntakeStatus>,
     ai_execution: TenderAiExecutionBinding,
     capability_readiness: WorkspaceCapabilityReadiness,
@@ -524,8 +642,17 @@ impl TenderStore {
         let ai_execution = self.inspect_tender_ai_execution_binding()?;
         let capability_readiness = self.workspace_capability_readiness()?;
         let doctor_blockers = workspace_doctor_blockers(&ai_execution, &capability_readiness);
-        let current_action =
-            self.workspace_current_action(summary.lifecycle_phase, &work, intake.as_ref())?;
+        let external_rfis = self.workspace_external_rfi_summaries()?;
+        let estimate = self.workspace_estimate_summary()?;
+        let pricing = self.workspace_pricing_summary()?;
+        let current_action = self.workspace_current_action(
+            summary.lifecycle_phase,
+            &work,
+            intake.as_ref(),
+            &external_rfis,
+            estimate.as_ref(),
+            pricing.as_ref(),
+        )?;
         let safe_terminal_boundary = self.retention_boundary_is_safe()?;
         let tender = ManagerWorkspaceTender {
             tender_id: summary.tender_id,
@@ -549,6 +676,9 @@ impl TenderStore {
             work,
             files,
             team,
+            external_rfis,
+            estimate,
+            pricing,
             intake,
             ai_execution,
             capability_readiness,
@@ -1330,7 +1460,19 @@ impl TenderStore {
         phase: TenderLifecyclePhase,
         work: &WorkspaceWorkSummary,
         intake: Option<&ManagerIntakeStatus>,
+        external_rfis: &[WorkspaceExternalRfiSummary],
+        estimate: Option<&WorkspaceEstimateSummary>,
+        pricing: Option<&WorkspacePricingSummary>,
     ) -> Result<WorkspaceCurrentAction, TenderCommandError> {
+        if let Some(action) = self.workspace_external_rfi_action(external_rfis)? {
+            return Ok(action);
+        }
+        if let Some(action) = self.workspace_estimate_action(estimate) {
+            return Ok(action);
+        }
+        if let Some(action) = workspace_pricing_action(pricing) {
+            return Ok(action);
+        }
         let action = match phase {
             TenderLifecyclePhase::Intake => {
                 if let Some(intake) = intake {
@@ -1535,6 +1677,430 @@ impl TenderStore {
         };
         Ok(action)
     }
+
+    fn workspace_external_rfi_summaries(
+        &self,
+    ) -> Result<Vec<WorkspaceExternalRfiSummary>, TenderCommandError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT heads.rfi_id,
+                       heads.current_version,
+                       json_array_length(versions.questions_json),
+                       versions.query_refs_json,
+                       (
+                         SELECT COUNT(*) FROM external_rfi_responses AS responses
+                         WHERE responses.rfi_id = heads.rfi_id
+                           AND responses.rfi_version = heads.current_version
+                       ),
+                       (
+                         SELECT COUNT(*) FROM external_rfi_responses AS responses
+                         WHERE responses.rfi_id = heads.rfi_id
+                           AND responses.rfi_version = heads.current_version
+                           AND (
+                             SELECT json_array_length(issued.query_refs_json)
+                             FROM external_rfi_versions AS issued
+                             WHERE issued.rfi_id = responses.rfi_id
+                               AND issued.version = responses.rfi_version
+                           ) >
+                           (
+                             SELECT COUNT(*)
+                             FROM external_rfi_response_interpretations AS interpretations
+                             WHERE interpretations.response_link_id = responses.response_link_id
+                           )
+                       ),
+                       (
+                         SELECT COUNT(*) FROM external_rfi_approvals AS approvals
+                         WHERE approvals.rfi_id = heads.rfi_id
+                           AND approvals.rfi_version = heads.current_version
+                       ),
+                       (
+                         SELECT reviews.outcome FROM external_rfi_reviews AS reviews
+                         WHERE reviews.rfi_id = heads.rfi_id
+                           AND reviews.rfi_version = heads.current_version
+                       ),
+                       (
+                         SELECT COUNT(*)
+                         FROM external_rfi_approvals AS approvals
+                         JOIN external_rfi_exports AS exports
+                           ON exports.approval_id = approvals.approval_id
+                         WHERE approvals.rfi_id = heads.rfi_id
+                           AND approvals.rfi_version = heads.current_version
+                       )
+                FROM external_rfi_heads AS heads
+                JOIN external_rfi_versions AS versions
+                  ON versions.rfi_id = heads.rfi_id
+                 AND versions.version = heads.current_version
+                ORDER BY versions.created_at DESC, heads.rfi_id",
+            )
+            .map_err(sql_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, i64>(8)?,
+                ))
+            })
+            .map_err(sql_error)?;
+        let mut summaries = Vec::new();
+        for row in rows {
+            let (
+                rfi_id,
+                version,
+                question_count,
+                query_refs_json,
+                response_count,
+                uninterpreted_response_count,
+                approval_count,
+                review_outcome,
+                export_count,
+            ) = row.map_err(sql_error)?;
+            let query_refs: Vec<super::external_rfis::ExternalRfiQueryReference> =
+                serde_json::from_str(&query_refs_json)
+                    .map_err(|_| TenderCommandError::new(TenderErrorCode::IntegrityFailed))?;
+            let evidence_current = super::external_rfis::external_rfi_query_refs_are_current(
+                &self.connection,
+                &query_refs,
+            )?;
+            let status = if !evidence_current {
+                WorkspaceExternalRfiStatus::QueryBasisStale
+            } else if uninterpreted_response_count > 0 {
+                WorkspaceExternalRfiStatus::ResponseAwaitingInterpretation
+            } else if approval_count > 0 {
+                WorkspaceExternalRfiStatus::ApprovedForIssue
+            } else if review_outcome.as_deref() == Some("passed") {
+                WorkspaceExternalRfiStatus::AwaitingApproval
+            } else if review_outcome.as_deref() == Some("failed") {
+                WorkspaceExternalRfiStatus::ReviewFailed
+            } else {
+                WorkspaceExternalRfiStatus::AwaitingReview
+            };
+            let approved_for_issue = evidence_current
+                && approval_count > 0
+                && review_outcome.as_deref() == Some("passed");
+            summaries.push(WorkspaceExternalRfiSummary {
+                rfi_id,
+                version,
+                status,
+                question_count: to_u32(question_count)?,
+                response_count: to_u32(response_count)?,
+                approval_pending: !approved_for_issue
+                    && evidence_current
+                    && approval_count == 0
+                    && review_outcome.as_deref() == Some("passed"),
+                export_pending: approved_for_issue && export_count == 0,
+                interpretation_pending: uninterpreted_response_count > 0,
+            });
+        }
+        Ok(summaries)
+    }
+
+    fn workspace_external_rfi_action(
+        &self,
+        summaries: &[WorkspaceExternalRfiSummary],
+    ) -> Result<Option<WorkspaceCurrentAction>, TenderCommandError> {
+        if let Some(pending) = summaries.iter().find(|summary| {
+            matches!(
+                summary.status,
+                WorkspaceExternalRfiStatus::AwaitingReview
+                    | WorkspaceExternalRfiStatus::ReviewFailed
+                    | WorkspaceExternalRfiStatus::AwaitingApproval
+            )
+        }) {
+            let (title, summary_text) = match pending.status {
+                WorkspaceExternalRfiStatus::AwaitingReview => (
+                    "Review the External RFI draft",
+                    "A controlled question to the client is drafted from exact Tender questions and evidence. It needs independent review before you approve it for issue.",
+                ),
+                WorkspaceExternalRfiStatus::ReviewFailed => (
+                    "Resolve the External RFI review findings",
+                    "The independent review found problems in the draft. Revise the draft to resolve them, then run a new review.",
+                ),
+                WorkspaceExternalRfiStatus::AwaitingApproval => (
+                    "Approve the External RFI for issue",
+                    "The independent review passed. Your approval records the exact wording before it can be exported for human issue.",
+                ),
+                _ => unreachable!("matched only the three pending review statuses"),
+            };
+            return Ok(Some(action(
+                WorkspaceActionKind::ReviewExternalRfi,
+                title,
+                summary_text,
+                "Review External RFI",
+                true,
+            )));
+        }
+        if summaries
+            .iter()
+            .any(|summary| summary.interpretation_pending)
+        {
+            return Ok(Some(action(
+                WorkspaceActionKind::InterpretExternalRfiResponse,
+                "Interpret the received response",
+                "A response to your External RFI arrived. Record one interpretation as the Manager so the answer enters the Tender record.",
+                "Interpret response",
+                true,
+            )));
+        }
+        let eligible_queries: i64 = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM tender_query_heads AS heads
+                 JOIN tender_query_treatment_decisions AS decisions
+                   ON decisions.query_id = heads.query_id
+                  AND decisions.query_version = heads.current_version
+                 WHERE decisions.treatment = 'external_rfi_drafting'
+                   AND decisions.closes_query = 0",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if eligible_queries > 0 {
+            return Ok(Some(action(
+                WorkspaceActionKind::DraftExternalRfi,
+                "Ask the client a controlled question",
+                "A Tender question is routed for a controlled External RFI. Gather the exact questions, address them to the recipient, and Quantix prepares the draft for review.",
+                "Start External RFI",
+                true,
+            )));
+        }
+        Ok(None)
+    }
+
+    fn workspace_estimate_summary(
+        &self,
+    ) -> Result<Option<WorkspaceEstimateSummary>, TenderCommandError> {
+        let basis: Option<(String, u32, i64, bool, bool)> = self
+            .connection
+            .query_row(
+                "SELECT basis_id, version,
+                        json_array_length(manifest_json, '$.boq_rows'),
+                        json_extract(manifest_json, '$.complete') = 1,
+                        json_extract(manifest_json, '$.reconciled') = 1
+                 FROM basis_of_estimate_versions
+                 ORDER BY version DESC LIMIT 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let Some((basis_id, version, boq_row_count, complete, reconciled)) = basis else {
+            return Ok(None);
+        };
+        let review: Option<(String, i64)> = self
+            .connection
+            .query_row(
+                "SELECT outcome, json_array_length(findings_json)
+                 FROM basis_of_estimate_reviews
+                 WHERE basis_id = ?1 AND basis_version = ?2",
+                params![basis_id, version],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let approved: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM basis_of_estimate_approvals
+                   WHERE basis_id = ?1 AND basis_version = ?2
+                 )",
+                params![basis_id, version],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        let calculation_run_count: i64 = self
+            .connection
+            .query_row("SELECT COUNT(*) FROM calculation_runs", [], |row| {
+                row.get(0)
+            })
+            .map_err(sql_error)?;
+        let status = if approved {
+            WorkspaceEstimateStatus::Approved
+        } else if review
+            .as_ref()
+            .is_some_and(|(outcome, _)| outcome == "passed")
+        {
+            WorkspaceEstimateStatus::AwaitingApproval
+        } else if review
+            .as_ref()
+            .is_some_and(|(outcome, _)| outcome == "failed")
+        {
+            WorkspaceEstimateStatus::ReviewFailed
+        } else if complete && reconciled {
+            WorkspaceEstimateStatus::AwaitingReview
+        } else {
+            WorkspaceEstimateStatus::Incomplete
+        };
+        Ok(Some(WorkspaceEstimateSummary {
+            basis_id,
+            version,
+            status,
+            boq_row_count: to_u32(boq_row_count)?,
+            finding_count: to_u32(review.map(|(_, findings)| findings).unwrap_or(0))?,
+            calculation_run_count: to_u32(calculation_run_count)?,
+        }))
+    }
+
+    fn workspace_estimate_action(
+        &self,
+        estimate: Option<&WorkspaceEstimateSummary>,
+    ) -> Option<WorkspaceCurrentAction> {
+        let estimate = estimate?;
+        let (title, summary_text) = match estimate.status {
+            WorkspaceEstimateStatus::AwaitingReview => (
+                "Review the Basis of Estimate",
+                "The Cost Estimator published a complete, reconciled Basis of Estimate. It needs independent review before you approve it for reliance.",
+            ),
+            WorkspaceEstimateStatus::ReviewFailed => (
+                "Resolve the estimate review findings",
+                "The independent review found problems in the Basis of Estimate. A revised basis must remediate them before a new review can run.",
+            ),
+            WorkspaceEstimateStatus::AwaitingApproval => (
+                "Approve the Basis of Estimate",
+                "The independent review passed. Your approval binds the exact basis version before any pricing may rely on it.",
+            ),
+            WorkspaceEstimateStatus::Approved | WorkspaceEstimateStatus::Incomplete => return None,
+        };
+        Some(action(
+            WorkspaceActionKind::ReviewBasisOfEstimate,
+            title,
+            summary_text,
+            "Review estimate basis",
+            true,
+        ))
+    }
+
+    fn workspace_pricing_summary(
+        &self,
+    ) -> Result<Option<WorkspacePricingSummary>, TenderCommandError> {
+        let pricing_exists: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM priced_cost_baselines)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if !pricing_exists {
+            return Ok(None);
+        }
+        let budget = BidPackageOperationBudget::from_connection(&self.connection)?;
+        let inspection =
+            super::pricing::inspect_pricing_workspace_in_connection(&self.connection, budget)?;
+        let Some(baseline) = inspection.baseline else {
+            return Ok(None);
+        };
+        let baseline_status = if baseline.approval.is_some() {
+            WorkspacePricingBaselineStatus::Approved
+        } else {
+            match baseline.review.as_ref().map(|review| review.outcome) {
+                Some(PricedCostBaselineReviewOutcome::Passed) => {
+                    WorkspacePricingBaselineStatus::AwaitingApproval
+                }
+                Some(PricedCostBaselineReviewOutcome::Failed) => {
+                    WorkspacePricingBaselineStatus::ReviewFailed
+                }
+                None => WorkspacePricingBaselineStatus::AwaitingReview,
+            }
+        };
+        let strategy_awaiting_approval = inspection
+            .strategies
+            .iter()
+            .any(|strategy| strategy.current && strategy.approval.is_none());
+        let mut adjustments_awaiting_review = 0_u32;
+        let mut adjustments_awaiting_approval = 0_u32;
+        for adjustment in &inspection.adjustments {
+            if !adjustment.current || adjustment.approval.is_some() {
+                continue;
+            }
+            match adjustment.review.as_ref().map(|review| review.outcome) {
+                None => adjustments_awaiting_review += 1,
+                Some(PricedCostBaselineReviewOutcome::Passed) => adjustments_awaiting_approval += 1,
+                Some(PricedCostBaselineReviewOutcome::Failed) => {}
+            }
+        }
+        let head_selection: Option<(String, String, u32)> = self
+            .connection
+            .query_row(
+                "SELECT selections.selection_id, selections.pricing_scenario_id,
+                        selections.pricing_scenario_version
+                 FROM pricing_selection_head AS heads
+                 JOIN pricing_scenario_selections AS selections
+                   ON selections.selection_id = heads.selection_id
+                 WHERE heads.singleton = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let selected_scenario =
+            head_selection
+                .as_ref()
+                .and_then(|(_, scenario_id, scenario_version)| {
+                    inspection.scenarios.iter().find(|scenario| {
+                        scenario.pricing_scenario_id == *scenario_id
+                            && scenario.version == *scenario_version
+                    })
+                });
+        let scenario_selection_pending = head_selection.is_none()
+            && inspection.scenarios.iter().any(|scenario| scenario.current);
+        let (tender_price_state, tender_price_amount, tender_price_currency) =
+            match selected_scenario {
+                None => (None, None, None),
+                Some(scenario) if !scenario.current => {
+                    (Some(WorkspaceTenderPriceState::Revoked), None, None)
+                }
+                Some(scenario) => match scenario.approved_tender_price.as_ref() {
+                    Some(price) => (
+                        Some(WorkspaceTenderPriceState::Approved),
+                        Some(price.amount.clone()),
+                        Some(price.currency.clone()),
+                    ),
+                    None => (
+                        Some(WorkspaceTenderPriceState::AwaitingApproval),
+                        None,
+                        None,
+                    ),
+                },
+            };
+        Ok(Some(WorkspacePricingSummary {
+            baseline_id: baseline.baseline_id.clone(),
+            baseline_version: baseline.version,
+            baseline_current: baseline.current,
+            baseline_status,
+            baseline_finding_count: baseline
+                .review
+                .as_ref()
+                .map_or(0, |review| review.findings.len() as u32),
+            baseline_amount: baseline.amount.clone(),
+            baseline_currency: baseline.currency.clone(),
+            strategy_awaiting_approval,
+            adjustments_awaiting_review,
+            adjustments_awaiting_approval,
+            scenario_selection_pending,
+            selected_scenario_name: selected_scenario.map(|scenario| scenario.name.clone()),
+            tender_price_state,
+            tender_price_amount,
+            tender_price_currency,
+        }))
+    }
 }
 
 fn workspace_reference_exists(
@@ -1584,6 +2150,23 @@ fn workspace_reference_exists(
                 |row| row.get(0),
             )
         }
+        super::WorkspaceMessageReferenceKind::ArtifactVersion => transaction.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM source_artifact_versions
+               WHERE artifact_id = ?1 AND version = ?2
+             )
+             OR EXISTS(
+               SELECT 1 FROM production_artifact_versions
+               WHERE artifact_id = ?1 AND version = ?2
+             )",
+            params![reference.reference, reference.version],
+            |row| row.get(0),
+        ),
+        super::WorkspaceMessageReferenceKind::TenderTask => transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tender_tasks WHERE task_id = ?1)",
+            [&reference.reference],
+            |row| row.get(0),
+        ),
     }
     .map_err(sql_error)?;
     Ok(exists)
@@ -2069,6 +2652,9 @@ fn projection_from_snapshot(
         work: snapshot.work,
         files: snapshot.files,
         team: snapshot.team,
+        external_rfis: snapshot.external_rfis,
+        estimate: snapshot.estimate,
+        pricing: snapshot.pricing,
         intake: snapshot.intake,
         ai_execution: Some(snapshot.ai_execution),
         capability_readiness: Some(snapshot.capability_readiness),
@@ -2248,6 +2834,68 @@ fn workspace_doctor_blockers(
     blockers
 }
 
+fn workspace_pricing_action(
+    pricing: Option<&WorkspacePricingSummary>,
+) -> Option<WorkspaceCurrentAction> {
+    let pricing = pricing?;
+    let (title, summary_text) = if !pricing.baseline_current {
+        (
+            "Replace the stale priced cost baseline",
+            "The priced cost baseline was built on an older Basis of Estimate, so it can no longer support pricing. Establish a new baseline version from the current approved basis.",
+        )
+    } else {
+        match pricing.baseline_status {
+            WorkspacePricingBaselineStatus::AwaitingReview => (
+                "Review the priced cost baseline",
+                "The expected delivery cost is recorded as a controlled baseline tied to the approved Basis of Estimate. It needs independent review before you approve it for commercial pricing.",
+            ),
+            WorkspacePricingBaselineStatus::ReviewFailed => (
+                "Resolve the baseline review findings",
+                "The independent review found problems in the priced cost baseline. Establish a corrected baseline version that remediates the exact findings.",
+            ),
+            WorkspacePricingBaselineStatus::AwaitingApproval => (
+                "Approve the priced cost baseline",
+                "The independent review passed. Your approval binds the exact baseline version and its expected cost before commercial pricing may rely on it.",
+            ),
+            WorkspacePricingBaselineStatus::Approved if pricing.strategy_awaiting_approval => (
+                "Approve the commercial strategy",
+                "The commercial strategy is built from an exact reviewed adjustment. Your approval binds its stated appetite, exclusions, and qualifications before pricing scenarios can use it.",
+            ),
+            WorkspacePricingBaselineStatus::Approved
+                if pricing.adjustments_awaiting_review > 0 =>
+            (
+                "Review the pricing adjustment",
+                "A cost or commercial adjustment is waiting for its independent review. Every adjustment must be a reviewed, attributable input before a pricing scenario can use it.",
+            ),
+            WorkspacePricingBaselineStatus::Approved
+                if pricing.adjustments_awaiting_approval > 0 =>
+            (
+                "Approve the pricing adjustment",
+                "The independent review passed for a pricing adjustment. Your approval binds the exact adjustment version and amount before scenarios can include it.",
+            ),
+            WorkspacePricingBaselineStatus::Approved if pricing.scenario_selection_pending => (
+                "Choose the pricing scenario",
+                "The calculated pricing scenarios are ready. Compare their exact results and select the one the Tender will stand on.",
+            ),
+            WorkspacePricingBaselineStatus::Approved
+                if pricing.tender_price_state
+                    == Some(WorkspaceTenderPriceState::AwaitingApproval) =>
+            (
+                "Approve the Tender Price",
+                "The selected scenario is calculated and current. Your approval records the exact Tender Price and its complete calculation basis.",
+            ),
+            WorkspacePricingBaselineStatus::Approved => return None,
+        }
+    };
+    Some(action(
+        WorkspaceActionKind::ReviewPricing,
+        title,
+        summary_text,
+        "Review pricing",
+        true,
+    ))
+}
+
 fn empty_projection(catalogue: Vec<ManagerWorkspaceTender>) -> ManagerWorkspaceProjection {
     ManagerWorkspaceProjection {
         catalogue,
@@ -2263,6 +2911,9 @@ fn empty_projection(catalogue: Vec<ManagerWorkspaceTender>) -> ManagerWorkspaceP
         work: WorkspaceWorkSummary::default(),
         files: WorkspaceFilesSummary::default(),
         team: WorkspaceTeamSummary::default(),
+        external_rfis: Vec::new(),
+        estimate: None,
+        pricing: None,
         intake: None,
         ai_execution: None,
         capability_readiness: None,

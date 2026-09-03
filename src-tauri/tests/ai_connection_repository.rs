@@ -105,7 +105,7 @@ impl RepositoryFixture {
         let repo = Arc::new(AiConnectionRepository::new(
             vault,
             Arc::clone(&installation),
-            AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
+            AiAdapterVersions::new("codex-v1", "grok-v1", "general-v1").unwrap(),
             Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
             Arc::new(move |connection_id: &str| {
                 if !matches!(
@@ -810,7 +810,7 @@ fn missing_targets_and_checker_failures_are_precise_and_nonpublishing() {
     let failing_repo = AiConnectionRepository::new(
         AiConnectionVault::new(&fixture.application_home).unwrap(),
         Arc::clone(&fixture.installation),
-        AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
+        AiAdapterVersions::new("codex-v1", "grok-v1", "general-v1").unwrap(),
         Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
         Arc::new(|_| Err(quantix_lib::ai::connections::AiConnectionError::StoreUnavailable)),
     );
@@ -858,7 +858,7 @@ fn direct_tender_insertion_is_detected_but_is_not_the_conforming_race_proof() {
     let ordered_repo = AiConnectionRepository::new(
         AiConnectionVault::new(&fixture.application_home).unwrap(),
         Arc::clone(&fixture.installation),
-        AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
+        AiAdapterVersions::new("codex-v1", "grok-v1", "general-v1").unwrap(),
         Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
         Arc::new(move |connection_id: &str| {
             if !matches!(
@@ -1025,7 +1025,7 @@ fn readiness_fails_closed_for_destination_adapter_and_catalogue_drift() {
     let drifted_adapter_repo = AiConnectionRepository::new(
         AiConnectionVault::new(&adapter_fixture.application_home).unwrap(),
         Arc::clone(&adapter_fixture.installation),
-        AiAdapterVersions::new("codex-v1", "general-v2").unwrap(),
+        AiAdapterVersions::new("codex-v1", "grok-v1", "general-v2").unwrap(),
         Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
         Arc::new(no_nonterminal_reference),
     );
@@ -1877,7 +1877,7 @@ fn concurrent_repository_handles_serialize_material_cas() {
     let second_repo = Arc::new(AiConnectionRepository::new(
         AiConnectionVault::new(&fixture.application_home).unwrap(),
         Arc::clone(&fixture.installation),
-        AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
+        AiAdapterVersions::new("codex-v1", "grok-v1", "general-v1").unwrap(),
         Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
         Arc::new(no_nonterminal_reference),
     ));
@@ -2146,7 +2146,7 @@ fn indeterminate_settings_latch_blocks_current_repository_until_restart() {
     let restarted = AiConnectionRepository::new(
         AiConnectionVault::new(&fixture.application_home).unwrap(),
         Arc::clone(&fixture.installation),
-        AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
+        AiAdapterVersions::new("codex-v1", "grok-v1", "general-v1").unwrap(),
         Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
         Arc::new(no_nonterminal_reference),
     );
@@ -2234,7 +2234,7 @@ fn reconciliation_never_reads_until_commit_failure_leaves_autocommit() {
     let restarted = AiConnectionRepository::new(
         AiConnectionVault::new(&fixture.application_home).unwrap(),
         Arc::clone(&fixture.installation),
-        AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
+        AiAdapterVersions::new("codex-v1", "grok-v1", "general-v1").unwrap(),
         Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
         Arc::new(no_nonterminal_reference),
     );
@@ -2430,7 +2430,7 @@ fn settings_writes_preserve_preferences_and_return_exact_snapshots() {
     let competing_repo = AiConnectionRepository::new(
         AiConnectionVault::new(&response_fixture.application_home).unwrap(),
         Arc::clone(&response_fixture.installation),
-        AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
+        AiAdapterVersions::new("codex-v1", "grok-v1", "general-v1").unwrap(),
         Arc::new(|| "2026-08-24T12:34:56Z".to_owned()),
         Arc::new(no_nonterminal_reference),
     );
@@ -3039,8 +3039,8 @@ fn invalid_identifiers_and_zero_cas_fail_before_reference_checks() {
 
 #[test]
 fn adapter_activation_and_account_expiry_inputs_are_strictly_bounded() {
-    assert!(AiAdapterVersions::new("", "general-v1").is_err());
-    assert!(AiAdapterVersions::new("codex-v1", "g".repeat(129)).is_err());
+    assert!(AiAdapterVersions::new("", "grok-v1", "general-v1").is_err());
+    assert!(AiAdapterVersions::new("codex-v1", "grok-v1", "g".repeat(129)).is_err());
 
     let base = serde_json::json!({
         "connection_id":"0123456789abcdef0123456789abcdef",
@@ -3146,7 +3146,7 @@ fn exact_bound_compatible_destination_activates_and_bad_clock_cannot_write() {
     let invalid_clock_repo = AiConnectionRepository::new(
         AiConnectionVault::new(&invalid_clock_fixture.application_home).unwrap(),
         Arc::clone(&invalid_clock_fixture.installation),
-        AiAdapterVersions::new("codex-v1", "general-v1").unwrap(),
+        AiAdapterVersions::new("codex-v1", "grok-v1", "general-v1").unwrap(),
         Arc::new(String::new),
         Arc::new(no_nonterminal_reference),
     );

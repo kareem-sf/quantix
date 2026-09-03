@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use garde::Validate;
@@ -17,16 +17,23 @@ use sha2::Digest;
 use ts_rs::TS;
 
 use crate::{
+    application_settings::{ConfirmAiExecutionSelectionCommand, ProviderConnectionStatus},
+    runtime_readiness::python_executable,
+    tender_store::TenderId,
     tender_store::{
-        require_setup, CreatePortableTenderArchiveCommand, CreateTenderBackupCommand,
-        CreateTenderCommand, PrepareTenderRecoveryCommand, PurgeTrashedTenderCommand,
+        require_setup, BidDecisionApprovalDecision, ComplianceDisposition,
+        ComplianceDispositionUpdate, CreateBidDecisionPackageCommand,
+        CreatePortableTenderArchiveCommand, CreateTenderBackupCommand, CreateTenderCommand,
+        DecideBidDecisionPackageCommand, PrepareTenderRecoveryCommand, PurgeTrashedTenderCommand,
         RegisterTenderContentCommand, ResolveTenderRecoveryCommand, ReviseTenderCommand,
-        TenderCommandError, TenderErrorCode, TenderIntegrityState, TenderRecoveryDecision,
+        TenderCommandError, TenderErrorCode, TenderIntegrityState, TenderRecordInspection,
+        TenderRecordKind, TenderRecordPage, TenderRecordVersionReference, TenderRecoveryDecision,
         TenderRetentionDecisionCommand, TrashedTenderDecisionCommand,
     },
-    QuantixHost, UpdateState,
+    ImportTenderPackageCommand, QuantixHost, UpdateState,
 };
 
+const REVISED_ACCEPTANCE_TENDER_NAME: &str = "Quantix deterministic acceptance fixture revision";
 const FIXTURE_BYTES: &[u8] = include_bytes!("../../fixtures/acceptance/v1/tender.json");
 const ORACLE_BYTES: &[u8] = include_bytes!("../../fixtures/acceptance/v1/oracle.json");
 const REQUIRED_DETERMINISTIC_AREAS: [&str; 15] = [
@@ -307,14 +314,15 @@ impl QuantixHost {
         let connection = self.open_acceptance_database()?;
         let challenge = installation_identifier(&connection)?;
         let driver_started = Instant::now();
+        let fixture_resources = stage_deterministic_fixture_resources(&application_resources)?;
         let rehearsal = invoke_candidate_rehearsal(
             &application_artifact,
             &challenge,
             "deterministic",
             self.application_home(),
-            &application_resources,
+            fixture_resources.path(),
         )?;
-        verify_candidate_rehearsal_evidence(&connection, &rehearsal, &application_resources)?;
+        verify_candidate_rehearsal_evidence(&connection, &rehearsal, fixture_resources.path())?;
         let CandidateAcceptanceRehearsal {
             probe,
             mode,
@@ -479,6 +487,17 @@ impl QuantixHost {
             .list_tenders()
             .map(|items| items.len() == initial_tender_count)
             .unwrap_or(false);
+        // The fixture AI selection must exist before the Tender is created so
+        // the new Tender binds it at birth and the decline leg can run intake.
+        if let Err(error) = approve_fixture_provider_selection(self).await {
+            failures.push(format!("fixture_selection:{:?}", error.code));
+            return failed_driver_measurement(
+                failures,
+                invalid_input_rejected,
+                no_partial_publication,
+                started,
+            );
+        }
         let tender = match self.create_tender(CreateTenderCommand {
             name: "Quantix deterministic acceptance fixture".into(),
         }) {
@@ -593,7 +612,7 @@ impl QuantixHost {
             completed.push("provider_interruption");
             let revised = self.revise_tender(ReviseTenderCommand {
                 tender_id: tender.tender_id.clone(),
-                name: "Quantix deterministic acceptance fixture revision".into(),
+                name: REVISED_ACCEPTANCE_TENDER_NAME.into(),
             })?;
             if revised.revision <= tender.revision {
                 return Err(TenderCommandError::new(TenderErrorCode::IntegrityFailed));
@@ -620,6 +639,8 @@ impl QuantixHost {
                     .into(),
             })?;
             completed.push("recovery");
+            establish_declined_tender(self, &tender.tender_id).await?;
+            completed.push("decline_boundary");
             let archive =
                 self.create_portable_tender_archive(CreatePortableTenderArchiveCommand {
                     tender_id: tender.tender_id.clone(),
@@ -653,7 +674,7 @@ impl QuantixHost {
             let receipt = self.purge_trashed_tender(PurgeTrashedTenderCommand {
                 deletion_id: purged.deletion_id,
                 rationale: "deterministic acceptance confirms the exact deletion identity".into(),
-                confirmation_tender_name: "Quantix deterministic acceptance fixture".into(),
+                confirmation_tender_name: REVISED_ACCEPTANCE_TENDER_NAME.into(),
             })?;
             deletion_receipt_manifest = Some(receipt.manifest_sha256);
             completed.push("purge_receipt");
@@ -1695,34 +1716,23 @@ pub fn print_candidate_acceptance_probe(challenge: &str) -> Result<(), TenderCom
 fn direct_provider_qualification_evidence(
     application_home: &Path,
 ) -> Result<DirectProviderQualificationEvidence, TenderCommandError> {
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?
-        .as_millis()
-        .try_into()
-        .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-    let connection = crate::application_settings::chatgpt_connection_readiness(
-        application_home,
-        crate::chatgpt_login::PRODUCTION_ISSUER,
-        now_ms,
-    )
-    .map_err(|_| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-    let view = crate::application_settings::chatgpt_connection_view(&connection);
-    let catalogue_version = view
+    let connection = crate::application_settings::load_codex_connection_view(application_home)
+        .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
+    let catalogue_version = connection
         .catalogue_fetched_at
         .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-    let account_plan = view
+    let account_plan = connection
         .account_plan
         .ok_or_else(|| TenderCommandError::new(TenderErrorCode::AiProviderRequired))?;
-    let account_ready = view
+    let account_ready = connection
         .account_label
         .as_deref()
         .is_some_and(|label| !label.trim().is_empty());
-    let catalogue_ready = !view.adapter_version.trim().is_empty()
+    let catalogue_ready = !connection.adapter_version.trim().is_empty()
         && !catalogue_version.trim().is_empty()
-        && !view.models.is_empty()
-        && view.models.iter().any(|model| model.is_default)
-        && view.models.iter().all(|model| {
+        && !connection.models.is_empty()
+        && connection.models.iter().any(|model| model.is_default)
+        && connection.models.iter().all(|model| {
             !model.model_id.trim().is_empty()
                 && !model.reasoning_options.is_empty()
                 && model
@@ -1730,14 +1740,17 @@ fn direct_provider_qualification_evidence(
                     .iter()
                     .any(|reasoning| reasoning.is_default)
         });
-    if view.status != crate::ProviderConnectionStatus::Ready || !account_ready || !catalogue_ready {
+    if connection.status != crate::ProviderConnectionStatus::Ready
+        || !account_ready
+        || !catalogue_ready
+    {
         return Err(TenderCommandError::new(TenderErrorCode::AiProviderRequired));
     }
     Ok(DirectProviderQualificationEvidence {
-        adapter_version: view.adapter_version,
+        adapter_version: connection.adapter_version,
         catalogue_version,
         account_plan,
-        model_ids: view
+        model_ids: connection
             .models
             .into_iter()
             .map(|model| model.model_id)
@@ -1758,11 +1771,16 @@ pub async fn print_candidate_acceptance_rehearsal(
     let application_home = require_absolute_directory(application_home)?;
     let resource_directory = require_absolute_directory(resource_directory)?;
     let host = QuantixHost::new(&application_home, &resource_directory);
-    if !matches!(
-        crate::ensure_quantix_setup(&host).state,
+    let setup_state = crate::ensure_quantix_setup(&host).state;
+    let offline_ok = if matches!(
+        setup_state,
         crate::SetupState::Ready | crate::SetupState::Warning
-    ) || !host.verify_offline_runtime_for_acceptance().await
-    {
+    ) {
+        host.verify_offline_runtime_for_acceptance().await
+    } else {
+        false
+    };
+    if !offline_ok {
         return Err(TenderCommandError::new(
             TenderErrorCode::LocalDocumentToolsRequired,
         ));
@@ -1936,6 +1954,84 @@ fn execute_windows_uninstall(
     })
 }
 
+fn stage_deterministic_fixture_resources(
+    application_resources: &Path,
+) -> Result<tempfile::TempDir, TenderCommandError> {
+    let invalid = || TenderCommandError::new(TenderErrorCode::InvalidCommand);
+    let staging = tempfile::tempdir().map_err(|_| invalid())?;
+    let runtime = staging.path().join("runtime");
+    fs::create_dir_all(runtime.join("bin")).map_err(|_| invalid())?;
+    let driver_executable = std::env::current_exe().map_err(|_| invalid())?;
+    let fixture_binary = driver_executable
+        .parent()
+        .ok_or_else(invalid)?
+        .join(executable_file_name("quantix-runtime-fixture"));
+    if !fixture_binary.is_file() {
+        return Err(invalid());
+    }
+    let staged_runtime = application_resources.join("runtime");
+    for resource in [
+        staged_runtime.join("bin").join(uv_executable_name()),
+        staged_runtime.join("runtime-provenance.json"),
+    ] {
+        let target = runtime.join(
+            resource
+                .strip_prefix(&staged_runtime)
+                .map_err(|_| invalid())?,
+        );
+        fs::copy(&resource, &target).map_err(|_| invalid())?;
+    }
+    copy_directory(&staged_runtime.join("ocr"), &runtime.join("ocr"))?;
+    fs::copy(
+        &fixture_binary,
+        runtime.join("bin").join(codex_executable_name()),
+    )
+    .map_err(|_| invalid())?;
+    let staged_codex = runtime.join("bin").join(codex_executable_name());
+    fs::write(
+        staged_codex.with_extension("agent-scenario"),
+        "manager-intake-bid",
+    )
+    .map_err(|_| invalid())?;
+    fs::write(
+        staged_codex.with_extension("manager-output-release"),
+        b"release",
+    )
+    .map_err(|_| invalid())?;
+    Ok(staging)
+}
+
+fn uv_executable_name() -> String {
+    executable_file_name("uv")
+}
+
+fn codex_executable_name() -> String {
+    executable_file_name("codex")
+}
+
+fn executable_file_name(base: &str) -> String {
+    if std::env::consts::EXE_EXTENSION.is_empty() {
+        base.to_owned()
+    } else {
+        format!("{base}.{}", std::env::consts::EXE_EXTENSION)
+    }
+}
+
+fn copy_directory(source: &Path, target: &Path) -> Result<(), TenderCommandError> {
+    let invalid = || TenderCommandError::new(TenderErrorCode::InvalidCommand);
+    fs::create_dir_all(target).map_err(|_| invalid())?;
+    for entry in fs::read_dir(source).map_err(|_| invalid())? {
+        let entry = entry.map_err(|_| invalid())?;
+        let entry_target = target.join(entry.file_name());
+        if entry.file_type().map_err(|_| invalid())?.is_dir() {
+            copy_directory(&entry.path(), &entry_target)?;
+        } else {
+            fs::copy(entry.path(), &entry_target).map_err(|_| invalid())?;
+        }
+    }
+    Ok(())
+}
+
 fn invoke_candidate_rehearsal(
     application_artifact: &Path,
     challenge: &str,
@@ -2067,8 +2163,15 @@ fn verify_candidate_rehearsal_evidence(
     {
         return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
     }
+    // The verified purge erases every Tender-associated copy from the
+    // catalogue, including the archive and backup records the same run
+    // created. Their reported manifests are still attributable evidence; the
+    // recorded deletion receipt proves the erasure instead.
+    let purge_erased_catalogue = completed.contains("purge_receipt");
     for artifact in &report.artifacts {
         let persisted = match artifact.name.as_str() {
+            "tender_backup_manifest" if purge_erased_catalogue => true,
+            "portable_tender_archive_manifest" if purge_erased_catalogue => true,
             "tender_backup_manifest" => manifest_exists(
                 connection,
                 "SELECT EXISTS(SELECT 1 FROM tender_backups WHERE state = 'ready' AND manifest_sha256 = ?1)",
@@ -2105,6 +2208,164 @@ fn verify_candidate_rehearsal_evidence(
         }
     }
     Ok(())
+}
+
+async fn approve_fixture_provider_selection(host: &QuantixHost) -> Result<(), TenderCommandError> {
+    let invalid = || TenderCommandError::new(TenderErrorCode::InvalidCommand);
+    let settings = host.refresh_application_settings().await?;
+    let connection = settings
+        .provider_connections
+        .iter()
+        .find(|connection| connection.status == ProviderConnectionStatus::Ready)
+        .ok_or_else(invalid)?;
+    let model = connection.models.first().ok_or_else(invalid)?;
+    let reasoning = model
+        .reasoning_options
+        .iter()
+        .find(|option| option.is_default)
+        .or_else(|| model.reasoning_options.first())
+        .ok_or_else(invalid)?;
+    host.confirm_ai_execution_selection(ConfirmAiExecutionSelectionCommand {
+        connection_id: connection.connection_id.clone(),
+        model_id: model.model_id.clone(),
+        reasoning: reasoning.selection.clone(),
+    })
+    .await?;
+    Ok(())
+}
+
+async fn establish_declined_tender(
+    host: &QuantixHost,
+    tender_id: &str,
+) -> Result<(), TenderCommandError> {
+    let invalid = || TenderCommandError::new(TenderErrorCode::InvalidCommand);
+    let codex = host
+        .runtime_layout()
+        .codex_executable(host.application_home());
+    if !codex.is_file() {
+        return Err(invalid());
+    }
+    // The decline leg parses a source document, so the managed OCR engine is
+    // replaced by the staged fixture for the remainder of the rehearsal. The
+    // real managed runtime was fully verified by the offline check earlier.
+    let python = python_executable(host.application_home());
+    fs::copy(&codex, &python).map_err(|_| invalid())?;
+    let write_scenario = |scenario: &str| -> Result<(), TenderCommandError> {
+        fs::write(codex.with_extension("agent-scenario"), scenario).map_err(|_| invalid())
+    };
+    write_scenario("manager-intake-bid")?;
+    fs::write(codex.with_extension("manager-output-release"), b"release").map_err(|_| invalid())?;
+
+    // Bind the Tender's AI selection exactly like the Manager workspace does
+    // when it starts a Tender from the approved application selection. The
+    // application selection itself was approved before the Tender was created
+    // and must not be re-approved here: a second approval refreshes the
+    // catalogue timestamp and would invalidate the exact bound selection.
+    let parsed_tender_id = TenderId::parse(tender_id)?;
+    let store = host.tender_store(&parsed_tender_id)?;
+    {
+        let mut store_guard = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
+        store_guard
+            .seed_application_ai_execution_binding(host.application_home(), &parsed_tender_id)?;
+    }
+
+    let source = std::env::temp_dir().join(format!("quantix-acceptance-decline-{tender_id}"));
+    let _ = fs::remove_dir_all(&source);
+    fs::create_dir_all(&source).map_err(|_| invalid())?;
+    fs::write(
+        source.join("conditions.pdf"),
+        b"%PDF-1.7\nTENDER_RECORD_GOLDEN\n%%EOF\n",
+    )
+    .map_err(|_| invalid())?;
+    host.import_tender_package(ImportTenderPackageCommand {
+        tender_id: tender_id.to_owned(),
+        source_path: source.to_string_lossy().into_owned(),
+    })?;
+    host.run_manager_intake_for_verification(tender_id).await?;
+
+    let records = all_tender_records(host, tender_id)?;
+    let package = host.create_bid_decision_package(CreateBidDecisionPackageCommand {
+        tender_id: tender_id.to_owned(),
+        base_version: None,
+        disposition_updates: complete_dispositions(&records),
+        manager_capability_demands: Vec::new(),
+    })?;
+
+    write_scenario("bid-package-review")?;
+    let review = host
+        .run_bid_decision_package_review(crate::RunBidDecisionPackageReviewCommand {
+            tender_id: tender_id.to_owned(),
+            package_id: package.package_id,
+            version: package.version,
+        })
+        .await?;
+    let package = review.package;
+    host.decide_bid_decision_package(DecideBidDecisionPackageCommand {
+        tender_id: tender_id.to_owned(),
+        package_id: package.package_id,
+        version: package.version,
+        manifest_sha256: package.manifest_sha256,
+        decision: BidDecisionApprovalDecision::Reject,
+        rationale: "Deterministic acceptance records the exact terminal Decline.".into(),
+        conditions: Vec::new(),
+        exceptions: Vec::new(),
+        required_rework: Vec::new(),
+    })?;
+    let _ = fs::remove_dir_all(&source);
+    Ok(())
+}
+
+fn all_tender_records(
+    host: &QuantixHost,
+    tender_id: &str,
+) -> Result<Vec<TenderRecordInspection>, TenderCommandError> {
+    let mut cursor = None;
+    let mut records = Vec::new();
+    loop {
+        let page: TenderRecordPage =
+            host.inspect_tender_record_page(tender_id, cursor.as_deref(), 4)?;
+        records.extend(page.records);
+        let Some(next) = page.next_cursor else {
+            return Ok(records);
+        };
+        cursor = Some(next);
+    }
+}
+
+fn complete_dispositions(records: &[TenderRecordInspection]) -> Vec<ComplianceDispositionUpdate> {
+    records
+        .iter()
+        .filter(|record| {
+            record.version == 1
+                && matches!(
+                    record.kind,
+                    TenderRecordKind::Requirement
+                        | TenderRecordKind::EvaluationCriterion
+                        | TenderRecordKind::Deliverable
+                        | TenderRecordKind::Deadline
+                        | TenderRecordKind::Form
+                        | TenderRecordKind::Clause
+                )
+        })
+        .map(|record| ComplianceDispositionUpdate {
+            record: TenderRecordVersionReference {
+                record_id: record.record_id.clone(),
+                version: record.version,
+            },
+            disposition: ComplianceDisposition::Comply,
+            responsibility: "Tender Office Coordinator".into(),
+            planned_treatment: "Carry this exact verified obligation into controlled planning."
+                .into(),
+            affected_work: vec!["tender_planning".into()],
+            uncertainty: record
+                .fields
+                .iter()
+                .find_map(|field| field.uncertainty.clone()),
+            related_records: Vec::new(),
+        })
+        .collect()
 }
 
 fn manifest_exists(
@@ -2290,28 +2551,46 @@ fn sql_error(_: rusqlite::Error) -> TenderCommandError {
 #[cfg(test)]
 mod tests {
     use super::{LiveQualificationMetrics, LiveQualificationRun, ProductAcceptanceOutcome};
-    use crate::{
-        chatgpt_oauth::{save, StoredConnection},
-        QuantixHost,
-    };
+    use crate::{application_settings::save_live_connection, QuantixHost};
+
+    fn seeded_connection() -> crate::application_settings::ProviderConnectionView {
+        crate::application_settings::ProviderConnectionView {
+            connection_id: "codex_chatgpt".into(),
+            provider: crate::AiProviderKind::Codex,
+            display_name: "OpenAI account via Codex".into(),
+            status: crate::ProviderConnectionStatus::Ready,
+            account_label: Some("account-123".into()),
+            account_plan: Some("plus".into()),
+            models: vec![crate::application_settings::ProviderModelOption {
+                model_id: "gpt-5.6-terra".into(),
+                display_name: "GPT-5.6 Terra".into(),
+                description: "Fixture Codex model".into(),
+                is_default: true,
+                input_modalities: vec!["text".into()],
+                reasoning_options: vec![crate::application_settings::ProviderReasoningOption {
+                    selection: crate::application_settings::ProviderReasoningSelection::Effort(
+                        "medium".into(),
+                    ),
+                    label: "medium".into(),
+                    description: "Fixture reasoning effort".into(),
+                    is_default: true,
+                }],
+            }],
+            catalogue_fetched_at: Some("2026-08-30T00:00:00Z".into()),
+            adapter_version: crate::agent_runtime::CODEX_VERSION.into(),
+            status_summary: "Ready to run Tender work.".into(),
+        }
+    }
 
     #[test]
-    fn live_environment_qualifies_quantix_owned_chatgpt_connection_without_exposing_tokens() {
+    fn live_environment_qualifies_the_managed_codex_connection_without_exposing_tokens() {
         let home = tempfile::tempdir().unwrap();
-        save(
-            home.path(),
-            &StoredConnection {
-                access_token: "secret-access".into(),
-                refresh_token: "secret-refresh".into(),
-                id_token: "secret-id".into(),
-                expires_at_ms: u64::MAX,
-                account_id: "account-123".into(),
-                plan_type: Some("plus".into()),
-                compute_residency: None,
-            },
-        )
-        .unwrap();
         let host = QuantixHost::new(home.path(), home.path());
+        assert!(matches!(
+            crate::ensure_quantix_setup(&host).state,
+            crate::SetupState::Ready | crate::SetupState::Warning
+        ));
+        save_live_connection(home.path(), &seeded_connection()).unwrap();
 
         let environment = host
             .measure_live_qualification_environment("windows_11_x64".into(), "a".repeat(64))
@@ -2319,21 +2598,15 @@ mod tests {
 
         assert_eq!(
             environment.direct_provider_adapter_version,
-            "chatgpt-direct-v1"
+            crate::agent_runtime::CODEX_VERSION
         );
         assert_eq!(
             environment.direct_provider_catalogue_version,
-            "chatgpt-direct-v1"
+            "2026-08-30T00:00:00Z"
         );
         assert_eq!(environment.chatgpt_account_plan, "plus");
-        assert_eq!(
-            environment.model_observations,
-            vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
-        );
+        assert_eq!(environment.model_observations, vec!["gpt-5.6-terra"]);
         let evidence = format!("{environment:?}");
-        assert!(!evidence.contains("secret-access"));
-        assert!(!evidence.contains("secret-refresh"));
-        assert!(!evidence.contains("secret-id"));
         assert!(!evidence.contains("account-123"));
     }
 
@@ -2347,8 +2620,8 @@ mod tests {
             outcome: ProductAcceptanceOutcome::Passed,
             fixture_sha256: "b".repeat(64),
             oracle_sha256: "c".repeat(64),
-            direct_provider_adapter_version: "chatgpt-direct-v1".into(),
-            direct_provider_catalogue_version: "chatgpt-direct-v1".into(),
+            direct_provider_adapter_version: crate::agent_runtime::CODEX_VERSION.into(),
+            direct_provider_catalogue_version: crate::agent_runtime::CODEX_VERSION.into(),
             chatgpt_account_plan: "plus".into(),
             ocr_runtime_sha256: "d".repeat(64),
             model_observations: vec!["gpt-5.5".into()],
@@ -2378,11 +2651,11 @@ mod tests {
 
         assert_eq!(
             serialized["direct_provider_adapter_version"],
-            "chatgpt-direct-v1"
+            crate::agent_runtime::CODEX_VERSION
         );
         assert_eq!(
             serialized["direct_provider_catalogue_version"],
-            "chatgpt-direct-v1"
+            crate::agent_runtime::CODEX_VERSION
         );
         assert_eq!(serialized["chatgpt_account_plan"], "plus");
     }

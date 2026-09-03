@@ -30,8 +30,9 @@ use super::{
     metadata_is_unsafe_storage_link, random_identifier, sha256_hex, sql_error, sqlite_timestamp,
     store_unavailable,
     tender_queries::{query_evidence_reference_exists, ExternalRfiInterpretationInput},
+    workspace::append_manager_message,
     BidPackageOperationBudget, QuantixHost, TenderCommandError, TenderErrorCode, TenderId,
-    TenderStore, WorkPlanProfileBinding,
+    TenderOfficeMessageKind, TenderStore, WorkPlanProfileBinding,
 };
 
 pub(crate) const EXTERNAL_RFI_REVIEW_QUALIFICATION: &str = "review_query_rfi_control";
@@ -1328,7 +1329,6 @@ impl TenderStore {
                 permission_grant,
                 provider_thread_ref,
                 provider_thread_to_archive,
-                expected_initial_request_body_bytes: None,
                 workspace: workspace.clone(),
             })
         })();
@@ -2231,6 +2231,15 @@ impl TenderStore {
                 ],
             )
             .map_err(sql_error)?;
+        append_manager_message(
+            &transaction,
+            TenderOfficeMessageKind::Status,
+            &format!(
+                "Approved External RFI {} v{} for human issue after its independent review passed. Quantix has not sent it; you export a verified file and deliver it outside Quantix.",
+                command.rfi_id, command.version
+            ),
+            &created_at,
+        )?;
         budget.check()?;
         transaction.commit().map_err(sql_error)?;
         self.load_external_rfi(&command.rfi_id, command.version, budget)
@@ -2702,6 +2711,15 @@ impl TenderStore {
                 ],
             )
             .map_err(sql_error)?;
+        append_manager_message(
+            &transaction,
+            TenderOfficeMessageKind::Status,
+            &format!(
+                "Interpreted the received response for External RFI {} v{}: the answer is recorded against Query {} as version {}. The original response and every earlier answer stay preserved unchanged.",
+                rfi_id, rfi_version, command.query_id, publication.query_version
+            ),
+            &created_at,
+        )?;
         budget.check()?;
         transaction.commit().map_err(sql_error)?;
         self.load_external_rfi(&rfi_id, rfi_version, budget)
@@ -4501,7 +4519,7 @@ fn attachment_reference_exists(
         .map_err(sql_error)
 }
 
-fn external_rfi_query_refs_are_current(
+pub(super) fn external_rfi_query_refs_are_current(
     connection: &rusqlite::Connection,
     references: &[ExternalRfiQueryReference],
 ) -> Result<bool, TenderCommandError> {

@@ -8,7 +8,10 @@ import {
   Info,
   LoaderCircle,
   LogOut,
+  Pencil,
+  Plus,
   RefreshCw,
+  Trash2,
   Settings2,
   ShieldCheck,
   Sparkles,
@@ -22,6 +25,9 @@ import { QuantixMark } from "./QuantixMark";
 import { DiagnosticsTimeline } from "./DiagnosticsTimeline";
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
 import type { GeneralApplicationPreferences } from "./bindings/GeneralApplicationPreferences";
+import type { AiProviderRoute } from "./bindings/AiProviderRoute";
+import type { AiProviderSettingsView } from "./bindings/AiProviderSettingsView";
+import type { AiProviderView } from "./bindings/AiProviderView";
 import type { ProviderConnectionView } from "./bindings/ProviderConnectionView";
 import type { ProviderReasoningSelection } from "./bindings/ProviderReasoningSelection";
 import type { RuntimeReadiness } from "./bindings/RuntimeReadiness";
@@ -38,8 +44,13 @@ import {
   checkQuantixUpdate,
   confirmAiExecutionSelection,
   disconnectChatGpt,
+  inspectAiProviders,
   inspectQuantixDoctor,
+  probeAiProvider,
   inspectRuntimeReadiness,
+  removeAiProvider,
+  saveAiProvider,
+  setActiveAiProvider,
   openChatGptDeviceLoginPage,
   repairQuantixDoctor,
   refreshApplicationSettings,
@@ -64,7 +75,7 @@ type ApplicationSettingsSection =
 
 const SETTINGS_NAVIGATION = [
   { id: "general", label: "General", icon: Settings2 },
-  { id: "ai", label: "ChatGPT & Models", icon: Sparkles },
+  { id: "ai", label: "AI Providers", icon: Sparkles },
   { id: "data", label: "Data & Storage", icon: Database },
   { id: "updates", label: "Updates", icon: RefreshCw },
   { id: "about", label: "About & Diagnostics", icon: Info },
@@ -74,6 +85,140 @@ const SETTINGS_NAVIGATION = [
   icon: typeof Settings2;
 }[];
 
+interface ProviderDraft {
+  id: string;
+  display_name: string;
+  route: AiProviderRoute;
+  base_url: string;
+  model_id: string;
+  api_key: string;
+  /** Set when editing, so the key field can mean "leave the stored one alone". */
+  existingId: string | null;
+}
+
+/**
+ * Starting points for the common endpoints. They only prefill the form — anything
+ * reachable over an OpenAI- or Anthropic-compatible API can be entered by hand.
+ */
+const PROVIDER_PRESETS: {
+  key: string;
+  label: string;
+  draft: Omit<ProviderDraft, "api_key" | "existingId">;
+}[] = [
+  {
+    key: "openrouter",
+    label: "OpenRouter",
+    draft: {
+      id: "OPENROUTER",
+      display_name: "OpenRouter",
+      route: "openai_compatible",
+      base_url: "https://openrouter.ai/api/v1",
+      model_id: "anthropic/claude-sonnet-4.5",
+    },
+  },
+  {
+    key: "groq",
+    label: "Groq",
+    draft: {
+      id: "GROQ",
+      display_name: "Groq",
+      route: "openai_compatible",
+      base_url: "https://api.groq.com/openai/v1",
+      model_id: "llama-3.3-70b-versatile",
+    },
+  },
+  {
+    key: "openai",
+    label: "OpenAI",
+    draft: {
+      id: "OPENAI",
+      display_name: "OpenAI",
+      route: "openai",
+      base_url: "",
+      model_id: "gpt-5.3",
+    },
+  },
+  {
+    key: "anthropic",
+    label: "Anthropic",
+    draft: {
+      id: "ANTHROPIC",
+      display_name: "Anthropic",
+      route: "anthropic",
+      base_url: "",
+      model_id: "claude-sonnet-4-5",
+    },
+  },
+  {
+    key: "google",
+    label: "Google Gemini",
+    draft: {
+      id: "GOOGLE",
+      display_name: "Google Gemini",
+      route: "google",
+      base_url: "",
+      model_id: "gemini-3-pro",
+    },
+  },
+  {
+    key: "custom",
+    label: "Other (OpenAI-compatible)",
+    draft: {
+      id: "",
+      display_name: "",
+      route: "openai_compatible",
+      base_url: "",
+      model_id: "",
+    },
+  },
+];
+
+const PROVIDER_ROUTE_LABELS: Record<AiProviderRoute, string> = {
+  openai: "OpenAI",
+  openai_compatible: "OpenAI-compatible",
+  anthropic: "Anthropic",
+  anthropic_compatible: "Anthropic-compatible",
+  google: "Google",
+  xai: "xAI",
+};
+
+const PROVIDER_ROUTE_ORDER: AiProviderRoute[] = [
+  "openai_compatible",
+  "anthropic_compatible",
+  "openai",
+  "anthropic",
+  "google",
+  "xai",
+];
+
+function routeRequiresBaseUrl(route: AiProviderRoute): boolean {
+  return route === "openai_compatible" || route === "anthropic_compatible";
+}
+
+function emptyDraft(): ProviderDraft {
+  return {
+    id: "",
+    display_name: "",
+    route: "openai_compatible",
+    base_url: "",
+    model_id: "",
+    api_key: "",
+    existingId: null,
+  };
+}
+
+function draftFrom(connection: AiProviderView): ProviderDraft {
+  return {
+    id: connection.id,
+    display_name: connection.display_name,
+    route: connection.route,
+    base_url: connection.base_url ?? "",
+    model_id: connection.model_id,
+    api_key: "",
+    existingId: connection.id,
+  };
+}
+
 function settingsError(reason: unknown): string {
   if (typeof reason === "object" && reason !== null && "code" in reason) {
     if (reason.code === "local_document_tools_required") {
@@ -81,9 +226,6 @@ function settingsError(reason: unknown): string {
     }
     if (reason.code === "ai_provider_required") {
       return "Connect ChatGPT before using AI for Tender work.";
-    }
-    if (reason.code === "oauth_port_blocked") {
-      return "Quantix could not receive the browser sign-in. Close any other ChatGPT sign-in windows and try again, or sign in on another device.";
     }
     if (reason.code === "oauth_already_running") {
       return "A ChatGPT sign-in is already running. Finish it in your browser or cancel it first.";
@@ -170,7 +312,6 @@ export function ApplicationSettings({
   const [deviceClipboardError, setDeviceClipboardError] = useState<
     string | null
   >(null);
-  const [deviceFallbackVisible, setDeviceFallbackVisible] = useState(false);
   const [browserLoginStarted, setBrowserLoginStarted] = useState(false);
   const [deviceLogin, setDeviceLogin] = useState<DeviceLoginDetails | null>(
     null,
@@ -184,6 +325,20 @@ export function ApplicationSettings({
   const [factsBusy, setFactsBusy] = useState(false);
   const [doctor, setDoctor] = useState<QuantixDoctorReport | null>(null);
   const [repairAllOpen, setRepairAllOpen] = useState(false);
+  const [providers, setProviders] = useState<AiProviderSettingsView | null>(
+    null,
+  );
+  const [providerBusy, setProviderBusy] = useState(false);
+  const [providerError, setProviderError] = useState<string | null>(null);
+  const [providerDraft, setProviderDraft] = useState<ProviderDraft | null>(
+    null,
+  );
+  const [probing, setProbing] = useState<string | null>(null);
+  const [probeResult, setProbeResult] = useState<{
+    id: string;
+    reached: boolean;
+    summary: string;
+  } | null>(null);
   const mountedRef = useRef(false);
   const ownedLoginRef = useRef<"browser" | "device" | null>(null);
   const settingsRequestVersionRef = useRef(0);
@@ -279,6 +434,39 @@ export function ApplicationSettings({
   useEffect(() => {
     void load();
   }, [load]);
+
+  const loadProviders = useCallback(async () => {
+    try {
+      const view = await inspectAiProviders();
+      if (mountedRef.current) setProviders(view);
+    } catch (reason) {
+      if (mountedRef.current) setProviderError(settingsError(reason));
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadProviders();
+  }, [loadProviders]);
+
+  // Every provider mutation returns the whole settings view, so one helper keeps the
+  // busy flag, the error banner and the refreshed list consistent across all of them.
+  const runProviderAction = useCallback(
+    async (action: () => Promise<AiProviderSettingsView>) => {
+      setProviderBusy(true);
+      setProviderError(null);
+      try {
+        const view = await action();
+        if (mountedRef.current) setProviders(view);
+        return true;
+      } catch (reason) {
+        if (mountedRef.current) setProviderError(settingsError(reason));
+        return false;
+      } finally {
+        if (mountedRef.current) setProviderBusy(false);
+      }
+    },
+    [],
+  );
 
   const chatgpt = settings?.chatgpt ?? null;
   const chatgptConnected = chatgpt?.state === "connected";
@@ -538,9 +726,6 @@ export function ApplicationSettings({
         return;
       }
       ownedLoginRef.current = null;
-      if (reasonHasCode(reason, "oauth_port_blocked")) {
-        setDeviceFallbackVisible(true);
-      }
       setGeneralActionError(settingsError(reason));
     } finally {
       settingsMutationInFlightRef.current = false;
@@ -719,7 +904,6 @@ export function ApplicationSettings({
     if (await runSettingsAction(disconnectChatGpt)) {
       setDeviceLogin(null);
       setDeviceCodeCopied(false);
-      setDeviceFallbackVisible(false);
       setBrowserLoginStarted(false);
     }
   };
@@ -961,10 +1145,10 @@ export function ApplicationSettings({
           >
             <div className="application-settings__section-heading">
               <div>
-                <h2 id="ai-settings">ChatGPT &amp; Models</h2>
+                <h2 id="ai-settings">AI Providers</h2>
                 <p>
-                  Quantix opens ChatGPT in your browser and reconnects
-                  automatically when you finish signing in.
+                  Connect the AI accounts Quantix may use for Tender work.
+                  Sign-in always completes in your browser, with the provider.
                 </p>
               </div>
               <button type="button" disabled={busy} onClick={() => void load()}>
@@ -1245,28 +1429,17 @@ export function ApplicationSettings({
                         >
                           Connect ChatGPT
                         </button>
-                        {deviceFallbackVisible ? (
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void connectChatGptOnAnotherDevice()}
-                          >
-                            Sign in on another device
-                          </button>
-                        ) : null}
                       </div>
-                      {!deviceFallbackVisible ? (
-                        <details className="application-settings__trouble">
-                          <summary>Having trouble signing in?</summary>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void connectChatGptOnAnotherDevice()}
-                          >
-                            Sign in on another device
-                          </button>
-                        </details>
-                      ) : null}
+                      <details className="application-settings__trouble">
+                        <summary>Having trouble signing in?</summary>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void connectChatGptOnAnotherDevice()}
+                        >
+                          Sign in on another device
+                        </button>
+                      </details>
                     </div>
                   )}
                 </div>
@@ -1443,6 +1616,353 @@ export function ApplicationSettings({
                 ChatGPT settings are unavailable. Refresh to try again.
               </p>
             )}
+
+            <div className="application-settings__providers">
+              <div className="application-settings__providers-heading">
+                <div>
+                  <h3>Model providers</h3>
+                  <p>
+                    Use your own API key with any OpenAI- or
+                    Anthropic-compatible endpoint.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={providerBusy || providerDraft !== null}
+                  onClick={() => {
+                    setProviderError(null);
+                    setProviderDraft(emptyDraft());
+                  }}
+                >
+                  <Plus size={16} aria-hidden="true" />
+                  Add provider
+                </button>
+              </div>
+
+              {providerError ? (
+                <p className="application-settings__error" role="alert">
+                  {providerError}
+                </p>
+              ) : null}
+
+              {providers && providers.connections.length > 0 ? (
+                <ul className="application-settings__provider-list">
+                  {providers.connections.map((connection) => (
+                    <li key={connection.id}>
+                      <div>
+                        <span>
+                          <strong>{connection.display_name}</strong>
+                          {connection.is_active ? <em>Default</em> : null}
+                        </span>
+                        <small>
+                          {PROVIDER_ROUTE_LABELS[connection.route]}
+                          {" \u00b7 "}
+                          {connection.model_id}
+                          {connection.base_url
+                            ? " \u00b7 " + connection.base_url
+                            : ""}
+                        </small>
+                        {connection.has_api_key ? null : (
+                          <small className="application-settings__unavailable">
+                            No API key stored. Edit this provider to add one.
+                          </small>
+                        )}
+                        {probeResult && probeResult.id === connection.id ? (
+                          <small
+                            className={
+                              probeResult.reached
+                                ? undefined
+                                : "application-settings__unavailable"
+                            }
+                            role="status"
+                          >
+                            {probeResult.summary}
+                          </small>
+                        ) : null}
+                      </div>
+                      <div className="application-settings__provider-actions">
+                        <button
+                          type="button"
+                          disabled={
+                            providerBusy ||
+                            probing !== null ||
+                            !connection.has_api_key
+                          }
+                          onClick={() => {
+                            setProbing(connection.id);
+                            setProbeResult(null);
+                            void probeAiProvider(connection.id)
+                              .then((result) => {
+                                if (!mountedRef.current) return;
+                                setProbeResult({
+                                  id: connection.id,
+                                  ...result,
+                                });
+                              })
+                              .catch((reason: unknown) => {
+                                if (!mountedRef.current) return;
+                                setProbeResult({
+                                  id: connection.id,
+                                  reached: false,
+                                  summary: settingsError(reason),
+                                });
+                              })
+                              .finally(() => {
+                                if (mountedRef.current) setProbing(null);
+                              });
+                          }}
+                        >
+                          {probing === connection.id ? (
+                            <LoaderCircle className="is-spinning" size={15} />
+                          ) : null}
+                          Test
+                        </button>
+                        {connection.is_active ? null : (
+                          <button
+                            type="button"
+                            disabled={providerBusy}
+                            onClick={() => {
+                              void runProviderAction(() =>
+                                setActiveAiProvider(connection.id),
+                              );
+                            }}
+                          >
+                            Make default
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={providerBusy}
+                          aria-label={"Edit " + connection.display_name}
+                          onClick={() => {
+                            setProviderError(null);
+                            setProviderDraft(draftFrom(connection));
+                          }}
+                        >
+                          <Pencil size={15} aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={providerBusy}
+                          aria-label={"Remove " + connection.display_name}
+                          onClick={() => {
+                            void runProviderAction(() =>
+                              removeAiProvider(connection.id),
+                            );
+                          }}
+                        >
+                          <Trash2 size={15} aria-hidden="true" />
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : providerDraft === null ? (
+                <p className="application-settings__empty">
+                  No model providers yet. Add one to use your own API key.
+                </p>
+              ) : null}
+
+              {providerDraft ? (
+                <form
+                  className="application-settings__provider-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    const draft = providerDraft;
+                    void runProviderAction(() =>
+                      saveAiProvider({
+                        id: draft.id,
+                        display_name: draft.display_name,
+                        route: draft.route,
+                        base_url: draft.base_url.trim()
+                          ? draft.base_url.trim()
+                          : null,
+                        model_id: draft.model_id,
+                        // Blank while editing means keep the stored key, so the
+                        // interface never has to hold a secret in order to save.
+                        api_key:
+                          draft.api_key.trim() === "" && draft.existingId
+                            ? null
+                            : draft.api_key,
+                      }),
+                    ).then((saved) => {
+                      if (saved) setProviderDraft(null);
+                    });
+                  }}
+                >
+                  {providerDraft.existingId ? null : (
+                    <div className="application-settings__provider-field">
+                      <QuantixSelect
+                        aria-label="Start from"
+                        label="Start from"
+                        value=""
+                        onChange={(value) => {
+                          const preset = PROVIDER_PRESETS.find(
+                            (entry) => entry.key === value,
+                          );
+                          if (!preset) return;
+                          setProviderDraft({
+                            ...preset.draft,
+                            api_key: "",
+                            existingId: null,
+                          });
+                        }}
+                        options={[
+                          { value: "", label: "Choose a provider" },
+                          ...PROVIDER_PRESETS.map((entry) => ({
+                            value: entry.key,
+                            label: entry.label,
+                          })),
+                        ]}
+                      />
+                    </div>
+                  )}
+
+                  <label>
+                    <span>Name</span>
+                    <input
+                      type="text"
+                      required
+                      value={providerDraft.display_name}
+                      onChange={(event) =>
+                        setProviderDraft({
+                          ...providerDraft,
+                          display_name: event.target.value,
+                        })
+                      }
+                    />
+                  </label>
+
+                  <div className="application-settings__provider-field">
+                    <label>
+                      <span>Id</span>
+                      <input
+                        type="text"
+                        required
+                        readOnly={providerDraft.existingId !== null}
+                        aria-describedby="provider-id-hint"
+                        value={providerDraft.id}
+                        onChange={(event) =>
+                          setProviderDraft({
+                            ...providerDraft,
+                            id: event.target.value,
+                          })
+                        }
+                      />
+                    </label>
+                    <small id="provider-id-hint">
+                      Letters, digits and underscores. Used as the entry name in
+                      the .env file.
+                    </small>
+                  </div>
+
+                  <div className="application-settings__provider-field">
+                    <QuantixSelect
+                      aria-label="API style"
+                      label="API style"
+                      value={providerDraft.route}
+                      onChange={(value) =>
+                        setProviderDraft({
+                          ...providerDraft,
+                          route: value as AiProviderRoute,
+                        })
+                      }
+                      options={PROVIDER_ROUTE_ORDER.map((route) => ({
+                        value: route,
+                        label: PROVIDER_ROUTE_LABELS[route],
+                      }))}
+                    />
+                  </div>
+
+                  <label>
+                    <span>
+                      {routeRequiresBaseUrl(providerDraft.route)
+                        ? "Base URL"
+                        : "Base URL (optional)"}
+                    </span>
+                    <input
+                      type="url"
+                      required={routeRequiresBaseUrl(providerDraft.route)}
+                      placeholder="https://openrouter.ai/api/v1"
+                      value={providerDraft.base_url}
+                      onChange={(event) =>
+                        setProviderDraft({
+                          ...providerDraft,
+                          base_url: event.target.value,
+                        })
+                      }
+                    />
+                  </label>
+
+                  <label>
+                    <span>Model id</span>
+                    <input
+                      type="text"
+                      required
+                      value={providerDraft.model_id}
+                      onChange={(event) =>
+                        setProviderDraft({
+                          ...providerDraft,
+                          model_id: event.target.value,
+                        })
+                      }
+                    />
+                  </label>
+
+                  <label>
+                    <span>API key</span>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      required={providerDraft.existingId === null}
+                      placeholder={
+                        providerDraft.existingId
+                          ? "Leave blank to keep the stored key"
+                          : ""
+                      }
+                      value={providerDraft.api_key}
+                      onChange={(event) =>
+                        setProviderDraft({
+                          ...providerDraft,
+                          api_key: event.target.value,
+                        })
+                      }
+                    />
+                  </label>
+
+                  <div className="application-settings__provider-form-actions">
+                    <button type="submit" disabled={providerBusy}>
+                      {providerBusy ? (
+                        <LoaderCircle className="is-spinning" size={16} />
+                      ) : null}
+                      Save provider
+                    </button>
+                    <button
+                      type="button"
+                      disabled={providerBusy}
+                      onClick={() => {
+                        setProviderDraft(null);
+                        setProviderError(null);
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              ) : null}
+
+              {providers ? (
+                <div className="application-settings__disclosure">
+                  <ShieldCheck size={16} aria-hidden="true" />
+                  <p>
+                    API keys are stored as plain text in{" "}
+                    <code>{providers.file_path}</code>. Anything that can read
+                    that file can use your keys, so keep it as private as the
+                    rest of your Quantix data.
+                  </p>
+                </div>
+              ) : null}
+            </div>
           </section>
 
           <details
@@ -1696,9 +2216,8 @@ export function ApplicationSettings({
 
           <p className="application-settings__notification-note">
             <Bell size={15} aria-hidden="true" /> General preferences are
-            application-wide. ChatGPT &amp; Models supplies the default for new
-            Tenders only; every existing Tender and Agent Run keeps its exact
-            selection.
+            application-wide. AI Providers supplies the default for new Tenders
+            only; every existing Tender and Agent Run keeps its exact selection.
           </p>
         </m.div>
       </div>

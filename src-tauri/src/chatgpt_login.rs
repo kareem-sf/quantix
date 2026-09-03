@@ -1,30 +1,18 @@
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::agent_runtime::{AgentProvider, ChatGptLoginType, LoginOutcome};
 use crate::application_settings::{
-    load_application_settings, save_authorized_connection_projection_unlocked,
-    save_chatgpt_disconnected_unlocked, ApplicationSettingsView,
-};
-use crate::chatgpt_oauth::{
-    clear_unlocked, device_login_deadline, extract_identity, load, needs_refresh, restore_unlocked,
-    run_login, save_unlocked, with_connection_mutation, with_connection_mutation_before,
-    AuthorizationCompletion, DeviceAuthorization, DeviceClient, DevicePollOutcome, LoadState,
-    StoredConnection, TokenClient,
+    load_application_settings, ProviderConnectionStatus, ProviderConnectionView,
 };
 use crate::host::QuantixHost;
 use crate::tender_store::{TenderCommandError, TenderErrorCode};
 
-pub(crate) const PRODUCTION_ISSUER: &str = "https://auth.openai.com";
 const CHATGPT_DEVICE_LOGIN_URL: &str = "https://auth.openai.com/codex/device";
-const LOGIN_PORT_CANDIDATES: &[u16] = &[1455, 1457];
-const CANCEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
-const LOOPBACK_HOST: &str = "127.0.0.1";
-const REDIRECT_URI_MARKER: &str = "redirect_uri=http://localhost:";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -102,100 +90,20 @@ pub enum ChatGptLoginPhase {
     Cancelled,
 }
 
-struct ActiveLoginFlow {
-    cancel: AtomicBool,
-    decision: AtomicU8,
-    callback_port: Mutex<Option<u16>>,
+pub(crate) struct ActiveLogin {
+    verification_url: Option<String>,
+    cancelled: AtomicBool,
 }
 
-const FLOW_PENDING: u8 = 0;
-const FLOW_CANCELLED: u8 = 1;
-const FLOW_PERSISTED: u8 = 2;
-const FLOW_DISCONNECTED: u8 = 3;
-
-impl ActiveLoginFlow {
-    fn new() -> Self {
-        Self {
-            cancel: AtomicBool::new(false),
-            decision: AtomicU8::new(FLOW_PENDING),
-            callback_port: Mutex::new(None),
-        }
-    }
-
-    fn opener<F>(self: Arc<Self>, open_browser: F) -> impl FnOnce(&str)
-    where
-        F: FnOnce(&str) + Send + 'static,
-    {
-        move |url| {
-            let port = callback_port_from_authorize_url(url);
-            *self
-                .callback_port
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = port;
-            if self.cancel.load(Ordering::Acquire) {
-                if let Some(port) = port {
-                    request_callback_cancel(port);
-                }
-                return;
-            }
-            open_browser(url);
-        }
-    }
-
-    fn wake_cancelled_flow(&self) {
-        let port = *self
-            .callback_port
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(port) = port {
-            request_callback_cancel(port);
-        }
-    }
-
-    fn is_cancelled(&self) -> bool {
-        self.cancel.load(Ordering::Acquire)
-    }
-
-    fn request_cancel(&self) {
-        self.cancel.store(true, Ordering::Release);
-    }
-
-    // Decision changes are serialized by with_connection_mutation so cancel,
-    // persistence, and disconnect have one explicit winner.
-    fn claim_cancel(&self) -> bool {
-        match self.decision.load(Ordering::Acquire) {
-            FLOW_PENDING => {
-                self.decision.store(FLOW_CANCELLED, Ordering::Release);
-                self.cancel.store(true, Ordering::Release);
-                true
-            }
-            FLOW_CANCELLED => true,
-            FLOW_PERSISTED | FLOW_DISCONNECTED => false,
-            _ => false,
-        }
-    }
-
-    fn mark_persisted(&self) {
-        self.decision.store(FLOW_PERSISTED, Ordering::Release);
-    }
-
-    fn force_disconnect(&self) {
-        self.decision.store(FLOW_DISCONNECTED, Ordering::Release);
-        self.cancel.store(true, Ordering::Release);
-    }
-
+impl ActiveLogin {
     fn was_cancelled(&self) -> bool {
-        self.decision.load(Ordering::Acquire) == FLOW_CANCELLED
-    }
-
-    fn was_disconnected(&self) -> bool {
-        self.decision.load(Ordering::Acquire) == FLOW_DISCONNECTED
+        self.cancelled.load(Ordering::Acquire)
     }
 }
 
 pub(crate) struct ChatGptLoginFlowState {
     phase: ChatGptLoginPhase,
-    active: Option<Arc<ActiveLoginFlow>>,
+    active: Option<Arc<ActiveLogin>>,
     disconnecting: usize,
 }
 
@@ -209,251 +117,57 @@ impl Default for ChatGptLoginFlowState {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum LoginOutcome {
-    Completed,
-    Cancelled,
-    Failed,
-}
-
-#[cfg(test)]
-pub(crate) fn run_chatgpt_login_flow(
-    home: &Path,
-    port_candidates: &[u16],
-    open_browser: impl FnOnce(&str),
-    issuer: &str,
-) -> LoginOutcome {
-    run_chatgpt_login_flow_for_active(home, port_candidates, open_browser, issuer, None)
-}
-
-fn run_chatgpt_login_flow_for_active(
-    home: &Path,
-    port_candidates: &[u16],
-    open_browser: impl FnOnce(&str),
-    issuer: &str,
-    active: Option<Arc<ActiveLoginFlow>>,
-) -> LoginOutcome {
-    let persistence_home = home.to_path_buf();
-    let persistence_active = active.clone();
-    match run_login(port_candidates, open_browser, issuer, move |tokens| {
-        match persist_authorized_connection(
-            &persistence_home,
-            tokens,
-            persistence_active.as_deref(),
-        ) {
-            LoginOutcome::Completed => AuthorizationCompletion::Connected,
-            LoginOutcome::Cancelled => AuthorizationCompletion::Cancelled,
-            LoginOutcome::Failed => AuthorizationCompletion::Failed,
-        }
-    }) {
-        crate::chatgpt_oauth::CallbackOutcome::Authorized => LoginOutcome::Completed,
-        crate::chatgpt_oauth::CallbackOutcome::Cancelled => LoginOutcome::Cancelled,
-        crate::chatgpt_oauth::CallbackOutcome::Failed(
-            crate::chatgpt_oauth::CallbackFailure::PortBlocked
-            | crate::chatgpt_oauth::CallbackFailure::ProviderDenied
-            | crate::chatgpt_oauth::CallbackFailure::ExchangeRejected
-            | crate::chatgpt_oauth::CallbackFailure::ExchangeUnreachable
-            | crate::chatgpt_oauth::CallbackFailure::Persistence
-            | crate::chatgpt_oauth::CallbackFailure::Startup
-            | crate::chatgpt_oauth::CallbackFailure::Timeout,
-        ) => LoginOutcome::Failed,
-    }
-}
-
-fn run_chatgpt_device_login_flow(
-    home: &Path,
-    issuer: &str,
-    client: DeviceClient,
-    authorization: DeviceAuthorization,
-    deadline: Instant,
-    active: &Arc<ActiveLoginFlow>,
-) -> LoginOutcome {
-    let grant = match client.poll(&authorization, deadline, || active.is_cancelled()) {
-        Ok(DevicePollOutcome::Authorized(grant)) => grant,
-        Ok(DevicePollOutcome::Cancelled) => return LoginOutcome::Cancelled,
-        Ok(DevicePollOutcome::TimedOut) | Err(_) => return LoginOutcome::Failed,
-    };
-    if active.is_cancelled() {
-        return LoginOutcome::Cancelled;
-    }
-    let token_client = match TokenClient::new(issuer) {
-        Ok(client) => client,
-        Err(_) => return LoginOutcome::Failed,
-    };
-    let tokens = match token_client.exchange_device_code_before(
-        &grant.authorization_code,
-        &grant.code_verifier,
-        deadline,
-    ) {
-        Ok(tokens) => tokens,
-        Err(_) => return LoginOutcome::Failed,
-    };
-    if active.is_cancelled() {
-        return LoginOutcome::Cancelled;
-    }
-    if Instant::now() >= deadline {
-        return LoginOutcome::Failed;
-    }
-    persist_authorized_connection_before(home, &tokens, Some(active), Some(deadline))
-}
-
-fn persist_authorized_connection(
-    home: &Path,
-    tokens: &crate::chatgpt_oauth::IssuedTokens,
-    active: Option<&ActiveLoginFlow>,
-) -> LoginOutcome {
-    persist_authorized_connection_before(home, tokens, active, None)
-}
-
-fn persist_authorized_connection_before(
-    home: &Path,
-    tokens: &crate::chatgpt_oauth::IssuedTokens,
-    active: Option<&ActiveLoginFlow>,
-    deadline: Option<Instant>,
-) -> LoginOutcome {
-    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-        return LoginOutcome::Failed;
-    }
-    let Some(identity) = extract_identity(&tokens.id_token) else {
-        return LoginOutcome::Failed;
-    };
-    let connection = StoredConnection::from_issued(tokens, &identity, now_ms());
-    let persist = || {
-        if active.is_some_and(|flow| flow.cancel.load(Ordering::Acquire)) {
-            return LoginOutcome::Cancelled;
-        }
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return LoginOutcome::Failed;
-        }
-        let previous = load(home);
-        if save_unlocked(home, &connection).is_err() {
-            return LoginOutcome::Failed;
-        }
-        if active.is_some_and(|flow| flow.cancel.load(Ordering::Acquire)) {
-            return rollback_authorized_connection(home, &previous, false, LoginOutcome::Cancelled);
-        }
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return rollback_authorized_connection(home, &previous, false, LoginOutcome::Failed);
-        }
-        if save_authorized_connection_projection_unlocked(home, &connection).is_err() {
-            return rollback_authorized_connection(home, &previous, false, LoginOutcome::Failed);
-        }
-        if active.is_some_and(|flow| flow.cancel.load(Ordering::Acquire)) {
-            return rollback_authorized_connection(home, &previous, true, LoginOutcome::Cancelled);
-        }
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return rollback_authorized_connection(home, &previous, true, LoginOutcome::Failed);
-        }
-        if let Some(flow) = active {
-            flow.mark_persisted();
-        }
-        LoginOutcome::Completed
-    };
-    match deadline {
-        Some(deadline) => {
-            with_connection_mutation_before(deadline, persist).unwrap_or(LoginOutcome::Failed)
-        }
-        None => with_connection_mutation(persist),
-    }
-}
-
-fn rollback_authorized_connection(
-    home: &Path,
-    previous: &LoadState,
-    projection_was_published: bool,
-    outcome: LoginOutcome,
-) -> LoginOutcome {
-    let auth_restored = restore_unlocked(home, previous).is_ok();
-    let projection_restored = !projection_was_published
-        || match previous {
-            LoadState::Connected(connection) => {
-                save_authorized_connection_projection_unlocked(home, connection).is_ok()
-            }
-            LoadState::Absent | LoadState::Unusable => {
-                save_chatgpt_disconnected_unlocked(home).is_ok()
-            }
-        };
-    if auth_restored && projection_restored {
-        outcome
-    } else {
-        let _ = clear_unlocked(home);
-        let _ = save_chatgpt_disconnected_unlocked(home);
-        LoginOutcome::Failed
-    }
-}
-
-fn callback_port_from_authorize_url(url: &str) -> Option<u16> {
-    let marker_start = url.find(REDIRECT_URI_MARKER)? + REDIRECT_URI_MARKER.len();
-    let remainder = &url[marker_start..];
-    let end = remainder.find('/').unwrap_or(remainder.len());
-    remainder[..end].parse().ok()
-}
-
-fn request_callback_cancel(port: u16) {
-    use std::io::Write;
-    let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    if let Ok(mut stream) = std::net::TcpStream::connect_timeout(&address, CANCEL_CONNECT_TIMEOUT) {
-        let request =
-            format!("GET /cancel HTTP/1.1\r\nHost: {LOOPBACK_HOST}\r\nConnection: close\r\n\r\n");
-        let _ = stream.write_all(request.as_bytes());
-        let _ = stream.flush();
-    }
-}
-
-fn all_login_ports_blocked(candidates: &[u16]) -> bool {
-    !candidates.is_empty()
-        && candidates
-            .iter()
-            .all(|candidate| std::net::TcpListener::bind((LOOPBACK_HOST, *candidate)).is_err())
-}
-
-fn open_in_system_browser(url: &str) {
-    let _ = webbrowser::open(url);
-}
-
-pub(crate) fn open_chatgpt_device_login_page() -> Result<(), TenderCommandError> {
-    webbrowser::open(CHATGPT_DEVICE_LOGIN_URL)
-        .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or_default()
-}
-
-pub(crate) fn chatgpt_connection_status(home: &Path) -> ChatGptConnectionStatus {
-    chatgpt_connection_status_with_phase(home, ChatGptLoginPhase::Idle)
+enum LoginStartOutcome {
+    AlreadyConnected,
+    Started {
+        verification_url: Option<String>,
+        user_code: Option<String>,
+    },
 }
 
 pub(crate) fn chatgpt_connection_status_with_phase(
     home: &Path,
     login_phase: ChatGptLoginPhase,
 ) -> ChatGptConnectionStatus {
-    match load(home) {
-        LoadState::Connected(connection) => ChatGptConnectionStatus {
-            state: ChatGptConnectionState::Connected,
-            account_id: Some(connection.account_id.clone()),
-            plan_type: connection.plan_type.clone(),
-            expires_at_ms: Some(connection.expires_at_ms),
-            login_phase,
-        },
-        LoadState::Absent => ChatGptConnectionStatus {
-            state: ChatGptConnectionState::Absent,
-            account_id: None,
-            plan_type: None,
-            expires_at_ms: None,
-            login_phase,
-        },
-        LoadState::Unusable => ChatGptConnectionStatus {
-            state: ChatGptConnectionState::Unusable,
-            account_id: None,
-            plan_type: None,
-            expires_at_ms: None,
-            login_phase,
-        },
+    chatgpt_connection_status_from_view(
+        &crate::application_settings::load_codex_connection_view(home),
+        login_phase,
+    )
+}
+
+pub(crate) fn chatgpt_connection_status_from_view(
+    connection: &Option<ProviderConnectionView>,
+    login_phase: ChatGptLoginPhase,
+) -> ChatGptConnectionStatus {
+    let state = match connection.as_ref().map(|connection| connection.status) {
+        Some(ProviderConnectionStatus::Ready) => ChatGptConnectionState::Connected,
+        Some(
+            ProviderConnectionStatus::TemporarilyUnavailable
+            | ProviderConnectionStatus::Incompatible,
+        ) => ChatGptConnectionState::Unusable,
+        Some(ProviderConnectionStatus::AuthenticationRequired)
+        | Some(ProviderConnectionStatus::SubscriptionRequired)
+        | None => ChatGptConnectionState::Absent,
+    };
+    ChatGptConnectionStatus {
+        state,
+        account_id: connection
+            .as_ref()
+            .and_then(|connection| connection.account_label.clone()),
+        plan_type: connection
+            .as_ref()
+            .and_then(|connection| connection.account_plan.clone()),
+        expires_at_ms: None,
+        login_phase,
     }
+}
+
+#[cfg(feature = "runtime-fixture")]
+fn open_in_system_browser(_url: &str) {}
+
+#[cfg(not(feature = "runtime-fixture"))]
+fn open_in_system_browser(url: &str) {
+    let _ = webbrowser::open(url);
 }
 
 impl QuantixHost {
@@ -464,212 +178,157 @@ impl QuantixHost {
             .phase
     }
 
-    pub fn start_chatgpt_login(&self) -> Result<StartChatGptLoginResult, StartChatGptLoginError> {
-        self.begin_chatgpt_login(
-            LOGIN_PORT_CANDIDATES,
-            PRODUCTION_ISSUER,
-            open_in_system_browser,
-        )
-    }
-
-    pub(crate) fn begin_chatgpt_login(
-        &self,
-        port_candidates: &[u16],
-        issuer: &str,
-        open_browser: impl FnOnce(&str) + Send + 'static,
-    ) -> Result<StartChatGptLoginResult, StartChatGptLoginError> {
-        let mut state = self
+    pub(crate) fn open_chatgpt_device_login_page(&self) -> Result<(), TenderCommandError> {
+        let verification_url = self
             .chatgpt_login_state()
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.active.is_some() || state.disconnecting > 0 {
-            return Err(StartChatGptLoginError::new(
-                TenderErrorCode::OauthAlreadyRunning,
-            ));
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .active
+            .as_ref()
+            .and_then(|active| active.verification_url.clone())
+            .unwrap_or_else(|| CHATGPT_DEVICE_LOGIN_URL.to_owned());
+        webbrowser::open(&verification_url)
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))
+    }
+
+    pub async fn start_chatgpt_login(
+        &self,
+    ) -> Result<StartChatGptLoginResult, StartChatGptLoginError> {
+        match self
+            .begin_chatgpt_login(ChatGptLoginType::Browser)
+            .await
+            .map_err(StartChatGptLoginError::new)?
+        {
+            LoginStartOutcome::AlreadyConnected => Ok(StartChatGptLoginResult {
+                status: StartChatGptLoginStatus::Connected,
+            }),
+            LoginStartOutcome::Started { .. } => Ok(StartChatGptLoginResult {
+                status: StartChatGptLoginStatus::AwaitingBrowser,
+            }),
         }
-        let application_home = self.application_home();
-        if let LoadState::Connected(connection) = load(application_home) {
-            if !needs_refresh(&connection, now_ms()) {
-                state.phase = ChatGptLoginPhase::Completed;
-                return Ok(StartChatGptLoginResult {
-                    status: StartChatGptLoginStatus::Connected,
-                });
+    }
+
+    pub async fn start_chatgpt_device_login(
+        &self,
+    ) -> Result<StartChatGptDeviceLoginResult, StartChatGptLoginError> {
+        match self
+            .begin_chatgpt_login(ChatGptLoginType::Device)
+            .await
+            .map_err(StartChatGptLoginError::new)?
+        {
+            LoginStartOutcome::AlreadyConnected => Err(StartChatGptLoginError::new(
+                TenderErrorCode::OauthAlreadyRunning,
+            )),
+            LoginStartOutcome::Started {
+                verification_url,
+                user_code,
+            } => {
+                let verification_url = verification_url
+                    .or_else(|| Some(CHATGPT_DEVICE_LOGIN_URL.to_owned()))
+                    .expect("device login returns a verification URL");
+                let user_code = user_code.expect("device login returns a one-time code");
+                Ok(StartChatGptDeviceLoginResult {
+                    verification_url,
+                    user_code,
+                })
             }
         }
-        if all_login_ports_blocked(port_candidates) {
-            return Err(StartChatGptLoginError::new(
-                TenderErrorCode::OauthPortBlocked,
-            ));
+    }
+
+    async fn begin_chatgpt_login(
+        &self,
+        login_type: ChatGptLoginType,
+    ) -> Result<LoginStartOutcome, TenderErrorCode> {
+        {
+            let state = self
+                .chatgpt_login_state()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.active.is_some() || state.disconnecting > 0 {
+                return Err(TenderErrorCode::OauthAlreadyRunning);
+            }
         }
-        let active = Arc::new(ActiveLoginFlow::new());
-        state.phase = ChatGptLoginPhase::AwaitingBrowser;
-        state.active = Some(Arc::clone(&active));
-        let flow_host = self.clone();
-        let flow_home = application_home.to_path_buf();
-        let flow_ports = port_candidates.to_vec();
-        let flow_issuer = issuer.to_owned();
-        let thread_active = Arc::clone(&active);
-        let spawned = std::thread::Builder::new()
-            .name("chatgpt-login".to_owned())
-            .spawn(move || {
-                let opener = Arc::clone(&thread_active).opener(open_browser);
-                let outcome = run_chatgpt_login_flow_for_active(
-                    &flow_home,
-                    &flow_ports,
-                    opener,
-                    &flow_issuer,
-                    Some(Arc::clone(&thread_active)),
-                );
-                flow_host.finish_chatgpt_login_flow(&thread_active, outcome);
-            });
-        if spawned.is_err() {
-            state.active = None;
-            state.phase = ChatGptLoginPhase::Idle;
-            return Err(StartChatGptLoginError::new(
-                TenderErrorCode::StoreUnavailable,
-            ));
+        let provider = self
+            .ensure_codex_provider_for_login()
+            .await
+            .map_err(|_| TenderErrorCode::StoreUnavailable)?;
+        if provider.connection_snapshot().status == ProviderConnectionStatus::Ready {
+            let mut state = self
+                .chatgpt_login_state()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.phase = ChatGptLoginPhase::Completed;
+            return Ok(LoginStartOutcome::AlreadyConnected);
         }
-        Ok(StartChatGptLoginResult {
-            status: StartChatGptLoginStatus::AwaitingBrowser,
-        })
-    }
-
-    pub fn start_chatgpt_device_login(
-        &self,
-    ) -> Result<StartChatGptDeviceLoginResult, StartChatGptLoginError> {
-        self.begin_chatgpt_device_login(PRODUCTION_ISSUER)
-    }
-
-    pub(crate) fn begin_chatgpt_device_login(
-        &self,
-        issuer: &str,
-    ) -> Result<StartChatGptDeviceLoginResult, StartChatGptLoginError> {
-        self.begin_chatgpt_device_login_before(issuer, device_login_deadline())
-    }
-
-    fn begin_chatgpt_device_login_before(
-        &self,
-        issuer: &str,
-        deadline: Instant,
-    ) -> Result<StartChatGptDeviceLoginResult, StartChatGptLoginError> {
-        let active = Arc::new(ActiveLoginFlow::new());
+        let info = provider
+            .login_start(login_type)
+            .await
+            .map_err(|_| TenderErrorCode::StoreUnavailable)?;
         {
             let mut state = self
                 .chatgpt_login_state()
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if state.active.is_some() || state.disconnecting > 0 {
-                return Err(StartChatGptLoginError::new(
-                    TenderErrorCode::OauthAlreadyRunning,
-                ));
-            }
-            state.phase = ChatGptLoginPhase::AwaitingDevice;
-            state.active = Some(Arc::clone(&active));
+            state.active = Some(Arc::new(ActiveLogin {
+                verification_url: info.verification_url.clone(),
+                cancelled: AtomicBool::new(false),
+            }));
+            state.phase = match login_type {
+                ChatGptLoginType::Browser => ChatGptLoginPhase::AwaitingBrowser,
+                ChatGptLoginType::Device => ChatGptLoginPhase::AwaitingDevice,
+            };
         }
-
-        let client = match DeviceClient::new(issuer) {
-            Ok(client) => client,
-            Err(_) => {
-                self.fail_chatgpt_login_start(&active);
-                return Err(StartChatGptLoginError::new(
-                    TenderErrorCode::StoreUnavailable,
-                ));
+        if login_type == ChatGptLoginType::Browser {
+            if let Some(auth_url) = info.auth_url.as_deref() {
+                let auth_url = auth_url.to_owned();
+                tokio::task::spawn_blocking(move || open_in_system_browser(&auth_url));
             }
-        };
-        let authorization = match client.initiate(deadline) {
-            Ok(authorization) => authorization,
-            Err(_) => {
-                self.fail_chatgpt_login_start(&active);
-                return Err(StartChatGptLoginError::new(
-                    TenderErrorCode::StoreUnavailable,
-                ));
-            }
-        };
-        if active.is_cancelled() {
-            self.fail_chatgpt_login_start(&active);
-            return Err(StartChatGptLoginError::new(
-                TenderErrorCode::StoreUnavailable,
-            ));
         }
-
-        let result = StartChatGptDeviceLoginResult {
-            verification_url: authorization.verification_url.clone(),
-            user_code: authorization.user_code.clone(),
-        };
-        let flow_host = self.clone();
-        let flow_home = self.application_home().to_path_buf();
-        let flow_issuer = issuer.to_owned();
-        let thread_active = Arc::clone(&active);
-        let spawned = std::thread::Builder::new()
-            .name("chatgpt-device-login".to_owned())
-            .spawn(move || {
-                let outcome = run_chatgpt_device_login_flow(
-                    &flow_home,
-                    &flow_issuer,
-                    client,
-                    authorization,
-                    deadline,
-                    &thread_active,
-                );
-                flow_host.finish_chatgpt_login_flow(&thread_active, outcome);
-            });
-        if spawned.is_err() {
-            self.fail_chatgpt_login_start(&active);
-            return Err(StartChatGptLoginError::new(
-                TenderErrorCode::StoreUnavailable,
-            ));
-        }
-        Ok(result)
+        let watcher_host = self.clone();
+        let watcher_provider = provider;
+        tokio::spawn(async move {
+            let outcome = watcher_provider
+                .login_wait(tokio_util::sync::CancellationToken::new())
+                .await;
+            watcher_host.finish_chatgpt_login_flow(outcome);
+        });
+        Ok(LoginStartOutcome::Started {
+            verification_url: info.verification_url,
+            user_code: info.user_code,
+        })
     }
 
-    fn fail_chatgpt_login_start(&self, active: &Arc<ActiveLoginFlow>) {
+    async fn ensure_codex_provider_for_login(
+        &self,
+    ) -> Result<AgentProvider, crate::agent_runtime::ProviderFailure> {
+        self.ensure_codex_provider(tokio_util::sync::CancellationToken::new())
+            .await
+    }
+
+    fn finish_chatgpt_login_flow(&self, outcome: LoginOutcome) {
         let mut state = self
             .chatgpt_login_state()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state
+        let cancelled = state
             .active
             .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, active))
-        {
-            state.active = None;
-            state.phase = if active.was_disconnected() {
-                ChatGptLoginPhase::Idle
-            } else if active.was_cancelled() {
-                ChatGptLoginPhase::Cancelled
-            } else {
-                ChatGptLoginPhase::Failed
+            .is_some_and(|active| active.was_cancelled());
+        state.active = None;
+        if state.disconnecting > 0 {
+            state.phase = ChatGptLoginPhase::Idle;
+        } else if cancelled {
+            state.phase = ChatGptLoginPhase::Cancelled;
+        } else {
+            state.phase = match outcome {
+                LoginOutcome::Completed => ChatGptLoginPhase::Completed,
+                LoginOutcome::Cancelled => ChatGptLoginPhase::Cancelled,
+                LoginOutcome::Failed => ChatGptLoginPhase::Failed,
             };
         }
     }
 
-    fn finish_chatgpt_login_flow(&self, active: &Arc<ActiveLoginFlow>, outcome: LoginOutcome) {
-        let mut state = self
-            .chatgpt_login_state()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !state
-            .active
-            .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, active))
-        {
-            return;
-        }
-        state.active = None;
-        state.phase = if active.was_disconnected() || state.disconnecting > 0 {
-            ChatGptLoginPhase::Idle
-        } else if active.was_cancelled() {
-            ChatGptLoginPhase::Cancelled
-        } else {
-            match outcome {
-                LoginOutcome::Completed => ChatGptLoginPhase::Completed,
-                LoginOutcome::Cancelled => ChatGptLoginPhase::Cancelled,
-                LoginOutcome::Failed => ChatGptLoginPhase::Failed,
-            }
-        };
-    }
-
-    pub fn cancel_chatgpt_login(&self) {
+    pub async fn cancel_chatgpt_login(&self) {
         let active = self
             .chatgpt_login_state()
             .lock()
@@ -686,1151 +345,53 @@ impl QuantixHost {
             }
             return;
         };
-
-        active.request_cancel();
-        let cancellation_won = with_connection_mutation(|| active.claim_cancel());
-        if cancellation_won {
-            {
-                let mut state = self
-                    .chatgpt_login_state()
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                if state
-                    .active
-                    .as_ref()
-                    .is_some_and(|current| Arc::ptr_eq(current, &active))
-                {
-                    state.phase = ChatGptLoginPhase::Cancelled;
-                }
-            }
-            active.wake_cancelled_flow();
+        active.cancelled.store(true, Ordering::Release);
+        let provider = self.agent_provider().lock().await.clone();
+        if let Some(provider) = provider {
+            let _ = provider.login_cancel().await;
+        }
+        let mut state = self
+            .chatgpt_login_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state
+            .active
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &active))
+        {
+            state.phase = ChatGptLoginPhase::Cancelled;
         }
     }
 
-    pub fn disconnect_chatgpt(&self) -> Result<ApplicationSettingsView, TenderCommandError> {
-        let active = {
+    pub async fn disconnect_chatgpt(
+        &self,
+    ) -> Result<crate::application_settings::ApplicationSettingsView, TenderCommandError> {
+        {
             let mut state = self
                 .chatgpt_login_state()
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             state.disconnecting = state.disconnecting.saturating_add(1);
-            state.active.clone()
-        };
-        let disconnect_result = with_connection_mutation(|| {
-            if let Some(active) = active.as_deref() {
-                active.force_disconnect();
+            if let Some(active) = state.active.as_ref() {
+                active.cancelled.store(true, Ordering::Release);
             }
-            clear_unlocked(self.application_home())
-                .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
-            save_chatgpt_disconnected_unlocked(self.application_home())
-        });
-        if let Some(active) = active.as_deref() {
-            active.wake_cancelled_flow();
         }
-
+        let provider = self.agent_provider().lock().await.clone();
+        if let Some(provider) = provider {
+            let _ = provider.logout().await;
+        }
+        let _ = std::fs::remove_file(self.application_home().join("codex").join("auth.json"));
         let result = (|| {
-            disconnect_result?;
+            crate::application_settings::save_codex_disconnected(self.application_home())?;
             load_application_settings(self.application_home())
         })();
         let mut state = self
             .chatgpt_login_state()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.active = None;
         state.phase = ChatGptLoginPhase::Idle;
         state.disconnecting = state.disconnecting.saturating_sub(1);
         result
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
-    use std::path::PathBuf;
-    use std::sync::mpsc;
-    use std::sync::Arc;
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-    use super::*;
-    use crate::chatgpt_oauth::authorize::build_authorize_url;
-    use crate::chatgpt_oauth::crypto::{base64url_encode, generate_pkce, generate_state};
-    use crate::chatgpt_oauth::save;
-
-    const WAIT: Duration = Duration::from_secs(10);
-
-    fn temp_home(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "quantix-chatgpt-login-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn jwt_id_token(account_id: &str, plan_type: Option<&str>) -> String {
-        let mut auth = serde_json::Map::new();
-        auth.insert(
-            "chatgpt_account_id".to_string(),
-            serde_json::Value::String(account_id.to_string()),
-        );
-        if let Some(plan_type) = plan_type {
-            auth.insert(
-                "chatgpt_plan_type".to_string(),
-                serde_json::Value::String(plan_type.to_string()),
-            );
-        }
-        let payload = serde_json::json!({ "https://api.openai.com/auth": auth });
-        let header =
-            crate::chatgpt_oauth::crypto::base64url_encode(br#"{"alg":"RS256","typ":"JWT"}"#);
-        let body = base64url_encode(payload.to_string().as_bytes());
-        format!("{header}.{body}.c2ln")
-    }
-
-    struct MockIssuer {
-        base: String,
-    }
-
-    fn start_mock_issuer(token_body: String) -> MockIssuer {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { continue };
-                let mut chunk = [0u8; 1024];
-                let mut raw = Vec::new();
-                loop {
-                    match stream.read(&mut chunk) {
-                        Ok(0) | Err(_) => break,
-                        Ok(read) => {
-                            raw.extend_from_slice(&chunk[..read]);
-                            if raw.windows(4).any(|window| window == b"\r\n\r\n") {
-                                break;
-                            }
-                        }
-                    }
-                }
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{token_body}",
-                    token_body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-            }
-        });
-        MockIssuer {
-            base: format!("http://127.0.0.1:{port}"),
-        }
-    }
-
-    fn start_pending_device_issuer() -> MockIssuer {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        std::thread::spawn(move || {
-            let responses = [
-                (
-                    200,
-                    r#"{"device_auth_id":"device-flow","user_code":"CODE-FLOW","interval":"1"}"#,
-                ),
-                (403, r#"{"pending":true}"#),
-            ];
-            for (status, body) in responses {
-                let Ok((mut stream, _)) = listener.accept() else {
-                    return;
-                };
-                let mut chunk = [0u8; 1024];
-                let mut raw = Vec::new();
-                while !raw.windows(4).any(|window| window == b"\r\n\r\n") {
-                    let Ok(read) = stream.read(&mut chunk) else {
-                        return;
-                    };
-                    if read == 0 {
-                        return;
-                    }
-                    raw.extend_from_slice(&chunk[..read]);
-                }
-                let response = format!(
-                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-            }
-        });
-        MockIssuer {
-            base: format!("http://127.0.0.1:{port}"),
-        }
-    }
-
-    fn start_deadline_device_issuer(initiation_delay: Duration) -> MockIssuer {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        std::thread::spawn(move || {
-            let responses = [
-                (
-                    200,
-                    r#"{"device_auth_id":"device-deadline","user_code":"CODE-DEADLINE","interval":"1"}"#,
-                    initiation_delay,
-                ),
-                (403, r#"{"pending":true}"#, Duration::ZERO),
-            ];
-            for (status, body, delay) in responses {
-                let Ok((mut stream, _)) = listener.accept() else {
-                    return;
-                };
-                let mut chunk = [0u8; 1024];
-                let mut raw = Vec::new();
-                while !raw.windows(4).any(|window| window == b"\r\n\r\n") {
-                    let Ok(read) = stream.read(&mut chunk) else {
-                        return;
-                    };
-                    if read == 0 {
-                        return;
-                    }
-                    raw.extend_from_slice(&chunk[..read]);
-                }
-                std::thread::sleep(delay);
-                let response = format!(
-                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-            }
-        });
-        MockIssuer {
-            base: format!("http://127.0.0.1:{port}"),
-        }
-    }
-
-    fn http_get(port: u16, target: &str) -> String {
-        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let request =
-            format!("GET {target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-        stream.write_all(request.as_bytes()).unwrap();
-        let mut raw = String::new();
-        stream.read_to_string(&mut raw).unwrap();
-        raw
-    }
-
-    fn authorize_state(url: &str) -> String {
-        url.split('&')
-            .find_map(|pair| pair.strip_prefix("state=").map(str::to_string))
-            .expect("authorize URL carries state")
-    }
-
-    fn spawn_callback_driver(urls: mpsc::Receiver<String>, target: String) {
-        std::thread::spawn(move || {
-            let url = urls.recv_timeout(WAIT).expect("browser receives URL");
-            let port = callback_port_from_authorize_url(&url).expect("loopback callback port");
-            let response = http_get(port, &target.replace("{state}", &authorize_state(&url)));
-            assert!(
-                response.starts_with("HTTP/1.1"),
-                "callback response: {response}"
-            );
-        });
-    }
-
-    fn now_ms() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64
-    }
-
-    fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
-        let deadline = Instant::now() + WAIT;
-        while Instant::now() < deadline {
-            if condition() {
-                return true;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        condition()
-    }
-
-    #[test]
-    fn oauth_error_codes_serialize_as_snake_case() {
-        assert_eq!(
-            serde_json::to_string(&TenderErrorCode::OauthPortBlocked).unwrap(),
-            r#""oauth_port_blocked""#
-        );
-        assert_eq!(
-            serde_json::to_string(&TenderErrorCode::OauthAlreadyRunning).unwrap(),
-            r#""oauth_already_running""#
-        );
-    }
-
-    #[test]
-    fn core_completes_and_persists_the_connection() {
-        let (_dir, _host, home) = fresh_host();
-        let id_token = jwt_id_token("acc-core", Some("plus"));
-        let issuer = start_mock_issuer(format!(
-            r#"{{"access_token":"at-1","refresh_token":"rt-1","id_token":"{id_token}","expires_in":3600}}"#
-        ));
-        let (url_tx, url_rx) = mpsc::channel();
-        spawn_callback_driver(
-            url_rx,
-            "/auth/callback?code=coded-abc&state={state}".to_string(),
-        );
-        let started = now_ms();
-
-        let outcome = run_chatgpt_login_flow(
-            &home,
-            &[0],
-            |url| {
-                let _ = url_tx.send(url.to_string());
-            },
-            &issuer.base,
-        );
-
-        assert!(matches!(outcome, LoginOutcome::Completed), "{outcome:?}");
-        match load(&home) {
-            LoadState::Connected(connection) => {
-                assert_eq!(connection.account_id, "acc-core");
-                assert_eq!(connection.plan_type.as_deref(), Some("plus"));
-                assert!(connection.expires_at_ms >= started + 3_500_000);
-                assert!(!needs_refresh(&connection, started));
-            }
-            other => panic!("expected connected store, got {other:?}"),
-        }
-        let view = crate::application_settings::load_application_settings(&home).unwrap();
-        assert_eq!(view.chatgpt.state, ChatGptConnectionState::Connected);
-        assert_eq!(
-            view.provider_connections[0].status,
-            crate::application_settings::ProviderConnectionStatus::Ready
-        );
-        assert_eq!(
-            view.provider_connections[0].account_label.as_deref(),
-            Some("acc-core")
-        );
-        assert_eq!(
-            view.ai_execution_selection
-                .as_ref()
-                .map(|selection| selection.model_id.as_str()),
-            Some("gpt-5.5")
-        );
-        assert!(view.ai_execution_approval.is_none());
-    }
-
-    #[test]
-    fn core_reports_cancellation_and_leaves_the_store_absent() {
-        let home = temp_home("core-cancelled");
-        let issuer = start_mock_issuer("{}".to_string());
-        let (url_tx, url_rx) = mpsc::channel();
-        spawn_callback_driver(url_rx, "/cancel".to_string());
-
-        let outcome = run_chatgpt_login_flow(
-            &home,
-            &[0],
-            |url| {
-                let _ = url_tx.send(url.to_string());
-            },
-            &issuer.base,
-        );
-
-        assert!(matches!(outcome, LoginOutcome::Cancelled), "{outcome:?}");
-        assert!(matches!(load(&home), LoadState::Absent));
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn core_maps_provider_denial_without_touching_the_store() {
-        let home = temp_home("core-denied");
-        let issuer = start_mock_issuer("{}".to_string());
-        let (url_tx, url_rx) = mpsc::channel();
-        spawn_callback_driver(
-            url_rx,
-            "/auth/callback?error=access_denied&error_description=User%20said%20no&state={state}"
-                .to_string(),
-        );
-
-        let outcome = run_chatgpt_login_flow(
-            &home,
-            &[0],
-            |url| {
-                let _ = url_tx.send(url.to_string());
-            },
-            &issuer.base,
-        );
-
-        match outcome {
-            LoginOutcome::Failed => {}
-            other => panic!("expected provider denial failure, got {other:?}"),
-        }
-        assert!(matches!(load(&home), LoadState::Absent));
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn core_reports_blocked_ports_when_every_candidate_is_busy() {
-        let home = temp_home("core-blocked");
-        let gate_a = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let gate_b = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let candidates = [
-            gate_a.local_addr().unwrap().port(),
-            gate_b.local_addr().unwrap().port(),
-        ];
-
-        let outcome = run_chatgpt_login_flow(
-            &home,
-            &candidates,
-            |_url| {
-                panic!("browser must not open when no port is available");
-            },
-            "http://127.0.0.1:9",
-        );
-
-        assert_eq!(outcome, LoginOutcome::Failed);
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn core_fails_without_persisting_when_identity_is_missing() {
-        let home = temp_home("core-identity");
-        let issuer = start_mock_issuer(
-            r#"{"access_token":"at-1","refresh_token":"rt-1","id_token":"not-a-jwt","expires_in":3600}"#
-                .to_string(),
-        );
-        let (url_tx, url_rx) = mpsc::channel();
-        spawn_callback_driver(
-            url_rx,
-            "/auth/callback?code=coded-abc&state={state}".to_string(),
-        );
-
-        let outcome = run_chatgpt_login_flow(
-            &home,
-            &[0],
-            |url| {
-                let _ = url_tx.send(url.to_string());
-            },
-            &issuer.base,
-        );
-
-        assert_eq!(outcome, LoginOutcome::Failed);
-        assert!(matches!(load(&home), LoadState::Absent));
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn revoked_flow_cannot_persist_after_disconnect_has_claimed_the_mutation_boundary() {
-        let home = temp_home("revoked-persist");
-        let active = Arc::new(ActiveLoginFlow::new());
-        let tokens = crate::chatgpt_oauth::IssuedTokens {
-            access_token: "at-race".to_owned(),
-            refresh_token: "rt-race".to_owned(),
-            id_token: jwt_id_token("acc-race", Some("plus")),
-            expires_in_secs: 3_600,
-        };
-        let (started_tx, started_rx) = mpsc::channel();
-
-        let flow = with_connection_mutation(|| {
-            let flow_active = Arc::clone(&active);
-            let home = home.clone();
-            let flow = std::thread::spawn(move || {
-                started_tx.send(()).unwrap();
-                persist_authorized_connection(&home, &tokens, Some(&flow_active))
-            });
-            started_rx
-                .recv_timeout(WAIT)
-                .expect("authorized flow reaches the persistence barrier");
-            active.force_disconnect();
-            flow
-        });
-
-        assert_eq!(flow.join().unwrap(), LoginOutcome::Cancelled);
-        assert!(matches!(load(&home), LoadState::Absent));
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn cancellation_winner_prevents_persistence() {
-        let home = temp_home("cancel-wins");
-        let active = Arc::new(ActiveLoginFlow::new());
-        let tokens = crate::chatgpt_oauth::IssuedTokens {
-            access_token: "at-cancelled".to_owned(),
-            refresh_token: "rt-cancelled".to_owned(),
-            id_token: jwt_id_token("acc-cancelled", Some("plus")),
-            expires_in_secs: 3_600,
-        };
-
-        assert!(with_connection_mutation(|| active.claim_cancel()));
-        assert_eq!(
-            persist_authorized_connection(&home, &tokens, Some(&active)),
-            LoginOutcome::Cancelled
-        );
-        assert!(matches!(load(&home), LoadState::Absent));
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn cancellation_after_device_exchange_is_observed_before_persistence() {
-        let home = temp_home("device-cancel-after-exchange");
-        let active = Arc::new(ActiveLoginFlow::new());
-        let exchanged_tokens = crate::chatgpt_oauth::IssuedTokens {
-            access_token: "at-device".to_owned(),
-            refresh_token: "rt-device".to_owned(),
-            id_token: jwt_id_token("acc-device", Some("plus")),
-            expires_in_secs: 3_600,
-        };
-        assert!(with_connection_mutation(|| active.claim_cancel()));
-
-        let outcome = persist_authorized_connection_before(
-            &home,
-            &exchanged_tokens,
-            Some(&active),
-            Some(Instant::now() + Duration::from_secs(5)),
-        );
-
-        assert_eq!(outcome, LoginOutcome::Cancelled);
-        assert!(matches!(load(&home), LoadState::Absent));
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn ready_projection_failure_restores_the_previous_authorized_connection() {
-        let (_dir, _host, home) = fresh_host();
-        let previous = StoredConnection {
-            access_token: "at-previous".to_owned(),
-            refresh_token: "rt-previous".to_owned(),
-            id_token: "idt-previous".to_owned(),
-            expires_at_ms: now_ms() + 3_600_000,
-            account_id: "account-previous".to_owned(),
-            plan_type: Some("plus".to_owned()),
-            compute_residency: None,
-        };
-        save(&home, &previous).unwrap();
-        crate::application_settings::save_live_connection(
-            &home,
-            &crate::application_settings::chatgpt_connection_view(&previous),
-        )
-        .unwrap();
-        let database = rusqlite::Connection::open(home.join("installation.sqlite")).unwrap();
-        database
-            .execute("DROP TABLE provider_connections", [])
-            .unwrap();
-        drop(database);
-        let replacement = crate::chatgpt_oauth::IssuedTokens {
-            access_token: "at-replacement".to_owned(),
-            refresh_token: "rt-replacement".to_owned(),
-            id_token: jwt_id_token("account-replacement", Some("plus")),
-            expires_in_secs: 3_600,
-        };
-
-        assert_eq!(
-            persist_authorized_connection(&home, &replacement, None),
-            LoginOutcome::Failed
-        );
-        match load(&home) {
-            LoadState::Connected(connection) => {
-                assert_eq!(connection.access_token, "at-previous");
-                assert_eq!(connection.refresh_token, "rt-previous");
-                assert_eq!(connection.account_id, "account-previous");
-            }
-            other => panic!("projection failure must restore prior auth, got {other:?}"),
-        }
-    }
-
-    fn fresh_host() -> (tempfile::TempDir, crate::QuantixHost, PathBuf) {
-        let dir = tempfile::tempdir().expect("temporary application home");
-        let host = crate::QuantixHost::new(dir.path(), dir.path());
-        let outcome = host.ensure_setup();
-        assert!(
-            matches!(
-                outcome.state,
-                crate::SetupState::Ready | crate::SetupState::Warning
-            ),
-            "settings database ready: {outcome:?}"
-        );
-        let home = dir.path().to_path_buf();
-        (dir, host, home)
-    }
-
-    #[test]
-    fn begin_short_circuits_when_the_store_is_already_fresh() {
-        let (_dir, host, home) = fresh_host();
-        let connection = StoredConnection {
-            access_token: "at".to_string(),
-            refresh_token: "rt".to_string(),
-            id_token: "idt".to_string(),
-            expires_at_ms: now_ms() + 3_600_000,
-            account_id: "acc-fresh".to_string(),
-            plan_type: Some("plus".to_string()),
-            compute_residency: None,
-        };
-        save(&home, &connection).unwrap();
-
-        let result = host.begin_chatgpt_login(LOGIN_PORT_CANDIDATES, PRODUCTION_ISSUER, |_url| {
-            panic!("browser must not open for a fresh connection");
-        });
-
-        let result = result.expect("fresh connection short-circuit");
-        assert_eq!(result.status, StartChatGptLoginStatus::Connected);
-        assert_eq!(
-            host.chatgpt_login_state().lock().unwrap().phase,
-            ChatGptLoginPhase::Completed
-        );
-    }
-
-    #[test]
-    fn begin_starts_the_flow_and_completion_marks_the_machine_completed() {
-        let (_dir, host, home) = fresh_host();
-        let id_token = jwt_id_token("acc-flow", Some("team"));
-        let issuer = start_mock_issuer(format!(
-            r#"{{"access_token":"at-2","refresh_token":"rt-2","id_token":"{id_token}","expires_in":3600}}"#
-        ));
-        let stale = StoredConnection {
-            access_token: "old".to_string(),
-            refresh_token: "old".to_string(),
-            id_token: "old".to_string(),
-            expires_at_ms: now_ms().saturating_sub(1_000),
-            account_id: "acc-old".to_string(),
-            plan_type: None,
-            compute_residency: None,
-        };
-        save(&home, &stale).unwrap();
-
-        let (url_tx, url_rx) = mpsc::channel();
-        let sender = Arc::new(std::sync::Mutex::new(Some(url_tx)));
-        let result = host
-            .begin_chatgpt_login(&[0], &issuer.base, move |url| {
-                if let Some(sender) = sender.lock().unwrap().take() {
-                    let _ = sender.send(url.to_string());
-                }
-            })
-            .expect("flow starts");
-        assert_eq!(result.status, StartChatGptLoginStatus::AwaitingBrowser);
-
-        spawn_callback_driver(
-            url_rx,
-            "/auth/callback?code=coded-def&state={state}".to_string(),
-        );
-        assert!(wait_until(|| {
-            host.chatgpt_login_state().lock().unwrap().phase != ChatGptLoginPhase::AwaitingBrowser
-        }));
-        assert_eq!(
-            host.chatgpt_login_state().lock().unwrap().phase,
-            ChatGptLoginPhase::Completed
-        );
-        match load(&home) {
-            LoadState::Connected(connection) => {
-                assert_eq!(connection.account_id, "acc-flow");
-                assert_eq!(connection.plan_type.as_deref(), Some("team"));
-            }
-            other => panic!("expected refreshed store, got {other:?}"),
-        }
-        let view = crate::application_settings::load_application_settings(&home).unwrap();
-        assert_eq!(view.chatgpt.state, ChatGptConnectionState::Connected);
-        assert_eq!(
-            view.provider_connections[0].status,
-            crate::application_settings::ProviderConnectionStatus::Ready
-        );
-        assert!(view.ai_execution_selection.is_some());
-        assert!(view.ai_execution_approval.is_none());
-    }
-
-    #[test]
-    fn begin_rejects_a_second_flow_while_one_is_active() {
-        let (_dir, host, _home) = fresh_host();
-        let issuer = start_mock_issuer("{}".to_string());
-        host.begin_chatgpt_login(&[0], &issuer.base, |_url| {})
-            .expect("first flow starts");
-
-        let error = host
-            .begin_chatgpt_login(&[0], &issuer.base, |_url| {})
-            .expect_err("second flow rejected");
-        assert_eq!(error.code, TenderErrorCode::OauthAlreadyRunning);
-        let device_error = host
-            .begin_chatgpt_device_login(&issuer.base)
-            .expect_err("device flow cannot overlap browser flow");
-        assert_eq!(device_error.code, TenderErrorCode::OauthAlreadyRunning);
-
-        host.cancel_chatgpt_login();
-        assert!(wait_until(|| {
-            host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Cancelled
-        }));
-    }
-
-    #[test]
-    fn cancellation_keeps_flow_ownership_until_the_worker_finishes() {
-        let (_dir, host, _home) = fresh_host();
-        let active = Arc::new(ActiveLoginFlow::new());
-        {
-            let mut state = host.chatgpt_login_state().lock().unwrap();
-            state.phase = ChatGptLoginPhase::AwaitingDevice;
-            state.active = Some(Arc::clone(&active));
-        }
-
-        host.cancel_chatgpt_login();
-
-        {
-            let state = host.chatgpt_login_state().lock().unwrap();
-            assert_eq!(state.phase, ChatGptLoginPhase::Cancelled);
-            assert!(state
-                .active
-                .as_ref()
-                .is_some_and(|current| Arc::ptr_eq(current, &active)));
-        }
-        assert_eq!(
-            host.begin_chatgpt_device_login("http://127.0.0.1:9")
-                .unwrap_err()
-                .code,
-            TenderErrorCode::OauthAlreadyRunning
-        );
-
-        host.finish_chatgpt_login_flow(&active, LoginOutcome::Cancelled);
-        assert!(host.chatgpt_login_state().lock().unwrap().active.is_none());
-    }
-
-    #[test]
-    fn persistence_wins_over_late_cancellation() {
-        let (_dir, host, home) = fresh_host();
-        let active = Arc::new(ActiveLoginFlow::new());
-        let tokens = crate::chatgpt_oauth::IssuedTokens {
-            access_token: "at-winner".to_owned(),
-            refresh_token: "rt-winner".to_owned(),
-            id_token: jwt_id_token("acc-winner", Some("plus")),
-            expires_in_secs: 3_600,
-        };
-        {
-            let mut state = host.chatgpt_login_state().lock().unwrap();
-            state.phase = ChatGptLoginPhase::AwaitingBrowser;
-            state.active = Some(Arc::clone(&active));
-        }
-
-        assert_eq!(
-            persist_authorized_connection(&home, &tokens, Some(&active)),
-            LoginOutcome::Completed
-        );
-        host.cancel_chatgpt_login();
-
-        assert_eq!(
-            host.chatgpt_login_state().lock().unwrap().phase,
-            ChatGptLoginPhase::AwaitingBrowser
-        );
-        host.finish_chatgpt_login_flow(&active, LoginOutcome::Completed);
-        assert_eq!(
-            host.chatgpt_login_state().lock().unwrap().phase,
-            ChatGptLoginPhase::Completed
-        );
-        assert!(matches!(load(&home), LoadState::Connected(_)));
-    }
-
-    #[test]
-    fn device_flow_uses_the_shared_guard_and_cancellation_phase() {
-        let (_dir, host, _home) = fresh_host();
-        let issuer = start_pending_device_issuer();
-
-        let started = host
-            .begin_chatgpt_device_login(&issuer.base)
-            .expect("device flow starts");
-
-        assert_eq!(started.user_code, "CODE-FLOW");
-        assert_eq!(
-            started.verification_url,
-            format!("{}/codex/device", issuer.base)
-        );
-        assert_eq!(
-            host.chatgpt_login_state().lock().unwrap().phase,
-            ChatGptLoginPhase::AwaitingDevice
-        );
-        let error = host
-            .begin_chatgpt_login(&[0], &issuer.base, |_url| {})
-            .expect_err("browser flow cannot overlap device flow");
-        assert_eq!(error.code, TenderErrorCode::OauthAlreadyRunning);
-
-        host.cancel_chatgpt_login();
-        assert!(wait_until(|| {
-            host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Cancelled
-        }));
-    }
-
-    #[test]
-    fn device_flow_deadline_includes_initiation_and_pending_wait_time() {
-        let (_dir, host, _home) = fresh_host();
-        let issuer = start_deadline_device_issuer(Duration::from_millis(100));
-        let started = Instant::now();
-        let deadline = started + Duration::from_millis(500);
-
-        let result = host
-            .begin_chatgpt_device_login_before(&issuer.base, deadline)
-            .expect("initiation finishes inside the shared budget");
-
-        assert_eq!(result.user_code, "CODE-DEADLINE");
-        while started.elapsed() < Duration::from_secs(2)
-            && host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::AwaitingDevice
-        {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        assert_eq!(
-            host.chatgpt_login_state().lock().unwrap().phase,
-            ChatGptLoginPhase::Failed
-        );
-        assert!(started.elapsed() < Duration::from_secs(2));
-    }
-
-    #[test]
-    fn cancel_terminates_the_running_flow_and_is_idempotent() {
-        let (_dir, host, home) = fresh_host();
-        let issuer = start_mock_issuer("{}".to_string());
-        host.begin_chatgpt_login(&[0], &issuer.base, |_url| {})
-            .expect("flow starts");
-
-        host.cancel_chatgpt_login();
-        host.cancel_chatgpt_login();
-        assert!(wait_until(|| {
-            let state = host.chatgpt_login_state().lock().unwrap();
-            state.phase == ChatGptLoginPhase::Cancelled && state.active.is_none()
-        }));
-        assert!(matches!(load(&home), LoadState::Absent));
-
-        let restarted = host
-            .begin_chatgpt_login(&[0], &issuer.base, |_url| {})
-            .expect("restart after cancel");
-        assert_eq!(restarted.status, StartChatGptLoginStatus::AwaitingBrowser);
-        host.cancel_chatgpt_login();
-        assert!(wait_until(|| {
-            host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Cancelled
-        }));
-    }
-
-    #[test]
-    fn cancel_after_completion_keeps_tokens_and_ends_idle() {
-        let (_dir, host, home) = fresh_host();
-        let id_token = jwt_id_token("acc-late-cancel", Some("plus"));
-        let issuer = start_mock_issuer(format!(
-            r#"{{"access_token":"at-9","refresh_token":"rt-9","id_token":"{id_token}","expires_in":3600}}"#
-        ));
-        let (url_tx, url_rx) = mpsc::channel();
-        let sender = Arc::new(std::sync::Mutex::new(Some(url_tx)));
-        host.begin_chatgpt_login(&[0], &issuer.base, move |url| {
-            if let Some(sender) = sender.lock().unwrap().take() {
-                let _ = sender.send(url.to_string());
-            }
-        })
-        .expect("flow starts");
-
-        spawn_callback_driver(
-            url_rx,
-            "/auth/callback?code=coded-late&state={state}".to_string(),
-        );
-        assert!(wait_until(|| {
-            host.chatgpt_login_state().lock().unwrap().phase == ChatGptLoginPhase::Completed
-        }));
-
-        host.cancel_chatgpt_login();
-
-        assert_eq!(
-            host.chatgpt_login_state().lock().unwrap().phase,
-            ChatGptLoginPhase::Idle
-        );
-        match load(&home) {
-            LoadState::Connected(connection) => {
-                assert_eq!(connection.account_id, "acc-late-cancel");
-                assert_eq!(connection.plan_type.as_deref(), Some("plus"));
-                assert!(!needs_refresh(&connection, now_ms()));
-            }
-            other => panic!("completed authorization must persist past cancel, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn disconnect_clears_the_store_and_resets_the_machine() {
-        let (_dir, host, home) = fresh_host();
-        let connection = StoredConnection {
-            access_token: "at".to_string(),
-            refresh_token: "rt".to_string(),
-            id_token: "idt".to_string(),
-            expires_at_ms: now_ms() + 3_600_000,
-            account_id: "acc-gone".to_string(),
-            plan_type: None,
-            compute_residency: None,
-        };
-        save(&home, &connection).unwrap();
-        crate::application_settings::save_live_connection(
-            &home,
-            &crate::application_settings::ProviderConnectionView {
-                connection_id: crate::application_settings::CODEX_CONNECTION_ID.to_owned(),
-                provider: crate::application_settings::AiProviderKind::Codex,
-                display_name: "ChatGPT subscription".to_owned(),
-                status: crate::application_settings::ProviderConnectionStatus::Ready,
-                account_label: Some("acc-gone".to_owned()),
-                account_plan: Some("plus".to_owned()),
-                models: Vec::new(),
-                catalogue_fetched_at: Some("chatgpt-direct-v1".to_owned()),
-                adapter_version: "chatgpt-direct-v1".to_owned(),
-                status_summary: "Ready".to_owned(),
-            },
-        )
-        .unwrap();
-
-        let view = host.disconnect_chatgpt().expect("disconnect succeeds");
-        assert_eq!(view.chatgpt.state, ChatGptConnectionState::Absent);
-        assert!(view.chatgpt.account_id.is_none());
-        let provider = view
-            .provider_connections
-            .iter()
-            .find(|candidate| {
-                candidate.connection_id == crate::application_settings::CODEX_CONNECTION_ID
-            })
-            .expect("ChatGPT provider status remains visible after disconnect");
-        assert_eq!(
-            provider.status,
-            crate::application_settings::ProviderConnectionStatus::AuthenticationRequired
-        );
-        assert!(provider.account_label.is_none());
-        assert!(provider.models.is_empty());
-        assert!(matches!(load(&home), LoadState::Absent));
-        assert!(!home.join("auth.json").exists());
-        assert_eq!(
-            host.chatgpt_login_state().lock().unwrap().phase,
-            ChatGptLoginPhase::Idle
-        );
-    }
-
-    #[test]
-    fn disconnect_cancels_an_active_flow() {
-        let (_dir, host, home) = fresh_host();
-        let issuer = start_mock_issuer("{}".to_string());
-        host.begin_chatgpt_login(&[0], &issuer.base, |_url| {})
-            .expect("flow starts");
-
-        let view = host.disconnect_chatgpt().expect("disconnect succeeds");
-        assert_eq!(view.chatgpt.state, ChatGptConnectionState::Absent);
-        assert!(wait_until(|| {
-            let state = host.chatgpt_login_state().lock().unwrap();
-            state.phase == ChatGptLoginPhase::Idle && state.active.is_none()
-        }));
-        assert!(matches!(load(&home), LoadState::Absent));
-    }
-
-    #[test]
-    fn disconnect_holds_connection_serialization_through_the_settings_transaction() {
-        let (_dir, host, home) = fresh_host();
-        let connection = StoredConnection {
-            access_token: "at-before-disconnect".to_owned(),
-            refresh_token: "rt-before-disconnect".to_owned(),
-            id_token: "idt-before-disconnect".to_owned(),
-            expires_at_ms: now_ms() + 3_600_000,
-            account_id: "acc-before-disconnect".to_owned(),
-            plan_type: Some("plus".to_owned()),
-            compute_residency: None,
-        };
-        save(&home, &connection).unwrap();
-        crate::application_settings::save_live_connection(
-            &home,
-            &crate::application_settings::chatgpt_connection_view(&connection),
-        )
-        .unwrap();
-        let active = Arc::new(ActiveLoginFlow::new());
-        {
-            let mut state = host.chatgpt_login_state().lock().unwrap();
-            state.phase = ChatGptLoginPhase::AwaitingBrowser;
-            state.active = Some(Arc::clone(&active));
-        }
-
-        let mut blocker = rusqlite::Connection::open(home.join("installation.sqlite")).unwrap();
-        let blocker_transaction = blocker
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .unwrap();
-        let disconnect_host = host.clone();
-        let (disconnect_tx, disconnect_rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            disconnect_tx
-                .send(disconnect_host.disconnect_chatgpt())
-                .unwrap();
-        });
-        assert!(wait_until(|| !home.join("auth.json").exists()));
-
-        let late_tokens = crate::chatgpt_oauth::IssuedTokens {
-            access_token: "at-late".to_owned(),
-            refresh_token: "rt-late".to_owned(),
-            id_token: jwt_id_token("acc-late", Some("plus")),
-            expires_in_secs: 3_600,
-        };
-        let persist_home = home.clone();
-        let persist_active = Arc::clone(&active);
-        let (persist_tx, persist_rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            persist_tx
-                .send(persist_authorized_connection(
-                    &persist_home,
-                    &late_tokens,
-                    Some(&persist_active),
-                ))
-                .unwrap();
-        });
-        assert!(persist_rx.recv_timeout(Duration::from_millis(150)).is_err());
-
-        drop(blocker_transaction);
-        let disconnected = disconnect_rx
-            .recv_timeout(WAIT)
-            .unwrap()
-            .expect("disconnect completes after the settings write is released");
-        assert_eq!(disconnected.chatgpt.state, ChatGptConnectionState::Absent);
-        assert_eq!(
-            persist_rx.recv_timeout(WAIT).unwrap(),
-            LoginOutcome::Cancelled
-        );
-        assert!(matches!(load(&home), LoadState::Absent));
-        let view = crate::application_settings::load_application_settings(&home).unwrap();
-        assert_eq!(
-            view.provider_connections[0].status,
-            crate::application_settings::ProviderConnectionStatus::AuthenticationRequired
-        );
-    }
-
-    #[test]
-    fn disconnect_blocks_restart_and_prevents_a_late_worker_from_recreating_auth() {
-        let (_dir, host, home) = fresh_host();
-        let active = Arc::new(ActiveLoginFlow::new());
-        let tokens = crate::chatgpt_oauth::IssuedTokens {
-            access_token: "at-late".to_owned(),
-            refresh_token: "rt-late".to_owned(),
-            id_token: jwt_id_token("acc-late", Some("plus")),
-            expires_in_secs: 3_600,
-        };
-        {
-            let mut state = host.chatgpt_login_state().lock().unwrap();
-            state.phase = ChatGptLoginPhase::AwaitingBrowser;
-            state.active = Some(Arc::clone(&active));
-        }
-
-        host.disconnect_chatgpt().expect("disconnect succeeds");
-
-        assert!(host.chatgpt_login_state().lock().unwrap().active.is_some());
-        assert_eq!(
-            host.begin_chatgpt_device_login("http://127.0.0.1:9")
-                .unwrap_err()
-                .code,
-            TenderErrorCode::OauthAlreadyRunning
-        );
-        assert_eq!(
-            persist_authorized_connection(&home, &tokens, Some(&active)),
-            LoginOutcome::Cancelled
-        );
-        assert!(matches!(load(&home), LoadState::Absent));
-
-        host.finish_chatgpt_login_flow(&active, LoginOutcome::Cancelled);
-        let state = host.chatgpt_login_state().lock().unwrap();
-        assert_eq!(state.phase, ChatGptLoginPhase::Idle);
-        assert!(state.active.is_none());
-    }
-
-    #[test]
-    fn begin_reports_blocked_ports_without_process_details() {
-        let (_dir, host, _home) = fresh_host();
-        let Ok(gate_1455) = TcpListener::bind(("127.0.0.1", 1455)) else {
-            println!("skipping: port 1455 occupied");
-            return;
-        };
-        let Ok(gate_1457) = TcpListener::bind(("127.0.0.1", 1457)) else {
-            println!("skipping: port 1457 occupied");
-            return;
-        };
-
-        let error = host
-            .begin_chatgpt_login(&[1455, 1457], PRODUCTION_ISSUER, |_url| {
-                panic!("browser must not open when ports are blocked");
-            })
-            .expect_err("blocked ports reject synchronously");
-
-        assert_eq!(error.code, TenderErrorCode::OauthPortBlocked);
-        assert_eq!(
-            serde_json::to_value(&error).unwrap(),
-            serde_json::json!({ "code": "oauth_port_blocked" })
-        );
-        assert_eq!(
-            host.chatgpt_login_state().lock().unwrap().phase,
-            ChatGptLoginPhase::Idle
-        );
-        drop(gate_1455);
-        drop(gate_1457);
-    }
-
-    #[test]
-    fn begin_uses_the_next_candidate_when_the_first_port_is_busy() {
-        let (_dir, host, _home) = fresh_host();
-        let busy = TcpListener::bind((LOOPBACK_HOST, 0)).unwrap();
-        let busy_port = busy.local_addr().unwrap().port();
-
-        let started = host
-            .begin_chatgpt_login(&[busy_port, 0], "http://127.0.0.1:9", |_url| {})
-            .expect("a free fallback candidate starts the login flow");
-
-        assert_eq!(started.status, StartChatGptLoginStatus::AwaitingBrowser);
-        host.cancel_chatgpt_login();
-    }
-
-    #[test]
-    fn connection_status_maps_every_load_state() {
-        let home = temp_home("status-states");
-
-        let absent = chatgpt_connection_status(&home);
-        assert_eq!(absent.state, ChatGptConnectionState::Absent);
-        assert!(absent.account_id.is_none());
-        assert!(absent.plan_type.is_none());
-        assert!(absent.expires_at_ms.is_none());
-
-        save(
-            &home,
-            &StoredConnection {
-                access_token: "at".to_string(),
-                refresh_token: "rt".to_string(),
-                id_token: "idt".to_string(),
-                expires_at_ms: 5_000,
-                account_id: "acc-status".to_string(),
-                plan_type: Some("pro".to_string()),
-                compute_residency: None,
-            },
-        )
-        .unwrap();
-        let connected = chatgpt_connection_status(&home);
-        assert_eq!(connected.state, ChatGptConnectionState::Connected);
-        assert_eq!(connected.account_id.as_deref(), Some("acc-status"));
-        assert_eq!(connected.plan_type.as_deref(), Some("pro"));
-        assert_eq!(connected.expires_at_ms, Some(5_000));
-
-        std::fs::write(home.join("auth.json"), "<html>garbage</html>").unwrap();
-        let unusable = chatgpt_connection_status(&home);
-        assert_eq!(unusable.state, ChatGptConnectionState::Unusable);
-        assert!(unusable.account_id.is_none());
-        assert!(unusable.expires_at_ms.is_none());
-
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn cancelled_opener_skips_the_browser_and_self_cancels_the_server() {
-        let flow = Arc::new(ActiveLoginFlow::new());
-        assert!(with_connection_mutation(|| flow.claim_cancel()));
-
-        let gate = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = gate.local_addr().unwrap().port();
-        let url = build_authorize_url(
-            &format!("http://localhost:{port}/auth/callback"),
-            &generate_pkce().unwrap(),
-            &generate_state().unwrap(),
-        );
-
-        let opener = Arc::clone(&flow).opener(|_opened| {
-            panic!("cancelled flows must not launch a browser");
-        });
-        std::thread::spawn(move || opener(&url));
-
-        gate.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + WAIT;
-        let mut observed = false;
-        while Instant::now() < deadline && !observed {
-            if let Ok((mut stream, _)) = gate.accept() {
-                let mut request = String::new();
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                let _ = stream.read_to_string(&mut request);
-                observed = request.starts_with("GET /cancel");
-            } else {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        }
-        assert!(observed, "the loopback server received the cancel signal");
     }
 }

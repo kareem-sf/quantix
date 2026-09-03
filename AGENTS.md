@@ -2,10 +2,13 @@
 
 - Do not preserve backward compatibility. Remove obsolete paths instead of adding compatibility layers, fallbacks, or migrations.
 - Choose the simplest implementation that fully meets the current requirements. Avoid speculative abstractions, configuration, and indirection.
+- Validate before implementing: confirm the approach and the facts it rests on (SDK/API behavior, provider terms, requirements) before writing code, so we always do the right thing via the shortest path — no over-engineering, no over-coding.
 - Grow the system in layers. Start from the smallest version that works end to end, and add each new capability on top of a product that already works. Never trade a working product for unfinished complexity.
 - Keep components modular and concerns clearly separated.
 - Prefer established, well-maintained libraries when they reduce overall complexity or improve reliability. Do not reimplement common functionality without a clear reason.
 - Lean on the dependencies already in the project before writing your own implementation or adding packages. Do not assume a library lacks a capability without checking its documentation and types.
+- Avoid custom implementations and hand-written protocol/integration code as much as possible. Prefer ready-made, maintained libraries — Rust, JavaScript/TypeScript, Python, or otherwise — and write custom code only when no library meets the need.
+- Write all UI/UX in plain language a construction engineer understands. Never use developer, AI, or agent jargon in product copy; name things the way the user thinks about the work.
 - Make architectural decisions for the long term. Do not accept a stopgap that only works for now and is meant to be replaced later.
 For every non-trivial task, use a manager-worker approach.
 - The primary agent owns planning, architecture, task decomposition, integration, review, and final verification.
@@ -24,6 +27,7 @@ For every non-trivial task, use a manager-worker approach.
 - Check formatting without changing files: `npm run format:check`
 - Run TypeScript typechecking and Rust clippy: `npm run check`
 - Run deterministic tests and regenerate Rust-owned TypeScript DTOs: `npm test`
+- Run targeted tests during development — fastest first: `cargo test --manifest-path src-tauri/Cargo.toml --target-dir src-tauri/target/tests --features runtime-fixture --test <test-file-name>` (or `--lib <filter>` for unit tests) and `npx vitest run <file>` for one renderer test file. Reserve the full `npm test` suite for final verification only — before committing or handing off completed work.
 - Record deterministic product acceptance from a command file: `npm run acceptance:deterministic -- <application-home> <command.json>`
 - Aggregate deterministic Product Acceptance Runs: `npm run acceptance:aggregate -- <application-home> <source-revision>`
 - Record one opted-in local live-provider run: `npm run acceptance:live -- <application-home> <command.json>`
@@ -36,3 +40,17 @@ For every non-trivial task, use a manager-worker approach.
 
 Keep generated declarations under `src/bindings` committed. Do not edit them manually.
 Production builds are explicit release-stage operations; do not run them during normal development.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as GitHub issues on `kareem-sf/quantix`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage labels are used as-is (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` plus `docs/adr/` at the repo root. See `docs/agents/domain.md`.

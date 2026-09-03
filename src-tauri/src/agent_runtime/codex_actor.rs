@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 use crate::process_supervisor::ProcessError;
 
 use super::{
+    chatgpt_reasoning_effort, codex_connection_without_catalog,
     codex_protocol::{
         dynamic_tool_specs, handle_control_request, handle_notification, outcome_unknown,
         parse_wire_message, process_failure, protocol_failure, provider_instruction_bundle,
@@ -28,7 +29,7 @@ use super::{
     PROVIDER_OUTPUT_LIMIT,
 };
 use crate::application_settings::{
-    AiProviderKind, ProviderConnectionStatus, ProviderConnectionView, ProviderReasoningSelection,
+    AiProviderKind, ProviderConnectionStatus, ProviderConnectionView,
 };
 
 const COMMAND_CAPACITY: usize = 8;
@@ -36,6 +37,34 @@ const ACTOR_OUTPUT_LIMIT: usize = PROVIDER_OUTPUT_LIMIT * 2;
 const ARCHIVE_CONFIRMATION_PAGE_LIMIT: u32 = 100;
 const ACTOR_DEADLINE_GRACE: Duration = Duration::from_secs(2);
 const THREAD_CLEANUP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
+const LOGIN_OPERATION_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChatGptLoginType {
+    Browser,
+    Device,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LoginStartInfo {
+    pub login_id: String,
+    pub auth_url: Option<String>,
+    pub verification_url: Option<String>,
+    pub user_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoginOutcome {
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Default)]
+struct SharedLoginState {
+    login_id: Option<String>,
+    outcome: Option<LoginOutcome>,
+}
 
 #[derive(Clone)]
 pub(crate) struct CodexProvider {
@@ -44,6 +73,8 @@ pub(crate) struct CodexProvider {
     terminated: Arc<AtomicBool>,
     termination: Arc<Notify>,
     connection: Arc<Mutex<ProviderConnectionView>>,
+    login: Arc<Mutex<SharedLoginState>>,
+    login_signal: Arc<Notify>,
 }
 
 impl CodexProvider {
@@ -68,13 +99,19 @@ impl CodexProvider {
         let alive = Arc::new(AtomicBool::new(true));
         let terminated = Arc::new(AtomicBool::new(false));
         let termination = Arc::new(Notify::new());
+        let login = Arc::new(Mutex::new(SharedLoginState::default()));
+        let login_signal = Arc::new(Notify::new());
         tokio::spawn(run_actor(
             process,
             receiver,
             Arc::clone(&alive),
             Arc::clone(&terminated),
             Arc::clone(&termination),
-            Arc::clone(&connection),
+            ActorShared {
+                connection: Arc::clone(&connection),
+                login: Arc::clone(&login),
+                login_signal: Arc::clone(&login_signal),
+            },
         ));
         Ok(Self {
             sender,
@@ -82,6 +119,8 @@ impl CodexProvider {
             terminated,
             termination,
             connection,
+            login,
+            login_signal,
         })
     }
 
@@ -111,6 +150,61 @@ impl CodexProvider {
             .await
             .map_err(|_| process_failure(false))?;
         receiver.await.map_err(|_| process_failure(false))?
+    }
+
+    pub(crate) async fn login_start(
+        &self,
+        login_type: ChatGptLoginType,
+    ) -> Result<LoginStartInfo, ProviderFailure> {
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .send(ProviderCommand::LoginStart {
+                login_type,
+                response,
+            })
+            .await
+            .map_err(|_| process_failure(false))?;
+        receiver.await.map_err(|_| process_failure(false))?
+    }
+
+    pub(crate) async fn login_cancel(&self) -> Result<(), ProviderFailure> {
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .send(ProviderCommand::LoginCancel { response })
+            .await
+            .map_err(|_| process_failure(false))?;
+        receiver.await.map_err(|_| process_failure(false))?
+    }
+
+    pub(crate) async fn logout(&self) -> Result<(), ProviderFailure> {
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .send(ProviderCommand::Logout { response })
+            .await
+            .map_err(|_| process_failure(false))?;
+        receiver.await.map_err(|_| process_failure(false))?
+    }
+
+    pub(crate) async fn login_wait(&self, cancellation: CancellationToken) -> LoginOutcome {
+        loop {
+            if let Some(outcome) = self
+                .login
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .outcome
+            {
+                return outcome;
+            }
+            if !self.alive.load(Ordering::Acquire) || self.sender.is_closed() {
+                return LoginOutcome::Failed;
+            }
+            let notified = self.login_signal.notified();
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return LoginOutcome::Cancelled,
+                _ = notified => {}
+            }
+        }
     }
 
     pub(super) async fn run_turn(
@@ -186,6 +280,16 @@ enum ProviderCommand {
         thread_ref: String,
         response: oneshot::Sender<Result<(), ProviderFailure>>,
     },
+    LoginStart {
+        login_type: ChatGptLoginType,
+        response: oneshot::Sender<Result<LoginStartInfo, ProviderFailure>>,
+    },
+    LoginCancel {
+        response: oneshot::Sender<Result<(), ProviderFailure>>,
+    },
+    Logout {
+        response: oneshot::Sender<Result<(), ProviderFailure>>,
+    },
     Shutdown {
         response: oneshot::Sender<Result<(), ProcessError>>,
     },
@@ -259,6 +363,22 @@ enum PendingRpc {
         delete_failure: ProviderFailure,
         response: oneshot::Sender<Result<(), ProviderFailure>>,
     },
+    LoginStart {
+        response: oneshot::Sender<Result<LoginStartInfo, ProviderFailure>>,
+    },
+    LoginCancel {
+        response: oneshot::Sender<Result<(), ProviderFailure>>,
+    },
+    Logout {
+        response: oneshot::Sender<Result<(), ProviderFailure>>,
+    },
+}
+
+#[derive(Clone)]
+struct ActorShared {
+    connection: Arc<Mutex<ProviderConnectionView>>,
+    login: Arc<Mutex<SharedLoginState>>,
+    login_signal: Arc<Notify>,
 }
 
 async fn run_actor(
@@ -267,8 +387,13 @@ async fn run_actor(
     alive: Arc<AtomicBool>,
     terminated: Arc<AtomicBool>,
     termination: Arc<Notify>,
-    connection: Arc<Mutex<ProviderConnectionView>>,
+    shared: ActorShared,
 ) {
+    let ActorShared {
+        connection,
+        login,
+        login_signal,
+    } = &shared;
     let _termination_signal = ActorTerminationSignal {
         terminated,
         termination,
@@ -288,22 +413,26 @@ async fn run_actor(
                         &mut commands,
                         &mut runs,
                         &alive,
+                        login,
+                        login_signal,
                         process_failure(true),
                     ).await;
                     return;
                 };
                 match command {
                     ProviderCommand::Refresh { response } => {
-                        let result = if runs.is_empty() && pending.is_empty()
+                        let result = if login_is_outstanding(login)
+                            || !runs.is_empty()
+                            || !pending.is_empty()
                         {
+                            Ok(false)
+                        } else {
                             process.refresh_readiness().await.map(|updated| {
                                 *connection
                                     .lock()
                                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = updated;
                                 true
                             })
-                        } else {
-                            Ok(false)
                         };
                         let fatal = result.is_err();
                         let _ = response.send(result);
@@ -313,6 +442,8 @@ async fn run_actor(
                                 &mut commands,
                                 &mut runs,
                                 &alive,
+                                login,
+                                login_signal,
                                 process_failure(true),
                             ).await;
                             return;
@@ -372,6 +503,8 @@ async fn run_actor(
                                 &mut commands,
                                 &mut runs,
                                 &alive,
+                                login,
+                                login_signal,
                                 failure,
                             )
                             .await;
@@ -384,6 +517,181 @@ async fn run_actor(
                                 response,
                             },
                         );
+                    }
+                    ProviderCommand::LoginStart {
+                        login_type,
+                        response,
+                    } => {
+                        let busy = !runs.is_empty()
+                            || !pending.is_empty()
+                            || login_is_outstanding(login);
+                        if busy {
+                            let _ = response.send(Err(process_failure(false)));
+                            continue;
+                        }
+                        {
+                            let mut state = login
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            state.login_id = None;
+                            state.outcome = None;
+                        }
+                        if let Err(failure) = process.conversation_mut().and_then(|conversation| {
+                            conversation
+                                .begin_operation(
+                                    LOGIN_OPERATION_TIMEOUT,
+                                    ACTOR_OUTPUT_LIMIT,
+                                    ACTOR_OUTPUT_LIMIT,
+                                )
+                                .map_err(|_| process_failure(false))
+                        }) {
+                            let _ = response.send(Err(failure));
+                            continue;
+                        }
+                        let params_type = match login_type {
+                            ChatGptLoginType::Browser => "chatgpt",
+                            ChatGptLoginType::Device => "chatgptDeviceCode",
+                        };
+                        let id = match allocate_id(&mut next_rpc_id) {
+                            Ok(id) => id,
+                            Err(failure) => {
+                                let _ = response.send(Err(failure));
+                                continue;
+                            }
+                        };
+                        if write_rpc(
+                            process.conversation_mut().expect("provider conversation is active"),
+                            &json!({
+                                "method": "account/login/start",
+                                "id": id,
+                                "params": { "type": params_type }
+                            }),
+                        )
+                        .await
+                        .is_err()
+                        {
+                            let failure = process_failure(false);
+                            let _ = response.send(Err(failure.clone()));
+                            terminate_actor(
+                                &mut process,
+                                &mut commands,
+                                &mut runs,
+                                &alive,
+                                login,
+                                login_signal,
+                                failure,
+                            )
+                            .await;
+                            return;
+                        }
+                        pending.insert(id, PendingRpc::LoginStart { response });
+                    }
+                    ProviderCommand::LoginCancel { response } => {
+                        let login_id = login
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .login_id
+                            .clone();
+                        let Some(login_id) = login_id else {
+                            let _ = response.send(Ok(()));
+                            continue;
+                        };
+                        if let Err(failure) = process.conversation_mut().and_then(|conversation| {
+                            conversation
+                                .begin_operation(
+                                    THREAD_CLEANUP_OPERATION_TIMEOUT,
+                                    ACTOR_OUTPUT_LIMIT,
+                                    ACTOR_OUTPUT_LIMIT,
+                                )
+                                .map_err(|_| process_failure(false))
+                        }) {
+                            let _ = response.send(Err(failure));
+                            continue;
+                        }
+                        let id = match allocate_id(&mut next_rpc_id) {
+                            Ok(id) => id,
+                            Err(failure) => {
+                                let _ = response.send(Err(failure));
+                                continue;
+                            }
+                        };
+                        if write_rpc(
+                            process.conversation_mut().expect("provider conversation is active"),
+                            &json!({
+                                "method": "account/login/cancel",
+                                "id": id,
+                                "params": { "loginId": login_id }
+                            }),
+                        )
+                        .await
+                        .is_err()
+                        {
+                            let failure = process_failure(false);
+                            let _ = response.send(Err(failure.clone()));
+                            terminate_actor(
+                                &mut process,
+                                &mut commands,
+                                &mut runs,
+                                &alive,
+                                login,
+                                login_signal,
+                                failure,
+                            )
+                            .await;
+                            return;
+                        }
+                        pending.insert(id, PendingRpc::LoginCancel { response });
+                    }
+                    ProviderCommand::Logout { response } => {
+                        if !runs.is_empty() || !pending.is_empty() {
+                            let _ = response.send(Err(process_failure(false)));
+                            continue;
+                        }
+                        if let Err(failure) = process.conversation_mut().and_then(|conversation| {
+                            conversation
+                                .begin_operation(
+                                    THREAD_CLEANUP_OPERATION_TIMEOUT,
+                                    ACTOR_OUTPUT_LIMIT,
+                                    ACTOR_OUTPUT_LIMIT,
+                                )
+                                .map_err(|_| process_failure(false))
+                        }) {
+                            let _ = response.send(Err(failure));
+                            continue;
+                        }
+                        let id = match allocate_id(&mut next_rpc_id) {
+                            Ok(id) => id,
+                            Err(failure) => {
+                                let _ = response.send(Err(failure));
+                                continue;
+                            }
+                        };
+                        if write_rpc(
+                            process.conversation_mut().expect("provider conversation is active"),
+                            &json!({
+                                "method": "account/logout",
+                                "id": id,
+                                "params": {}
+                            }),
+                        )
+                        .await
+                        .is_err()
+                        {
+                            let failure = process_failure(false);
+                            let _ = response.send(Err(failure.clone()));
+                            terminate_actor(
+                                &mut process,
+                                &mut commands,
+                                &mut runs,
+                                &alive,
+                                login,
+                                login_signal,
+                                failure,
+                            )
+                            .await;
+                            return;
+                        }
+                        pending.insert(id, PendingRpc::Logout { response });
                     }
                     ProviderCommand::Run(command) => {
                         let ProviderRunCommand {
@@ -450,6 +758,8 @@ async fn run_actor(
                                 &mut commands,
                                 &mut runs,
                                 &alive,
+                                login,
+                                login_signal,
                                 failure,
                             ).await;
                             return;
@@ -460,6 +770,7 @@ async fn run_actor(
                         commands.close();
                         let pending_failures = drain_failed_runs(&mut runs, process_failure(true));
                         send_failed_runs(pending_failures);
+                        fail_pending_account_rpcs(&mut pending);
                         let result = process.shutdown().await;
                         let _ = response.send(result);
                         return;
@@ -478,12 +789,14 @@ async fn run_actor(
                         &mut commands,
                         &mut runs,
                         &alive,
+                        login,
+                        login_signal,
                         failure,
                     ).await;
                     return;
                 }
             }
-            line = process.read_line(), if !runs.is_empty() || !pending.is_empty() => {
+            line = process.read_line(), if !runs.is_empty() || !pending.is_empty() || login_is_outstanding(login) => {
                 let line = match line {
                     Ok(line) => line,
                     Err(_) => {
@@ -499,6 +812,8 @@ async fn run_actor(
                             &mut commands,
                             &mut runs,
                             &alive,
+                            login,
+                            login_signal,
                             failure,
                         ).await;
                         return;
@@ -512,6 +827,8 @@ async fn run_actor(
                             &mut commands,
                             &mut runs,
                             &alive,
+                            login,
+                            login_signal,
                             protocol_failure(true),
                         ).await;
                         return;
@@ -523,6 +840,9 @@ async fn run_actor(
                         runs: &mut runs,
                         pending: &mut pending,
                         next_rpc_id: &mut next_rpc_id,
+                        login,
+                        login_signal,
+                        connection,
                     },
                     &line,
                     message,
@@ -533,11 +853,44 @@ async fn run_actor(
                         &mut commands,
                         &mut runs,
                         &alive,
+                        login,
+                        login_signal,
                         failure,
                     ).await;
                     return;
                 }
             }
+        }
+    }
+}
+
+fn login_is_outstanding(login: &Arc<Mutex<SharedLoginState>>) -> bool {
+    let state = login
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.login_id.is_some() && state.outcome.is_none()
+}
+
+fn fail_pending_account_rpcs(pending: &mut HashMap<u64, PendingRpc>) {
+    let drained: Vec<(u64, PendingRpc)> = pending
+        .extract_if(|_, operation| {
+            matches!(
+                operation,
+                PendingRpc::LoginStart { .. }
+                    | PendingRpc::LoginCancel { .. }
+                    | PendingRpc::Logout { .. }
+            )
+        })
+        .collect();
+    for (_, operation) in drained {
+        match operation {
+            PendingRpc::LoginStart { response } => {
+                let _ = response.send(Err(process_failure(true)));
+            }
+            PendingRpc::LoginCancel { response } | PendingRpc::Logout { response } => {
+                let _ = response.send(Err(process_failure(true)));
+            }
+            _ => {}
         }
     }
 }
@@ -820,10 +1173,8 @@ async fn send_turn(
     if run.prepared.provider_selection.provider != AiProviderKind::Codex {
         return Err(protocol_failure(false));
     }
-    let effort = match &run.prepared.provider_selection.reasoning {
-        ProviderReasoningSelection::CodexEffort(effort) => Some(effort.as_str()),
-        ProviderReasoningSelection::ProviderDefault => None,
-    };
+    let effort =
+        chatgpt_reasoning_effort(&run.prepared.provider_selection.reasoning)?.map(|e| e.as_str());
     let on_requested = std::mem::replace(
         &mut run.callbacks.on_requested,
         Box::new(|| Err(protocol_failure(false))),
@@ -895,6 +1246,9 @@ struct CodexActorContext<'a> {
     runs: &'a mut HashMap<String, ActorRun>,
     pending: &'a mut HashMap<u64, PendingRpc>,
     next_rpc_id: &'a mut u64,
+    login: &'a Arc<Mutex<SharedLoginState>>,
+    login_signal: &'a Arc<Notify>,
+    connection: &'a Arc<Mutex<ProviderConnectionView>>,
 }
 
 async fn handle_message(
@@ -907,6 +1261,9 @@ async fn handle_message(
         runs,
         pending,
         next_rpc_id,
+        login,
+        login_signal,
+        connection,
     } = context;
     if message.get("id").is_some() && message.get("method").is_none() {
         let id = message
@@ -922,6 +1279,9 @@ async fn handle_message(
                 runs,
                 pending,
                 next_rpc_id,
+                login,
+                login_signal,
+                connection,
             },
             line.len(),
             message,
@@ -959,6 +1319,9 @@ async fn handle_message(
     }
     validate_schema("ServerNotification", &message)?;
     let params = message.get("params").unwrap_or(&Value::Null);
+    if method == "account/login/completed" {
+        return handle_login_completed(login, login_signal, connection, process, params).await;
+    }
     let routed = notification_turn_ref(params)
         .map(|turn_ref| {
             runs.iter()
@@ -1018,6 +1381,109 @@ async fn handle_message(
     Ok(())
 }
 
+fn parse_login_start_info(result: &Value) -> Result<LoginStartInfo, ProviderFailure> {
+    let login_type = result.get("type").and_then(Value::as_str);
+    let login_id = result
+        .get("loginId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| protocol_failure(false))?;
+    match login_type {
+        Some("chatgpt") => {
+            let auth_url = result
+                .get("authUrl")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| protocol_failure(false))?;
+            Ok(LoginStartInfo {
+                login_id: login_id.to_owned(),
+                auth_url: Some(auth_url.to_owned()),
+                verification_url: None,
+                user_code: None,
+            })
+        }
+        Some("chatgptDeviceCode") => {
+            let verification_url = result
+                .get("verificationUrl")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| protocol_failure(false))?;
+            let user_code = result
+                .get("userCode")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| protocol_failure(false))?;
+            Ok(LoginStartInfo {
+                login_id: login_id.to_owned(),
+                auth_url: None,
+                verification_url: Some(verification_url.to_owned()),
+                user_code: Some(user_code.to_owned()),
+            })
+        }
+        _ => Err(protocol_failure(false)),
+    }
+}
+
+fn complete_login(
+    login: &Arc<Mutex<SharedLoginState>>,
+    login_signal: &Arc<Notify>,
+    outcome: LoginOutcome,
+) {
+    let mut state = login
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if state.outcome.is_none() {
+        state.outcome = Some(outcome);
+        drop(state);
+        login_signal.notify_waiters();
+    }
+}
+
+async fn handle_login_completed(
+    login: &Arc<Mutex<SharedLoginState>>,
+    login_signal: &Arc<Notify>,
+    connection: &Arc<Mutex<ProviderConnectionView>>,
+    process: &mut CodexProviderProcess,
+    params: &Value,
+) -> Result<(), ProviderFailure> {
+    let expected_login_id = login
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .login_id
+        .clone();
+    let Some(expected_login_id) = expected_login_id else {
+        return Ok(());
+    };
+    let login_id = params.get("loginId").and_then(Value::as_str);
+    if login_id.is_some_and(|value| !value.is_empty())
+        && login_id != Some(expected_login_id.as_str())
+    {
+        return Ok(());
+    }
+    if params.get("success").and_then(Value::as_bool) != Some(true) {
+        let cancelled = params
+            .get("error")
+            .and_then(Value::as_str)
+            .is_some_and(|error| error == "cancelled");
+        complete_login(
+            login,
+            login_signal,
+            if cancelled {
+                LoginOutcome::Cancelled
+            } else {
+                LoginOutcome::Failed
+            },
+        );
+        return Ok(());
+    }
+    let updated = process.refresh_readiness().await?;
+    *connection
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = updated;
+    complete_login(login, login_signal, LoginOutcome::Completed);
+    Ok(())
+}
+
 async fn handle_response(
     context: CodexActorContext<'_>,
     line_bytes: usize,
@@ -1029,8 +1495,57 @@ async fn handle_response(
         runs,
         pending,
         next_rpc_id,
+        login,
+        login_signal,
+        connection,
     } = context;
     let operation = match operation {
+        PendingRpc::LoginStart { response } => {
+            let result = response_result(&message, "v2/LoginAccountResponse", false);
+            let info = match result {
+                Ok(result) => parse_login_start_info(&result),
+                Err(failure) => Err(failure),
+            };
+            match info {
+                Ok(info) => {
+                    login
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .login_id = Some(info.login_id.clone());
+                    let _ = response.send(Ok(info));
+                }
+                Err(failure) => {
+                    complete_login(login, login_signal, LoginOutcome::Failed);
+                    let _ = response.send(Err(failure));
+                }
+            }
+            return Ok(());
+        }
+        PendingRpc::LoginCancel { response } => {
+            if response_result(&message, "v2/CancelLoginAccountResponse", false).is_ok() {
+                let _ = response.send(Ok(()));
+            } else {
+                let _ = response.send(Err(protocol_failure(false)));
+            }
+            return Ok(());
+        }
+        PendingRpc::Logout { response } => {
+            if response_result(&message, "v2/LogoutAccountResponse", false).is_ok() {
+                let updated = codex_connection_without_catalog(
+                    ProviderConnectionStatus::AuthenticationRequired,
+                    None,
+                    None,
+                    "Connect an OpenAI account to use Codex intelligence.",
+                );
+                *connection
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = updated;
+                let _ = response.send(Ok(()));
+            } else {
+                let _ = response.send(Err(process_failure(false)));
+            }
+            return Ok(());
+        }
         PendingRpc::DeleteThread {
             thread_ref,
             response,
@@ -1113,7 +1628,11 @@ async fn handle_response(
         | PendingRpc::Thread(run_id)
         | PendingRpc::Turn(run_id)
         | PendingRpc::Interrupt(run_id) => run_id.clone(),
-        PendingRpc::DeleteThread { .. } | PendingRpc::DeleteConfirm { .. } => {
+        PendingRpc::DeleteThread { .. }
+        | PendingRpc::DeleteConfirm { .. }
+        | PendingRpc::LoginStart { .. }
+        | PendingRpc::LoginCancel { .. }
+        | PendingRpc::Logout { .. } => {
             unreachable!("account and cleanup responses return above")
         }
     };
@@ -1219,7 +1738,11 @@ async fn handle_response(
             response_result(&message, "v2/TurnInterruptResponse", true)?;
             Ok(())
         }
-        PendingRpc::DeleteThread { .. } | PendingRpc::DeleteConfirm { .. } => {
+        PendingRpc::DeleteThread { .. }
+        | PendingRpc::DeleteConfirm { .. }
+        | PendingRpc::LoginStart { .. }
+        | PendingRpc::LoginCancel { .. }
+        | PendingRpc::Logout { .. } => {
             unreachable!("account and cleanup responses return above")
         }
     }
@@ -1406,12 +1929,15 @@ async fn terminate_actor(
     commands: &mut mpsc::Receiver<ProviderCommand>,
     runs: &mut HashMap<String, ActorRun>,
     alive: &AtomicBool,
+    login: &Arc<Mutex<SharedLoginState>>,
+    login_signal: &Arc<Notify>,
     failure: ProviderFailure,
 ) {
     alive.store(false, Ordering::Release);
     commands.close();
     let failed = drain_failed_runs(runs, failure);
     send_failed_runs(failed);
+    complete_login(login, login_signal, LoginOutcome::Failed);
     let _ = process.shutdown().await;
 }
 

@@ -169,6 +169,7 @@ pub enum AiConnectionMethod {
 #[serde(rename_all = "snake_case")]
 pub enum AiProviderKind {
     Codex,
+    Grok,
     OpenAi,
     Anthropic,
     GoogleGemini,
@@ -234,6 +235,7 @@ pub fn validate_method_provider(
     let valid = matches!(
         (method, provider),
         (AiConnectionMethod::AccountLogin, AiProviderKind::Codex)
+            | (AiConnectionMethod::AccountLogin, AiProviderKind::Grok)
             | (
                 AiConnectionMethod::DirectProviderKey,
                 AiProviderKind::OpenAi
@@ -714,13 +716,18 @@ impl AiConnectionConfiguration {
     pub fn data_destination(&self) -> Result<&str, AiContractError> {
         self.validate()?;
         match self {
-            Self::AccountLogin { .. } => Ok("https://chatgpt.com"),
+            Self::AccountLogin { provider, .. } => match provider {
+                AiProviderKind::Codex => Ok("https://chatgpt.com"),
+                AiProviderKind::Grok => Ok("https://api.x.ai"),
+                _ => Err(AiContractError::InvalidPairing),
+            },
             Self::DirectProviderKey { provider } => match provider {
                 AiProviderKind::OpenAi => Ok("https://api.openai.com"),
                 AiProviderKind::Anthropic => Ok("https://api.anthropic.com"),
                 AiProviderKind::GoogleGemini => Ok("https://generativelanguage.googleapis.com"),
                 AiProviderKind::XAi => Ok("https://api.x.ai"),
                 AiProviderKind::Codex
+                | AiProviderKind::Grok
                 | AiProviderKind::OpenAiCompatible
                 | AiProviderKind::AnthropicCompatible => Err(AiContractError::InvalidPairing),
             },
@@ -1454,6 +1461,7 @@ mod tests {
                 AiProviderKind::Codex,
                 true,
             ),
+            (AiConnectionMethod::AccountLogin, AiProviderKind::Grok, true),
             (
                 AiConnectionMethod::DirectProviderKey,
                 AiProviderKind::OpenAi,
@@ -1492,6 +1500,11 @@ mod tests {
             (
                 AiConnectionMethod::DirectProviderKey,
                 AiProviderKind::Codex,
+                false,
+            ),
+            (
+                AiConnectionMethod::DirectProviderKey,
+                AiProviderKind::Grok,
                 false,
             ),
             (

@@ -1,33 +1,26 @@
 use std::{
-    path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
+    ffi::OsString,
+    fs, io,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
-#[cfg(feature = "runtime-fixture")]
-use std::{ffi::OsString, fs, io, path::Path};
 
 use garde::Validate;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 
 use crate::{
-    agent_backend::{
-        execute_provider_turn as execute_chatgpt_backend_turn, BackendRequest, ReasoningEffort,
-        RequestBudgetFailureKind, ReqwestBackend, StreamEvent, ToolRejection, TurnContext,
-        UsageSnapshot, BACKEND_URL,
-    },
     application_settings::{
-        project_approved_chatgpt_connection, refresh_approved_chatgpt_connection,
-        AiExecutionSelection, AiProviderKind, ProviderReasoningSelection,
+        codex_connection_version, codex_failure_connection_status, save_codex_connection_status,
+        save_live_connection, AiExecutionSelection, AiProviderKind, ProviderConnectionStatus,
+        ProviderConnectionView, ProviderModelOption, ProviderReasoningOption,
+        ProviderReasoningSelection, CODEX_CONNECTION_ID,
     },
-    chatgpt_login::PRODUCTION_ISSUER,
-    chatgpt_oauth::TokenClient,
+    process_supervisor::{ProcessError, ProcessSpec, ProcessTermination, SupervisedConversation},
     tender_store::{
         lock_mutex_with_check, require_setup, BasisOfEstimateReviewResult,
         BidDecisionApprovalHistoryPage, BidDecisionApprovalInvalidationResult,
@@ -37,70 +30,65 @@ use crate::{
         ComplianceMatrixPage, CostEstimatorBasisResult, CostEstimatorCalculationResult,
         CreateBidDecisionPackageCommand, CreateTenderEngineerEntryCommand,
         DecideBidDecisionPackageCommand, DecideTenderRecordCommand, ExternalRfiReviewResult,
-        InspectBidDecisionApprovalHistoryCommand, InvalidateBidDecisionApprovalCommand,
-        ManagerIntakeExtractionRecovery, ManagerIntakeStage, PricedCostBaselineReviewResult,
-        PricingAdjustmentReviewResult, ProductionTaskRunResult, ProductionTaskState,
-        ResolveBidDecisionReturnReworkCommand, RunBasisOfEstimateReviewCommand,
-        RunBidDecisionPackageReviewCommand, RunCalculationRuleReviewCommand,
-        RunCostEstimatorBasisCommand, RunCostEstimatorCalculationCommand,
-        RunExternalRfiReviewCommand, RunPricedCostBaselineReviewCommand,
-        RunPricingAdjustmentReviewCommand, RunProductionTaskCommand,
-        RunSubmissionSectionReviewCommand, RunTenderRecordExtractionCommand,
-        RunTenderRecordReviewCommand, SubmissionSectionReviewRunResult, TenderCommandError,
-        TenderErrorCode, TenderEvidenceReference, TenderId, TenderRecordAuthority,
-        TenderRecordDecisionResult, TenderRecordExtractionResult, TenderRecordPage,
-        TenderRecordReviewResult, TenderStore,
+        InspectBidDecisionApprovalHistoryCommand, InspectTenderRecordCommand,
+        InvalidateBidDecisionApprovalCommand, ManagerIntakeExtractionRecovery, ManagerIntakeStage,
+        PricedCostBaselineReviewResult, PricingAdjustmentReviewResult, ProductionTaskRunResult,
+        ProductionTaskState, ResolveBidDecisionReturnReworkCommand,
+        RunBasisOfEstimateReviewCommand, RunBidDecisionPackageReviewCommand,
+        RunCalculationRuleReviewCommand, RunCostEstimatorBasisCommand,
+        RunCostEstimatorCalculationCommand, RunExternalRfiReviewCommand,
+        RunPricedCostBaselineReviewCommand, RunPricingAdjustmentReviewCommand,
+        RunProductionTaskCommand, RunSubmissionSectionReviewCommand,
+        RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand,
+        SubmissionSectionReviewRunResult, TenderCommandError, TenderErrorCode, TenderId,
+        TenderRecordAuthority, TenderRecordDecisionResult, TenderRecordExtractionResult,
+        TenderRecordInspection, TenderRecordPage, TenderRecordReviewResult, TenderStore,
     },
     QuantixHost,
 };
 
-#[cfg(not(feature = "runtime-fixture"))]
-use crate::application_settings::project_chatgpt_connection_readiness;
-
-#[cfg(feature = "runtime-fixture")]
-use crate::{
-    application_settings::{
-        codex_connection_version, codex_failure_connection_status, save_codex_connection_status,
-        save_live_connection, ProviderConnectionStatus, ProviderConnectionView,
-        ProviderModelOption, ProviderReasoningOption, CODEX_CONNECTION_ID,
-    },
-    process_supervisor::{ProcessError, ProcessSpec, ProcessTermination, SupervisedConversation},
-};
+#[cfg(any(test, feature = "runtime-fixture"))]
+use crate::tender_store::TenderEvidenceReference;
 
 mod bootstrap_profile;
-#[cfg(feature = "runtime-fixture")]
 mod codex_actor;
 mod codex_protocol;
 pub(crate) mod permissions;
+pub mod worker_lane;
 pub(crate) use bootstrap_profile::{bootstrap_profile, bootstrap_task};
-#[cfg(feature = "runtime-fixture")]
-pub(crate) use codex_actor::CodexProvider;
+pub(crate) use codex_actor::{ChatGptLoginType, CodexProvider, LoginOutcome, LoginStartInfo};
 use codex_protocol::{
-    direct_tool_specs, execute_typed_tool, outcome_unknown, process_failure, protocol_failure,
-    typed_tool_arguments_are_valid, typed_tool_is_known, validate_candidate,
+    execute_typed_tool, outcome_unknown, process_failure, protocol_failure, read_expected_response,
+    typed_tool_arguments_are_valid, typed_tool_is_known, write_rpc, ReasoningEffort,
 };
 pub(crate) use codex_protocol::{
     provider_instruction_bundle, provider_instruction_bundle_from_data_views,
 };
-#[cfg(feature = "runtime-fixture")]
-use codex_protocol::{read_expected_response, write_rpc};
 use permissions::permission_duration;
 
 #[derive(Clone)]
-#[cfg(feature = "runtime-fixture")]
 pub(crate) enum AgentProvider {
     Codex(CodexProvider),
 }
 
-#[cfg(feature = "runtime-fixture")]
 impl AgentProvider {
     async fn codex_readiness(
         supervisor: &crate::process_supervisor::ProcessSupervisor,
         executable: PathBuf,
-        process_directory: &Path,
+        application_home: &Path,
         cancellation: CancellationToken,
     ) -> Result<Self, ProviderFailure> {
-        CodexProvider::readiness(supervisor, executable, process_directory, cancellation)
+        #[cfg(not(feature = "runtime-fixture"))]
+        match crate::managed_runtime::prepare_managed_codex_runtime(
+            application_home,
+            cancellation.clone(),
+        )
+        .await
+        {
+            Ok(_) => {}
+            Err(_) => return Err(process_failure(false)),
+        }
+        CodexProvider::readiness(supervisor, executable, application_home, cancellation)
             .await
             .map(Self::Codex)
     }
@@ -117,14 +105,39 @@ impl AgentProvider {
         }
     }
 
-    #[cfg(feature = "runtime-fixture")]
     pub(crate) async fn delete_thread(&self, thread_ref: String) -> Result<(), ProviderFailure> {
         match self {
             Self::Codex(provider) => provider.delete_thread(thread_ref).await,
         }
     }
 
-    #[cfg(feature = "runtime-fixture")]
+    pub(crate) async fn login_start(
+        &self,
+        login_type: ChatGptLoginType,
+    ) -> Result<LoginStartInfo, ProviderFailure> {
+        match self {
+            Self::Codex(provider) => provider.login_start(login_type).await,
+        }
+    }
+
+    pub(crate) async fn login_cancel(&self) -> Result<(), ProviderFailure> {
+        match self {
+            Self::Codex(provider) => provider.login_cancel().await,
+        }
+    }
+
+    pub(crate) async fn logout(&self) -> Result<(), ProviderFailure> {
+        match self {
+            Self::Codex(provider) => provider.logout().await,
+        }
+    }
+
+    pub(crate) async fn login_wait(&self, cancellation: CancellationToken) -> LoginOutcome {
+        match self {
+            Self::Codex(provider) => provider.login_wait(cancellation).await,
+        }
+    }
+
     async fn run_turn(
         &self,
         prepared: PreparedAgentRun,
@@ -172,14 +185,10 @@ const PROVIDER_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg(feature = "runtime-fixture")]
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(5);
 const PROVIDER_OUTPUT_LIMIT: usize = 1024 * 1024;
-#[cfg(feature = "runtime-fixture")]
 const PROVIDER_READINESS_TIMEOUT: Duration = Duration::from_secs(20);
-#[cfg(any(test, feature = "runtime-fixture"))]
-pub(crate) const CODEX_VERSION: &str = "0.147.0";
-#[cfg(feature = "runtime-fixture")]
+pub(crate) const CODEX_VERSION: &str = "0.151.0";
 pub(crate) const CODEX_PROTOCOL_SCHEMA: &str =
-    include_str!("../tests/fixtures/codex_app_server_protocol.schemas.json");
-#[cfg(feature = "runtime-fixture")]
+    include_str!("agent_runtime/codex_app_server_protocol.schemas.json");
 const SUPPORTED_CHATGPT_PLANS: [&str; 13] = [
     "go",
     "plus",
@@ -688,12 +697,6 @@ pub struct ProviderFailure {
     pub redacted_detail: Option<String>,
     pub retry_after_milliseconds: Option<u64>,
     pub validation_issues: Vec<OutputValidationIssue>,
-    #[serde(skip)]
-    #[ts(skip)]
-    pub(crate) request_body_bytes: Option<u64>,
-    #[serde(skip)]
-    #[ts(skip)]
-    pub(crate) request_budget_failure_kind: Option<RequestBudgetFailureKind>,
 }
 
 impl ProviderFailure {
@@ -710,37 +713,17 @@ impl ProviderFailure {
             redacted_detail: redacted_detail.map(str::to_owned),
             retry_after_milliseconds: None,
             validation_issues: Vec::new(),
-            request_body_bytes: None,
-            request_budget_failure_kind: None,
         }
     }
 
+    #[cfg(any(test, feature = "runtime-fixture"))]
     pub(crate) fn with_retry_after_milliseconds(mut self, value: Option<u64>) -> Self {
         self.retry_after_milliseconds = value;
         self
     }
 
-    pub(crate) fn with_request_body_bytes(mut self, value: u64) -> Self {
-        self.request_body_bytes = Some(value);
-        self
-    }
-
-    pub(crate) fn with_request_budget_failure_kind(
-        mut self,
-        value: RequestBudgetFailureKind,
-    ) -> Self {
-        self.request_budget_failure_kind = Some(value);
-        self
-    }
-
     fn diagnostic_code(&self) -> String {
-        match self.request_budget_failure_kind {
-            Some(RequestBudgetFailureKind::HardCapExceeded) => "REQUEST_BUDGET_EXCEEDED".into(),
-            Some(RequestBudgetFailureKind::PreparedContextMismatch) => {
-                "REQUEST_BUDGET_PARITY_MISMATCH".into()
-            }
-            None => format!("{:?}", self.category),
-        }
+        format!("{:?}", self.category)
     }
 
     pub(crate) fn with_validation_issues(
@@ -840,7 +823,6 @@ pub(crate) struct PreparedAgentRun {
     pub permission_grant: PermissionGrant,
     pub provider_thread_ref: Option<String>,
     pub provider_thread_to_archive: Option<String>,
-    pub expected_initial_request_body_bytes: Option<u64>,
     pub workspace: PathBuf,
 }
 
@@ -924,8 +906,8 @@ impl CandidateDisposition {
 pub(crate) enum DeterministicProviderOutcome {
     Completed,
     Failed,
+    #[cfg(any(test, feature = "runtime-fixture"))]
     RateLimited,
-    RequestBudgetExceeded(u64),
     Interrupted,
 }
 
@@ -948,17 +930,11 @@ type ManagerIntakeVerificationBatches = Vec<(
     u64,
 )>;
 
-struct ProviderTurnTiming {
-    operation_limit: Duration,
-    started: Instant,
-}
-
 type TurnAcceptedCallback = dyn FnOnce(&str) -> Result<(), ProviderFailure> + Send;
 type TurnRequestedCallback = dyn FnOnce() -> Result<(), ProviderFailure> + Send;
 type TurnEventCallback =
     dyn FnMut(&PendingProviderEvent, &ProviderUsage) -> Result<(), ProviderFailure> + Send;
 type TurnDeniedCallback = dyn FnMut(&PendingProviderEvent) -> Result<(), ProviderFailure> + Send;
-#[cfg(feature = "runtime-fixture")]
 type TurnToolCallCallback =
     dyn FnMut(&str, &str, &Value) -> Result<Option<String>, ProviderFailure> + Send;
 type ThreadArchivedCallback = dyn FnOnce(&str) -> Result<(), ProviderFailure> + Send;
@@ -971,7 +947,6 @@ struct RunCallbacks {
     on_accepted: Box<TurnAcceptedCallback>,
     on_event: Box<TurnEventCallback>,
     on_denied: Box<TurnDeniedCallback>,
-    #[cfg(feature = "runtime-fixture")]
     on_tool_call: Box<TurnToolCallCallback>,
 }
 
@@ -1520,7 +1495,6 @@ impl QuantixHost {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "runtime-fixture"))]
     pub async fn run_manager_intake_for_verification(
         &self,
         tender_id: &str,
@@ -1650,19 +1624,6 @@ impl QuantixHost {
         self.run_bootstrap_agent_with_deterministic_provider(
             command,
             DeterministicProviderOutcome::RateLimited,
-        )
-        .await
-    }
-
-    #[cfg(any(test, feature = "runtime-fixture"))]
-    pub async fn run_request_budget_exceeded_bootstrap_agent_for_verification(
-        &self,
-        command: RunBootstrapAgentCommand,
-        request_bytes: u64,
-    ) -> Result<AgentRunInspection, TenderCommandError> {
-        self.run_bootstrap_agent_with_deterministic_provider(
-            command,
-            DeterministicProviderOutcome::RequestBudgetExceeded(request_bytes),
         )
         .await
     }
@@ -2662,6 +2623,26 @@ impl QuantixHost {
         Ok(page)
     }
 
+    pub fn inspect_tender_record(
+        &self,
+        command: InspectTenderRecordCommand,
+    ) -> Result<TenderRecordInspection, TenderCommandError> {
+        require_setup(self)?;
+        command
+            .validate()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::InvalidCommand))?;
+        let tender_id = TenderId::parse(&command.tender_id)?;
+        if !valid_identifier(&command.record_id) {
+            return Err(TenderCommandError::new(TenderErrorCode::InvalidCommand));
+        }
+        let store = self.tender_store(&tender_id)?;
+        let record = store
+            .lock()
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?
+            .inspect_tender_record_version(&command.record_id, command.version)?;
+        Ok(record)
+    }
+
     pub fn create_tender_engineer_entry(
         &self,
         command: CreateTenderEngineerEntryCommand,
@@ -3121,7 +3102,6 @@ impl QuantixHost {
         &self,
         cancellation: CancellationToken,
     ) -> CodexReadiness {
-        #[cfg(feature = "runtime-fixture")]
         match self.try_inspect_codex_subscription(cancellation).await {
             Ok(()) => CodexReadiness::Ready,
             Err(failure) => {
@@ -3144,22 +3124,8 @@ impl QuantixHost {
                 }
             }
         }
-        #[cfg(not(feature = "runtime-fixture"))]
-        match self.try_inspect_chatgpt_subscription(cancellation).await {
-            Ok(()) => CodexReadiness::Ready,
-            Err(failure) => match failure.category {
-                ProviderFailureCategory::AuthenticationRequired => {
-                    CodexReadiness::AuthenticationRequired
-                }
-                ProviderFailureCategory::SubscriptionRequired => {
-                    CodexReadiness::SubscriptionRequired
-                }
-                _ => CodexReadiness::Unavailable,
-            },
-        }
     }
 
-    #[cfg(feature = "runtime-fixture")]
     pub(crate) async fn quiesce_agent_provider_for_update(&self) -> bool {
         let provider = self.agent_provider().lock().await.take();
         match provider {
@@ -3168,7 +3134,45 @@ impl QuantixHost {
         }
     }
 
-    #[cfg(feature = "runtime-fixture")]
+    pub(crate) async fn ensure_codex_provider(
+        &self,
+        cancellation: CancellationToken,
+    ) -> Result<AgentProvider, ProviderFailure> {
+        let mut provider_slot = self.agent_provider().lock().await;
+        if let Some(provider) = provider_slot.as_ref() {
+            if provider.refresh_readiness().await.is_ok() {
+                return Ok(provider.clone());
+            }
+        } else {
+            let provider = AgentProvider::codex_readiness(
+                self.process_supervisor(),
+                self.runtime_layout()
+                    .codex_executable(self.application_home()),
+                self.application_home(),
+                cancellation.clone(),
+            )
+            .await?;
+            *provider_slot = Some(provider.clone());
+            return Ok(provider);
+        }
+        drop(provider_slot);
+        let stale = self.agent_provider().lock().await.take();
+        if let Some(stale) = stale {
+            let _ = stale.shutdown().await;
+        }
+        let provider = AgentProvider::codex_readiness(
+            self.process_supervisor(),
+            self.runtime_layout()
+                .codex_executable(self.application_home()),
+            self.application_home(),
+            cancellation.clone(),
+        )
+        .await?;
+        let mut provider_slot = self.agent_provider().lock().await;
+        *provider_slot = Some(provider.clone());
+        Ok(provider)
+    }
+
     async fn try_inspect_codex_subscription(
         &self,
         cancellation: CancellationToken,
@@ -3181,7 +3185,8 @@ impl QuantixHost {
         if provider_slot.is_none() {
             let provider = AgentProvider::codex_readiness(
                 self.process_supervisor(),
-                self.runtime_layout().codex_executable(),
+                self.runtime_layout()
+                    .codex_executable(self.application_home()),
                 self.application_home(),
                 cancellation.clone(),
             )
@@ -3221,26 +3226,8 @@ impl QuantixHost {
             .map_err(|_| process_failure(false))?;
         provider_connection_readiness(&connection)
     }
-
-    #[cfg(not(feature = "runtime-fixture"))]
-    async fn try_inspect_chatgpt_subscription(
-        &self,
-        cancellation: CancellationToken,
-    ) -> Result<(), ProviderFailure> {
-        let home = self.application_home().to_path_buf();
-        let readiness = tokio::task::spawn_blocking(move || {
-            project_chatgpt_connection_readiness(&home, PRODUCTION_ISSUER, epoch_milliseconds())
-        });
-        tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => return Err(readiness_interruption_failure()),
-            readiness = readiness => readiness.map_err(|_| process_failure(false))??,
-        };
-        Ok(())
-    }
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn provider_connection_readiness(
     connection: &ProviderConnectionView,
 ) -> Result<(), ProviderFailure> {
@@ -3290,7 +3277,6 @@ async fn execute_provider_turn_from(
         Ok(duration) if !duration.is_zero() => duration,
         _ => return failed_execution(permission_failure(), started),
     };
-    #[cfg(feature = "runtime-fixture")]
     let provider = if prepared.provider_selection.provider == AiProviderKind::Codex {
         let mut provider_slot = host.agent_provider().lock().await;
         let provider = match provider_slot.take() {
@@ -3312,7 +3298,8 @@ async fn execute_provider_turn_from(
                     );
                     match AgentProvider::codex_readiness(
                         host.process_supervisor(),
-                        host.runtime_layout().codex_executable(),
+                        host.runtime_layout()
+                            .codex_executable(host.application_home()),
                         host.application_home(),
                         cancellation.clone(),
                     )
@@ -3350,7 +3337,8 @@ async fn execute_provider_turn_from(
             },
             None => match AgentProvider::codex_readiness(
                 host.process_supervisor(),
-                host.runtime_layout().codex_executable(),
+                host.runtime_layout()
+                    .codex_executable(host.application_home()),
                 host.application_home(),
                 cancellation.clone(),
             )
@@ -3366,7 +3354,6 @@ async fn execute_provider_turn_from(
     } else {
         None
     };
-    #[cfg(feature = "runtime-fixture")]
     if let Some(provider) = provider.as_ref() {
         if let Err(failure) = provider_connection_readiness(&provider.connection_snapshot()) {
             return failed_execution(failure, started);
@@ -3384,15 +3371,12 @@ async fn execute_provider_turn_from(
     let event_store = Arc::clone(store);
     let event_host = host.clone();
     let denial_store = Arc::clone(store);
-    #[cfg(feature = "runtime-fixture")]
     let tool_store = Arc::clone(store);
     let requested_run_id = prepared.run_id.clone();
     let run_id = prepared.run_id.clone();
     let event_run_id = prepared.run_id.clone();
     let denial_run_id = prepared.run_id.clone();
-    #[cfg(feature = "runtime-fixture")]
     let tool_run_id = prepared.run_id.clone();
-    #[cfg(feature = "runtime-fixture")]
     let tool_prepared = prepared.clone();
     let callbacks = RunCallbacks {
         on_thread_archived: Box::new(move |thread_ref| {
@@ -3441,7 +3425,6 @@ async fn execute_provider_turn_from(
                 .checkpoint_agent_control_denial(&denial_run_id, event)
                 .map_err(|_| outcome_unknown())
         }),
-        #[cfg(feature = "runtime-fixture")]
         on_tool_call: Box::new(move |correlation_id, tool_name, arguments| {
             if !typed_tool_is_known(tool_name) {
                 return Ok(None);
@@ -3493,36 +3476,16 @@ async fn execute_provider_turn_from(
     }
     let mut execution = match prepared.provider_selection.provider {
         AiProviderKind::Codex => {
-            #[cfg(feature = "runtime-fixture")]
-            {
-                provider
-                    .as_ref()
-                    .expect("Codex provider initialized above")
-                    .run_turn(prepared.clone(), operation_limit, cancellation, callbacks)
-                    .await
-            }
-            #[cfg(not(feature = "runtime-fixture"))]
-            {
-                chatgpt_provider_turn(
-                    host,
-                    store,
-                    prepared.clone(),
-                    cancellation,
-                    callbacks,
-                    ProviderTurnTiming {
-                        operation_limit,
-                        started,
-                    },
-                    None,
-                )
+            provider
+                .as_ref()
+                .expect("Codex provider initialized above")
+                .run_turn(prepared.clone(), operation_limit, cancellation, callbacks)
                 .await
-            }
         }
     };
     host.observe_provider_usage(&execution.usage);
     execution.usage.elapsed_milliseconds =
         Some(started.elapsed().as_millis().try_into().unwrap_or(u64::MAX));
-    #[cfg(feature = "runtime-fixture")]
     if let Some(provider) = provider.filter(AgentProvider::is_closed) {
         let mut provider_slot = host.agent_provider().lock().await;
         let removed = provider_slot
@@ -3556,7 +3519,9 @@ async fn pause_repair_before_provider_turn(host: &QuantixHost, prepared: &Prepar
     if prepared.task.repair_feedback.is_none() {
         return;
     }
-    let executable = host.runtime_layout().codex_executable();
+    let executable = host
+        .runtime_layout()
+        .codex_executable(host.application_home());
     let pause = executable.with_extension("repair-before-turn-pause");
     if !pause.is_file() {
         return;
@@ -3653,15 +3618,9 @@ fn record_provider_turn_diagnostic(
 
 fn provider_protocol_size_bytes(execution: &ProviderExecution) -> Option<u64> {
     execution
-        .failure
+        .candidate_payload_json
         .as_ref()
-        .and_then(|failure| failure.request_body_bytes)
-        .or_else(|| {
-            execution
-                .candidate_payload_json
-                .as_ref()
-                .map(|payload| u64::try_from(payload.len()).unwrap_or(u64::MAX))
-        })
+        .map(|payload| u64::try_from(payload.len()).unwrap_or(u64::MAX))
 }
 
 fn record_provider_turn_started(host: &QuantixHost, tender_id: &str, prepared: &PreparedAgentRun) {
@@ -3703,112 +3662,12 @@ fn failed_execution(failure: ProviderFailure, started: Instant) -> ProviderExecu
     }
 }
 
-#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
-fn chatgpt_failure_execution(
-    thread_ref: Option<String>,
-    turn_ref: Option<String>,
-    failure: ProviderFailure,
-    started: Instant,
-) -> ProviderExecution {
-    let state = match failure.category {
-        ProviderFailureCategory::OutcomeUnknown => AgentRunState::Indeterminate,
-        ProviderFailureCategory::Interrupted => AgentRunState::Interrupted,
-        _ => AgentRunState::Failed,
-    };
-    ProviderExecution {
-        state,
-        transport_disposition: if failure.category == ProviderFailureCategory::RequestBudgetExceeded
-        {
-            ProviderTransportDisposition::LocalRejected
-        } else {
-            match state {
-                AgentRunState::Interrupted => ProviderTransportDisposition::Interrupted,
-                AgentRunState::Indeterminate => ProviderTransportDisposition::Indeterminate,
-                AgentRunState::Failed => ProviderTransportDisposition::Failed,
-                AgentRunState::Completed | AgentRunState::Running => {
-                    ProviderTransportDisposition::Failed
-                }
-            }
-        },
-        candidate_disposition: CandidateDisposition::NotEvaluated,
-        provider_thread_ref: thread_ref.clone(),
-        provider_turn_ref: turn_ref.clone(),
-        events: Vec::new(),
-        usage: ProviderUsage {
-            elapsed_milliseconds: Some(
-                started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
-            ),
-            ..ProviderUsage::default()
-        },
-        failure: Some(failure),
-        candidate_payload_json: None,
-    }
-}
-
-#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
-fn epoch_milliseconds() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis() as u64)
-}
-
-#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
-fn merge_usage_snapshot(usage: &mut ProviderUsage, snapshot: &UsageSnapshot) {
-    usage.input_tokens = Some(usage.input_tokens.unwrap_or(0) + snapshot.input_tokens);
-    usage.output_tokens = Some(usage.output_tokens.unwrap_or(0) + snapshot.output_tokens);
-    usage.total_tokens = Some(usage.total_tokens.unwrap_or(0) + snapshot.total_tokens);
-    usage.cached_input_tokens =
-        Some(usage.cached_input_tokens.unwrap_or(0) + snapshot.cached_input_tokens.unwrap_or(0));
-    if snapshot.reasoning_output_tokens.is_some() {
-        usage.reasoning_output_tokens = Some(
-            usage.reasoning_output_tokens.unwrap_or(0)
-                + snapshot.reasoning_output_tokens.unwrap_or(0),
-        );
-    }
-}
-
-#[derive(Default)]
-struct ChatGptResponseLifecycle {
-    accepted_ref: Option<String>,
-    active_response_ref: Option<String>,
-}
-
-impl ChatGptResponseLifecycle {
-    fn created(
-        &mut self,
-        response_id: String,
-        on_accepted: &mut Option<Box<TurnAcceptedCallback>>,
-    ) -> Result<(), ProviderFailure> {
-        if self.active_response_ref.is_some() {
-            return Err(protocol_failure(true));
-        }
-        if self.accepted_ref.is_none() {
-            let Some(callback) = on_accepted.take() else {
-                return Err(protocol_failure(true));
-            };
-            callback(&response_id)?;
-            self.accepted_ref = Some(response_id.clone());
-        }
-        self.active_response_ref = Some(response_id);
-        Ok(())
-    }
-
-    fn completed(&mut self, response_id: &str) -> Result<(), ProviderFailure> {
-        if self.active_response_ref.as_deref() != Some(response_id) {
-            return Err(protocol_failure(true));
-        }
-        self.active_response_ref = None;
-        Ok(())
-    }
-}
-
-#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
 fn chatgpt_reasoning_effort(
     selection: &ProviderReasoningSelection,
 ) -> Result<Option<ReasoningEffort>, ProviderFailure> {
     let effort = match selection {
         ProviderReasoningSelection::ProviderDefault => return Ok(None),
-        ProviderReasoningSelection::CodexEffort(value) => value.as_str(),
+        ProviderReasoningSelection::Effort(value) => value.as_str(),
     };
     let effort = match effort {
         "none" => Some(ReasoningEffort::None),
@@ -3821,42 +3680,8 @@ fn chatgpt_reasoning_effort(
     Ok(effort)
 }
 
-pub(crate) fn build_direct_backend_request(
-    prepared: &PreparedAgentRun,
-    instructions: String,
-    tools: Vec<Value>,
-    output_schema: Value,
-) -> Result<BackendRequest, ProviderFailure> {
-    Ok(BackendRequest {
-        model: prepared.provider_selection.model_id.clone(),
-        instructions,
-        input_items: vec![json!({
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": prepared.task.objective.clone()}],
-        })],
-        tools,
-        output_schema,
-        store: false,
-        include_reasoning: true,
-        reasoning_effort: chatgpt_reasoning_effort(&prepared.provider_selection.reasoning)?,
-        session_id: String::new(),
-        expected_initial_body_bytes: prepared.expected_initial_request_body_bytes,
-    })
-}
-
-#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
-fn with_production_token_client<T>(
-    operation: impl FnOnce(&TokenClient) -> Result<T, ProviderFailure>,
-) -> Result<T, ProviderFailure> {
-    let token_client = TokenClient::new(PRODUCTION_ISSUER).map_err(|_| process_failure(false))?;
-    operation(&token_client)
-}
-
 #[cfg(test)]
 mod direct_backend_mapping_tests {
-    use std::sync::{Arc, Mutex};
-
     use super::*;
 
     #[test]
@@ -3875,10 +3700,8 @@ mod direct_backend_mapping_tests {
         );
         for (selection, expected) in cases {
             assert_eq!(
-                chatgpt_reasoning_effort(&ProviderReasoningSelection::CodexEffort(
-                    selection.to_owned()
-                ))
-                .unwrap(),
+                chatgpt_reasoning_effort(&ProviderReasoningSelection::Effort(selection.to_owned()))
+                    .unwrap(),
                 Some(expected)
             );
         }
@@ -3887,400 +3710,11 @@ mod direct_backend_mapping_tests {
     #[test]
     fn rejects_unknown_chatgpt_reasoning_selections() {
         assert!(
-            chatgpt_reasoning_effort(&ProviderReasoningSelection::CodexEffort(
+            chatgpt_reasoning_effort(&ProviderReasoningSelection::Effort(
                 "unsupported".to_owned()
             ))
             .is_err()
         );
-    }
-
-    #[test]
-    fn production_token_client_is_scoped_to_blocking_refresh_work() {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .expect("multi-thread runtime");
-
-        runtime.block_on(async {
-            tokio::task::block_in_place(|| {
-                with_production_token_client(|_| Ok::<_, ProviderFailure>(()))
-            })
-            .expect("the production token client must be created and dropped while blocking");
-            tokio::task::yield_now().await;
-        });
-    }
-
-    #[test]
-    fn production_sink_accepts_sequential_responses_for_tool_roundtrip() {
-        let persisted = Arc::new(Mutex::new(Vec::new()));
-        let persisted_by_callback = Arc::clone(&persisted);
-        let mut on_accepted: Option<Box<TurnAcceptedCallback>> =
-            Some(Box::new(move |response_id| {
-                persisted_by_callback
-                    .lock()
-                    .expect("accepted refs lock")
-                    .push(response_id.to_owned());
-                Ok(())
-            }));
-        let mut lifecycle = ChatGptResponseLifecycle::default();
-
-        lifecycle
-            .created("resp_tool_1".to_owned(), &mut on_accepted)
-            .expect("accept initial tool response");
-        lifecycle
-            .completed("resp_tool_1")
-            .expect("complete initial tool response");
-        lifecycle
-            .created("resp_tool_2".to_owned(), &mut on_accepted)
-            .expect("accept tool-output follow-up response");
-        lifecycle
-            .completed("resp_tool_2")
-            .expect("complete tool-output follow-up response");
-
-        assert_eq!(
-            *persisted.lock().expect("accepted refs lock"),
-            vec!["resp_tool_1"],
-            "the first response remains the durable Provider Turn identity"
-        );
-        assert_eq!(lifecycle.accepted_ref.as_deref(), Some("resp_tool_1"));
-        assert_eq!(lifecycle.active_response_ref, None);
-    }
-
-    #[test]
-    fn production_sink_rejects_mismatched_follow_up_completion() {
-        let mut on_accepted: Option<Box<TurnAcceptedCallback>> = Some(Box::new(|_| Ok(())));
-        let mut lifecycle = ChatGptResponseLifecycle::default();
-        lifecycle
-            .created("resp_tool_1".to_owned(), &mut on_accepted)
-            .expect("accept initial response");
-        lifecycle
-            .completed("resp_tool_1")
-            .expect("complete initial response");
-        lifecycle
-            .created("resp_tool_2".to_owned(), &mut on_accepted)
-            .expect("accept follow-up response");
-
-        let failure = lifecycle
-            .completed("resp_foreign")
-            .expect_err("a different response cannot complete the follow-up");
-        assert_eq!(failure.category, ProviderFailureCategory::OutcomeUnknown);
-        assert!(!failure.retry_safe);
-        assert_eq!(lifecycle.accepted_ref.as_deref(), Some("resp_tool_1"));
-        assert_eq!(
-            lifecycle.active_response_ref.as_deref(),
-            Some("resp_tool_2"),
-            "a foreign completion must not consume the active response"
-        );
-    }
-}
-
-/// Drives one Codex-provider run against the Quantix-owned ChatGPT backend.
-/// Connection readiness comes from the stored token connection (refreshing an
-/// expired one through the issuer), and Typed Tool calls are authorized by the
-/// run's Permission Grant exactly like the previous control-request path.
-///
-/// Request mapping from the prepared run: the provider instruction bundle
-/// becomes `instructions`, Typed Tool specs become `tools`, and the Tender
-/// Task objective becomes the single user input item. Unlike the Codex
-/// app-server path, Data View payloads are not inlined into the request text
-/// (they remain materialized workspace inputs referenced by the bundle). The
-/// task output contract is sent as the Responses structured-output format and
-/// validated again locally, while the run id doubles as the session identity.
-#[cfg_attr(feature = "runtime-fixture", allow(dead_code))]
-async fn chatgpt_provider_turn(
-    host: &QuantixHost,
-    store: &Arc<Mutex<TenderStore>>,
-    prepared: PreparedAgentRun,
-    cancellation: CancellationToken,
-    callbacks: RunCallbacks,
-    timing: ProviderTurnTiming,
-    connection_override: Option<(crate::chatgpt_oauth::StoredConnection, String)>,
-) -> ProviderExecution {
-    let ProviderTurnTiming {
-        operation_limit,
-        started,
-    } = timing;
-    let RunCallbacks {
-        on_thread_archived,
-        on_thread_established,
-        on_requested,
-        on_accepted,
-        mut on_event,
-        mut on_denied,
-        ..
-    } = callbacks;
-    let mut on_accepted = Some(on_accepted);
-    let (connection, backend_endpoint) = match connection_override {
-        Some(override_values) => override_values,
-        None => {
-            let home = host.application_home().to_path_buf();
-            let approved_selection = prepared.provider_selection.clone();
-            let readiness = tokio::task::spawn_blocking(move || {
-                project_approved_chatgpt_connection(
-                    &home,
-                    PRODUCTION_ISSUER,
-                    epoch_milliseconds(),
-                    &approved_selection,
-                )
-            })
-            .await;
-            let connection = match readiness {
-                Ok(Ok(connection)) => connection,
-                Ok(Err(failure)) => return failed_execution(failure, started),
-                Err(_) => return failed_execution(process_failure(false), started),
-            };
-            (connection, BACKEND_URL.to_owned())
-        }
-    };
-    if let Some(archived) = prepared.provider_thread_to_archive.as_deref() {
-        if let Err(failure) = on_thread_archived(archived) {
-            return failed_execution(failure, started);
-        }
-    }
-    let resumed = prepared.provider_thread_ref.is_some();
-    let thread_ref = prepared
-        .provider_thread_ref
-        .clone()
-        .unwrap_or_else(|| format!("chatgpt:{}", prepared.run_id));
-    if let Err(failure) = on_thread_established(&thread_ref, resumed) {
-        return failed_execution(failure, started);
-    }
-    if let Err(failure) = on_requested() {
-        return chatgpt_failure_execution(Some(thread_ref), None, failure, started);
-    }
-    let instruction = match provider_instruction_bundle(&prepared) {
-        Ok(instruction) => instruction,
-        Err(failure) => return chatgpt_failure_execution(Some(thread_ref), None, failure, started),
-    };
-    let tools = match direct_tool_specs(&prepared.permission_grant) {
-        Ok(tools) => tools,
-        Err(failure) => return chatgpt_failure_execution(Some(thread_ref), None, failure, started),
-    };
-    let output_schema: Value = match serde_json::from_str(&prepared.task.output_contract_json) {
-        Ok(schema) => schema,
-        Err(_) => {
-            return chatgpt_failure_execution(
-                Some(thread_ref),
-                None,
-                protocol_failure(false),
-                started,
-            )
-        }
-    };
-    let backend = match ReqwestBackend::new(&backend_endpoint) {
-        Ok(backend) => backend,
-        Err(_) => {
-            return chatgpt_failure_execution(
-                Some(thread_ref),
-                None,
-                process_failure(false),
-                started,
-            )
-        }
-    };
-    let request =
-        match build_direct_backend_request(&prepared, instruction, tools, output_schema.clone()) {
-            Ok(request) => request,
-            Err(failure) => {
-                return chatgpt_failure_execution(Some(thread_ref), None, failure, started)
-            }
-        };
-
-    let deadline = started.checked_add(operation_limit).unwrap_or(started);
-    let is_cancelled = || cancellation.is_cancelled() || Instant::now() >= deadline;
-
-    let tool_counter = Arc::new(AtomicU64::new(0));
-    let authorize_store = Arc::clone(store);
-    let authorize_prepared = prepared.clone();
-    let authorize_run_id = prepared.run_id.clone();
-    let authorize_tool = move |tool_name: &str, arguments: &str| -> Result<Value, ToolRejection> {
-        let arguments_value: Value = serde_json::from_str(arguments)
-            .map_err(|_| ToolRejection::NotPermitted("malformed_tool_arguments"))?;
-        if !typed_tool_is_known(tool_name) {
-            return Err(ToolRejection::NotPermitted(
-                PermissionDenialReason::ToolNotGranted.as_str(),
-            ));
-        }
-        let valid = typed_tool_arguments_are_valid(tool_name, &arguments_value)
-            .map_err(|_| ToolRejection::Failed("tool_validation_failed"))?;
-        if !valid {
-            return Err(ToolRejection::NotPermitted(
-                PermissionDenialReason::ToolNotGranted.as_str(),
-            ));
-        }
-        let correlation_id = format!(
-            "chatgpt-tool-{}",
-            tool_counter.fetch_add(1, Ordering::SeqCst)
-        );
-        let authorized = authorize_store
-            .lock()
-            .map_err(|_| ToolRejection::Failed("store_unavailable"))?
-            .authorize_agent_typed_tool(&authorize_run_id, &correlation_id, tool_name)
-            .map_err(|_| ToolRejection::Failed("store_unavailable"))?;
-        if !authorized {
-            return Err(ToolRejection::NotPermitted(
-                PermissionDenialReason::ToolNotGranted.as_str(),
-            ));
-        }
-        let record = |succeeded: bool| -> Result<(), ToolRejection> {
-            authorize_store
-                .lock()
-                .map_err(|_| ToolRejection::Failed("store_unavailable"))?
-                .record_agent_typed_tool_execution(
-                    &authorize_run_id,
-                    &correlation_id,
-                    tool_name,
-                    succeeded,
-                )
-                .map_err(|_| ToolRejection::Failed("audit_unavailable"))
-        };
-        match execute_typed_tool(&authorize_prepared, tool_name, &arguments_value) {
-            Ok(output) => {
-                let payload: Value = serde_json::from_str(&output).unwrap_or(Value::String(output));
-                record(true)?;
-                Ok(payload)
-            }
-            Err(_) => {
-                record(false)?;
-                Err(ToolRejection::Failed("tool_execution_failed"))
-            }
-        }
-    };
-
-    let mut response_lifecycle = ChatGptResponseLifecycle::default();
-    let mut streamed_usage = ProviderUsage::default();
-    let mut final_text: Option<String> = None;
-    let mut sink = |event: StreamEvent| -> Result<(), ProviderFailure> {
-        match event {
-            StreamEvent::Created { response_id } => {
-                response_lifecycle.created(response_id, &mut on_accepted)
-            }
-            StreamEvent::Completed { response_id, usage } => {
-                response_lifecycle.completed(&response_id)?;
-                merge_usage_snapshot(&mut streamed_usage, &usage);
-                let observed = PendingProviderEvent::new(
-                    ProviderEventKind::UsageObserved,
-                    "ChatGPT usage observed",
-                    None,
-                );
-                on_event(&observed, &streamed_usage)
-            }
-            StreamEvent::ItemDone(frame) => {
-                if frame.pointer("/item/type").and_then(Value::as_str) != Some("message") {
-                    return Ok(());
-                }
-                let mut text = String::new();
-                if let Some(parts) = frame.pointer("/item/content").and_then(Value::as_array) {
-                    for part in parts {
-                        if part.get("type").and_then(Value::as_str) == Some("output_text") {
-                            if let Some(chunk) = part.get("text").and_then(Value::as_str) {
-                                text.push_str(chunk);
-                            }
-                        }
-                    }
-                }
-                final_text = Some(text);
-                Ok(())
-            }
-            StreamEvent::ItemAdded(_)
-            | StreamEvent::TextDelta(_)
-            | StreamEvent::FunctionCallDelta { .. }
-            | StreamEvent::FunctionCallDone { .. }
-            | StreamEvent::Errored(_) => Ok(()),
-        }
-    };
-    let mut denied = |call_id: &str,
-                      tool_name: &str,
-                      raw_arguments: &str,
-                      reason: &str|
-     -> Result<(), ProviderFailure> {
-        let mut fingerprint = Sha256::new();
-        fingerprint.update(tool_name.as_bytes());
-        fingerprint.update([0]);
-        fingerprint.update(raw_arguments.as_bytes());
-        let request_fingerprint = fingerprint
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        let denial_reason =
-            PermissionDenialReason::parse(reason).unwrap_or(PermissionDenialReason::DefaultDeny);
-        let event = PendingProviderEvent::new(
-            ProviderEventKind::ControlRequestDenied,
-            "ChatGPT Typed Tool call denied by the Host",
-            Some(tool_name),
-        )
-        .with_control_denial(call_id.to_owned(), request_fingerprint, denial_reason);
-        on_denied(&event)
-    };
-    let refresh_auth = |expected_account_id: &str| {
-        with_production_token_client(|token_client| {
-            refresh_approved_chatgpt_connection(
-                host.application_home(),
-                token_client,
-                epoch_milliseconds(),
-                expected_account_id,
-                &prepared.provider_selection,
-            )
-        })
-    };
-
-    let turn_context = TurnContext {
-        backend: &backend,
-        auth: &connection,
-        refresh_auth: &refresh_auth,
-        request,
-        session_id: prepared.run_id.clone(),
-        authorize_tool: &authorize_tool,
-        is_cancelled: &is_cancelled,
-        on_event: &mut sink,
-        on_tool_denied: &mut denied,
-    };
-    let outcome = execute_chatgpt_backend_turn(turn_context).await;
-    match outcome {
-        Ok(result) => {
-            let candidate = validate_candidate(
-                final_text.as_deref(),
-                &output_schema,
-                prepared
-                    .task
-                    .resource_budget
-                    .output_bytes
-                    .min(PROVIDER_OUTPUT_LIMIT as u32),
-            );
-            match candidate {
-                Ok(candidate) => ProviderExecution {
-                    state: AgentRunState::Completed,
-                    transport_disposition: ProviderTransportDisposition::Completed,
-                    candidate_disposition: CandidateDisposition::NotEvaluated,
-                    provider_thread_ref: Some(thread_ref),
-                    provider_turn_ref: response_lifecycle.accepted_ref,
-                    events: Vec::new(),
-                    usage: result.usage,
-                    failure: None,
-                    candidate_payload_json: Some(candidate),
-                },
-                Err(failure) => {
-                    let mut execution = chatgpt_failure_execution(
-                        Some(thread_ref),
-                        response_lifecycle.accepted_ref,
-                        failure,
-                        started,
-                    );
-                    execution.transport_disposition = ProviderTransportDisposition::Completed;
-                    execution.candidate_disposition =
-                        CandidateDisposition::rejected(vec!["schema_rejection".into()]);
-                    execution
-                }
-            }
-        }
-        Err(failure) => chatgpt_failure_execution(
-            Some(thread_ref),
-            response_lifecycle.accepted_ref,
-            failure,
-            started,
-        ),
     }
 }
 
@@ -4316,15 +3750,33 @@ fn deterministic_provider_execution(
                 .expect("static deterministic provider result is canonical JSON"),
             ),
         },
-        DeterministicProviderOutcome::Failed => failed_execution(
-            ProviderFailure::new(
-                ProviderFailureCategory::ProcessFailed,
-                true,
-                "Retry only after the deterministic provider failure is reviewed.",
-                Some("The deterministic adapter injected an invalid provider outcome."),
+        DeterministicProviderOutcome::Failed => ProviderExecution {
+            state: AgentRunState::Failed,
+            transport_disposition: ProviderTransportDisposition::Completed,
+            candidate_disposition: CandidateDisposition::rejected(vec!["schema_rejection".into()]),
+            provider_thread_ref: Some(
+                prepared
+                    .provider_thread_ref
+                    .clone()
+                    .unwrap_or_else(|| format!("acceptance-thread-{}", prepared.run_id)),
             ),
-            Instant::now(),
-        ),
+            provider_turn_ref: Some(format!("acceptance-turn-{}", prepared.run_id)),
+            events: Vec::new(),
+            usage: ProviderUsage {
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                elapsed_milliseconds: Some(0),
+                ..ProviderUsage::default()
+            },
+            failure: Some(ProviderFailure::new(
+                ProviderFailureCategory::OutputInvalid,
+                true,
+                "Create a linked retry after reviewing the output-contract failure.",
+                Some("The deterministic adapter injected an invalid provider outcome."),
+            )),
+            candidate_payload_json: None,
+        },
+        #[cfg(any(test, feature = "runtime-fixture"))]
         DeterministicProviderOutcome::RateLimited => failed_execution(
             ProviderFailure::new(
                 ProviderFailureCategory::RateLimited,
@@ -4333,10 +3785,6 @@ fn deterministic_provider_execution(
                 Some("The deterministic adapter injected a rate-limited provider outcome."),
             )
             .with_retry_after_milliseconds(Some(60_000)),
-            Instant::now(),
-        ),
-        DeterministicProviderOutcome::RequestBudgetExceeded(request_bytes) => failed_execution(
-            request_budget_failure(request_bytes, RequestBudgetFailureKind::HardCapExceeded),
             Instant::now(),
         ),
         DeterministicProviderOutcome::Interrupted => interrupted_execution(Instant::now()),
@@ -4354,7 +3802,6 @@ fn deterministic_provider_selection() -> AiExecutionSelection {
     }
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn indeterminate_execution(
     thread_ref: &str,
     turn_ref: Option<String>,
@@ -4452,21 +3899,6 @@ fn permission_failure() -> ProviderFailure {
     )
 }
 
-pub(crate) fn request_budget_failure(
-    request_bytes: u64,
-    kind: RequestBudgetFailureKind,
-) -> ProviderFailure {
-    ProviderFailure::new(
-        ProviderFailureCategory::RequestBudgetExceeded,
-        false,
-        "Reduce the Tender evidence included in this request before retrying.",
-        Some("The prepared request exceeded the local provider request budget."),
-    )
-    .with_request_body_bytes(request_bytes)
-    .with_request_budget_failure_kind(kind)
-}
-
-#[cfg(feature = "runtime-fixture")]
 fn authentication_failure() -> ProviderFailure {
     ProviderFailure::new(
         ProviderFailureCategory::AuthenticationRequired,
@@ -4476,7 +3908,6 @@ fn authentication_failure() -> ProviderFailure {
     )
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn subscription_failure() -> ProviderFailure {
     ProviderFailure::new(
         ProviderFailureCategory::SubscriptionRequired,
@@ -4486,7 +3917,6 @@ fn subscription_failure() -> ProviderFailure {
     )
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn turn_acceptance_unknown() -> ProviderFailure {
     ProviderFailure::new(
         ProviderFailureCategory::OutcomeUnknown,
@@ -4507,7 +3937,6 @@ pub enum CodexReadiness {
     Unavailable,
 }
 
-#[cfg(feature = "runtime-fixture")]
 pub(crate) fn chatgpt_subscription_is_supported(
     account_type: Option<&str>,
     plan_type: Option<&str>,
@@ -4516,7 +3945,6 @@ pub(crate) fn chatgpt_subscription_is_supported(
         && plan_type.is_some_and(|plan| SUPPORTED_CHATGPT_PLANS.contains(&plan))
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn codex_user_agent_is_supported(user_agent: &str) -> bool {
     let server_identity = user_agent
         .split_once(" (")
@@ -4526,7 +3954,6 @@ fn codex_user_agent_is_supported(user_agent: &str) -> bool {
         .is_some_and(|(product, version)| !product.is_empty() && version == CODEX_VERSION)
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn controlled_codex_environment(
     application_home: &Path,
 ) -> io::Result<(PathBuf, Vec<(OsString, OsString)>)> {
@@ -4542,11 +3969,11 @@ fn controlled_codex_environment(
     let process_directory = engineer_home.join(".quantix-provider");
     let staging = process_directory.join("staging");
     fs::create_dir_all(&staging)?;
-    let codex_home = std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| engineer_home.join(".codex"));
     let mut environment = vec![
-        (OsString::from("CODEX_HOME"), codex_home.into_os_string()),
+        (
+            OsString::from("CODEX_HOME"),
+            application_home.join("codex").into_os_string(),
+        ),
         (OsString::from("HOME"), engineer_home.as_os_str().to_owned()),
         (
             OsString::from("USERPROFILE"),
@@ -4564,13 +3991,11 @@ fn controlled_codex_environment(
     Ok((process_directory, environment))
 }
 
-#[cfg(feature = "runtime-fixture")]
 pub(super) struct CodexProviderProcess {
     conversation: Option<SupervisedConversation>,
     connection: ProviderConnectionView,
 }
 
-#[cfg(feature = "runtime-fixture")]
 impl CodexProviderProcess {
     pub(super) async fn readiness(
         supervisor: &crate::process_supervisor::ProcessSupervisor,
@@ -4829,7 +4254,6 @@ impl CodexProviderProcess {
     }
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn codex_connection_without_catalog(
     status: ProviderConnectionStatus,
     account_label: Option<String>,
@@ -4850,7 +4274,6 @@ fn codex_connection_without_catalog(
     }
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn parse_codex_model(model: &Value) -> Option<ProviderModelOption> {
     if model.get("hidden").and_then(Value::as_bool) != Some(false) {
         return None;
@@ -4887,7 +4310,7 @@ fn parse_codex_model(model: &Value) -> Option<ProviderModelOption> {
                 return None;
             }
             Some(ProviderReasoningOption {
-                selection: ProviderReasoningSelection::CodexEffort(effort.to_owned()),
+                selection: ProviderReasoningSelection::Effort(effort.to_owned()),
                 label: effort.to_owned(),
                 description: description.to_owned(),
                 is_default: effort == default_effort,
@@ -4926,7 +4349,6 @@ fn parse_codex_model(model: &Value) -> Option<ProviderModelOption> {
     })
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn restricted_codex_arguments() -> Vec<OsString> {
     let mut arguments = vec![
         OsString::from("app-server"),
@@ -4963,7 +4385,6 @@ fn restricted_codex_arguments() -> Vec<OsString> {
     arguments
 }
 
-#[cfg(feature = "runtime-fixture")]
 fn stream_provider_events(
     execution: &mut ProviderExecution,
     on_event: &mut TurnEventCallback,
@@ -4989,215 +4410,6 @@ fn valid_identifier(value: &str) -> bool {
 mod tests {
     use super::*;
     use crate::tender_store::CreateTenderCommand;
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn direct_request_budget_mismatch_is_a_truthful_local_rejection() {
-        let root = tempfile::tempdir().expect("temporary direct request home");
-        let application_home = root.path().join(".quantix");
-        let resources = root.path().join("resources");
-        let host = QuantixHost::new(&application_home, &resources);
-        assert!(matches!(
-            crate::ensure_quantix_setup(&host).state,
-            crate::SetupState::Ready | crate::SetupState::Warning
-        ));
-        let tender = host
-            .create_tender(CreateTenderCommand {
-                name: "Direct request budget Tender".into(),
-            })
-            .expect("create Tender");
-        let tender_id = TenderId::parse(&tender.tender_id).expect("Tender id");
-        let _deep_session = host
-            .diagnostics()
-            .start_deep(tender_id.as_str())
-            .expect("start deep diagnostics");
-        let store = host.tender_store(&tender_id).expect("Tender Store");
-        let mut prepared = store
-            .lock()
-            .expect("Tender Store lock")
-            .prepare_bootstrap_agent_run(
-                &tender_id,
-                &deterministic_provider_selection(),
-                None,
-                false,
-            )
-            .expect("prepare Agent Run");
-        prepared.expected_initial_request_body_bytes = Some(1);
-
-        let thread_store = Arc::clone(&store);
-        let thread_prepared = prepared.clone();
-        let requested_store = Arc::clone(&store);
-        let requested_run_id = prepared.run_id.clone();
-        let accepted_store = Arc::clone(&store);
-        let accepted_run_id = prepared.run_id.clone();
-        let event_store = Arc::clone(&store);
-        let event_run_id = prepared.run_id.clone();
-        let callbacks = RunCallbacks {
-            on_thread_archived: Box::new(|_| Ok(())),
-            on_thread_established: Box::new(move |thread_ref, resumed| {
-                thread_store
-                    .lock()
-                    .map_err(|_| process_failure(false))?
-                    .checkpoint_agent_thread(&thread_prepared, thread_ref, resumed)
-                    .map_err(|_| process_failure(false))
-            }),
-            on_requested: Box::new(move || {
-                requested_store
-                    .lock()
-                    .map_err(|_| process_failure(false))?
-                    .checkpoint_agent_turn_requested(&requested_run_id)
-                    .map_err(|_| process_failure(false))
-            }),
-            on_accepted: Box::new(move |turn_ref| {
-                accepted_store
-                    .lock()
-                    .map_err(|_| outcome_unknown())?
-                    .checkpoint_agent_turn(&accepted_run_id, turn_ref)
-                    .map_err(|_| outcome_unknown())
-            }),
-            on_event: Box::new(move |event, usage| {
-                event_store
-                    .lock()
-                    .map_err(|_| outcome_unknown())?
-                    .checkpoint_agent_provider_event(&event_run_id, event, usage)
-                    .map_err(|_| outcome_unknown())
-            }),
-            on_denied: Box::new(|_| Ok(())),
-            #[cfg(feature = "runtime-fixture")]
-            on_tool_call: Box::new(|_, _, _| Ok(None)),
-        };
-        let connection = crate::chatgpt_oauth::StoredConnection {
-            access_token: "test-access".into(),
-            refresh_token: "test-refresh".into(),
-            id_token: "test-id".into(),
-            expires_at_ms: u64::MAX,
-            account_id: "test-account".into(),
-            plan_type: Some("plus".into()),
-            compute_residency: None,
-        };
-        let started = Instant::now();
-        record_provider_turn_started(&host, tender_id.as_str(), &prepared);
-        let execution = chatgpt_provider_turn(
-            &host,
-            &store,
-            prepared.clone(),
-            CancellationToken::new(),
-            callbacks,
-            ProviderTurnTiming {
-                operation_limit: Duration::from_secs(5),
-                started,
-            },
-            Some((connection, "http://127.0.0.1:9/never-called".into())),
-        )
-        .await;
-
-        assert_eq!(
-            execution.transport_disposition,
-            ProviderTransportDisposition::LocalRejected
-        );
-        assert_eq!(
-            execution
-                .failure
-                .as_ref()
-                .map(ProviderFailure::diagnostic_code),
-            Some("REQUEST_BUDGET_PARITY_MISMATCH".into())
-        );
-        let actual_request_bytes = execution
-            .failure
-            .as_ref()
-            .and_then(|failure| failure.request_body_bytes)
-            .expect("actual request byte count");
-        record_provider_turn_diagnostic(&host, tender_id.as_str(), &prepared, &execution, started);
-        store
-            .lock()
-            .expect("Tender Store lock")
-            .complete_agent_run(&tender_id, &prepared, execution)
-            .expect("complete local rejection");
-        let run = store
-            .lock()
-            .expect("Tender Store lock")
-            .inspect_agent_run(&prepared.run_id)
-            .expect("inspect Agent Run");
-        assert_eq!(
-            run.events
-                .iter()
-                .map(|event| event.kind)
-                .collect::<Vec<_>>(),
-            vec![
-                ProviderEventKind::RunStarted,
-                ProviderEventKind::ThreadEstablished,
-                ProviderEventKind::TurnRequested,
-                ProviderEventKind::Terminal,
-            ]
-        );
-        assert_eq!(
-            run.events.last().map(|event| event.summary.as_str()),
-            Some("Prepared request rejected by local request budget")
-        );
-        host.diagnostics()
-            .drain_for_test()
-            .expect("flush direct request diagnostics");
-        let facts = walkdir::WalkDir::new(
-            application_home
-                .join("logs")
-                .join("tenders")
-                .join(tender_id.as_str()),
-        )
-        .into_iter()
-        .map(|entry| entry.expect("diagnostic entry"))
-        .filter(|entry| entry.file_type().is_file())
-        .flat_map(|entry| {
-            std::fs::read_to_string(entry.path())
-                .expect("read diagnostics")
-                .lines()
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .map(|line| serde_json::from_str::<crate::DiagnosticEvent>(&line).expect("diagnostic fact"))
-        .filter(|fact| fact.correlation.run_id.as_deref() == Some(prepared.run_id.as_str()))
-        .collect::<Vec<_>>();
-        let rejection = facts
-            .iter()
-            .find(|fact| fact.event_name == "provider_request_rejected")
-            .expect("local rejection diagnostic");
-        assert_eq!(
-            rejection.error_code.as_deref(),
-            Some("REQUEST_BUDGET_PARITY_MISMATCH")
-        );
-        assert!(!facts
-            .iter()
-            .any(|fact| fact.event_name == "provider_turn_failed"));
-        assert!(!facts
-            .iter()
-            .any(|fact| fact.event_name == "provider_transport_completed"));
-        let deep = facts
-            .iter()
-            .find(|fact| fact.event_name == "provider_turn_protocol_boundary" && fact.deep)
-            .expect("deep request boundary diagnostic");
-        assert_eq!(deep.size_bytes, Some(actual_request_bytes));
-    }
-
-    #[test]
-    fn request_budget_diagnostics_record_only_the_exact_byte_count() {
-        let request_bytes = crate::agent_backend::DIRECT_PROVIDER_REQUEST_HARD_CAP_BYTES + 1;
-        let execution = failed_execution(
-            request_budget_failure(request_bytes, RequestBudgetFailureKind::HardCapExceeded),
-            Instant::now(),
-        );
-
-        assert_eq!(
-            provider_protocol_size_bytes(&execution),
-            Some(request_bytes)
-        );
-        let failure = execution.failure.expect("request budget failure");
-        assert!(!failure
-            .required_user_action
-            .contains(&request_bytes.to_string()));
-        assert!(!failure
-            .redacted_detail
-            .as_deref()
-            .unwrap_or_default()
-            .contains(&request_bytes.to_string()));
-    }
 
     #[tokio::test]
     async fn deterministic_provider_accepts_a_new_default_local_only_tender() {
@@ -5255,7 +4467,7 @@ mod tests {
         assert_eq!(failed.provider_selection, expected_selection);
         assert_eq!(
             failed.failure.as_ref().map(|failure| failure.category),
-            Some(ProviderFailureCategory::ProcessFailed)
+            Some(ProviderFailureCategory::OutputInvalid)
         );
         assert_eq!(
             failed
@@ -5263,11 +4475,16 @@ mod tests {
                 .iter()
                 .map(|event| event.kind)
                 .collect::<Vec<_>>(),
-            vec![ProviderEventKind::RunStarted, ProviderEventKind::Terminal]
+            vec![
+                ProviderEventKind::RunStarted,
+                ProviderEventKind::ThreadEstablished,
+                ProviderEventKind::CandidateRejected,
+                ProviderEventKind::Terminal
+            ]
         );
         assert_eq!(
             failed.events.last().map(|event| event.summary.as_str()),
-            Some("Provider transport failed")
+            Some("Agent Run rejected after candidate validation")
         );
 
         let interrupted = host

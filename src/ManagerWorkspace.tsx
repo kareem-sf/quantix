@@ -3,8 +3,10 @@ import {
   Bot,
   ChevronRight,
   CircleAlert,
+  DatabaseBackup,
   FileText,
   Folder,
+  Info,
   ListChecks,
   LoaderCircle,
   MessageSquare,
@@ -17,6 +19,7 @@ import {
   Send,
   Settings,
   ShieldAlert,
+  ShieldCheck,
   Trash2,
   Undo2,
   Users,
@@ -37,6 +40,7 @@ import type { ManagerWorkspaceProjection } from "./bindings/ManagerWorkspaceProj
 import type { ManagerWorkspaceTender } from "./bindings/ManagerWorkspaceTender";
 import type { ApplicationSettingsView } from "./bindings/ApplicationSettingsView";
 import type { DeletionReceipt } from "./bindings/DeletionReceipt";
+import type { StartupReconciliationReport } from "./bindings/StartupReconciliationReport";
 import type { TrashedTenderRecord } from "./bindings/TrashedTenderRecord";
 import type { GeneralApplicationPreferences } from "./bindings/GeneralApplicationPreferences";
 import type { RuntimePreparationProgress } from "./bindings/RuntimePreparationProgress";
@@ -50,11 +54,38 @@ import type { WorkspaceSearchProjection } from "./bindings/WorkspaceSearchProjec
 import type { WorkspaceSearchHit } from "./bindings/WorkspaceSearchHit";
 import type { WorkspaceMessageReference } from "./bindings/WorkspaceMessageReference";
 import type { AgentRunInspection } from "./bindings/AgentRunInspection";
+import type { AgentRunHistoryPage } from "./bindings/AgentRunHistoryPage";
+import type { AgentTaskInputReference } from "./bindings/AgentTaskInputReference";
+import type { DataViewManifest } from "./bindings/DataViewManifest";
+import type { ThreadExposureSet } from "./bindings/ThreadExposureSet";
 import type { WorkspaceTaskRow } from "./bindings/WorkspaceTaskRow";
+import type { WorkspaceTaskState } from "./bindings/WorkspaceTaskState";
+import type { ProductionArtifactVersion } from "./bindings/ProductionArtifactVersion";
+import type { ProductionReview } from "./bindings/ProductionReview";
+import type { ProductionReviewFinding } from "./bindings/ProductionReviewFinding";
+import type { ProductionTaskReviewInspection } from "./bindings/ProductionTaskReviewInspection";
+import type { TenderProductionInspection } from "./bindings/TenderProductionInspection";
+import type { TenderRecordEvidence } from "./bindings/TenderRecordEvidence";
+import type { TenderRecordInspection } from "./bindings/TenderRecordInspection";
+import type { ChangeAssessmentClassification } from "./bindings/ChangeAssessmentClassification";
+import type { ChangeAssessmentPage } from "./bindings/ChangeAssessmentPage";
+import type { ArtifactVersionSummary } from "./bindings/ArtifactVersionSummary";
 import { ApplicationSettings } from "./ApplicationSettings";
 import { exactApplicationAiSelectionIsReady } from "./applicationAiSelectionReadiness";
 import { notifyAttentionRequired } from "./applicationNotifications";
+import { ControlledCalculationView } from "./ControlledCalculationView";
+import { TenderEstimateReview } from "./TenderEstimateReview";
 import { TenderFocusedAction } from "./TenderFocusedAction";
+import { TenderRfiReview } from "./TenderRfiReview";
+import {
+  type EvidenceReviewConflict,
+  type EvidenceReviewTarget,
+  TenderEvidenceReview,
+} from "./TenderEvidenceReview";
+import {
+  type TenderRecordDecisionTarget,
+  TenderRecordDecision,
+} from "./TenderRecordDecision";
 import { QuantixMark } from "./QuantixMark";
 import { QuantixWindow } from "./QuantixWindow";
 import { quantixSmoothEase } from "./motion/motionPresets";
@@ -73,15 +104,21 @@ import {
   archiveTender,
   cancelRuntimePreparation,
   chooseAndImportTenderPackage,
+  createTenderBackup,
+  decideChangeAssessment,
   ensureQuantixSetup,
+  inspectArtifactVersions,
+  inspectChangeAssessments,
   inspectManagerWorkspace,
   inspectDeletionReceipts,
   inspectApplicationSettings,
   inspectAgentRun,
+  inspectAgentRunHistory,
   inspectRuntimePreparationProgress,
   inspectRuntimeReadiness,
   inspectPackageIntakeProgress,
   cancelPackageIntake,
+  inspectStartupReconciliation,
   inspectTrashedTenders,
   rebindManagerIntakeProvider,
   recordEngineerWorkspaceMessage,
@@ -94,6 +131,12 @@ import {
   restoreTrashedTender,
   selectManagerWorkspaceTender,
   startManagerTender,
+  approveProductionFindingException,
+  inspectProductionTaskReview,
+  inspectTenderProduction,
+  inspectTenderRecord,
+  interruptAgentRun,
+  runProductionTask,
   trashRecoveryRequiredTender,
   trashTender,
   purgeRecoveryRequiredTender,
@@ -122,6 +165,13 @@ type TrashAction = {
   record: TrashedTenderRecord;
 } | null;
 type RecoveryRequestedAction = "move_to_trash" | "delete_permanently" | null;
+type EvidenceReviewState = {
+  target: EvidenceReviewTarget;
+  conflicts: EvidenceReviewConflict[];
+};
+type RecordDecisionState = {
+  focusTarget: TenderRecordDecisionTarget | null;
+};
 
 type WorkspaceOperationKind =
   | "start_tender"
@@ -131,8 +181,12 @@ type WorkspaceOperationKind =
   | "retry_intake"
   | "rebind_intake"
   | "rename_tender"
+  | "create_backup"
   | "retention"
-  | "trash";
+  | "trash"
+  | "run_task"
+  | "stop_task"
+  | "request_change";
 
 type WorkspaceOperation = {
   kind: WorkspaceOperationKind;
@@ -178,6 +232,28 @@ function isFocusedActionKind(
   return (FOCUSED_ACTION_KINDS as readonly string[]).includes(kind);
 }
 
+const RFI_ACTION_KINDS = [
+  "draft_external_rfi",
+  "review_external_rfi",
+  "interpret_external_rfi_response",
+] as const;
+type RfiActionKind = (typeof RFI_ACTION_KINDS)[number];
+
+function isRfiActionKind(
+  kind: WorkspaceCurrentAction["kind"],
+): kind is RfiActionKind {
+  return (RFI_ACTION_KINDS as readonly string[]).includes(kind);
+}
+
+const ESTIMATE_REVIEW_ACTION_KINDS = ["review_basis_of_estimate"] as const;
+type EstimateReviewActionKind = (typeof ESTIMATE_REVIEW_ACTION_KINDS)[number];
+
+function isEstimateReviewActionKind(
+  kind: WorkspaceCurrentAction["kind"],
+): kind is EstimateReviewActionKind {
+  return (ESTIMATE_REVIEW_ACTION_KINDS as readonly string[]).includes(kind);
+}
+
 const LOADING_TITLE_BAR_MENUS: readonly WindowTitleBarMenu[] = [
   "File",
   "Edit",
@@ -206,6 +282,75 @@ function sameWorkspaceLocation(
   );
 }
 
+function latestManagerQuestion(
+  projection: ManagerWorkspaceProjection | null,
+): TenderOfficeMessage | null {
+  const messages = projection?.conversation?.messages ?? [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.author === "manager" && message.kind === "question") {
+      return message;
+    }
+  }
+  return null;
+}
+
+function citedRecordTargets(
+  projection: ManagerWorkspaceProjection | null,
+): TenderRecordDecisionTarget[] {
+  const question = latestManagerQuestion(projection);
+  if (!question) return [];
+  return question.references
+    .filter((reference) => reference.kind === "tender_record")
+    .map((reference) => ({
+      recordId: reference.reference,
+      version: reference.version,
+    }));
+}
+
+function evidenceMatchesTarget(
+  evidence: TenderRecordEvidence,
+  target: EvidenceReviewTarget,
+) {
+  return (
+    evidence.reference.artifact_id === target.artifactId &&
+    evidence.reference.version === target.version &&
+    (target.ordinal === null || evidence.reference.ordinal === target.ordinal)
+  );
+}
+
+function evidenceConflictsForTarget(
+  records: TenderRecordInspection[],
+  target: EvidenceReviewTarget,
+): EvidenceReviewConflict[] {
+  const conflicts: EvidenceReviewConflict[] = [];
+  const seen = new Set<string>();
+  for (const record of records) {
+    for (const contradiction of record.contradictions) {
+      if (
+        !contradiction.evidence.some((evidence) =>
+          evidenceMatchesTarget(evidence, target),
+        )
+      ) {
+        continue;
+      }
+      for (const evidence of contradiction.evidence) {
+        if (evidenceMatchesTarget(evidence, target)) continue;
+        const key = `${evidence.reference.artifact_id}:${evidence.reference.version}:${evidence.reference.ordinal}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        conflicts.push({
+          artifactId: evidence.reference.artifact_id,
+          version: evidence.reference.version,
+          ordinal: evidence.reference.ordinal,
+          label: evidence.package_path,
+        });
+      }
+    }
+  }
+  return conflicts;
+}
+
 function initialNavigationHistory(
   projection?: ManagerWorkspaceProjection,
 ): NavigationHistory {
@@ -218,6 +363,58 @@ function setupWarningCopy(issue: SetupIssue): string {
     return "Quantix could not verify that Application Home is private to this device user.";
   }
   return "Review the local workspace security warning before adding confidential Tender material.";
+}
+
+function startupReconciliationNotice(
+  report: StartupReconciliationReport,
+): { summary: string; details: string } | null {
+  const sentences: string[] = [];
+  const {
+    removed_tender_candidates,
+    interrupted_backup_operations,
+    interrupted_recovery_operations,
+    completed_retention_operations,
+  } = report;
+  if (removed_tender_candidates === 1) {
+    sentences.push(
+      "One unfinished Tender registration was cleaned up during startup.",
+    );
+  } else if (removed_tender_candidates > 1) {
+    sentences.push(
+      `${removed_tender_candidates} unfinished Tender registrations were cleaned up during startup.`,
+    );
+  }
+  if (interrupted_backup_operations === 1) {
+    sentences.push("An interrupted backup was safely closed.");
+  } else if (interrupted_backup_operations > 1) {
+    sentences.push(
+      `${interrupted_backup_operations} interrupted backups were safely closed.`,
+    );
+  }
+  if (interrupted_recovery_operations === 1) {
+    sentences.push("An interrupted recovery was safely closed.");
+  } else if (interrupted_recovery_operations > 1) {
+    sentences.push(
+      `${interrupted_recovery_operations} interrupted recoveries were safely closed.`,
+    );
+  }
+  if (completed_retention_operations === 1) {
+    sentences.push(
+      "An interrupted Archived & Trash change was finished safely.",
+    );
+  } else if (completed_retention_operations > 1) {
+    sentences.push(
+      `${completed_retention_operations} interrupted Archived & Trash changes were finished safely.`,
+    );
+  }
+  if (sentences.length === 0) return null;
+  const details = [
+    `Unfinished Tender registrations removed: ${removed_tender_candidates}`,
+    `Interrupted backups closed: ${interrupted_backup_operations}`,
+    `Interrupted recoveries closed: ${interrupted_recovery_operations}`,
+    `Archived & Trash changes finished: ${completed_retention_operations}`,
+  ].join(" · ");
+  return { summary: sentences.join(" "), details };
 }
 
 function formatRuntimeBytes(bytes: number | bigint) {
@@ -315,6 +512,8 @@ function TenderButton({
   selected,
   busy,
   onSelect,
+  onCreateBackup,
+  onInspectBackups,
   onRename,
   onArchive,
   onTrash,
@@ -324,6 +523,8 @@ function TenderButton({
   selected: boolean;
   busy: boolean;
   onSelect: () => void;
+  onCreateBackup: () => void;
+  onInspectBackups: () => void;
   onRename: () => void;
   onArchive: () => void;
   onTrash: () => void;
@@ -400,7 +601,23 @@ function TenderButton({
                     "Review the integrity finding and verified recovery options.",
                 },
               ]
-            : []),
+            : [
+                {
+                  id: "create_backup",
+                  label: "Create verified backup",
+                  icon: <DatabaseBackup size={15} aria-hidden="true" />,
+                  disabled: busy,
+                  description: "Verify this Tender and save a restorable copy.",
+                },
+                {
+                  id: "inspect_backups",
+                  label: "Inspect backups",
+                  icon: <ShieldCheck size={15} aria-hidden="true" />,
+                  disabled: busy,
+                  description:
+                    "Review verified backups and recovery candidates.",
+                },
+              ]),
           {
             id: "rename",
             label: "Rename",
@@ -445,6 +662,8 @@ function TenderButton({
         onAction={(action) => {
           setMenuOpen(false);
           if (action === "recovery") onSelect();
+          else if (action === "create_backup") onCreateBackup();
+          else if (action === "inspect_backups") onInspectBackups();
           else if (action === "rename") onRename();
           else if (action === "archive") onArchive();
           else if (action === "trash") onTrash();
@@ -665,15 +884,29 @@ function StartTender({
   );
 }
 
+const MESSAGE_KIND_LABELS: Partial<
+  Record<TenderOfficeMessage["kind"], string>
+> = {
+  status: "Status",
+  question: "Question",
+  finding: "Finding",
+  handoff: "Handoff",
+  blocker: "Blocker",
+  output: "Output",
+};
+
 function Message({
   message,
   meaningful,
+  onOpenReference,
 }: {
   message: TenderOfficeMessage;
   meaningful: boolean;
+  onOpenReference: (reference: WorkspaceMessageReference) => void;
 }) {
   const isEngineer = message.author === "engineer";
   const isSystem = message.author === "system";
+  const kindLabel = MESSAGE_KIND_LABELS[message.kind];
   return (
     <article
       id={`manager-message-${message.message_id}`}
@@ -688,6 +921,9 @@ function Message({
           <strong>
             {isEngineer ? "You" : isSystem ? "Quantix" : "Tendering Manager"}
           </strong>
+          {kindLabel ? (
+            <span className="manager-message__kind">{kindLabel}</span>
+          ) : null}
           <time dateTime={message.created_at}>
             {new Intl.DateTimeFormat(undefined, {
               hour: "numeric",
@@ -705,20 +941,42 @@ function Message({
               {message.references.length === 1 ? "" : "s"}
             </summary>
             <ul>
-              {message.references.map((reference, index) => (
-                <li
-                  key={`${reference.kind}-${reference.reference}-${reference.version}-${reference.evidence_ordinal ?? 0}-${index}`}
-                >
-                  <strong>{reference.label}</strong>
-                  {reference.detail ? <span>{reference.detail}</span> : null}
-                  <code>
-                    {reference.reference} · v{reference.version}
-                    {reference.evidence_ordinal
-                      ? ` · evidence ${reference.evidence_ordinal}`
-                      : ""}
-                  </code>
-                </li>
-              ))}
+              {message.references.map((reference, index) => {
+                const opensReview = reference.kind === "source_evidence";
+                const opensDecision = reference.kind === "tender_record";
+                const referenceBody = (
+                  <>
+                    <strong>{reference.label}</strong>
+                    {reference.detail ? <span>{reference.detail}</span> : null}
+                    <code>
+                      {reference.reference} · v{reference.version}
+                      {reference.evidence_ordinal
+                        ? ` · evidence ${reference.evidence_ordinal}`
+                        : ""}
+                    </code>
+                  </>
+                );
+                return (
+                  <li
+                    key={`${reference.kind}-${reference.reference}-${reference.version}-${reference.evidence_ordinal ?? 0}-${index}`}
+                  >
+                    {opensReview || opensDecision ? (
+                      <button
+                        type="button"
+                        className="manager-message__reference"
+                        onClick={() => onOpenReference(reference)}
+                      >
+                        {referenceBody}
+                        <span className="manager-message__reference-action">
+                          {opensReview ? "Review evidence" : "Review record"}
+                        </span>
+                      </button>
+                    ) : (
+                      referenceBody
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </details>
         ) : null}
@@ -748,6 +1006,12 @@ function ManagerView({
   onOpenSettings,
   onOpenAction,
   onOpenFocusedAction,
+  onOpenRfiReview,
+  onOpenEstimateReview,
+  onOpenRecordDecision,
+  onOpenChangeReview,
+  canDecideCitedRecords,
+  onOpenReference,
   onOpenSearch,
   contextRefs,
   onRemoveContext,
@@ -773,6 +1037,12 @@ function ManagerView({
   onOpenSettings: () => void;
   onOpenAction: () => void;
   onOpenFocusedAction: () => void;
+  onOpenRfiReview: () => void;
+  onOpenEstimateReview: () => void;
+  onOpenRecordDecision: () => void;
+  onOpenChangeReview: () => void;
+  canDecideCitedRecords: boolean;
+  onOpenReference: (reference: WorkspaceMessageReference) => void;
   onOpenSearch: () => void;
   contextRefs: WorkspaceMessageReference[];
   onRemoveContext: (reference: string) => void;
@@ -847,6 +1117,13 @@ function ManagerView({
     aiStatus === "checking" &&
     projection.current_action.kind === "configure_ai_provider";
   const aiAvailable = projection.ai_execution?.readiness === "ready";
+  const aiBlockers = projection.doctor_blockers.filter(
+    (blocker) => blocker.area === "ai_execution",
+  );
+  const capabilityGaps =
+    projection.capability_readiness?.state === "blocked"
+      ? projection.capability_readiness.gaps
+      : [];
 
   const openCurrentAction = () => {
     if (documentToolsRequired) {
@@ -871,6 +1148,17 @@ function ManagerView({
         onOpenFocusedAction();
         break;
       }
+      case "draft_external_rfi":
+      case "review_external_rfi":
+      case "interpret_external_rfi_response":
+        onOpenRfiReview();
+        break;
+      case "review_basis_of_estimate":
+        onOpenEstimateReview();
+        break;
+      case "review_change":
+        onOpenChangeReview();
+        break;
       case "prepare_work_plan":
       case "review_work_plan":
         onOpenFocusedAction();
@@ -890,9 +1178,12 @@ function ManagerView({
     "answer_manager_question",
     "retry_intake",
     "review_bid_decision",
+    "review_change",
     "prepare_work_plan",
     "review_work_plan",
     "review_work",
+    ...RFI_ACTION_KINDS,
+    ...ESTIMATE_REVIEW_ACTION_KINDS,
   ].includes(projection.current_action.kind);
   const intakeWorking =
     !documentToolsRequired &&
@@ -951,43 +1242,95 @@ function ManagerView({
     : projection.current_action.kind === "configure_ai_provider" && !aiAvailable
       ? "Open Settings"
       : projection.current_action.action_label;
+  const managerQuiet =
+    !documentToolsRequired &&
+    !providerCheckPending &&
+    !preparationActive &&
+    aiAvailable &&
+    aiStatus !== "unavailable" &&
+    !projection.intake &&
+    projection.team.active_agent_runs === 0 &&
+    !projection.current_action.requires_engineer &&
+    !hasActionButton &&
+    projection.doctor_blockers.length === 0;
+  const capabilityGatesCurrentAction =
+    capabilityGaps.length > 0 &&
+    ["prepare_work_plan", "review_work_plan"].includes(
+      projection.current_action.kind,
+    );
+  const capabilityGapList = capabilityGaps
+    .map((gap) => gap.capability.replace(/_/g, " "))
+    .join(", ");
+  const showBlockerRecovery =
+    aiBlockers.length > 0 &&
+    !(
+      showActionButton &&
+      !aiAvailable &&
+      projection.current_action.kind === "configure_ai_provider"
+    );
   const sendSuggestion = (body: string) => {
     if (!busy) void onSend(body);
   };
 
   return (
     <div className="manager-view">
-      <div className="manager-view__status">
-        <span
-          className={
-            projection.team.active_agent_runs > 0 || intakeWorking
-              ? "is-working"
-              : ""
-          }
-        />
-        <div>
-          <strong>Tendering Manager</strong>
-          <small>
-            {documentToolsRequired
-              ? preparationActive
-                ? "Preparing local document tools"
-                : runtimeStatus === "checking"
-                  ? "Checking local document tools"
-                  : "Waiting for local document tools"
-              : projection.intake
-                ? intakePaused
-                  ? "Paused — AI office unavailable"
-                  : projection.intake.label
-                : projection.team.active_agent_runs > 0
-                  ? "Coordinating the Tender team"
-                  : aiAvailable
-                    ? "Ready"
-                    : aiStatus === "checking"
-                      ? "Checking AI connection"
-                      : "AI office unavailable — records remain accessible"}
-          </small>
+      {managerQuiet ? null : (
+        <div className="manager-view__status">
+          <span
+            className={
+              projection.team.active_agent_runs > 0 || intakeWorking
+                ? "is-working"
+                : ""
+            }
+          />
+          <div>
+            <strong>Tendering Manager</strong>
+            <small>
+              {documentToolsRequired
+                ? preparationActive
+                  ? "Preparing local document tools"
+                  : runtimeStatus === "checking"
+                    ? "Checking local document tools"
+                    : "Waiting for local document tools"
+                : projection.intake
+                  ? intakePaused
+                    ? "Paused — AI office unavailable"
+                    : projection.intake.label
+                  : projection.team.active_agent_runs > 0
+                    ? "Coordinating the Tender team"
+                    : aiAvailable
+                      ? "Ready"
+                      : aiStatus === "checking"
+                        ? "Checking AI connection"
+                        : "AI office unavailable — records remain accessible"}
+            </small>
+          </div>
         </div>
-      </div>
+      )}
+      {!readOnly && aiBlockers.length > 0 ? (
+        <section className="manager-view__blocker" role="status">
+          {aiBlockers.map((blocker) => (
+            <div key={blocker.code}>
+              <strong>{blocker.title}</strong>
+              <details className="manager-view__blocker__details">
+                <summary>Technical details</summary>
+                <p>{blocker.detail}</p>
+              </details>
+            </div>
+          ))}
+          {showBlockerRecovery ? (
+            <button type="button" onClick={onOpenSettings}>
+              Restore AI connection
+            </button>
+          ) : null}
+        </section>
+      ) : null}
+      {!readOnly && capabilityGatesCurrentAction ? (
+        <p className="manager-view__capability" role="note">
+          These skills still need a specialist before the work plan can
+          continue: {capabilityGapList}.
+        </p>
+      ) : null}
       <div
         ref={conversationRef}
         className="manager-view__conversation"
@@ -1012,9 +1355,10 @@ function ManagerView({
               message.message_id ===
               projection.conversation?.latest_meaningful_message_id
             }
+            onOpenReference={onOpenReference}
           />
         ))}
-        {!readOnly ? (
+        {!readOnly && !managerQuiet ? (
           <article
             className="manager-message manager-message--activity"
             aria-label="Current Tender activity"
@@ -1089,6 +1433,15 @@ function ManagerView({
                     {currentActionLabel}
                   </button>
                 ) : null}
+                {canDecideCitedRecords ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={onOpenRecordDecision}
+                  >
+                    Review cited Tender records
+                  </button>
+                ) : null}
                 {documentToolsRequired && showActionButton ? (
                   <button
                     type="button"
@@ -1103,7 +1456,10 @@ function ManagerView({
                     Cancel preparation
                   </button>
                 ) : null}
-                {intakePaused && !documentToolsRequired && !showActionButton ? (
+                {intakePaused &&
+                !documentToolsRequired &&
+                !showActionButton &&
+                aiBlockers.length === 0 ? (
                   <button type="button" onClick={onOpenSettings}>
                     Restore AI connection
                   </button>
@@ -1504,29 +1860,95 @@ function TenderSearch({
   );
 }
 
-function WorkView({ projection }: { projection: ManagerWorkspaceProjection }) {
-  const groups: Array<[string, WorkspaceTaskRow[]]> = [
-    [
-      "Needs you",
-      projection.work.tasks.filter((task) => task.state === "needs_engineer"),
-    ],
-    [
-      "Working",
-      projection.work.tasks.filter((task) => task.state === "working"),
-    ],
-    [
-      "Waiting",
-      projection.work.tasks.filter((task) =>
-        ["waiting", "paused"].includes(task.state),
-      ),
-    ],
-    ["Done", projection.work.tasks.filter((task) => task.state === "done")],
-    [
-      "Needs attention",
-      projection.work.tasks.filter((task) => task.state === "failed"),
-    ],
-  ];
-  const total = projection.work.tasks.length;
+const WORK_GROUP_ORDER: readonly WorkspaceTaskState[] = [
+  "waiting",
+  "working",
+  "needs_engineer",
+  "paused",
+  "done",
+  "failed",
+];
+
+const WORK_GROUP_LABELS: Record<WorkspaceTaskState, string> = {
+  waiting: "Waiting",
+  working: "Working",
+  needs_engineer: "Needs you",
+  paused: "Paused",
+  done: "Done",
+  failed: "Failed",
+};
+
+function humanizeToken(value: string): string {
+  return value.replace(/_/g, " ");
+}
+
+function taskStateSentence(task: WorkspaceTaskRow): string {
+  switch (task.status_detail) {
+    case "blocked":
+      return "Waiting for earlier work to finish first.";
+    case "ready":
+      return "Ready. The Manager's coordinator starts this automatically.";
+    case "running":
+      return "A specialist is working on this right now.";
+    case "reviewing":
+      return "An independent reviewer is checking the finished work.";
+    case "review_ready":
+      return "The work is finished. Its review waits for your decision.";
+    case "remediation_ready":
+      return "The reviewer asked for changes. The rework starts next.";
+    case "query_blocked":
+      return "On hold until a Tender question is answered.";
+    case "attempt_limit_reached":
+      return "Tried too many times without a verified result. It needs your decision.";
+    case "indeterminate":
+      return "The last attempt ended without a clear result. It needs your decision.";
+    case "ready_for_integration":
+      return "Done. The Manager folds this output into the next stage.";
+    case "suspended":
+      return "Paused because the Work Plan changed. The Manager will resume or re-plan it.";
+    case "cancelled":
+      return "Stopped before finishing. The recorded outcome stays on file.";
+    case "failed":
+      return "Could not finish. Decide what happens next with the Manager.";
+    default:
+      return WORK_GROUP_LABELS[task.state] + ".";
+  }
+}
+
+function waitingForLabel(task: WorkspaceTaskRow): string | null {
+  if (task.state !== "waiting" || task.dependencies.length === 0) return null;
+  return task.dependencies.map(humanizeToken).join(", ");
+}
+
+function workDependents(
+  tasks: WorkspaceTaskRow[],
+  task: WorkspaceTaskRow,
+): WorkspaceTaskRow[] {
+  if (!task.task_key) return [];
+  return tasks.filter(
+    (candidate) =>
+      candidate.production_task_id !== task.production_task_id &&
+      candidate.dependencies.includes(task.task_key),
+  );
+}
+
+function taskChangeRequestBody(task: WorkspaceTaskRow): string {
+  const objective = task.objective ?? humanizeToken(task.task_key);
+  return `Please amend the Work Plan for task "${task.task_key}" (${objective}). I want to change what this task covers. Propose the amendment for my approval, and restart this task only after the amended plan is approved.`;
+}
+
+function WorkView({
+  projection,
+  onOpenTask,
+}: {
+  projection: ManagerWorkspaceProjection;
+  onOpenTask: (task: WorkspaceTaskRow) => void;
+}) {
+  const tasks = projection.work.tasks;
+  const groups = WORK_GROUP_ORDER.map(
+    (state) => [state, tasks.filter((task) => task.state === state)] as const,
+  );
+  const total = tasks.length;
   return (
     <section className="workspace-summary" aria-labelledby="work-title">
       <div className="workspace-summary__heading">
@@ -1544,46 +1966,60 @@ function WorkView({ projection }: { projection: ManagerWorkspaceProjection }) {
       ) : (
         <div className="workspace-work-groups">
           {groups
-            .filter(([, tasks]) => tasks.length > 0)
-            .map(([label, tasks]) => (
-              <section key={label} aria-label={label}>
+            .filter(([, groupTasks]) => groupTasks.length > 0)
+            .map(([state, groupTasks]) => (
+              <section key={state} aria-label={WORK_GROUP_LABELS[state]}>
                 <div className="workspace-work-groups__heading">
-                  <h3>{label}</h3>
-                  <span>{tasks.length}</span>
+                  <h3>{WORK_GROUP_LABELS[state]}</h3>
+                  <span>{groupTasks.length}</span>
                 </div>
                 <ul>
-                  {tasks.map((task) => (
-                    <li key={task.production_task_id}>
-                      <div
-                        className="workspace-task__state"
-                        data-state={task.state}
-                      />
-                      <div>
-                        <strong>{task.objective ?? task.task_key}</strong>
-                        <span>{task.status_detail}</span>
-                        <dl>
+                  {groupTasks.map((task) => {
+                    const waitingFor = waitingForLabel(task);
+                    return (
+                      <li
+                        key={task.production_task_id}
+                        className={
+                          task.state === "done" ? "is-quiet" : undefined
+                        }
+                      >
+                        <button
+                          type="button"
+                          className="workspace-task__open"
+                          onClick={() => onOpenTask(task)}
+                        >
+                          <span
+                            className="workspace-task__state"
+                            data-state={task.state}
+                            aria-hidden="true"
+                          />
                           <div>
-                            <dt>Specialist</dt>
-                            <dd>
-                              {task.agent?.identity ?? "Tendering Manager"}
-                            </dd>
+                            <strong>
+                              {task.objective ?? humanizeToken(task.task_key)}
+                            </strong>
+                            <span>{taskStateSentence(task)}</span>
+                            {waitingFor ? (
+                              <span className="workspace-task__waiting">
+                                Waiting for: {waitingFor}
+                              </span>
+                            ) : null}
+                            <dl>
+                              <div>
+                                <dt>Specialist</dt>
+                                <dd>
+                                  {task.agent?.identity ?? "Tendering Manager"}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt>Outputs</dt>
+                                <dd>{task.output_count}</dd>
+                              </div>
+                            </dl>
                           </div>
-                          <div>
-                            <dt>Blocker</dt>
-                            <dd>
-                              {task.dependencies.length
-                                ? task.dependencies.join(", ")
-                                : "None"}
-                            </dd>
-                          </div>
-                          <div>
-                            <dt>Outputs</dt>
-                            <dd>{task.output_count}</dd>
-                          </div>
-                        </dl>
-                      </div>
-                    </li>
-                  ))}
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
             ))}
@@ -1593,72 +2029,736 @@ function WorkView({ projection }: { projection: ManagerWorkspaceProjection }) {
   );
 }
 
-function TeamView({ projection }: { projection: ManagerWorkspaceProjection }) {
+function WorkTaskDetail({
+  tenderId,
+  task,
+  tasks,
+  busy,
+  readOnly,
+  onRefresh,
+  onStart,
+  onStop,
+  onRequestChange,
+  onOpenCalculations,
+  reportCommandFailure,
+  onClose,
+}: {
+  tenderId: string;
+  task: WorkspaceTaskRow;
+  tasks: WorkspaceTaskRow[];
+  busy: boolean;
+  readOnly: boolean;
+  onRefresh: () => Promise<void>;
+  onStart: () => Promise<boolean>;
+  onStop: () => Promise<boolean>;
+  onRequestChange: () => Promise<boolean>;
+  onOpenCalculations: () => void;
+  reportCommandFailure: () => void;
+  onClose: () => void;
+}) {
+  const [production, setProduction] =
+    useState<TenderProductionInspection | null>(null);
+  const [review, setReview] = useState<ProductionTaskReviewInspection | null>(
+    null,
+  );
+  const [loading, setLoading] = useState(true);
+  const [confirmStop, setConfirmStop] = useState(false);
+  const [exceptionDrafts, setExceptionDrafts] = useState<
+    Record<string, { rationale: string; consequence: string }>
+  >({});
+  const [approvingFindingId, setApprovingFindingId] = useState<string | null>(
+    null,
+  );
+
+  const dependents = useMemo(() => workDependents(tasks, task), [tasks, task]);
+  const productionTask =
+    production?.tasks.find(
+      (candidate) => candidate.production_task_id === task.production_task_id,
+    ) ?? null;
+  const isEstimatorTask =
+    productionTask?.task.exact_inputs.some(
+      (input) =>
+        input.kind === "calculation_scenario_version" ||
+        input.kind === "basis_of_estimate_request",
+    ) ?? false;
+  const canStart = !readOnly && task.status_detail === "ready";
+  const canRequestQueryControl =
+    !readOnly &&
+    task.status_detail === "query_blocked" &&
+    productionTask?.query_control_available === true;
+  const canStop =
+    !readOnly && task.state === "working" && task.current_run_id !== null;
+  const exceptionAllowed =
+    productionTask?.task.major_finding_policy === "engineer_exception_allowed";
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setConfirmStop(false);
+    setExceptionDrafts({});
+    const load = async () => {
+      try {
+        const [nextProduction, nextReview] = await Promise.all([
+          inspectTenderProduction(tenderId),
+          inspectProductionTaskReview(tenderId, task.production_task_id),
+        ]);
+        if (!active) return;
+        setProduction(nextProduction);
+        setReview(nextReview);
+      } catch {
+        if (active) reportCommandFailure();
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [
+    tenderId,
+    task.production_task_id,
+    task.state,
+    task.current_run_id,
+    reportCommandFailure,
+  ]);
+
+  const requestStart = async () => {
+    await onStart();
+  };
+
+  const requestStop = async () => {
+    await onStop();
+  };
+
+  const approveException = async (
+    targetReview: ProductionReview,
+    finding: ProductionReviewFinding,
+  ) => {
+    const draft = exceptionDrafts[finding.finding_id];
+    const artifact = review?.artifact_versions.find(
+      (candidate) =>
+        candidate.artifact_id === targetReview.target_artifact_id &&
+        candidate.version === targetReview.target_version,
+    );
+    if (!draft?.rationale.trim() || !draft.consequence.trim() || !artifact) {
+      return;
+    }
+    setApprovingFindingId(finding.finding_id);
+    try {
+      const next = await approveProductionFindingException(
+        tenderId,
+        task.production_task_id,
+        finding.finding_id,
+        targetReview.review_id,
+        artifact.artifact_id,
+        artifact.version,
+        artifact.payload_sha256,
+        draft.rationale.trim(),
+        draft.consequence.trim(),
+      );
+      setReview(next);
+      setExceptionDrafts((current) => {
+        const nextDrafts = { ...current };
+        delete nextDrafts[finding.finding_id];
+        return nextDrafts;
+      });
+      await onRefresh();
+    } catch {
+      reportCommandFailure();
+    } finally {
+      setApprovingFindingId(null);
+    }
+  };
+
+  const artifacts = review?.artifact_versions ?? [];
+  const evidenceReferences = [
+    ...new Set(
+      artifacts.flatMap((artifact) => artifact.payload.evidence_references),
+    ),
+  ];
+
+  return (
+    <section
+      className="work-task-detail"
+      data-testid="work-task-detail"
+      aria-labelledby="work-task-detail-title"
+    >
+      <header className="work-task-detail__header">
+        <div>
+          <p className="section-label">Work task</p>
+          <h2 id="work-task-detail-title">
+            {task.objective ?? humanizeToken(task.task_key)}
+          </h2>
+          <p>{taskStateSentence(task)}</p>
+          <p>
+            Specialist: {task.agent?.identity ?? "Tendering Manager"}
+            {task.agent ? ` · ${task.agent.profession}` : ""}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="manager-workspace__secondary"
+          onClick={onClose}
+        >
+          Back to Work
+        </button>
+      </header>
+
+      {loading ? (
+        <p className="work-task-detail__loading" role="status">
+          Opening the task detail…
+        </p>
+      ) : null}
+
+      {!readOnly && (canStart || canRequestQueryControl || canStop) ? (
+        <section className="work-task-detail__section" aria-label="Actions">
+          {canStart || canRequestQueryControl ? (
+            <div className="work-task-detail__actions">
+              <button
+                type="button"
+                className="manager-workspace__primary"
+                disabled={busy}
+                onClick={() => void requestStart()}
+              >
+                {canStart ? "Start work now" : "Request specialist update"}
+              </button>
+            </div>
+          ) : null}
+          {canStop ? (
+            confirmStop ? (
+              <div className="work-task-detail__stop" role="alert">
+                <strong>Stop this work?</strong>
+                <p>
+                  {dependents.length > 0
+                    ? `${dependents.length === 1 ? "1 task waits" : `${dependents.length} tasks wait`} for this work: ${dependents
+                        .map(
+                          (dependent) =>
+                            dependent.objective ??
+                            humanizeToken(dependent.task_key),
+                        )
+                        .join("; ")}. `
+                    : "Nothing else waits on this task right now. "}
+                  Stopping now records the outcome as it stands, and dependent
+                  work stays waiting until the Manager re-plans or the task
+                  starts again.
+                </p>
+                <div className="work-task-detail__actions">
+                  <button
+                    type="button"
+                    className="manager-workspace__primary"
+                    disabled={busy}
+                    onClick={() => void requestStop()}
+                  >
+                    Stop the work
+                  </button>
+                  <button
+                    type="button"
+                    className="manager-workspace__secondary"
+                    disabled={busy}
+                    onClick={() => setConfirmStop(false)}
+                  >
+                    Keep working
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="work-task-detail__actions">
+                <button
+                  type="button"
+                  className="manager-workspace__secondary"
+                  disabled={busy}
+                  onClick={() => setConfirmStop(true)}
+                >
+                  Stop
+                </button>
+              </div>
+            )
+          ) : null}
+        </section>
+      ) : null}
+
+      {productionTask && productionTask.task.exact_inputs.length > 0 ? (
+        <section className="work-task-detail__section">
+          <h3>What this task works from</h3>
+          <ul className="work-task-detail__references">
+            {productionTask.task.exact_inputs.map((input) => (
+              <li key={`${input.kind}-${input.reference}-${input.version}`}>
+                <strong>{humanizeToken(input.kind)}</strong>
+                <code>
+                  {input.reference} · v{input.version}
+                </code>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {isEstimatorTask ? (
+        <section
+          className="work-task-detail__section"
+          aria-label="Controlled estimating"
+          data-testid="work-task-detail__estimating"
+        >
+          <h3>Controlled estimating</h3>
+          <p>
+            This task records its quantities, rates, and results as controlled
+            calculation records. Open the controlled calculations to read the
+            exact inputs, rounding, and results as the engine produced them.
+          </p>
+          <button
+            type="button"
+            className="manager-workspace__secondary"
+            disabled={busy}
+            onClick={onOpenCalculations}
+          >
+            Open controlled calculations
+          </button>
+        </section>
+      ) : null}
+
+      {evidenceReferences.length > 0 ? (
+        <section className="work-task-detail__section">
+          <h3>Evidence used</h3>
+          <ul className="work-task-detail__references">
+            {evidenceReferences.map((reference) => (
+              <li key={reference}>
+                <code>{reference}</code>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      <section className="work-task-detail__section">
+        <h3>Current output</h3>
+        {artifacts.length > 0 ? (
+          artifacts.map((artifact: ProductionArtifactVersion) => (
+            <article
+              key={`${artifact.artifact_id}-${artifact.version}`}
+              className="work-task-detail__output"
+            >
+              <strong>
+                Output v{artifact.version}
+                {artifact.version === artifacts[artifacts.length - 1].version
+                  ? " · latest"
+                  : ""}
+              </strong>
+              {isEstimatorTask ? (
+                <p>
+                  Published by Agent Run <code>{artifact.author_run_id}</code>.
+                </p>
+              ) : null}
+              <p>{artifact.payload.summary}</p>
+              <p>
+                Output checks{" "}
+                {artifact.output_validation_passed ? "passed" : "failed"} ·
+                Evidence verification{" "}
+                {artifact.evidence_verified ? "passed" : "failed"}
+              </p>
+              {artifact.payload.gaps.length > 0 ? (
+                <p>Disclosed gaps: {artifact.payload.gaps.join(", ")}</p>
+              ) : null}
+            </article>
+          ))
+        ) : (
+          <p>
+            No output yet ({task.output_count} recorded). It appears here as
+            soon as the specialist records one.
+          </p>
+        )}
+      </section>
+
+      {review && review.reviews.length > 0 ? (
+        <section className="work-task-detail__section">
+          <h3>Independent reviews</h3>
+          {review.reviews.map((targetReview) => (
+            <article
+              key={targetReview.review_id}
+              className="work-task-detail__review"
+            >
+              <strong>
+                Output v{targetReview.target_version} ·{" "}
+                {humanizeToken(targetReview.result)}
+              </strong>
+              <p>
+                {humanizeToken(targetReview.capability)} · criteria:{" "}
+                {targetReview.criteria.join(", ")}
+              </p>
+              {targetReview.findings.length === 0 ? (
+                <p>No findings.</p>
+              ) : (
+                <ul className="work-task-detail__findings">
+                  {targetReview.findings.map((finding) => {
+                    const draft = exceptionDrafts[finding.finding_id];
+                    return (
+                      <li key={finding.finding_id}>
+                        <strong>{humanizeToken(finding.severity)}</strong> ·{" "}
+                        {finding.summary}
+                        {finding.evidence_references.length > 0 ? (
+                          <span>
+                            {" "}
+                            · Evidence {finding.evidence_references.join(", ")}
+                          </span>
+                        ) : null}
+                        {finding.disposition ? (
+                          <p>
+                            Settled: {humanizeToken(finding.disposition.kind)}{" "}
+                            by {humanizeToken(finding.disposition.decided_by)}.
+                            Consequence: {finding.disposition.consequence}
+                          </p>
+                        ) : finding.severity === "minor" ? (
+                          <p>Disclosed; does not block the work.</p>
+                        ) : finding.severity === "critical" ? (
+                          <p>
+                            Open and nonwaivable; the author must fix it and a
+                            new independent review is required.
+                          </p>
+                        ) : finding.severity === "major" && exceptionAllowed ? (
+                          <div className="work-task-detail__exception">
+                            <label>
+                              Exception rationale
+                              <textarea
+                                value={draft?.rationale ?? ""}
+                                maxLength={4000}
+                                disabled={busy || approvingFindingId !== null}
+                                onChange={(event) => {
+                                  const rationale = event.currentTarget.value;
+                                  setExceptionDrafts((current) => ({
+                                    ...current,
+                                    [finding.finding_id]: {
+                                      rationale,
+                                      consequence:
+                                        current[finding.finding_id]
+                                          ?.consequence ?? "",
+                                    },
+                                  }));
+                                }}
+                              />
+                            </label>
+                            <label>
+                              Exact consequence
+                              <textarea
+                                value={draft?.consequence ?? ""}
+                                maxLength={4000}
+                                disabled={busy || approvingFindingId !== null}
+                                onChange={(event) => {
+                                  const consequence = event.currentTarget.value;
+                                  setExceptionDrafts((current) => ({
+                                    ...current,
+                                    [finding.finding_id]: {
+                                      rationale:
+                                        current[finding.finding_id]
+                                          ?.rationale ?? "",
+                                      consequence,
+                                    },
+                                  }));
+                                }}
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              className="manager-workspace__primary"
+                              disabled={
+                                busy ||
+                                approvingFindingId !== null ||
+                                !draft?.rationale.trim() ||
+                                !draft?.consequence.trim()
+                              }
+                              onClick={() =>
+                                void approveException(targetReview, finding)
+                              }
+                            >
+                              Approve this exception
+                            </button>
+                          </div>
+                        ) : (
+                          <p>
+                            Open; the approved Review Policy requires the author
+                            to fix it and run a new review.
+                          </p>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </article>
+          ))}
+        </section>
+      ) : null}
+
+      {!readOnly ? (
+        <section className="work-task-detail__section work-task-detail__change">
+          <h3>Need this task to do something different?</h3>
+          <p>
+            What a task covers comes from the approved Work Plan. Only the
+            Manager can change it, through a Work Plan amendment. Sending the
+            request opens the Manager conversation with this exact task named.
+          </p>
+          <button
+            type="button"
+            className="manager-workspace__secondary"
+            disabled={busy}
+            onClick={() => void onRequestChange()}
+          >
+            Request a change through the Manager
+          </button>
+        </section>
+      ) : null}
+    </section>
+  );
+}
+
+type TeamRoomFilter = "all" | "needs_you" | "handoffs" | "outputs";
+
+const TEAM_ROOM_FILTERS: readonly { id: TeamRoomFilter; label: string }[] = [
+  { id: "all", label: "All messages" },
+  { id: "needs_you", label: "Needs you" },
+  { id: "handoffs", label: "Handoffs" },
+  { id: "outputs", label: "Outputs" },
+];
+
+const NEEDS_YOU_MESSAGE_KINDS: readonly TenderOfficeMessage["kind"][] = [
+  "question",
+  "finding",
+  "blocker",
+];
+
+function roomFilter(
+  messages: TenderOfficeMessage[],
+  filter: TeamRoomFilter,
+  latestMeaningfulMessageId: string | null | undefined,
+): TenderOfficeMessage[] {
+  switch (filter) {
+    case "handoffs":
+      return messages.filter((message) => message.kind === "handoff");
+    case "outputs":
+      return messages.filter((message) => message.kind === "output");
+    case "needs_you":
+      return messages.filter((message) => {
+        if (!NEEDS_YOU_MESSAGE_KINDS.includes(message.kind)) return false;
+        if (message.message_id === latestMeaningfulMessageId) return true;
+        return !messages.some(
+          (later) =>
+            later.sequence > message.sequence && later.author === "engineer",
+        );
+      });
+    default:
+      return messages;
+  }
+}
+
+type ConversationSection = {
+  key: string;
+  heading: string | null;
+  messages: TenderOfficeMessage[];
+};
+
+function conversationDayKey(at: string): string {
+  const date = new Date(at);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+function groupConversationByDay(
+  messages: TenderOfficeMessage[],
+): ConversationSection[] {
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const todayKey = conversationDayKey(today.toISOString());
+  const yesterdayKey = conversationDayKey(yesterday.toISOString());
+  const formatDate = new Intl.DateTimeFormat(undefined, { dateStyle: "long" });
+  const sections: ConversationSection[] = [];
+  for (const message of messages) {
+    const key = conversationDayKey(message.created_at);
+    const section = sections[sections.length - 1];
+    if (section && section.key === key) {
+      section.messages.push(message);
+      continue;
+    }
+    const date = new Date(message.created_at);
+    const heading =
+      !key || Number.isNaN(date.getTime())
+        ? null
+        : key === todayKey
+          ? null
+          : key === yesterdayKey
+            ? "Yesterday"
+            : formatDate.format(date);
+    sections.push({ key, heading, messages: [message] });
+  }
+  return sections;
+}
+
+function TeamRoom({
+  projection,
+  busy,
+  readOnly,
+  composer,
+  onComposerChange,
+  onSend,
+  onOpenSearch,
+  contextRefs,
+  onRemoveContext,
+  onOpenReference,
+  onClose,
+}: {
+  projection: ManagerWorkspaceProjection;
+  busy: boolean;
+  readOnly: boolean;
+  composer: string;
+  onComposerChange: (value: string) => void;
+  onSend: (body: string) => Promise<boolean>;
+  onOpenSearch: () => void;
+  contextRefs: WorkspaceMessageReference[];
+  onRemoveContext: (reference: string) => void;
+  onOpenReference: (reference: WorkspaceMessageReference) => void;
+  onClose: () => void;
+}) {
   const tenderId = projection.selected_tender?.tender_id ?? null;
+  const [filter, setFilter] = useState<TeamRoomFilter>("all");
   const [selectedRun, setSelectedRun] = useState<AgentRunInspection | null>(
     null,
   );
   const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
-  const [workroomTab, setWorkroomTab] = useState<
-    "conversation" | "context" | "activity" | "outputs"
-  >("conversation");
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
+
+  const messages = projection.conversation?.messages ?? [];
+  const filteredMessages = useMemo(
+    () =>
+      roomFilter(
+        messages,
+        filter,
+        projection.conversation?.latest_meaningful_message_id,
+      ),
+    [filter, messages, projection.conversation?.latest_meaningful_message_id],
+  );
+  const sections = useMemo(
+    () => groupConversationByDay(filteredMessages),
+    [filteredMessages],
+  );
+
+  useEffect(() => {
+    const conversation = conversationRef.current;
+    if (conversation) conversation.scrollTop = conversation.scrollHeight;
+  }, [filter, messages[messages.length - 1]?.sequence]);
 
   const openWorkroom = async (runId: string) => {
     if (!tenderId) return;
     setLoadingRunId(runId);
     try {
       setSelectedRun(await inspectAgentRun(tenderId, runId));
-      setWorkroomTab("conversation");
     } finally {
       setLoadingRunId(null);
     }
   };
 
+  const send = async () => {
+    const body = composer.trim();
+    if (!body || busy) return;
+    if (await onSend(body)) onComposerChange("");
+  };
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void send();
+    }
+  };
+
   return (
-    <section
-      className="workspace-summary workspace-team"
-      aria-labelledby="team-title"
-    >
-      <div className="workspace-summary__heading">
-        <Users size={22} aria-hidden="true" />
-        <div>
-          <h2 id="team-title">Team</h2>
-          <p>
-            Attributable questions, findings, handoffs, blockers, and outputs.
-          </p>
+    <section className="team-room" aria-labelledby="team-room-title">
+      <header className="team-room__header">
+        <div className="team-room__heading">
+          <Users size={22} aria-hidden="true" />
+          <div>
+            <h2 id="team-room-title">Team working</h2>
+            <p>
+              The live room for this Tender. Closing it returns you to the
+              Manager conversation.
+            </p>
+          </div>
         </div>
+        <button
+          type="button"
+          className="manager-workspace__secondary"
+          onClick={onClose}
+        >
+          Back to Manager
+        </button>
+      </header>
+      <div
+        className="team-room__filters"
+        role="group"
+        aria-label="Message filters"
+      >
+        {TEAM_ROOM_FILTERS.map(({ id, label }) => (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={filter === id}
+            onClick={() => setFilter(id)}
+          >
+            {label}
+          </button>
+        ))}
       </div>
-      <div className="workspace-team__columns">
-        <section>
-          <h3>Team stream</h3>
-          {projection.team.events.length ? (
-            <ol className="workspace-team__stream">
-              {projection.team.events.map((event) => (
-                <li key={event.message_id}>
-                  <span>{event.kind.replace(/_/g, " ")}</span>
-                  <strong>
-                    {event.author === "engineer" ? "Engineer" : "Quantix"}
-                  </strong>
-                  <p>{event.body}</p>
-                  <time>{new Date(event.created_at).toLocaleString()}</time>
-                </li>
-              ))}
-            </ol>
+      <div className="team-room__body">
+        <div
+          ref={conversationRef}
+          className="team-room__conversation"
+          role="log"
+          aria-label="Team room conversation"
+          aria-live="polite"
+        >
+          {sections.length === 0 ? (
+            <p className="team-room__empty">
+              {filter === "all"
+                ? "No messages yet. The Manager and specialists post here as the work moves."
+                : "No messages match this filter."}
+            </p>
           ) : (
-            <p className="workspace-summary__empty">No Team events yet.</p>
+            sections.map((section) => (
+              <div key={section.key} className="team-room__section">
+                {section.heading ? (
+                  <h3 className="team-room__section-heading">
+                    {section.heading}
+                  </h3>
+                ) : null}
+                {section.messages.map((message) => (
+                  <Message
+                    key={message.message_id}
+                    message={message}
+                    meaningful={
+                      message.message_id ===
+                      projection.conversation?.latest_meaningful_message_id
+                    }
+                    onOpenReference={onOpenReference}
+                  />
+                ))}
+              </div>
+            ))
           )}
-        </section>
-        <section>
+        </div>
+        <aside className="team-room__rail" aria-label="Agent workrooms">
           <h3>Agent workrooms</h3>
           {projection.team.agent_runs.length ? (
             <ul className="workspace-team__runs">
               {projection.team.agent_runs.map((run) => (
                 <li key={run.run_id}>
-                  <div>
+                  <button
+                    type="button"
+                    className="workspace-team__agent"
+                    disabled={loadingRunId === run.run_id}
+                    onClick={() => void openWorkroom(run.run_id)}
+                  >
                     <strong>{run.agent.identity}</strong>
                     <span>{run.agent.profession}</span>
                     <small>{run.state.replace(/_/g, " ")}</small>
-                  </div>
+                  </button>
                   <button
                     type="button"
                     disabled={loadingRunId === run.run_id}
@@ -1670,102 +2770,580 @@ function TeamView({ projection }: { projection: ManagerWorkspaceProjection }) {
               ))}
             </ul>
           ) : (
-            <p className="workspace-summary__empty">No Agent Runs yet.</p>
+            <p className="team-room__empty">No Agent Runs yet.</p>
           )}
-        </section>
+          {selectedRun && tenderId ? (
+            <AgentWorkroom
+              key={selectedRun.run_id}
+              tenderId={tenderId}
+              run={selectedRun}
+              onClose={() => setSelectedRun(null)}
+            />
+          ) : null}
+        </aside>
       </div>
-      {selectedRun ? (
-        <section className="agent-workroom" aria-label="Agent workroom">
-          <div className="agent-workroom__heading">
-            <div>
-              <strong>{selectedRun.profile.identity}</strong>
-              <span>{selectedRun.task.objective}</span>
-            </div>
-            <button type="button" onClick={() => setSelectedRun(null)}>
-              Close
-            </button>
-          </div>
-          <nav aria-label="Agent workroom sections">
-            {(["conversation", "context", "activity", "outputs"] as const).map(
-              (tab) => (
+      {!readOnly ? (
+        <div className="manager-composer team-room__composer">
+          {contextRefs.length ? (
+            <div
+              className="manager-composer__context"
+              aria-label="Attached context"
+            >
+              {contextRefs.map((reference) => (
                 <button
-                  key={tab}
+                  key={[
+                    reference.kind,
+                    reference.reference,
+                    reference.version,
+                    reference.evidence_ordinal ?? 0,
+                  ].join("-")}
                   type="button"
-                  aria-current={workroomTab === tab ? "page" : undefined}
-                  onClick={() => setWorkroomTab(tab)}
+                  title="Remove attached context"
+                  onClick={() => onRemoveContext(reference.reference)}
                 >
-                  {tab[0].toUpperCase() + tab.slice(1)}
+                  {reference.label} ×
                 </button>
-              ),
-            )}
-          </nav>
-          {workroomTab === "conversation" ? (
-            <div className="agent-workroom__panel">
-              <p>
-                Run <code>{selectedRun.run_id}</code> is{" "}
-                {selectedRun.state.replace(/_/g, " ")}.
-              </p>
-              <p>
-                {selectedRun.failure?.required_user_action ??
-                  "No provider failure recorded."}
-              </p>
+              ))}
             </div>
           ) : null}
-          {workroomTab === "context" ? (
-            <div className="agent-workroom__panel">
-              <h4>Exact inputs</h4>
+          <div className="manager-composer__surface">
+            <button
+              className="manager-composer__attach"
+              type="button"
+              aria-label="Add Tender context"
+              title="Add Tender context"
+              disabled={busy}
+              onClick={onOpenSearch}
+            >
+              <Paperclip size={18} aria-hidden="true" />
+            </button>
+            <textarea
+              ref={composerRef}
+              rows={1}
+              value={composer}
+              aria-label="Message the Team"
+              placeholder="Message the Team…"
+              disabled={busy}
+              onChange={(event) => onComposerChange(event.target.value)}
+              onKeyDown={onKeyDown}
+            />
+            <button
+              className="manager-composer__send"
+              type="button"
+              aria-label="Send message"
+              disabled={busy || !composer.trim()}
+              onClick={() => void send()}
+            >
+              <Send size={18} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+const WORKROOM_TABS = [
+  "conversation",
+  "context",
+  "activity",
+  "outputs",
+] as const;
+type WorkroomTab = (typeof WORKROOM_TABS)[number];
+
+type PriorRunsState =
+  | { kind: "loading" }
+  | { kind: "ready"; page: AgentRunHistoryPage }
+  | { kind: "error" };
+
+const PRIOR_RUNS_PAGE_SIZE = 4;
+
+function formatInputReferences(inputs: AgentTaskInputReference[]): string {
+  if (inputs.length === 0) return "None";
+  return inputs
+    .map((input) => `${input.kind} ${input.reference} · v${input.version}`)
+    .join(", ");
+}
+
+function formatDataViews(views: DataViewManifest[]): string {
+  if (views.length === 0) return "None";
+  return views
+    .map((view) => `${view.relative_path} · ${view.data_scope}`)
+    .join(", ");
+}
+
+function formatThreadExposure(exposure: ThreadExposureSet): string {
+  return [
+    `Inputs: ${formatInputReferences(exposure.exact_inputs)}`,
+    `Data scopes: ${exposure.data_scopes.join(", ") || "none"}`,
+    `Classifications: ${exposure.data_classifications.join(", ") || "none"}`,
+  ].join(" · ");
+}
+
+type AgentContextComparisonRow = {
+  label: string;
+  changed: boolean;
+  current: string;
+  prior: string;
+};
+
+function agentContextComparisonRows(
+  current: AgentRunInspection,
+  prior: AgentRunInspection,
+): AgentContextComparisonRow[] {
+  const rows = [
+    {
+      label: "Instructions",
+      current: current.profile.instructions,
+      prior: prior.profile.instructions,
+    },
+    {
+      label: "Exact inputs",
+      current: formatInputReferences(current.task.exact_inputs),
+      prior: formatInputReferences(prior.task.exact_inputs),
+    },
+    {
+      label: "Data views",
+      current: formatDataViews(current.permission_grant.data_views),
+      prior: formatDataViews(prior.permission_grant.data_views),
+    },
+    {
+      label: "Granted data scopes",
+      current: current.permission_grant.data_scopes.join(", ") || "None",
+      prior: prior.permission_grant.data_scopes.join(", ") || "None",
+    },
+    {
+      label: "Conversation exposure",
+      current: formatThreadExposure(current.permission_grant.thread_exposure),
+      prior: formatThreadExposure(prior.permission_grant.thread_exposure),
+    },
+  ];
+  return rows.map((row) => ({ ...row, changed: row.current !== row.prior }));
+}
+
+function AgentWorkroom({
+  tenderId,
+  run,
+  onClose,
+}: {
+  tenderId: string;
+  run: AgentRunInspection;
+  onClose: () => void;
+}) {
+  const [tab, setTab] = useState<WorkroomTab>("conversation");
+  const [priorState, setPriorState] = useState<PriorRunsState>({
+    kind: "loading",
+  });
+  const [beforeSequence, setBeforeSequence] = useState<bigint | null>(null);
+  const [cursorStack, setCursorStack] = useState<(bigint | null)[]>([]);
+  const [pageLoading, setPageLoading] = useState(false);
+  const [selectedPriorRunId, setSelectedPriorRunId] = useState<string | null>(
+    null,
+  );
+  const [selectedPriorRun, setSelectedPriorRun] =
+    useState<AgentRunInspection | null>(null);
+  const [priorRunFailed, setPriorRunFailed] = useState(false);
+  const pageRequestGeneration = useRef(0);
+
+  const loadPriorPage = useCallback(
+    async (cursor: bigint | null, nextCursorStack: (bigint | null)[]) => {
+      const generation = ++pageRequestGeneration.current;
+      setPageLoading(true);
+      try {
+        const page = await inspectAgentRunHistory(
+          tenderId,
+          cursor,
+          PRIOR_RUNS_PAGE_SIZE,
+        );
+        if (generation !== pageRequestGeneration.current) return;
+        setBeforeSequence(cursor);
+        setCursorStack(nextCursorStack);
+        setPriorState({ kind: "ready", page });
+      } catch {
+        if (generation !== pageRequestGeneration.current) return;
+        setPriorState({ kind: "error" });
+      } finally {
+        if (generation === pageRequestGeneration.current) {
+          setPageLoading(false);
+        }
+      }
+    },
+    [tenderId],
+  );
+
+  useEffect(() => {
+    void loadPriorPage(null, []);
+  }, [loadPriorPage]);
+
+  const loadOlderPriorRuns = async () => {
+    if (priorState.kind !== "ready" || pageLoading) return;
+    const next = priorState.page.next_before_sequence;
+    if (next === null) return;
+    await loadPriorPage(next, [...cursorStack, beforeSequence]);
+  };
+
+  const loadNewerPriorRuns = async () => {
+    if (pageLoading) return;
+    const previous = cursorStack[cursorStack.length - 1];
+    if (previous === undefined) return;
+    await loadPriorPage(previous, cursorStack.slice(0, -1));
+  };
+
+  const selectPriorRun = async (runId: string) => {
+    setSelectedPriorRunId(runId);
+    setSelectedPriorRun(null);
+    setPriorRunFailed(false);
+    try {
+      setSelectedPriorRun(await inspectAgentRun(tenderId, runId));
+    } catch {
+      setPriorRunFailed(true);
+    }
+  };
+
+  const priorRuns =
+    priorState.kind === "ready"
+      ? priorState.page.items.filter(
+          (item) =>
+            item.run.run_id !== run.run_id &&
+            item.run.task_id === run.task.task_id &&
+            item.run.profile_identity === run.profile.identity,
+        )
+      : [];
+  const morePriorRuns =
+    priorState.kind === "ready" &&
+    priorState.page.next_before_sequence !== null;
+  const comparison = selectedPriorRun
+    ? agentContextComparisonRows(run, selectedPriorRun)
+    : null;
+
+  return (
+    <section className="agent-workroom" aria-label="Agent workroom">
+      <div className="agent-workroom__heading">
+        <div>
+          <strong>{run.profile.identity}</strong>
+          <span>{run.task.objective}</span>
+        </div>
+        <button type="button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+      <nav aria-label="Agent workroom sections">
+        {WORKROOM_TABS.map((candidate) => (
+          <button
+            key={candidate}
+            type="button"
+            aria-current={tab === candidate ? "page" : undefined}
+            onClick={() => setTab(candidate)}
+          >
+            {candidate[0].toUpperCase() + candidate.slice(1)}
+          </button>
+        ))}
+      </nav>
+      {tab === "conversation" ? (
+        <div className="agent-workroom__panel">
+          <p>
+            Run <code>{run.run_id}</code> is {run.state.replace(/_/g, " ")}.
+          </p>
+          <p>
+            {run.failure?.required_user_action ??
+              "No provider failure recorded."}
+          </p>
+        </div>
+      ) : null}
+      {tab === "context" ? (
+        <div className="agent-workroom__panel agent-workroom__context">
+          <section
+            className="agent-workroom__supplied"
+            aria-label="What this run actually received"
+          >
+            <h4>What this run actually received</h4>
+            <h5>Exact inputs</h5>
+            {run.task.exact_inputs.length ? (
               <ul>
-                {selectedRun.task.exact_inputs.map((input) => (
+                {run.task.exact_inputs.map((input) => (
                   <li key={`${input.kind}-${input.reference}-${input.version}`}>
                     {input.kind}: <code>{input.reference}</code> · v
                     {input.version}
                   </li>
                 ))}
               </ul>
-              <h4>Granted access</h4>
-              <p>
-                {selectedRun.permission_grant.data_scopes.join(", ") ||
-                  "No data scopes"}
-              </p>
-              <h4>Requested but not granted</h4>
-              <p>
-                {selectedRun.access_requests
-                  .filter((request) => request.status !== "approved")
-                  .flatMap((request) => request.request.data_scopes)
-                  .join(", ") || "None"}
-              </p>
-            </div>
-          ) : null}
-          {workroomTab === "activity" ? (
-            <ol className="agent-workroom__panel agent-workroom__events">
-              {selectedRun.events.map((event) => (
-                <li key={event.sequence}>
-                  <strong>{event.kind.replace(/_/g, " ")}</strong>
-                  <span>{event.summary}</span>
-                </li>
-              ))}
-            </ol>
-          ) : null}
-          {workroomTab === "outputs" ? (
-            <div className="agent-workroom__panel">
-              {selectedRun.proposed_result ? (
-                <>
-                  <strong>
-                    {selectedRun.proposed_result.verification_status.replace(
-                      /_/g,
-                      " ",
-                    )}
-                  </strong>
-                  <pre>{selectedRun.proposed_result.payload_json}</pre>
-                </>
-              ) : (
-                <p>No output has been proposed.</p>
-              )}
-            </div>
-          ) : null}
-        </section>
+            ) : (
+              <p>None</p>
+            )}
+            <h5>Agent instructions (version {run.profile.version})</h5>
+            <p>{run.profile.instructions}</p>
+            <h5>Data views supplied</h5>
+            {run.permission_grant.data_views.length ? (
+              <ul className="agent-workroom__views">
+                {run.permission_grant.data_views.map((view) => (
+                  <li key={view.view_id}>
+                    <code>{view.relative_path}</code>
+                    <span>
+                      {view.data_scope} ·{" "}
+                      {view.data_classification.replace(/_/g, " ")} · digest{" "}
+                      {view.sha256.slice(0, 12)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>None</p>
+            )}
+            <h5>Granted access</h5>
+            <p>
+              {run.permission_grant.data_scopes.join(", ") || "No data scopes"}
+            </p>
+            <h5>Conversation exposure</h5>
+            <p>
+              Everything the provider conversation has been exposed to during
+              this run.
+            </p>
+            <ul>
+              <li>
+                {formatInputReferences(
+                  run.permission_grant.thread_exposure.exact_inputs,
+                )}
+              </li>
+              <li>
+                Data scopes:{" "}
+                {run.permission_grant.thread_exposure.data_scopes.join(", ") ||
+                  "none"}
+              </li>
+              <li>
+                Classifications:{" "}
+                {run.permission_grant.thread_exposure.data_classifications.join(
+                  ", ",
+                ) || "none"}
+              </li>
+            </ul>
+          </section>
+          <section
+            className="agent-workroom__requests"
+            aria-label="Requested but not granted"
+          >
+            <h4>Requested but not granted</h4>
+            <p>
+              {run.access_requests
+                .filter((request) => request.status !== "approved")
+                .flatMap((request) => request.request.data_scopes)
+                .join(", ") || "None"}
+            </p>
+          </section>
+          <section
+            className="agent-workroom__ceiling"
+            aria-label="What this Agent could request"
+          >
+            <h4>What this Agent could request</h4>
+            <p>
+              The permission ceiling for this Agent Profile. This is the most
+              the Agent may ask for on any run — not what this run received.
+            </p>
+            <dl>
+              <div>
+                <dt>Exact inputs</dt>
+                <dd>
+                  {formatInputReferences(
+                    run.permission_grant.access_ceiling.exact_inputs,
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Data scopes</dt>
+                <dd>
+                  {run.permission_grant.access_ceiling.data_scopes.join(", ") ||
+                    "None"}
+                </dd>
+              </div>
+              <div>
+                <dt>Data classifications</dt>
+                <dd>
+                  {run.permission_grant.access_ceiling.data_classifications.join(
+                    ", ",
+                  ) || "None"}
+                </dd>
+              </div>
+              <div>
+                <dt>Allowed actions</dt>
+                <dd>
+                  {run.permission_grant.access_ceiling.allowed_actions.join(
+                    ", ",
+                  ) || "None"}
+                </dd>
+              </div>
+              <div>
+                <dt>Allowed tools</dt>
+                <dd>
+                  {run.permission_grant.access_ceiling.allowed_tools.join(
+                    ", ",
+                  ) || "None"}
+                </dd>
+              </div>
+            </dl>
+          </section>
+          <section className="agent-workroom__prior" aria-label="Prior runs">
+            <h4>Prior runs</h4>
+            {priorState.kind === "loading" ? (
+              <p role="status">Loading prior runs…</p>
+            ) : null}
+            {priorState.kind === "error" ? (
+              <p role="alert">Prior runs are unavailable.</p>
+            ) : null}
+            {priorState.kind === "ready" && priorRuns.length === 0 ? (
+              <p>No prior runs for this Agent and task.</p>
+            ) : null}
+            {priorRuns.length ? (
+              <ul className="agent-workroom__prior-list">
+                {priorRuns.map((item) => (
+                  <li key={item.run.run_id}>
+                    <button
+                      type="button"
+                      aria-current={
+                        selectedPriorRunId === item.run.run_id
+                          ? "true"
+                          : undefined
+                      }
+                      onClick={() => void selectPriorRun(item.run.run_id)}
+                    >
+                      <strong>{item.run.state.replace(/_/g, " ")}</strong>
+                      <small>
+                        {new Date(
+                          item.run.completed_at ?? item.run.started_at,
+                        ).toLocaleString()}
+                      </small>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {morePriorRuns || cursorStack.length > 0 ? (
+              <div className="agent-workroom__prior-paging">
+                <button
+                  type="button"
+                  disabled={pageLoading || cursorStack.length === 0}
+                  onClick={() => void loadNewerPriorRuns()}
+                >
+                  Newer runs
+                </button>
+                <button
+                  type="button"
+                  disabled={pageLoading || !morePriorRuns}
+                  onClick={() => void loadOlderPriorRuns()}
+                >
+                  Older runs
+                </button>
+              </div>
+            ) : null}
+            {selectedPriorRunId && !selectedPriorRun && !priorRunFailed ? (
+              <p role="status">Loading the selected prior run…</p>
+            ) : null}
+            {priorRunFailed ? (
+              <p role="alert">The selected prior run is unavailable.</p>
+            ) : null}
+            {comparison ? (
+              <div className="agent-workroom__comparison">
+                <h5>What changed against the selected prior run</h5>
+                <dl>
+                  {comparison.map((row) => (
+                    <div
+                      key={row.label}
+                      className={row.changed ? "is-changed" : "is-same"}
+                    >
+                      <dt>
+                        {row.label}
+                        <span>{row.changed ? "Changed" : "Same"}</span>
+                      </dt>
+                      <dd>
+                        <strong>This run</strong>
+                        <span>{row.current}</span>
+                      </dd>
+                      {row.changed ? (
+                        <dd>
+                          <strong>Prior run</strong>
+                          <span>{row.prior}</span>
+                        </dd>
+                      ) : null}
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            ) : null}
+          </section>
+        </div>
+      ) : null}
+      {tab === "activity" ? (
+        <ol className="agent-workroom__panel agent-workroom__events">
+          {run.events.map((event) => (
+            <li key={event.sequence}>
+              <strong>{event.kind.replace(/_/g, " ")}</strong>
+              <span>{event.summary}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      {tab === "outputs" ? (
+        <div className="agent-workroom__panel">
+          {run.proposed_result ? (
+            <>
+              <strong>
+                {run.proposed_result.verification_status.replace(/_/g, " ")}
+              </strong>
+              <pre>{run.proposed_result.payload_json}</pre>
+            </>
+          ) : (
+            <p>No output has been proposed.</p>
+          )}
+        </div>
       ) : null}
     </section>
+  );
+}
+
+function documentFolder(packagePath: string): string {
+  const separator = packagePath.lastIndexOf("/");
+  return separator === -1 ? "" : packagePath.slice(0, separator);
+}
+
+function ArtifactHistoryDisclosure({
+  tenderId,
+  artifactId,
+}: {
+  tenderId: string;
+  artifactId: string;
+}) {
+  const [versions, setVersions] = useState<ArtifactVersionSummary[] | null>(
+    null,
+  );
+  const [failed, setFailed] = useState(false);
+
+  return (
+    <details
+      className="workspace-documents__history"
+      onToggle={(event) => {
+        const open = event.currentTarget.open;
+        if (!open || versions !== null || failed) return;
+        inspectArtifactVersions(tenderId, artifactId)
+          .then((history) => setVersions(history.versions))
+          .catch(() => setFailed(true));
+      }}
+    >
+      <summary>History</summary>
+      {versions === null ? (
+        <p>{failed ? "Version history is unavailable." : "Loading history…"}</p>
+      ) : (
+        <ul>
+          {versions.map((version, index) => (
+            <li key={`${version.artifact_id}-${version.version}`}>
+              <strong>
+                {index === 0 ? "Current version" : "Prior version"} · v
+                {version.version}
+              </strong>
+              <code>{version.digest ?? "not registered"}</code>
+              <span>{new Date(version.created_at).toLocaleString()}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
   );
 }
 
@@ -1780,6 +3358,7 @@ function FilesView({
   onImport: (kind: TenderPackageSourceKind) => void;
   readOnly: boolean;
 }) {
+  const tenderId = projection.selected_tender?.tender_id ?? null;
   const intakeWorking = ["working", "waiting"].includes(
     projection.intake?.status ?? "",
   );
@@ -1789,6 +3368,27 @@ function FilesView({
   const exceptionDocuments = projection.files.tender_documents.filter(
     (document) => document.registration_state === "exception",
   );
+  const registeredFolders = new Map<
+    string,
+    typeof projection.files.tender_documents
+  >();
+  for (const document of registeredDocuments) {
+    const folder = documentFolder(document.package_path);
+    const group = registeredFolders.get(folder);
+    if (group) {
+      group.push(document);
+    } else {
+      registeredFolders.set(folder, [document]);
+    }
+  }
+  const folders = [...registeredFolders.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  for (const [, documents] of folders) {
+    documents.sort((left, right) =>
+      left.package_path.localeCompare(right.package_path),
+    );
+  }
 
   const renderDocument = (
     document: (typeof projection.files.tender_documents)[number],
@@ -1803,7 +3403,7 @@ function FilesView({
           ) : (
             <>
               Registration exception
-              {document.exception ? ` · ${document.exception}` : null}
+              {document.exception ? ` · ${document.exception}` : ""}
             </>
           )}
         </span>
@@ -1848,6 +3448,12 @@ function FilesView({
             </div>
           </dl>
         </details>
+        {tenderId && document.registration_state === "registered" ? (
+          <ArtifactHistoryDisclosure
+            tenderId={tenderId}
+            artifactId={document.artifact_id}
+          />
+        ) : null}
       </div>
     </li>
   );
@@ -1887,7 +3493,16 @@ function FilesView({
       {registeredDocuments.length > 0 ? (
         <div className="workspace-documents">
           <h3>Registered source documents</h3>
-          <ul>{registeredDocuments.map(renderDocument)}</ul>
+          {folders.map(([folder, documents]) => (
+            <section
+              key={folder || "package-root"}
+              className="workspace-documents__folder"
+              aria-label={folder || "Package root"}
+            >
+              <h4>{folder || "Package root"}</h4>
+              <ul>{documents.map(renderDocument)}</ul>
+            </section>
+          ))}
         </div>
       ) : null}
       {exceptionDocuments.length > 0 ? (
@@ -1933,6 +3548,12 @@ function FilesView({
                       </div>
                     </dl>
                   </details>
+                  {tenderId ? (
+                    <ArtifactHistoryDisclosure
+                      tenderId={tenderId}
+                      artifactId={output.artifact_id}
+                    />
+                  ) : null}
                 </div>
               </li>
             ))}
@@ -1959,6 +3580,249 @@ function FilesView({
           </button>
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function ChangeReviewSurface({
+  tenderId,
+  busy,
+  reportCommandFailure,
+  onDecided,
+  onClose,
+}: {
+  tenderId: string;
+  busy: boolean;
+  reportCommandFailure: () => void;
+  onDecided: () => void;
+  onClose: () => void;
+}) {
+  const [page, setPage] = useState<ChangeAssessmentPage | null>(null);
+  const [classification, setClassification] =
+    useState<ChangeAssessmentClassification>("material");
+  const [rationale, setRationale] = useState("");
+  const [deciding, setDeciding] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const requestGeneration = useRef(0);
+
+  useEffect(() => {
+    const generation = ++requestGeneration.current;
+    setLoading(true);
+    inspectChangeAssessments(tenderId, null, 4)
+      .then((next) => {
+        if (generation === requestGeneration.current) setPage(next);
+      })
+      .catch(() => {
+        if (generation === requestGeneration.current) reportCommandFailure();
+      })
+      .finally(() => {
+        if (generation === requestGeneration.current) setLoading(false);
+      });
+    return () => {
+      requestGeneration.current += 1;
+    };
+  }, [reportCommandFailure, tenderId]);
+
+  const active = page?.active ?? null;
+
+  const decide = async () => {
+    if (!active || active.status !== "pending" || deciding || !rationale.trim())
+      return;
+    setDeciding(true);
+    try {
+      await decideChangeAssessment(
+        tenderId,
+        active.assessment_id,
+        active.manifest_sha256,
+        classification,
+        rationale.trim(),
+      );
+      onDecided();
+    } catch {
+      reportCommandFailure();
+      setDeciding(false);
+    }
+  };
+
+  return (
+    <section
+      className="change-review"
+      data-testid="change-review"
+      aria-labelledby="change-review-title"
+    >
+      <header className="change-review__header">
+        <div>
+          <h2 id="change-review-title">Review the Tender change</h2>
+          <p>
+            A new source document version is waiting for your decision. The
+            earlier version stays preserved unchanged, and work that depends on
+            it is explained below.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="manager-workspace__secondary"
+          onClick={onClose}
+        >
+          Back to Manager conversation
+        </button>
+      </header>
+      {loading ? (
+        <p className="change-review__loading">
+          <LoaderCircle size={16} aria-hidden="true" /> Loading the change
+          assessment…
+        </p>
+      ) : !active ? (
+        <p className="change-review__empty">
+          No change is waiting for a decision.
+        </p>
+      ) : (
+        <>
+          <article className="change-review__card">
+            <h3>What changed</h3>
+            <p>
+              {active.relationship_kind === "addendum" ? (
+                <>A new addendum arrived for </>
+              ) : (
+                <>A replacement document arrived for </>
+              )}
+              <strong>{active.prior_source.package_path}</strong> and is
+              registered as{" "}
+              <strong>{active.replacement_source.package_path}</strong>.
+            </p>
+            <dl>
+              <div>
+                <dt>Earlier version</dt>
+                <dd>
+                  <code>
+                    {active.prior_source.artifact_id} · v
+                    {active.prior_source.version}
+                  </code>
+                </dd>
+              </div>
+              <div>
+                <dt>New version</dt>
+                <dd>
+                  <code>
+                    {active.replacement_source.artifact_id} · v
+                    {active.replacement_source.version}
+                  </code>
+                </dd>
+              </div>
+              <div>
+                <dt>SHA-256</dt>
+                <dd>
+                  <code>{active.replacement_source.sha256}</code>
+                </dd>
+              </div>
+            </dl>
+          </article>
+          <article className="change-review__card">
+            <h3>What is now out of date</h3>
+            {active.impacts.length ? (
+              <ul className="change-review__impacts">
+                {active.impacts.map((impact) => (
+                  <li
+                    key={`${impact.kind}-${impact.object_id}-${impact.object_version}`}
+                  >
+                    <div>
+                      <strong>{impact.kind.replace(/_/g, " ")}</strong>
+                      <span>{impact.consequence.replace(/_/g, " ")}</span>
+                    </div>
+                    <p>{impact.summary}</p>
+                    <code>
+                      {impact.object_id}
+                      {impact.object_version
+                        ? ` · v${impact.object_version}`
+                        : ""}
+                    </code>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>
+                No current records, work, or calculations depend on the replaced
+                document.
+              </p>
+            )}
+          </article>
+          <article className="change-review__card">
+            <h3>Affected work</h3>
+            <ul>
+              {active.proposed_rework.map((item, index) => (
+                <li key={`${index}-${item}`}>{item}</li>
+              ))}
+            </ul>
+            <p>{active.deadline_effect}</p>
+            <h4>Unchanged</h4>
+            <ul>
+              {active.unchanged_scope.map((item, index) => (
+                <li key={`${index}-${item}`}>{item}</li>
+              ))}
+            </ul>
+            {active.approval_consequences.length ? (
+              <>
+                <h4>Approvals affected</h4>
+                <ul>
+                  {active.approval_consequences.map((item) => (
+                    <li key={item.reference}>
+                      {item.reference}: {item.consequence}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
+          </article>
+          {active.status === "pending" ? (
+            <form
+              className="change-review__form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void decide();
+              }}
+            >
+              <label>
+                Classification
+                <select
+                  value={classification}
+                  disabled={busy || deciding}
+                  onChange={(event) =>
+                    setClassification(
+                      event.target.value as ChangeAssessmentClassification,
+                    )
+                  }
+                >
+                  <option value="material">
+                    Material — targeted rework is required
+                  </option>
+                  <option value="irrelevant">
+                    Irrelevant — current work stays valid
+                  </option>
+                </select>
+              </label>
+              <label>
+                Decision rationale
+                <textarea
+                  value={rationale}
+                  disabled={busy || deciding}
+                  onChange={(event) => setRationale(event.target.value)}
+                />
+              </label>
+              <button
+                className="manager-workspace__primary"
+                type="submit"
+                disabled={busy || deciding || !rationale.trim()}
+              >
+                Record decision
+              </button>
+            </form>
+          ) : (
+            <p className="change-review__empty">
+              A decision was already recorded for this change.
+            </p>
+          )}
+        </>
+      )}
     </section>
   );
 }
@@ -1990,6 +3854,15 @@ export function ManagerWorkspace({
   const [focusedActionTenderId, setFocusedActionTenderId] = useState<
     string | null
   >(null);
+  const [evidenceReview, setEvidenceReview] =
+    useState<EvidenceReviewState | null>(null);
+  const [recordDecision, setRecordDecision] =
+    useState<RecordDecisionState | null>(null);
+  const [changeReviewOpen, setChangeReviewOpen] = useState(false);
+  const [rfiReviewOpen, setRfiReviewOpen] = useState(false);
+  const [estimateReviewOpen, setEstimateReviewOpen] = useState(false);
+  const [calculationsOpen, setCalculationsOpen] = useState(false);
+  const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
   const [tenderViews, setTenderViews] = useState<Record<string, WorkspaceView>>(
     {},
   );
@@ -2052,6 +3925,12 @@ export function ManagerWorkspace({
   const [packageTask, setPackageTask] = useState<PackageTaskState | null>(null);
   const [operationFailure, setOperationFailure] =
     useState<WorkspaceOperationFailure | null>(null);
+  const [backupConfirmation, setBackupConfirmation] = useState<string | null>(
+    null,
+  );
+  const [startupReconciliation, setStartupReconciliation] =
+    useState<StartupReconciliationReport | null>(null);
+  const startupReconciliationFetched = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const refreshRunning = useRef(false);
   const settingsSnapshotRequestVersion = useRef(0);
@@ -2106,6 +3985,70 @@ export function ManagerWorkspace({
     setContextOpen(next);
     if (next && !contextRail) setSidebarOpen(false);
   }, [contextOpen, contextRail]);
+
+  useEffect(() => {
+    if (
+      rfiReviewOpen &&
+      (!projection?.selected_tender ||
+        !isRfiActionKind(projection.current_action.kind))
+    ) {
+      setRfiReviewOpen(false);
+    }
+  }, [rfiReviewOpen, projection]);
+
+  useEffect(() => {
+    if (
+      estimateReviewOpen &&
+      (!projection?.selected_tender ||
+        !isEstimateReviewActionKind(projection.current_action.kind))
+    ) {
+      setEstimateReviewOpen(false);
+    }
+  }, [estimateReviewOpen, projection]);
+
+  useEffect(() => {
+    if (
+      !evidenceReview &&
+      !recordDecision &&
+      !changeReviewOpen &&
+      !rfiReviewOpen &&
+      !estimateReviewOpen &&
+      !calculationsOpen &&
+      !focusedTaskId
+    )
+      return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !operationRef.current) {
+        if (calculationsOpen) setCalculationsOpen(false);
+        else if (evidenceReview) setEvidenceReview(null);
+        else if (recordDecision) setRecordDecision(null);
+        else if (changeReviewOpen) setChangeReviewOpen(false);
+        else if (rfiReviewOpen) setRfiReviewOpen(false);
+        else if (estimateReviewOpen) setEstimateReviewOpen(false);
+        else setFocusedTaskId(null);
+      }
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [
+    evidenceReview,
+    recordDecision,
+    changeReviewOpen,
+    rfiReviewOpen,
+    estimateReviewOpen,
+    calculationsOpen,
+    focusedTaskId,
+  ]);
+
+  useEffect(() => {
+    setEvidenceReview(null);
+    setRecordDecision(null);
+    setChangeReviewOpen(false);
+    setRfiReviewOpen(false);
+    setEstimateReviewOpen(false);
+    setCalculationsOpen(false);
+    setFocusedTaskId(null);
+  }, [projection?.selected_tender?.tender_id]);
 
   useEffect(() => {
     const wasRail = previousContextRail.current;
@@ -2171,6 +4114,20 @@ export function ManagerWorkspace({
       if (epoch === projectionEpoch.current) setError(readableError(reason));
     }
   }, []);
+
+  useEffect(() => {
+    if (!projection || startupReconciliationFetched.current) return;
+    startupReconciliationFetched.current = true;
+    let disposed = false;
+    void inspectStartupReconciliation()
+      .then((report) => {
+        if (!disposed) setStartupReconciliation(report);
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, [projection]);
 
   const acceptRuntimeReadiness = useCallback((readiness: RuntimeReadiness) => {
     const runtimeProbePending =
@@ -2869,6 +4826,8 @@ export function ManagerWorkspace({
 
   const selectTender = useCallback(
     async (tenderId: string) => {
+      setPendingTenderStart(null);
+      setAiPreflightOpen(false);
       const tender = projection?.catalogue.find(
         (candidate) => candidate.tender_id === tenderId,
       );
@@ -3008,6 +4967,185 @@ export function ManagerWorkspace({
     if (succeeded) await load();
   }, [load, projection?.selected_tender?.tender_id, run]);
 
+  const reportFocusedCommandFailure = useCallback(() => {
+    setOperationFailure({
+      message: "Quantix could not complete that action.",
+      label: "Tender decision workspace",
+    });
+  }, []);
+
+  const startFocusedTask = useCallback(async () => {
+    const tenderId = projection?.selected_tender?.tender_id;
+    const task = projection?.work.tasks.find(
+      (candidate) => candidate.production_task_id === focusedTaskId,
+    );
+    if (!tenderId || !task) return false;
+    const succeeded = await run(
+      async () => {
+        await runProductionTask(tenderId, task.production_task_id);
+        return true;
+      },
+      { kind: "run_task", label: "Starting the task" },
+      async () => load(),
+    );
+    if (succeeded) await load();
+    return succeeded === true;
+  }, [
+    focusedTaskId,
+    load,
+    projection?.selected_tender?.tender_id,
+    projection?.work.tasks,
+    run,
+  ]);
+
+  const stopFocusedTask = useCallback(async () => {
+    const tenderId = projection?.selected_tender?.tender_id;
+    const task = projection?.work.tasks.find(
+      (candidate) => candidate.production_task_id === focusedTaskId,
+    );
+    if (!tenderId || !task?.current_run_id) return false;
+    const succeeded = await run(
+      async () => {
+        await interruptAgentRun(tenderId, task.current_run_id!);
+        return true;
+      },
+      { kind: "stop_task", label: "Stopping the run" },
+      async () => load(),
+    );
+    if (succeeded) await load();
+    return succeeded === true;
+  }, [
+    focusedTaskId,
+    load,
+    projection?.selected_tender?.tender_id,
+    projection?.work.tasks,
+    run,
+  ]);
+
+  const requestFocusedTaskChange = useCallback(async () => {
+    const tenderId = projection?.selected_tender?.tender_id;
+    const task = projection?.work.tasks.find(
+      (candidate) => candidate.production_task_id === focusedTaskId,
+    );
+    if (!tenderId || !task) return false;
+    const succeeded = await run(
+      () =>
+        recordEngineerWorkspaceMessage(
+          tenderId,
+          taskChangeRequestBody(task),
+          [],
+          [],
+        ),
+      { kind: "request_change", label: "Sending the change request" },
+      (next) => setProjection(next),
+    );
+    if (!succeeded) return false;
+    setFocusedTaskId(null);
+    navigateToView("manager");
+    return true;
+  }, [
+    focusedTaskId,
+    navigateToView,
+    projection?.selected_tender?.tender_id,
+    projection?.work.tasks,
+    run,
+  ]);
+
+  const openEvidenceReview = useCallback(
+    (target: EvidenceReviewTarget, conflicts?: EvidenceReviewConflict[]) => {
+      const tenderId = projection?.selected_tender?.tender_id;
+      if (!tenderId) return;
+      setEvidenceReview({ target, conflicts: conflicts ?? [] });
+      if (conflicts) return;
+      const recordTargets = citedRecordTargets(projection);
+      if (recordTargets.length === 0) return;
+      void (async () => {
+        try {
+          const inspections = await Promise.all(
+            recordTargets.map((recordTarget) =>
+              inspectTenderRecord(
+                tenderId,
+                recordTarget.recordId,
+                recordTarget.version,
+              ),
+            ),
+          );
+          const nextConflicts = evidenceConflictsForTarget(inspections, target);
+          setEvidenceReview((current) =>
+            current && current.target === target
+              ? { target, conflicts: nextConflicts }
+              : current,
+          );
+        } catch {
+          // The review stays open without the conflicting-source context.
+        }
+      })();
+    },
+    [projection],
+  );
+
+  const handleMessageReference = useCallback(
+    (reference: WorkspaceMessageReference) => {
+      if (reference.kind === "source_evidence") {
+        openEvidenceReview({
+          artifactId: reference.reference,
+          version: reference.version,
+          ordinal: reference.evidence_ordinal,
+          label: reference.label,
+        });
+      } else if (reference.kind === "tender_record") {
+        setRecordDecision({
+          focusTarget: {
+            recordId: reference.reference,
+            version: reference.version,
+          },
+        });
+      }
+    },
+    [openEvidenceReview],
+  );
+
+  const closeEvidenceReview = useCallback(() => setEvidenceReview(null), []);
+  const closeRecordDecision = useCallback(() => setRecordDecision(null), []);
+  const closeChangeReview = useCallback(() => setChangeReviewOpen(false), []);
+  const handleChangeDecided = useCallback(async () => {
+    setChangeReviewOpen(false);
+    await load();
+  }, [load]);
+  const handleRecordDecided = useCallback(async () => {
+    setRecordDecision(null);
+    setEvidenceReview(null);
+    await load();
+  }, [load]);
+
+  const decisionTargets = useMemo(() => {
+    const focus = recordDecision?.focusTarget;
+    const cited = citedRecordTargets(projection);
+    if (!focus) return cited;
+    return [
+      focus,
+      ...cited.filter(
+        (target) =>
+          !(
+            target.recordId === focus.recordId &&
+            target.version === focus.version
+          ),
+      ),
+    ];
+  }, [projection, recordDecision]);
+  const canDecideCitedRecords =
+    projection?.current_action.kind === "answer_manager_question" &&
+    citedRecordTargets(projection).length > 0;
+  const focusedTask =
+    focusedTaskId && projection
+      ? (projection.work.tasks.find(
+          (task) => task.production_task_id === focusedTaskId,
+        ) ?? null)
+      : null;
+  const evidenceReviewOriginLabel = recordDecision
+    ? "record decision"
+    : "Manager conversation";
+
   const rebindIntakeProvider = useCallback(async () => {
     const tenderId = projection?.selected_tender?.tender_id;
     if (!tenderId) return;
@@ -3021,6 +5159,29 @@ export function ManagerWorkspace({
     );
     if (succeeded) await load();
   }, [load, projection?.selected_tender?.tender_id, run]);
+
+  const createBackup = useCallback(
+    async (tender: ManagerWorkspaceTender) => {
+      setBackupConfirmation(null);
+      const record = await run(
+        () => createTenderBackup(tender.tender_id),
+        { kind: "create_backup", label: "Creating verified backup" },
+        async () => load(),
+      );
+      if (record) setBackupConfirmation(record.created_at);
+    },
+    [load, run],
+  );
+
+  const inspectBackups = useCallback((tender: ManagerWorkspaceTender) => {
+    setBackupConfirmation(null);
+    setRecoveryRequestedAction(null);
+    setRecoveryTarget(tender);
+    setSettingsOpen(false);
+    setRetentionOpen(false);
+    setContextOpen(false);
+    if (mediaQueryMatches("(max-width: 819px)")) setSidebarOpen(false);
+  }, []);
 
   const applyRetentionAction = useCallback(async () => {
     const tenderId = retentionAction?.tender.tender_id;
@@ -3233,6 +5394,13 @@ export function ManagerWorkspace({
     projection?.catalogue.filter((tender) => tender.state === "archived") ?? [];
   const visibleTrash = trashedTenders.filter(
     (record) => !["restored", "purged"].includes(record.state),
+  );
+  const reconciliationNotice = useMemo(
+    () =>
+      startupReconciliation
+        ? startupReconciliationNotice(startupReconciliation)
+        : null,
+    [startupReconciliation],
   );
   const activeCounts = useMemo(() => {
     if (!projection) return 0;
@@ -3599,6 +5767,8 @@ export function ManagerWorkspace({
                       }
                       busy={isBusy}
                       onSelect={() => void selectTender(tender.tender_id)}
+                      onCreateBackup={() => void createBackup(tender)}
+                      onInspectBackups={() => inspectBackups(tender)}
                       onRename={() => {
                         setRenameTarget(tender);
                         setRenameValue(tender.name);
@@ -3672,6 +5842,22 @@ export function ManagerWorkspace({
                 </button>
               </aside>
             ) : null}
+            {reconciliationNotice ? (
+              <aside
+                className="manager-workspace__warning"
+                role="status"
+                aria-label="Startup cleanup"
+              >
+                <Info size={18} aria-hidden="true" />
+                <div>
+                  <span>{reconciliationNotice.summary}</span>
+                  <details>
+                    <summary>Technical details</summary>
+                    <small>{reconciliationNotice.details}</small>
+                  </details>
+                </div>
+              </aside>
+            ) : null}
             {error ? (
               <div className="manager-workspace__error" role="alert">
                 <CircleAlert size={18} aria-hidden="true" />
@@ -3711,6 +5897,14 @@ export function ManagerWorkspace({
                 role="status"
               >
                 {operation.label}…
+              </div>
+            ) : null}
+            {!operation && backupConfirmation ? (
+              <div
+                className="manager-workspace__operation-feedback"
+                role="status"
+              >
+                {`Verified backup created at ${new Date(backupConfirmation).toLocaleString()}. Find it under Inspect backups.`}
               </div>
             ) : null}
 
@@ -3755,6 +5949,11 @@ export function ManagerWorkspace({
                 <WorkspaceRecoveryCenter
                   tenderId={recoveryTarget.tender_id}
                   tenderName={recoveryTarget.name}
+                  variant={
+                    recoveryTarget.state === "recovery_required"
+                      ? "recovery"
+                      : "backups"
+                  }
                   requestedAction={recoveryRequestedAction}
                   onRequestedActionHandled={() =>
                     setRecoveryRequestedAction(null)
@@ -3826,8 +6025,34 @@ export function ManagerWorkspace({
                   ) : null}
                   <main className="manager-workspace__content">
                     {view === "manager" ? (
-                      focusedActionTenderId === selected.tender_id &&
-                      isFocusedActionKind(projection.current_action.kind) ? (
+                      rfiReviewOpen &&
+                      isRfiActionKind(projection.current_action.kind) ? (
+                        <TenderRfiReview
+                          tenderId={selected.tender_id}
+                          summaries={projection.external_rfis}
+                          interpretationFirst={
+                            projection.current_action.kind ===
+                            "interpret_external_rfi_response"
+                          }
+                          runtimeReady={runtimeStatus === "ready"}
+                          reportCommandFailure={reportFocusedCommandFailure}
+                          onRefresh={load}
+                          onClose={() => setRfiReviewOpen(false)}
+                        />
+                      ) : estimateReviewOpen &&
+                        isEstimateReviewActionKind(
+                          projection.current_action.kind,
+                        ) ? (
+                        <TenderEstimateReview
+                          tenderId={selected.tender_id}
+                          runtimeReady={runtimeStatus === "ready"}
+                          reportCommandFailure={reportFocusedCommandFailure}
+                          onRefresh={load}
+                          onOpenCalculations={() => setCalculationsOpen(true)}
+                          onClose={() => setEstimateReviewOpen(false)}
+                        />
+                      ) : focusedActionTenderId === selected.tender_id &&
+                        isFocusedActionKind(projection.current_action.kind) ? (
                         <TenderFocusedAction
                           tenderId={selected.tender_id}
                           actionKind={projection.current_action.kind}
@@ -3871,6 +6096,16 @@ export function ManagerWorkspace({
                           onOpenFocusedAction={() =>
                             setFocusedActionTenderId(selected.tender_id)
                           }
+                          onOpenRfiReview={() => setRfiReviewOpen(true)}
+                          onOpenEstimateReview={() =>
+                            setEstimateReviewOpen(true)
+                          }
+                          onOpenRecordDecision={() =>
+                            setRecordDecision({ focusTarget: null })
+                          }
+                          onOpenChangeReview={() => setChangeReviewOpen(true)}
+                          canDecideCitedRecords={canDecideCitedRecords}
+                          onOpenReference={handleMessageReference}
                           onOpenSearch={() => {
                             searchInputRef.current?.focus();
                             searchInputRef.current?.scrollIntoView({
@@ -3908,10 +6143,49 @@ export function ManagerWorkspace({
                       )
                     ) : null}
                     {view === "work" ? (
-                      <WorkView projection={projection} />
+                      <WorkView
+                        projection={projection}
+                        onOpenTask={(task) =>
+                          setFocusedTaskId(task.production_task_id)
+                        }
+                      />
                     ) : null}
                     {view === "team" ? (
-                      <TeamView projection={projection} />
+                      <TeamRoom
+                        projection={projection}
+                        busy={isBusy}
+                        readOnly={selected.state === "archived"}
+                        composer={composerDrafts[selected.tender_id] ?? ""}
+                        onComposerChange={(value) =>
+                          setComposerDrafts((current) => ({
+                            ...current,
+                            [selected.tender_id]: value,
+                          }))
+                        }
+                        onSend={sendMessage}
+                        onOpenSearch={() => {
+                          searchInputRef.current?.focus();
+                          searchInputRef.current?.scrollIntoView({
+                            behavior: "smooth",
+                            block: "center",
+                          });
+                        }}
+                        contextRefs={
+                          contextRefsByTender[selected.tender_id] ?? []
+                        }
+                        onRemoveContext={(reference) =>
+                          setContextRefsByTender((current) => ({
+                            ...current,
+                            [selected.tender_id]: (
+                              current[selected.tender_id] ?? []
+                            ).filter(
+                              (candidate) => candidate.reference !== reference,
+                            ),
+                          }))
+                        }
+                        onOpenReference={handleMessageReference}
+                        onClose={() => navigateToView("manager")}
+                      />
                     ) : null}
                     {view === "files" ? (
                       <FilesView
@@ -3922,6 +6196,69 @@ export function ManagerWorkspace({
                       />
                     ) : null}
                   </main>
+                  {changeReviewOpen ? (
+                    <div className="manager-workspace__overlay">
+                      <ChangeReviewSurface
+                        tenderId={selected.tender_id}
+                        busy={isBusy}
+                        reportCommandFailure={reportFocusedCommandFailure}
+                        onDecided={() => void handleChangeDecided()}
+                        onClose={closeChangeReview}
+                      />
+                    </div>
+                  ) : null}
+                  {recordDecision ? (
+                    <div className="manager-workspace__overlay">
+                      <TenderRecordDecision
+                        tenderId={selected.tender_id}
+                        recordTargets={decisionTargets}
+                        busy={isBusy}
+                        onReviewEvidence={openEvidenceReview}
+                        reportCommandFailure={reportFocusedCommandFailure}
+                        onDecided={() => void handleRecordDecided()}
+                        onClose={closeRecordDecision}
+                      />
+                    </div>
+                  ) : null}
+                  {focusedTask ? (
+                    <div className="manager-workspace__overlay">
+                      <WorkTaskDetail
+                        tenderId={selected.tender_id}
+                        task={focusedTask}
+                        tasks={projection.work.tasks}
+                        busy={isBusy}
+                        readOnly={selected.state === "archived"}
+                        onRefresh={load}
+                        onStart={() => startFocusedTask()}
+                        onStop={() => stopFocusedTask()}
+                        onRequestChange={() => requestFocusedTaskChange()}
+                        onOpenCalculations={() => setCalculationsOpen(true)}
+                        reportCommandFailure={reportFocusedCommandFailure}
+                        onClose={() => setFocusedTaskId(null)}
+                      />
+                    </div>
+                  ) : null}
+                  {calculationsOpen ? (
+                    <div className="manager-workspace__overlay is-raised">
+                      <ControlledCalculationView
+                        tenderId={selected.tender_id}
+                        reportCommandFailure={reportFocusedCommandFailure}
+                        onClose={() => setCalculationsOpen(false)}
+                      />
+                    </div>
+                  ) : null}
+                  {evidenceReview ? (
+                    <div className="manager-workspace__overlay is-raised">
+                      <TenderEvidenceReview
+                        tenderId={selected.tender_id}
+                        target={evidenceReview.target}
+                        conflicts={evidenceReview.conflicts}
+                        originLabel={evidenceReviewOriginLabel}
+                        onOpenTarget={(target) => openEvidenceReview(target)}
+                        onClose={closeEvidenceReview}
+                      />
+                    </div>
+                  ) : null}
                 </>
               ) : projection ? (
                 <main className="manager-workspace__empty-main">
@@ -3931,6 +6268,72 @@ export function ManagerWorkspace({
                     focusRef={packageFocusRef}
                     onStart={startTender}
                   />
+                  {aiPreflightOpen && pendingTenderStart ? (
+                    <section
+                      className="start-tender__ai-note"
+                      aria-label="AI setup for the new Tender"
+                    >
+                      <h3>
+                        {aiStatus === "ready"
+                          ? "AI is ready for this Tender"
+                          : "AI & Models is not fully set up"}
+                      </h3>
+                      <p>
+                        {aiPreflightReason} Local package registration and
+                        document work remain available without AI; only
+                        AI-required work will wait.
+                      </p>
+                      {settingsSnapshot?.ai_execution_selection ? (
+                        <p>
+                          Current default:{" "}
+                          {settingsSnapshot.ai_execution_selection.model_id}
+                        </p>
+                      ) : null}
+                      <div className="start-tender__ai-actions">
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => {
+                            setAiPreflightOpen(false);
+                            setPendingTenderStart(null);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        {aiStatus !== "ready" ? (
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => {
+                              setAiPreflightOpen(false);
+                              openSettings("ai");
+                            }}
+                          >
+                            Set up AI &amp; Models
+                          </button>
+                        ) : null}
+                        <button
+                          className="manager-workspace__primary"
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => {
+                            const kind = pendingTenderStart;
+                            if (!kind) return;
+                            setAiPreflightOpen(false);
+                            setPendingTenderStart(null);
+                            void continueStartTender(
+                              kind,
+                              aiStatus !== "ready",
+                            );
+                          }}
+                        >
+                          {aiStatus === "ready"
+                            ? "Continue New Tender"
+                            : "Continue without AI"}
+                        </button>
+                      </div>
+                    </section>
+                  ) : null}
                 </main>
               ) : null}
             </m.div>
@@ -3979,72 +6382,6 @@ export function ManagerWorkspace({
               presentation="drawer"
             />
           ) : null}
-
-          <QuantixDialog
-            isOpen={aiPreflightOpen}
-            title={
-              aiStatus === "ready"
-                ? "AI is ready for this Tender"
-                : "AI & Models is not fully set up"
-            }
-            onOpenChange={(open) => {
-              setAiPreflightOpen(open);
-              if (!open && aiStatus !== "ready") {
-                setPendingTenderStart(null);
-              }
-            }}
-          >
-            <p className="manager-workspace__dialog-copy">
-              {aiPreflightReason} Local package registration and document work
-              remain available without AI; only AI-required work will wait.
-            </p>
-            {settingsSnapshot?.ai_execution_selection ? (
-              <p className="manager-workspace__dialog-detail">
-                Current default:{" "}
-                {settingsSnapshot.ai_execution_selection.model_id}
-              </p>
-            ) : null}
-            <div className="retention-dialog__actions">
-              <button
-                type="button"
-                disabled={isBusy}
-                onClick={() => {
-                  setAiPreflightOpen(false);
-                  setPendingTenderStart(null);
-                }}
-              >
-                Cancel
-              </button>
-              {aiStatus !== "ready" ? (
-                <button
-                  type="button"
-                  disabled={isBusy}
-                  onClick={() => {
-                    setAiPreflightOpen(false);
-                    openSettings("ai");
-                  }}
-                >
-                  Set up AI &amp; Models
-                </button>
-              ) : null}
-              <button
-                className="manager-workspace__primary"
-                type="button"
-                disabled={isBusy || pendingTenderStart === null}
-                onClick={() => {
-                  const kind = pendingTenderStart;
-                  if (!kind) return;
-                  setAiPreflightOpen(false);
-                  setPendingTenderStart(null);
-                  void continueStartTender(kind, aiStatus !== "ready");
-                }}
-              >
-                {aiStatus === "ready"
-                  ? "Continue New Tender"
-                  : "Continue without AI"}
-              </button>
-            </div>
-          </QuantixDialog>
 
           <QuantixDialog
             isOpen={renameTarget !== null}

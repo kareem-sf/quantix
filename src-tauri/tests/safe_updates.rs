@@ -1,4 +1,4 @@
-use std::{
+﻿use std::{
     fs, io,
     io::Cursor,
     path::Path,
@@ -130,7 +130,7 @@ fn valid_offer(data_may_change: bool) -> UpdateCandidate {
         },
         compatibility: UpdateCompatibilityManifest {
             installation_schema_version: 25,
-            tender_schema_version: 45,
+            tender_schema_version: 46,
             ocr_version: "3.9.2".into(),
             runtime_manifest_schema_version: 3,
         },
@@ -610,7 +610,7 @@ fn valid_signed_update_is_presented_and_requires_exact_backup_before_installatio
     assert_eq!(presented.version, "0.2.0");
     assert_eq!(presented.artifact.sha256, "a".repeat(64));
     assert_eq!(presented.artifact.signature_sha256, "b".repeat(64));
-    assert_eq!(presented.compatibility.tender_schema_version, 45);
+    assert_eq!(presented.compatibility.tender_schema_version, 46);
     assert!(presented.impact.stored_data_may_change);
 
     let approved = host

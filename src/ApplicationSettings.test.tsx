@@ -16,13 +16,18 @@ const host = vi.hoisted(() => ({
   disconnectChatGpt: vi.fn(),
   exportDiagnosticsSupportBundle: vi.fn(),
   inspectDiagnosticTimeline: vi.fn(),
+  inspectAiProviders: vi.fn(),
+  probeAiProvider: vi.fn(),
   inspectDiagnosticsStatus: vi.fn(),
   inspectQuantixDoctor: vi.fn(),
   inspectRuntimeReadiness: vi.fn(),
   openChatGptDeviceLoginPage: vi.fn(),
   openDiagnosticLogs: vi.fn(),
   refreshApplicationSettings: vi.fn(),
+  removeAiProvider: vi.fn(),
   repairQuantixDoctor: vi.fn(),
+  saveAiProvider: vi.fn(),
+  setActiveAiProvider: vi.fn(),
   startChatGptDeviceLogin: vi.fn(),
   startChatGptLogin: vi.fn(),
   startTenderDeepDiagnostics: vi.fn(),
@@ -71,7 +76,7 @@ const disconnectedConnection = {
   account_plan: null,
   models: [],
   catalogue_fetched_at: null,
-  adapter_version: "chatgpt-direct-v1",
+  adapter_version: "0.151.0",
   status_summary: "Connect ChatGPT.",
 };
 
@@ -80,7 +85,7 @@ const readyConnection = {
   status: "ready" as const,
   account_label: "engineer@example.com",
   account_plan: "plus",
-  catalogue_fetched_at: "chatgpt-direct-v1",
+  catalogue_fetched_at: "2026-08-30T00:00:00Z",
   models: [
     {
       model_id: "gpt-construction",
@@ -90,7 +95,7 @@ const readyConnection = {
       input_modalities: ["text"],
       reasoning_options: [
         {
-          selection: { kind: "codex_effort", value: "medium" } as const,
+          selection: { kind: "effort", value: "medium" } as const,
           label: "Medium",
           description: "Balanced speed and depth.",
           is_default: true,
@@ -105,7 +110,7 @@ const readyConnection = {
       input_modalities: ["text"],
       reasoning_options: [
         {
-          selection: { kind: "codex_effort", value: "high" } as const,
+          selection: { kind: "effort", value: "high" } as const,
           label: "High",
           description: "Deeper review.",
           is_default: true,
@@ -119,9 +124,9 @@ const preparedSelection = {
   connection_id: "codex_chatgpt",
   provider: "codex" as const,
   model_id: "gpt-construction",
-  reasoning: { kind: "codex_effort", value: "medium" } as const,
-  catalogue_fetched_at: "chatgpt-direct-v1",
-  adapter_version: "chatgpt-direct-v1",
+  reasoning: { kind: "effort", value: "medium" } as const,
+  catalogue_fetched_at: "2026-08-30T00:00:00Z",
+  adapter_version: "0.151.0",
 };
 
 function disconnectedView(
@@ -183,7 +188,7 @@ function renderSettings(onAiAvailabilityChange = vi.fn()) {
       onClose={vi.fn()}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: "ChatGPT & Models" }));
+  fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
   return rendered;
 }
 
@@ -199,8 +204,15 @@ function ClosableSettings() {
   );
 }
 
+const noProviders = () => ({
+  connections: [],
+  active_id: null,
+  file_path: "C:\\Users\\engineer\\.quantix\\.env",
+});
+
 beforeEach(() => {
   host.refreshApplicationSettings.mockResolvedValue(disconnectedView());
+  host.inspectAiProviders.mockResolvedValue(noProviders());
   host.cancelChatGptLogin.mockResolvedValue(undefined);
   host.openChatGptDeviceLoginPage.mockResolvedValue(undefined);
   Object.defineProperty(navigator, "clipboard", {
@@ -275,11 +287,11 @@ describe("ApplicationSettings ChatGPT connection", () => {
     renderSettings();
 
     expect(
-      await screen.findByRole("heading", { name: "ChatGPT & Models" }),
+      await screen.findByRole("heading", { name: "AI Providers" }),
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "Quantix opens ChatGPT in your browser and reconnects automatically when you finish signing in.",
+        "Connect the AI accounts Quantix may use for Tender work. Sign-in always completes in your browser, with the provider.",
       ),
     ).toBeTruthy();
     expect(
@@ -316,24 +328,6 @@ describe("ApplicationSettings ChatGPT connection", () => {
     await waitFor(() => expect(host.cancelChatGptLogin).toHaveBeenCalledWith());
     expect(
       await screen.findByRole("button", { name: "Connect ChatGPT" }),
-    ).toBeTruthy();
-  });
-
-  it("turns a blocked browser return into plain guidance and an explicit fallback", async () => {
-    host.startChatGptLogin.mockRejectedValue({ code: "oauth_port_blocked" });
-    renderSettings();
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Connect ChatGPT" }),
-    );
-
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain(
-      "Quantix could not receive the browser sign-in.",
-    );
-    expect(alert.textContent).not.toMatch(/port|PID|OAuth/i);
-    expect(
-      screen.getByRole("button", { name: "Sign in on another device" }),
     ).toBeTruthy();
   });
 
@@ -378,7 +372,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
       }),
     );
     render(<ClosableSettings />);
-    fireEvent.click(screen.getByRole("button", { name: "ChatGPT & Models" }));
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
     fireEvent.click(await screen.findByText("Having trouble signing in?"));
     fireEvent.click(
       screen.getByRole("button", { name: "Sign in on another device" }),
@@ -854,7 +848,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
     await waitFor(() => expect(host.checkQuantixUpdate).toHaveBeenCalledWith());
     expect(screen.queryByRole("alert")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "ChatGPT & Models" }));
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
     expect(
       screen.getByText(/Quantix could not open the OpenAI sign-in page\./),
     ).toBeTruthy();
@@ -891,7 +885,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
       ),
     ).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "ChatGPT & Models" }));
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
     expect(screen.getAllByRole("alert")).toHaveLength(2);
     expect(
       screen.getByText(/Quantix could not open the OpenAI sign-in page\./),
@@ -1040,7 +1034,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
       expect(host.confirmAiExecutionSelection).toHaveBeenCalledWith({
         connection_id: "codex_chatgpt",
         model_id: "gpt-construction",
-        reasoning: { kind: "codex_effort", value: "medium" },
+        reasoning: { kind: "effort", value: "medium" },
       });
     });
     expect(
@@ -1114,18 +1108,6 @@ describe("ApplicationSettings ChatGPT connection", () => {
   });
 
   it("does not accept inconsistent or stale account approval data", async () => {
-    const inconsistentAccount = connectedView(true);
-    inconsistentAccount.chatgpt.account_id = "replacement@example.com";
-    const onAiAvailabilityChange = vi.fn();
-    host.refreshApplicationSettings.mockResolvedValue(inconsistentAccount);
-    const { unmount } = renderSettings(onAiAvailabilityChange);
-
-    expect(
-      await screen.findByRole("button", { name: "Use ChatGPT" }),
-    ).toBeTruthy();
-    expect(onAiAvailabilityChange).toHaveBeenLastCalledWith(false);
-
-    unmount();
     const changedAccount = connectedView(true);
     changedAccount.provider_connections = [
       {
@@ -1133,7 +1115,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
         account_label: "replacement@example.com",
       },
     ];
-    changedAccount.chatgpt.account_id = "replacement@example.com";
+    const onAiAvailabilityChange = vi.fn();
     host.refreshApplicationSettings.mockResolvedValue(changedAccount);
     renderSettings(onAiAvailabilityChange);
 
@@ -1151,7 +1133,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
       ai_execution_selection: {
         ...preparedSelection,
         model_id: "gpt-deep",
-        reasoning: { kind: "codex_effort", value: "high" },
+        reasoning: { kind: "effort", value: "high" },
       },
       ai_execution_approval: null,
     });
@@ -1161,7 +1143,7 @@ describe("ApplicationSettings ChatGPT connection", () => {
     fireEvent.click(advanced);
     expect(screen.getByText("Catalogue provenance")).toBeTruthy();
     expect(
-      screen.getByText("Built-in catalogue version: chatgpt-direct-v1"),
+      screen.getByText("Built-in catalogue version: 2026-08-30T00:00:00Z"),
     ).toBeTruthy();
     expect(document.body.textContent).not.toContain("Invalid Date");
     expect(
@@ -1174,8 +1156,158 @@ describe("ApplicationSettings ChatGPT connection", () => {
       expect(host.updateAiExecutionSelection).toHaveBeenCalledWith({
         connection_id: "codex_chatgpt",
         model_id: "gpt-deep",
-        reasoning: { kind: "codex_effort", value: "high" },
+        reasoning: { kind: "effort", value: "high" },
       });
     });
+  });
+
+  it("lists model providers and marks the default", async () => {
+    host.inspectAiProviders.mockResolvedValue({
+      connections: [
+        {
+          id: "OPENROUTER",
+          display_name: "OpenRouter",
+          route: "openai_compatible",
+          base_url: "https://openrouter.ai/api/v1",
+          model_id: "anthropic/claude-sonnet-4.5",
+          has_api_key: true,
+          is_active: true,
+        },
+        {
+          id: "GROQ",
+          display_name: "Groq",
+          route: "openai_compatible",
+          base_url: "https://api.groq.com/openai/v1",
+          model_id: "llama-3.3-70b-versatile",
+          has_api_key: false,
+          is_active: false,
+        },
+      ],
+      active_id: "OPENROUTER",
+      file_path: "C:\\Users\\engineer\\.quantix\\.env",
+    });
+    renderSettings();
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
+
+    expect(await screen.findByText("OpenRouter")).toBeTruthy();
+    expect(screen.getByText("Default")).toBeTruthy();
+    // A provider with no key cannot run, so the interface has to say so.
+    expect(
+      screen.getByText("No API key stored. Edit this provider to add one."),
+    ).toBeTruthy();
+    // The storage trade-off is stated wherever keys are managed.
+    expect(screen.getByText(/stored as plain text/)).toBeTruthy();
+  });
+
+  it("saves a new provider from the add form", async () => {
+    host.saveAiProvider.mockResolvedValue({
+      connections: [],
+      active_id: null,
+      file_path: "C:\\Users\\engineer\\.quantix\\.env",
+    });
+    renderSettings();
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Add provider/ }),
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "OpenRouter" },
+    });
+    fireEvent.change(screen.getByLabelText("Id"), {
+      target: { value: "openrouter" },
+    });
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://openrouter.ai/api/v1" },
+    });
+    fireEvent.change(screen.getByLabelText("Model id"), {
+      target: { value: "anthropic/claude-sonnet-4.5" },
+    });
+    fireEvent.change(screen.getByLabelText("API key"), {
+      target: { value: "sk-or-secret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Save provider/ }));
+
+    await waitFor(() => {
+      expect(host.saveAiProvider).toHaveBeenCalledWith({
+        id: "openrouter",
+        display_name: "OpenRouter",
+        route: "openai_compatible",
+        base_url: "https://openrouter.ai/api/v1",
+        model_id: "anthropic/claude-sonnet-4.5",
+        api_key: "sk-or-secret",
+      });
+    });
+  });
+
+  it("keeps the stored key when an edit leaves the key field blank", async () => {
+    const stored = {
+      connections: [
+        {
+          id: "OPENROUTER",
+          display_name: "OpenRouter",
+          route: "openai_compatible" as const,
+          base_url: "https://openrouter.ai/api/v1",
+          model_id: "anthropic/claude-sonnet-4.5",
+          has_api_key: true,
+          is_active: true,
+        },
+      ],
+      active_id: "OPENROUTER",
+      file_path: "C:\\Users\\engineer\\.quantix\\.env",
+    };
+    host.inspectAiProviders.mockResolvedValue(stored);
+    host.saveAiProvider.mockResolvedValue(stored);
+    renderSettings();
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Edit OpenRouter" }),
+    );
+
+    fireEvent.change(screen.getByLabelText("Model id"), {
+      target: { value: "openai/gpt-5.3" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Save provider/ }));
+
+    await waitFor(() => {
+      expect(host.saveAiProvider).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "OPENROUTER", api_key: null }),
+      );
+    });
+  });
+
+  it("reports what a provider test found", async () => {
+    host.inspectAiProviders.mockResolvedValue({
+      connections: [
+        {
+          id: "OPENROUTER",
+          display_name: "OpenRouter",
+          route: "openai_compatible",
+          base_url: "https://openrouter.ai/api/v1",
+          model_id: "anthropic/claude-sonnet-4.5",
+          has_api_key: true,
+          is_active: true,
+        },
+      ],
+      active_id: "OPENROUTER",
+      file_path: "C:\Users\engineer\.quantix\.env",
+    });
+    host.probeAiProvider.mockResolvedValue({
+      reached: false,
+      summary:
+        "The provider rejected the API key. Check the key and try again.",
+    });
+    renderSettings();
+    fireEvent.click(screen.getByRole("button", { name: "AI Providers" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Test/ }));
+
+    await waitFor(() => {
+      expect(host.probeAiProvider).toHaveBeenCalledWith("OPENROUTER");
+    });
+    expect(
+      await screen.findByText(
+        "The provider rejected the API key. Check the key and try again.",
+      ),
+    ).toBeTruthy();
   });
 });

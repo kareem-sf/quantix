@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import type { AiProviderProbeResult } from "./bindings/AiProviderProbeResult";
+import type { AiProviderSettingsView } from "./bindings/AiProviderSettingsView";
+import type { SaveAiProviderCommand } from "./bindings/SaveAiProviderCommand";
 import type { ApproveCalculationRuleCommand } from "./bindings/ApproveCalculationRuleCommand";
 import type { ApproveBasisOfEstimateCommand } from "./bindings/ApproveBasisOfEstimateCommand";
 import type { ApproveCommercialStrategyCommand } from "./bindings/ApproveCommercialStrategyCommand";
@@ -25,6 +28,8 @@ import type { CalculationWorkspaceInspection } from "./bindings/CalculationWorks
 import type { ChangeAssessment } from "./bindings/ChangeAssessment";
 import type { ChangeAssessmentClassification } from "./bindings/ChangeAssessmentClassification";
 import type { ChangeAssessmentPage } from "./bindings/ChangeAssessmentPage";
+import type { ArtifactVersionHistory } from "./bindings/ArtifactVersionHistory";
+import type { InspectArtifactVersionsCommand } from "./bindings/InspectArtifactVersionsCommand";
 import type { DecisionCockpit } from "./bindings/DecisionCockpit";
 import type { InspectDecisionCockpitCommand } from "./bindings/InspectDecisionCockpitCommand";
 import type { ControlledBoqCalculationRun } from "./bindings/ControlledBoqCalculationRun";
@@ -98,6 +103,7 @@ import type { ExternalRfiResponseCandidatePage } from "./bindings/ExternalRfiRes
 import type { ExternalRfiReviewResult } from "./bindings/ExternalRfiReviewResult";
 import type { InterruptAgentRunCommand } from "./bindings/InterruptAgentRunCommand";
 import type { InspectTenderRecordsCommand } from "./bindings/InspectTenderRecordsCommand";
+import type { InspectTenderRecordCommand } from "./bindings/InspectTenderRecordCommand";
 import type { InspectTenderQueriesCommand } from "./bindings/InspectTenderQueriesCommand";
 import type { InspectExternalRfisCommand } from "./bindings/InspectExternalRfisCommand";
 import type { InspectExternalRfiEligibleQueriesCommand } from "./bindings/InspectExternalRfiEligibleQueriesCommand";
@@ -167,6 +173,7 @@ import type { SelectManagerWorkspaceTenderCommand } from "./bindings/SelectManag
 import type { SetupOutcome } from "./bindings/SetupOutcome";
 import type { SourceRelationshipKind } from "./bindings/SourceRelationshipKind";
 import type { StartManagerTenderCommand } from "./bindings/StartManagerTenderCommand";
+import type { StartupReconciliationReport } from "./bindings/StartupReconciliationReport";
 import type { TenderSummary } from "./bindings/TenderSummary";
 import type { TenderCatalogueEntry } from "./bindings/TenderCatalogueEntry";
 import type { TenderBackupRecord } from "./bindings/TenderBackupRecord";
@@ -182,6 +189,7 @@ import type { TenderRecordAuthorityReference } from "./bindings/TenderRecordAuth
 import type { TenderRecordEngineerDecisionKind } from "./bindings/TenderRecordEngineerDecisionKind";
 import type { TenderRecordExtractionResult } from "./bindings/TenderRecordExtractionResult";
 import type { TenderRecordPage } from "./bindings/TenderRecordPage";
+import type { TenderRecordInspection } from "./bindings/TenderRecordInspection";
 import type { TenderRecordReviewResult } from "./bindings/TenderRecordReviewResult";
 import type { TenderQuery } from "./bindings/TenderQuery";
 import type { TenderQueryPage } from "./bindings/TenderQueryPage";
@@ -306,6 +314,30 @@ export function refreshApplicationSettings(): Promise<ApplicationSettingsView> {
 
 export function inspectApplicationSettings(): Promise<ApplicationSettingsView> {
   return invoke<ApplicationSettingsView>("inspect_application_settings");
+}
+
+export function inspectAiProviders(): Promise<AiProviderSettingsView> {
+  return invoke<AiProviderSettingsView>("inspect_ai_providers");
+}
+
+export function saveAiProvider(
+  command: SaveAiProviderCommand,
+): Promise<AiProviderSettingsView> {
+  return invoke<AiProviderSettingsView>("save_ai_provider", { command });
+}
+
+export function removeAiProvider(id: string): Promise<AiProviderSettingsView> {
+  return invoke<AiProviderSettingsView>("remove_ai_provider", { id });
+}
+
+export function setActiveAiProvider(
+  id: string,
+): Promise<AiProviderSettingsView> {
+  return invoke<AiProviderSettingsView>("set_active_ai_provider", { id });
+}
+
+export function probeAiProvider(id: string): Promise<AiProviderProbeResult> {
+  return invoke<AiProviderProbeResult>("probe_ai_provider", { id });
 }
 
 export function updateGeneralApplicationPreferences(
@@ -535,6 +567,10 @@ export function inspectTenderIntegrity(
 ): Promise<TenderIntegrityReport> {
   const command: OpenTenderCommand = { tender_id: tenderId };
   return invoke<TenderIntegrityReport>("inspect_tender_integrity", { command });
+}
+
+export function inspectStartupReconciliation(): Promise<StartupReconciliationReport> {
+  return invoke<StartupReconciliationReport>("inspect_startup_reconciliation");
 }
 
 export function createTenderBackup(
@@ -1107,6 +1143,19 @@ export function inspectTenderRecords(
   return invoke<TenderRecordPage>("inspect_tender_records", {
     command,
   });
+}
+
+export function inspectTenderRecord(
+  tenderId: string,
+  recordId: string,
+  version: number,
+): Promise<TenderRecordInspection> {
+  const command: InspectTenderRecordCommand = {
+    tender_id: tenderId,
+    record_id: recordId,
+    version,
+  };
+  return invoke<TenderRecordInspection>("inspect_tender_record", { command });
 }
 
 export function decideTenderRecord(
@@ -1834,6 +1883,19 @@ export function inspectChangeAssessments(
     limit,
   };
   return invoke<ChangeAssessmentPage>("inspect_change_assessments", {
+    command,
+  });
+}
+
+export function inspectArtifactVersions(
+  tenderId: string,
+  artifactId: string,
+): Promise<ArtifactVersionHistory> {
+  const command: InspectArtifactVersionsCommand = {
+    tender_id: tenderId,
+    artifact_id: artifactId,
+  };
+  return invoke<ArtifactVersionHistory>("inspect_artifact_versions", {
     command,
   });
 }

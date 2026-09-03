@@ -13,7 +13,6 @@ use tokio::sync::{
 };
 use tokio_util::sync::CancellationToken;
 
-#[cfg(feature = "runtime-fixture")]
 use crate::agent_runtime::AgentProvider;
 use crate::agent_runtime::{ProviderRateLimit, ProviderRateLimitState, ProviderUsage};
 use crate::diagnostics::{
@@ -59,9 +58,7 @@ struct QuantixHostInner {
     manager_intake_execution: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     manager_intake_wakeups: Mutex<HashMap<ManagerIntakeWakeupKey, CancellationToken>>,
     production_schedulers: Mutex<HashMap<String, OrdinaryWorkLease>>,
-    #[cfg(feature = "runtime-fixture")]
     agent_provider: tokio::sync::Mutex<Option<AgentProvider>>,
-    #[cfg(feature = "runtime-fixture")]
     provider_cleanup_execution: tokio::sync::Mutex<()>,
     provider_rate_limit: Mutex<Option<ProviderRateLimit>>,
     document_tools_verified: AtomicBool,
@@ -264,9 +261,7 @@ impl QuantixHost {
                 manager_intake_execution: Mutex::new(HashMap::new()),
                 manager_intake_wakeups: Mutex::new(HashMap::new()),
                 production_schedulers: Mutex::new(HashMap::new()),
-                #[cfg(feature = "runtime-fixture")]
                 agent_provider: tokio::sync::Mutex::new(None),
-                #[cfg(feature = "runtime-fixture")]
                 provider_cleanup_execution: tokio::sync::Mutex::new(()),
                 provider_rate_limit: Mutex::new(None),
                 document_tools_verified: AtomicBool::new(false),
@@ -282,6 +277,105 @@ impl QuantixHost {
 
     pub fn application_home(&self) -> &Path {
         &self.inner.application_home
+    }
+
+    pub fn inspect_worker_runtime(&self) -> crate::managed_runtime::ManagedWorkerRuntimeStatus {
+        crate::managed_runtime::inspect_managed_worker_runtime(
+            &self.inner.application_home,
+            self.runtime_layout(),
+        )
+    }
+
+    pub async fn prepare_worker_runtime(
+        &self,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<
+        crate::managed_runtime::ManagedWorkerRuntimeStatus,
+        crate::managed_runtime::ManagedRuntimeError,
+    > {
+        crate::managed_runtime::prepare_managed_worker_runtime(
+            &self.inner.application_home,
+            self.runtime_layout(),
+            self.process_supervisor(),
+            cancellation,
+        )
+        .await
+    }
+
+    /// Send the smallest possible request to a stored provider so the Engineer can
+    /// see whether the endpoint, model and key actually work before a Tender depends
+    /// on them. A probe calls no tools, so it needs none of the approval plumbing a
+    /// real Agent Run does.
+    pub async fn probe_ai_provider(
+        &self,
+        id: &str,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<crate::provider_env::AiProviderProbeResult, TenderCommandError> {
+        use crate::agent_runtime::worker_lane::{WorkerOperation, WorkerRunRequest};
+
+        let connection = crate::provider_env::resolve_connection(self.application_home(), id)?;
+        let prepared = self
+            .prepare_worker_runtime(cancellation.clone())
+            .await
+            .map_err(|_| TenderCommandError::new(TenderErrorCode::LocalDocumentToolsRequired))?;
+        if prepared.state != crate::managed_runtime::ManagedWorkerRuntimeState::Ready {
+            return Err(TenderCommandError::new(
+                TenderErrorCode::LocalDocumentToolsRequired,
+            ));
+        }
+
+        let request = WorkerRunRequest {
+            route: connection.route.as_str().to_owned(),
+            base_url: connection.base_url.clone(),
+            api_key: connection.api_key.clone(),
+            model_id: connection.model_id.clone(),
+            // Reasoning is a per-run choice, and several routes reject it outright.
+            reasoning: None,
+            instructions: "Reply with the single word OK.".to_owned(),
+            output_schema: None,
+            tools: Vec::new(),
+            input: "Reply with the single word OK.".to_owned(),
+            operation: WorkerOperation::Probe,
+            timeout: std::time::Duration::from_secs(60),
+        };
+
+        let outcome = crate::agent_runtime::worker_lane::run_worker_operation(
+            self.process_supervisor(),
+            &crate::managed_runtime::worker_python_path(&self.inner.application_home),
+            &self.inner.application_home,
+            &request,
+            cancellation,
+            |_, _| unreachable!("a probe never calls tools"),
+        )
+        .await;
+
+        Ok(crate::provider_env::AiProviderProbeResult::from_outcome(
+            outcome,
+        ))
+    }
+
+    #[cfg(feature = "runtime-fixture")]
+    pub async fn run_worker_operation_for_test(
+        &self,
+        request: crate::agent_runtime::worker_lane::WorkerRunRequest,
+        cancellation: tokio_util::sync::CancellationToken,
+        on_approval: impl FnMut(
+            &str,
+            &serde_json::Value,
+        ) -> crate::agent_runtime::worker_lane::WorkerApproval,
+    ) -> Result<
+        crate::agent_runtime::worker_lane::WorkerOutcome,
+        crate::agent_runtime::worker_lane::WorkerDriverError,
+    > {
+        crate::agent_runtime::worker_lane::run_worker_operation(
+            self.process_supervisor(),
+            &crate::managed_runtime::worker_python_path(&self.inner.application_home),
+            &self.inner.application_home,
+            &request,
+            cancellation,
+            on_approval,
+        )
+        .await
     }
 
     pub(crate) fn diagnostics(&self) -> &DiagnosticsStore {
@@ -469,10 +563,11 @@ impl QuantixHost {
             .lock()
             .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))?;
         if !*reconciled {
-            crate::tender_store::backups::reconcile_interrupted_backup_operations(
-                &self.inner.application_home,
-            )?;
-            self.reconcile_trash_records()?;
+            let (interrupted_backup_operations, interrupted_recovery_operations) =
+                crate::tender_store::backups::reconcile_interrupted_backup_operations(
+                    &self.inner.application_home,
+                )?;
+            let completed_retention_operations = self.reconcile_trash_records()?;
             let removed_tender_candidates =
                 crate::tender_store::reconcile_application_staging(&self.inner.application_home)?;
             *self
@@ -482,6 +577,9 @@ impl QuantixHost {
                 .map_err(|_| TenderCommandError::new(TenderErrorCode::StoreUnavailable))? =
                 StartupReconciliationReport {
                     removed_tender_candidates,
+                    interrupted_backup_operations,
+                    interrupted_recovery_operations,
+                    completed_retention_operations,
                 };
             *reconciled = true;
         }
@@ -524,12 +622,10 @@ impl QuantixHost {
         &self.inner.process_supervisor
     }
 
-    #[cfg(feature = "runtime-fixture")]
     pub(crate) fn agent_provider(&self) -> &tokio::sync::Mutex<Option<AgentProvider>> {
         &self.inner.agent_provider
     }
 
-    #[cfg(feature = "runtime-fixture")]
     pub(crate) fn provider_cleanup_execution(&self) -> &tokio::sync::Mutex<()> {
         &self.inner.provider_cleanup_execution
     }

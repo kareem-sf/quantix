@@ -14,9 +14,10 @@ use quantix_lib::{
     InspectDiagnosticTimelineCommand, InspectDiagnosticsStatusCommand,
     InspectManagerWorkspaceCommand, InspectQuantixDoctorCommand, InspectTenderAiExecutionCommand,
     IntegrationTermsDecision, LicenseDistributionReview, LiveQualificationMetrics,
-    LiveQualificationRun, ManagerConversation, ManagerIntakeStage, ManagerIntakeStatus,
-    ManagerIntakeStatusKind, ManagerWorkspaceProjection, ManagerWorkspaceTender,
-    ManagerWorkspaceTenderState, NativePlatformQualificationEvidence,
+    LiveQualificationRun, ManagedCodexRuntimeState, ManagedCodexRuntimeStatus,
+    ManagedWorkerRuntimeState, ManagedWorkerRuntimeStatus, ManagerConversation, ManagerIntakeStage,
+    ManagerIntakeStatus, ManagerIntakeStatusKind, ManagerWorkspaceProjection,
+    ManagerWorkspaceTender, ManagerWorkspaceTenderState, NativePlatformQualificationEvidence,
     NativePlatformQualificationRecord, OpenDiagnosticLogsCommand, OpenDiagnosticLogsResult,
     PackageIntakeOperationKind, PackageIntakeProgress, PackageIntakeStage,
     PortableTenderArchiveRecord, PrivateQualificationRecord, ProductAcceptanceOutcome,
@@ -89,6 +90,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     RunDeterministicAcceptanceCommand::export_all(&config)?;
     LiveQualificationMetrics::export_all(&config)?;
     LiveQualificationRun::export_all(&config)?;
+    ManagedCodexRuntimeState::export_all(&config)?;
+    ManagedCodexRuntimeStatus::export_all(&config)?;
+    ManagedWorkerRuntimeState::export_all(&config)?;
+    ManagedWorkerRuntimeStatus::export_all(&config)?;
+    ManagedWorkerRuntimeState::export_all(&config)?;
+    ManagedWorkerRuntimeStatus::export_all(&config)?;
     PrivateQualificationRecord::export_all(&config)?;
     RecordLiveQualificationRunCommand::export_all(&config)?;
     ChatGptProductionAssuranceEvidence::export_all(&config)?;

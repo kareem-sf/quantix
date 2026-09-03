@@ -104,12 +104,13 @@ pub use calculations::{
     RunCostEstimatorCalculationCommand,
 };
 pub use change_assessments::{
-    ChangeAssessment, ChangeAssessmentApprovalConsequence, ChangeAssessmentClassification,
-    ChangeAssessmentDecision, ChangeAssessmentDependencyKind, ChangeAssessmentDependencyReference,
+    ArtifactVersionHistory, ArtifactVersionSummary, ChangeAssessment,
+    ChangeAssessmentApprovalConsequence, ChangeAssessmentClassification, ChangeAssessmentDecision,
+    ChangeAssessmentDependencyKind, ChangeAssessmentDependencyReference,
     ChangeAssessmentEvidenceExcerpt, ChangeAssessmentImpact, ChangeAssessmentImpactConsequence,
     ChangeAssessmentImpactKind, ChangeAssessmentObjectKind, ChangeAssessmentPage,
     ChangeAssessmentSource, ChangeAssessmentStatus, DecideChangeAssessmentCommand,
-    InspectChangeAssessmentsCommand,
+    InspectArtifactVersionsCommand, InspectChangeAssessmentsCommand,
 };
 pub use coordinated_baselines::{
     AssembleCoordinatedBidBaselineCommand, CoordinatedBidBaseline, CoordinatedBidBaselineApproval,
@@ -227,13 +228,13 @@ pub use tender_queries::{
 pub(crate) use tender_records::ManagerIntakeExtractionRecovery;
 pub use tender_records::{
     CreateTenderEngineerEntryCommand, DecideTenderRecordCommand, GenerationAuthoringMode,
-    GenerationRequirementKind, InspectTenderRecordsCommand, RunTenderRecordExtractionCommand,
-    RunTenderRecordReviewCommand, TenderEvidenceReference, TenderRecordAuthority,
-    TenderRecordAuthorityKind, TenderRecordAuthorityReference, TenderRecordBasisKind,
-    TenderRecordContradiction, TenderRecordDecisionResult, TenderRecordEngineerDecisionKind,
-    TenderRecordEvidence, TenderRecordExtractionResult, TenderRecordField,
-    TenderRecordGenerationInstruction, TenderRecordInspection, TenderRecordKind, TenderRecordPage,
-    TenderRecordReview, TenderRecordReviewOutcome, TenderRecordReviewResult,
+    GenerationRequirementKind, InspectTenderRecordCommand, InspectTenderRecordsCommand,
+    RunTenderRecordExtractionCommand, RunTenderRecordReviewCommand, TenderEvidenceReference,
+    TenderRecordAuthority, TenderRecordAuthorityKind, TenderRecordAuthorityReference,
+    TenderRecordBasisKind, TenderRecordContradiction, TenderRecordDecisionResult,
+    TenderRecordEngineerDecisionKind, TenderRecordEvidence, TenderRecordExtractionResult,
+    TenderRecordField, TenderRecordGenerationInstruction, TenderRecordInspection, TenderRecordKind,
+    TenderRecordPage, TenderRecordReview, TenderRecordReviewOutcome, TenderRecordReviewResult,
     TenderRecordSourceRelationship, TenderRecordTrustClass,
 };
 pub use workspace::{
@@ -244,9 +245,12 @@ pub use workspace::{
     TenderOfficeMessage, TenderOfficeMessageAuthor, TenderOfficeMessageKind, WorkspaceActionKind,
     WorkspaceAgentReference, WorkspaceAgentRunReference, WorkspaceCapabilityReadiness,
     WorkspaceCapabilityReadinessState, WorkspaceCurrentAction, WorkspaceDoctorBlockerArea,
-    WorkspaceDoctorBlockerSummary, WorkspaceFilesSummary, WorkspaceOutputReference,
+    WorkspaceDoctorBlockerSummary, WorkspaceEstimateStatus, WorkspaceEstimateSummary,
+    WorkspaceExternalRfiStatus, WorkspaceExternalRfiSummary, WorkspaceFilesSummary,
+    WorkspaceOutputReference, WorkspacePricingBaselineStatus, WorkspacePricingSummary,
     WorkspaceSearchGroup, WorkspaceSearchHit, WorkspaceSearchProjection, WorkspaceSearchResultKind,
-    WorkspaceTaskRow, WorkspaceTaskState, WorkspaceTeamSummary, WorkspaceWorkSummary,
+    WorkspaceTaskRow, WorkspaceTaskState, WorkspaceTeamSummary, WorkspaceTenderPriceState,
+    WorkspaceWorkSummary,
 };
 
 #[cfg(test)]
@@ -258,7 +262,7 @@ static TENDER_STORE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static CONTENT_VERIFY_PASS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const TENDER_SCHEMA_VERSION: i64 = 45;
+pub(crate) const TENDER_SCHEMA_VERSION: i64 = 46;
 
 pub(crate) fn record_agent_run_provider_binding(
     transaction: &Transaction<'_>,
@@ -502,7 +506,8 @@ CREATE TABLE tender_office_message_references (
   message_id TEXT NOT NULL,
   ordinal INTEGER NOT NULL CHECK (ordinal > 0),
   kind TEXT NOT NULL CHECK (kind IN (
-    'agent_run', 'manager_intake_outcome', 'tender_record', 'source_evidence'
+    'agent_run', 'manager_intake_outcome', 'tender_record', 'source_evidence',
+    'artifact_version', 'tender_task'
   )),
   reference TEXT NOT NULL CHECK (length(reference) = 32),
   version INTEGER NOT NULL CHECK (version > 0),
@@ -4127,6 +4132,9 @@ pub struct TenderIntegrityReport {
 #[ts(export)]
 pub struct StartupReconciliationReport {
     pub removed_tender_candidates: u32,
+    pub interrupted_backup_operations: u32,
+    pub interrupted_recovery_operations: u32,
+    pub completed_retention_operations: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -4139,7 +4147,6 @@ pub enum TenderErrorCode {
     RequestBudgetExceeded,
     NotFound,
     OauthAlreadyRunning,
-    OauthPortBlocked,
     OperationTimedOut,
     RecoveryRequired,
     LocalDocumentToolsRequired,
@@ -8212,10 +8219,6 @@ mod tests {
 
     #[test]
     fn oauth_error_codes_serialize_as_snake_case() {
-        assert_eq!(
-            serde_json::to_string(&TenderErrorCode::OauthPortBlocked).expect("serialize code"),
-            r#""oauth_port_blocked""#
-        );
         assert_eq!(
             serde_json::to_string(&TenderErrorCode::OauthAlreadyRunning).expect("serialize code"),
             r#""oauth_already_running""#
