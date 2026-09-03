@@ -1,6 +1,15 @@
 // @ts-expect-error Node builtin types are intentionally absent from the renderer.
 import { webcrypto } from "node:crypto";
+import { configure } from "@testing-library/react";
 import { vi } from "vitest";
+
+// Testing Library waits one second by default. The workspace re-renders behind a
+// 2.5 second refresh, so on a slower machine a query can time out while the render
+// it is waiting for is still on its way: the suite passes on a developer machine and
+// fails on the build runner, on a different test each time. A longer ceiling costs
+// nothing when a query resolves quickly and removes that whole class of false
+// failure; a genuinely missing element still fails, just later.
+configure({ asyncUtilTimeout: 5_000 });
 
 if (!globalThis.crypto?.subtle) {
   Object.defineProperty(globalThis, "crypto", {
