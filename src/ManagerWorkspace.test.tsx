@@ -5497,10 +5497,15 @@ describe("ManagerWorkspace", () => {
     host.inspectTenderRecord.mockResolvedValue(proposedRecord());
 
     render(<ManagerWorkspace />);
+    // Re-issue the click until the surface is on screen. A refresh landing between
+    // the event and its render drops the click, and waiting longer never recovers a
+    // click that was not handled. Opening a surface has no side effect to repeat.
     fireEvent.click(await screen.findByText("2 references"));
-    fireEvent.click(screen.getByRole("button", { name: /Review evidence/ }));
-
-    const review = await screen.findByTestId("tender-evidence-review");
+    await waitFor(() => {
+      fireEvent.click(screen.getByRole("button", { name: /Review evidence/ }));
+      expect(screen.getByTestId("tender-evidence-review")).toBeTruthy();
+    });
+    const review = screen.getByTestId("tender-evidence-review");
     expect(host.inspectEvidence).toHaveBeenCalledWith(
       tenderId,
       evidenceArtifactId,
@@ -5574,13 +5579,16 @@ describe("ManagerWorkspace", () => {
     });
 
     render(<ManagerWorkspace />);
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Review cited Tender records",
-      }),
-    );
-
-    const surface = await screen.findByTestId("tender-record-decision");
+    // Re-issue the click until the surface is on screen. A refresh landing between
+    // the event and its render drops the click, and waiting longer never recovers a
+    // click that was not handled. Opening a surface has no side effect to repeat.
+    await waitFor(() => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Review cited Tender records" }),
+      );
+      expect(screen.getByTestId("tender-record-decision")).toBeTruthy();
+    });
+    const surface = screen.getByTestId("tender-record-decision");
     expect(within(surface).getByText("Slab concrete strength")).toBeTruthy();
     expect(host.inspectTenderRecord).toHaveBeenCalledWith(
       tenderId,
@@ -5648,13 +5656,16 @@ describe("ManagerWorkspace", () => {
     });
 
     render(<ManagerWorkspace />);
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Review cited Tender records",
-      }),
-    );
-
-    const surface = await screen.findByTestId("tender-record-decision");
+    // Re-issue the click until the surface is on screen. A refresh landing between
+    // the event and its render drops the click, and waiting longer never recovers a
+    // click that was not handled. Opening a surface has no side effect to repeat.
+    await waitFor(() => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Review cited Tender records" }),
+      );
+      expect(screen.getByTestId("tender-record-decision")).toBeTruthy();
+    });
+    const surface = screen.getByTestId("tender-record-decision");
     expect(
       within(surface).getByTestId("tender-record-decision-record"),
     ).toBeTruthy();
@@ -5683,12 +5694,16 @@ describe("ManagerWorkspace", () => {
       expect(screen.queryByTestId("tender-record-decision")).toBeNull();
     });
 
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Review cited Tender records",
-      }),
-    );
-    const reopened = await screen.findByTestId("tender-record-decision");
+    // Re-issue the click until the surface is on screen. A refresh landing between
+    // the event and its render drops the click, and waiting longer never recovers a
+    // click that was not handled. Opening a surface has no side effect to repeat.
+    await waitFor(() => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Review cited Tender records" }),
+      );
+      expect(screen.getByTestId("tender-record-decision")).toBeTruthy();
+    });
+    const reopened = screen.getByTestId("tender-record-decision");
     expect(
       within(reopened).getByTestId("tender-record-decision-query"),
     ).toBeTruthy();
@@ -5840,11 +5855,14 @@ describe("ManagerWorkspace", () => {
     });
 
     render(<ManagerWorkspace />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Review change" }),
-    );
-
-    const surface = await screen.findByTestId("change-review");
+    // Re-issue the click until the surface is on screen. A refresh landing between
+    // the event and its render drops the click, and waiting longer never recovers a
+    // click that was not handled. Opening a surface has no side effect to repeat.
+    await waitFor(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Review change" }));
+      expect(screen.getByTestId("change-review")).toBeTruthy();
+    });
+    const surface = screen.getByTestId("change-review");
     expect(within(surface).getByText("01 Instructions/ITT.pdf")).toBeTruthy();
     expect(within(surface).getByText("02 Addenda/Addendum-1.pdf")).toBeTruthy();
     expect(within(surface).getByText("What is now out of date")).toBeTruthy();
