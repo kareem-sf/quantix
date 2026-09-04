@@ -2173,8 +2173,10 @@ describe("ManagerWorkspace", () => {
       expect(screen.getByTestId("tender-rfi-response-section")).toBeTruthy();
     });
     const section = screen.getByTestId("tender-rfi-response-section");
+    // A surface opens before the data it shows arrives, so wait for the first piece
+    // of content rather than reading it synchronously the instant the panel exists.
     expect(
-      within(section).getByText(
+      await within(section).findByText(
         /You deliver that file to the recipient outside Quantix/,
       ),
     ).toBeTruthy();
@@ -5589,7 +5591,11 @@ describe("ManagerWorkspace", () => {
       expect(screen.getByTestId("tender-record-decision")).toBeTruthy();
     });
     const surface = screen.getByTestId("tender-record-decision");
-    expect(within(surface).getByText("Slab concrete strength")).toBeTruthy();
+    // A surface opens before the data it shows arrives, so wait for the first piece
+    // of content rather than reading it synchronously the instant the panel exists.
+    expect(
+      await within(surface).findByText("Slab concrete strength"),
+    ).toBeTruthy();
     expect(host.inspectTenderRecord).toHaveBeenCalledWith(
       tenderId,
       citedRecordId,
@@ -5666,8 +5672,10 @@ describe("ManagerWorkspace", () => {
       expect(screen.getByTestId("tender-record-decision")).toBeTruthy();
     });
     const surface = screen.getByTestId("tender-record-decision");
+    // A surface opens before the data it shows arrives, so wait for the first piece
+    // of content rather than reading it synchronously the instant the panel exists.
     expect(
-      within(surface).getByTestId("tender-record-decision-record"),
+      await within(surface).findByTestId("tender-record-decision-record"),
     ).toBeTruthy();
     expect(
       within(surface).queryByTestId("tender-record-decision-query"),
@@ -5704,8 +5712,10 @@ describe("ManagerWorkspace", () => {
       expect(screen.getByTestId("tender-record-decision")).toBeTruthy();
     });
     const reopened = screen.getByTestId("tender-record-decision");
+    // A surface opens before the data it shows arrives, so wait for the first piece
+    // of content rather than reading it synchronously the instant the panel exists.
     expect(
-      within(reopened).getByTestId("tender-record-decision-query"),
+      await within(reopened).findByTestId("tender-record-decision-query"),
     ).toBeTruthy();
 
     fireEvent.change(within(reopened).getByLabelText("Treatment"), {
@@ -5863,7 +5873,11 @@ describe("ManagerWorkspace", () => {
       expect(screen.getByTestId("change-review")).toBeTruthy();
     });
     const surface = screen.getByTestId("change-review");
-    expect(within(surface).getByText("01 Instructions/ITT.pdf")).toBeTruthy();
+    // A surface opens before the data it shows arrives, so wait for the first piece
+    // of content rather than reading it synchronously the instant the panel exists.
+    expect(
+      await within(surface).findByText("01 Instructions/ITT.pdf"),
+    ).toBeTruthy();
     expect(within(surface).getByText("02 Addenda/Addendum-1.pdf")).toBeTruthy();
     expect(within(surface).getByText("What is now out of date")).toBeTruthy();
     expect(within(surface).getByText("Affected work")).toBeTruthy();
