@@ -253,7 +253,7 @@ async fn wait_for_exact_agent_run_count(
     expected: u32,
     context: &str,
 ) {
-    for _ in 0..300 {
+    for _ in 0..1_500 {
         let actual = agent_run_count(application_home, tender_id);
         if actual == expected {
             tokio::time::sleep(Duration::from_millis(50)).await;

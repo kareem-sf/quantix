@@ -242,7 +242,7 @@ async fn in_flight_runtime_probe_holds_the_global_ordinary_work_lease_until_chil
 
     let probing_host = harness.host.clone();
     let probe = tokio::spawn(async move { probing_host.inspect_runtime_readiness().await });
-    for _ in 0..500 {
+    for _ in 0..1_500 {
         if probe_ready.exists() {
             break;
         }

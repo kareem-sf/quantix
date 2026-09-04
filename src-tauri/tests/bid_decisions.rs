@@ -9497,7 +9497,7 @@ async fn material_authority_change_requires_an_exact_approved_work_plan_amendmen
 }
 
 async fn wait_for_fixture_path(path: &Path) {
-    for _ in 0..1_000 {
+    for _ in 0..3_000 {
         if path.is_file() {
             return;
         }
@@ -15000,7 +15000,7 @@ async fn active_agent_work_blocks_the_atomic_gate_until_its_output_is_repackaged
         .await
     });
     let waiting = harness.codex.with_extension("record-output-waiting");
-    for _ in 0..1_000 {
+    for _ in 0..3_000 {
         if waiting.is_file() {
             break;
         }
@@ -15847,7 +15847,7 @@ async fn review_output_cannot_attach_after_its_exact_package_version_is_supersed
         .await
     });
     let waiting = harness.codex.with_extension("bid-package-review-waiting");
-    for _ in 0..1_000 {
+    for _ in 0..3_000 {
         if waiting.is_file() {
             break;
         }

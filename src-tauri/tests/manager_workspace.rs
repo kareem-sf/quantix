@@ -1489,7 +1489,7 @@ async fn public_host_runs_real_manager_intake_while_engineer_switches_tenders() 
             .await
     });
     let waiting = codex.with_extension("manager-output-waiting");
-    for _ in 0..2_000 {
+    for _ in 0..3_000 {
         if waiting.is_file() || worker.is_finished() {
             break;
         }

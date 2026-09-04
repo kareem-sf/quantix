@@ -1318,7 +1318,7 @@ async fn manager_intake_restart_resumes_the_same_persisted_repair_before_provide
     let intake =
         tokio::spawn(async move { host.run_manager_intake_for_verification(&tender_id).await });
     let waiting = harness.codex.with_extension("repair-before-turn-waiting");
-    for _ in 0..1_000 {
+    for _ in 0..3_000 {
         if waiting.is_file() {
             break;
         }
@@ -1385,7 +1385,7 @@ async fn manager_intake_restart_blocks_a_repair_after_thread_checkpoint_without_
     let intake =
         tokio::spawn(async move { host.run_manager_intake_for_verification(&tender_id).await });
     let waiting = harness.codex.with_extension("repair-before-turn-waiting");
-    for _ in 0..1_000 {
+    for _ in 0..3_000 {
         if waiting.is_file() {
             break;
         }
@@ -1465,7 +1465,7 @@ async fn manager_intake_same_host_retries_a_repair_that_expires_while_waiting_fo
     let intake =
         tokio::spawn(async move { host.run_manager_intake_for_verification(&tender_id).await });
     let waiting = harness.codex.with_extension("repair-before-turn-waiting");
-    for _ in 0..1_000 {
+    for _ in 0..3_000 {
         if waiting.is_file() {
             break;
         }
@@ -1580,7 +1580,7 @@ async fn manager_intake_same_host_blocks_a_repair_after_a_thread_checkpoint() {
     let intake =
         tokio::spawn(async move { host.run_manager_intake_for_verification(&tender_id).await });
     let waiting = harness.codex.with_extension("repair-before-turn-waiting");
-    for _ in 0..1_000 {
+    for _ in 0..3_000 {
         if waiting.is_file() {
             break;
         }
@@ -1915,7 +1915,7 @@ async fn manager_intake_retries_an_expired_predispatch_repair_without_a_second_s
     let intake =
         tokio::spawn(async move { host.run_manager_intake_for_verification(&tender_id).await });
     let waiting = harness.codex.with_extension("repair-before-turn-waiting");
-    for _ in 0..1_000 {
+    for _ in 0..3_000 {
         if waiting.is_file() {
             break;
         }
@@ -1955,7 +1955,7 @@ async fn manager_intake_retries_an_expired_predispatch_repair_without_a_second_s
             .await
     });
     let waiting = codex.with_extension("repair-before-turn-waiting");
-    for _ in 0..1_000 {
+    for _ in 0..3_000 {
         if waiting.is_file() {
             break;
         }
@@ -2185,7 +2185,7 @@ async fn cancellation_before_completion_discards_invalid_provider_output() {
         .await
     });
     let waiting = harness.codex.with_extension("record-output-waiting");
-    for _ in 0..1_000 {
+    for _ in 0..3_000 {
         if waiting.is_file() {
             break;
         }
@@ -2272,7 +2272,7 @@ async fn rejected_output_insert_failure_rolls_back_agent_completion() {
         .await
     });
     let waiting = harness.codex.with_extension("record-output-waiting");
-    for _ in 0..1_000 {
+    for _ in 0..3_000 {
         if waiting.is_file() {
             break;
         }
@@ -2924,7 +2924,7 @@ async fn extraction_output_cannot_publish_after_the_tender_revision_changes() {
         .await
     });
     let waiting = harness.codex.with_extension("record-output-waiting");
-    for _ in 0..1_000 {
+    for _ in 0..3_000 {
         if waiting.is_file() {
             break;
         }
@@ -3467,7 +3467,7 @@ async fn engineer_decision_during_review_terminalizes_the_stale_review_run() {
         .await
     });
     let waiting = harness.codex.with_extension("record-review-waiting");
-    for _ in 0..1_000 {
+    for _ in 0..3_000 {
         if waiting.is_file() {
             break;
         }

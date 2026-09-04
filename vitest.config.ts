@@ -13,5 +13,9 @@ export default defineConfig({
     fileParallelism: false,
     pool: "forks",
     setupFiles: ["./src/testSetup.ts"],
+    // Must exceed the Testing Library asyncUtilTimeout set in testSetup.ts, or a failing
+    // query burns the whole test budget and is reported as a timeout, hiding what it
+    // actually could not find.
+    testTimeout: 20_000,
   },
 });
