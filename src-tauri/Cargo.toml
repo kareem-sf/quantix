@@ -52,7 +52,7 @@ base64 = "0.23.1"
 cacache = { version = "13.1.0", default-features = false, features = ["mmap", "tokio-runtime"] }
 calamine = { version = "0.36.1", default-features = false, features = ["dates"] }
 docx-rs = "0.4.22"
-fastembed = { version = "=6.0.0", default-features = false, features = ["ort-download-binaries"] }
+fastembed = { version = "=6.0.2", default-features = false, features = ["ort-download-binaries"] }
 fs4 = "1.1.0"
 garde = { version = "0.23.0", features = ["derive"] }
 getrandom = "0.3"
