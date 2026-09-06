@@ -1,0 +1,243 @@
+.correspondence {
+  min-width: 0;
+  margin-top: 32px;
+  padding-top: 26px;
+  border-top: 1px solid var(--border);
+}
+.correspondence > .muted,
+.mail-sync > .muted {
+  margin: 10px 0 20px;
+}
+.correspondence label,
+.correspondence input,
+.correspondence textarea,
+.correspondence select,
+.correspondence .button,
+.quote-editor label,
+.quote-editor input,
+.quote-editor textarea {
+  font-size: 16px;
+}
+.quote-list {
+  list-style: none;
+  padding: 0;
+  margin: 18px 0;
+}
+.quote-list > li {
+  border-bottom: 1px solid var(--border);
+}
+.quote-list-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+  gap: 20px;
+  width: 100%;
+  padding: 16px 0;
+}
+.quote-list-button > span:first-child {
+  min-width: 0;
+}
+.quote-list-button strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+.quote-list-button .muted {
+  display: block;
+  margin-top: 5px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.quote-list-button[aria-expanded="true"] strong {
+  color: var(--teal);
+}
+.quote-review {
+  padding: 22px 0;
+}
+.quote-review .section-heading {
+  margin-bottom: 20px;
+}
+.quote-envelope {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: 12px 18px;
+  margin: 18px 0;
+}
+.quote-envelope dt {
+  color: var(--muted);
+}
+.quote-envelope dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.quote-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.65;
+  padding: 20px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.quote-warning {
+  background: #fffbf2;
+  border-left: 3px solid #c79a40;
+  padding: 14px 18px;
+  margin: 16px 0;
+  line-height: 1.6;
+}
+.quote-warning p + p {
+  margin-top: 8px;
+}
+.quote-attachments {
+  list-style: none;
+  padding: 0;
+}
+.quote-attachments li {
+  margin: 14px 0;
+  overflow-wrap: anywhere;
+}
+.quote-attachments code,
+.quote-fingerprint code {
+  display: block;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  margin-top: 6px;
+}
+.quote-fingerprint {
+  margin: 18px 0;
+  font-size: 14px;
+}
+.correspondence-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  line-height: 1.5;
+  font-weight: 400;
+}
+.correspondence-check input {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  margin: 3px 0 0;
+  accent-color: var(--teal);
+}
+.correspondence fieldset,
+.quote-editor fieldset {
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  margin: 24px 0;
+}
+.correspondence legend,
+.quote-editor legend {
+  padding: 0;
+  font-size: 18px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+.quote-attachment-selector {
+  max-height: 240px;
+  overflow: auto;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.quote-attachment-summary {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 8px 0 12px;
+}
+.quote-attachment-selector .correspondence-check {
+  margin: 12px 0;
+}
+.quote-source-picker {
+  margin: 20px 0;
+}
+.quote-source-picker > summary,
+.quote-reconciliation > summary {
+  cursor: pointer;
+  color: var(--teal);
+}
+.quote-source-picker ul {
+  list-style: none;
+  padding: 0;
+  max-height: 260px;
+  overflow: auto;
+}
+.quote-source-picker li {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 0;
+}
+.quote-source-picker .source-result {
+  width: 100%;
+  text-align: left;
+  line-height: 1.5;
+}
+.quote-source-picker .source-result span {
+  display: block;
+  color: var(--muted);
+  margin-top: 5px;
+}
+.quote-replies {
+  border-top: 1px solid var(--border);
+  margin-top: 30px;
+  padding-top: 24px;
+}
+.quote-reply {
+  border-bottom: 1px solid var(--border);
+  padding: 20px 0;
+}
+.quote-reply > .muted {
+  font-size: 14px;
+  margin: 6px 0;
+}
+.quote-reply .quote-body {
+  border: 0;
+  padding: 6px 0;
+}
+.mail-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 22px;
+}
+.mail-fields label {
+  margin-top: 14px;
+}
+.mail-fields select {
+  width: 100%;
+}
+.mail-sync {
+  border-top: 1px solid var(--border);
+  margin-top: 26px;
+  padding-top: 24px;
+}
+.mail-sync-result {
+  margin-top: 18px;
+}
+.mail-sync-result p + p {
+  margin-top: 8px;
+}
+.correspondence .form-actions {
+  flex-wrap: wrap;
+}
+@media (max-width: 760px) {
+  .mail-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .correspondence .section-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .quote-envelope {
+    grid-template-columns: 75px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .quote-list-button {
+    align-items: flex-start;
+  }
+  .quote-list-button > .status {
+    white-space: normal;
+  }
+}

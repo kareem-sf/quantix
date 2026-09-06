@@ -1,50 +1,23 @@
-# Quantix implementation plan
+# Quantix MVP implementation plan
 
-> For agentic workers: use the approved specification and assigned task brief. The primary developer coordinates independent work and performs integration/review. All development agents use gpt-6-astra/xhigh.
+Specification: docs/spec.md. Shared interfaces: docs/contracts.md. Current record: docs/progress.md.
 
-**Goal:** Deliver a local engineer-controlled Tender Office in complete working increments.
+The engineer's latest instruction is to finish implementation without tests, lint, typechecks, browser QA or live probes. The checkmarks below mean code is implemented and integrated, not tested or certified.
 
-**Architecture:** Python domain/document/AI service, SQLite and local source objects, typed HTTP API, React frontend and thin Tauri Windows shell.
+- [x] Original-preserving package import, structured source records, exact references, revision and duplicate handling.
+- [x] Local exact/meaning search and inspectable original/page/cell evidence.
+- [x] Manager/specialist execution, scoped plan approval, interruption/recovery and atomic publication.
+- [x] Source-backed project map and explicit source-review coverage.
+- [x] Approved reusable knowledge with provenance and time-sensitive revalidation.
+- [x] BOQ source interpretation, Decimal estimates, rate research/proposals and separate VAT treatment.
+- [x] Manual and agent drawing measurements; source-backed general quantity proposals; separate quantity approval.
+- [x] Supplier investigations, RFQ drafts, explicit send approval and reply tracking.
+- [x] Seven output workflows: consolidated BOQ/rates, analysis, technical work, registers, comparisons, programmes and mapped client BOQ copies.
+- [x] Approved-plan routine draft generation and Manager consolidation of specialist results.
+- [x] Source-backed submission requirements, output linking, completion/exception review and scoped final ZIP exports.
+- [x] Backups/recovery, private credentials, Windows shell and local launcher.
+- [x] API declaration generation and current implementation/limitation notes.
+- [ ] Joint testing of the latest MVP changes, after the engineer resumes testing.
+- [ ] Configured live Manager/research and specifically authorised mail use.
 
-**Spec:** docs/spec.md. **Interfaces:** docs/contracts.md. **Execution ledger:** docs/progress.md.
-
-## Global constraints
-
-Source packages unchanged; no customer content or secrets in Git; real operations and honest coverage; explicit material approvals; maintained SDKs; readable engineer copy. User authorises autonomous local implementation. The fresh directory itself is the isolated project; initialise a rebuild branch here.
-
-## Task 1 — Document extraction
-
-- [ ] Write failing tests using generated PDF/DOCX/XLSX fixtures for page/cell provenance, actual VBA detection, formulas/errors, cancellation, unknown formats and size limits.
-- [ ] Implement backend/quantix/documents.py with the extraction contracts in docs/contracts.md. Keep extraction pure with respect to domain storage.
-- [ ] Run targeted tests, validate a private sample in memory, review output and licences.
-
-## Task 2 — Durable local workspace
-
-- [ ] Write failing tests for Tender creation, safe folder/zip import, duplicate/version identity, source retrieval, Tender isolation, FTS queries, interrupted jobs and approval enforcement.
-- [ ] Implement backend/quantix/models.py, db.py, repository.py, intake.py, jobs.py and API routes using docs/contracts.md.
-- [ ] Add authenticated loopback serving, native file selection and development launcher. Generate frontend API types.
-- [ ] Import the private reference package into an ignored local application home; verify original hashes and exact cell/page references.
-
-## Task 3 — Desktop interface
-
-- [ ] Generate/inspect visual concept and record design tokens.
-- [ ] Implement Manager, Files/source inspection, Work/decisions, Estimate and Settings against real API operations.
-- [ ] Verify import, search, source preview, cancellation, error recovery and responsive layout in browser and native dev launch.
-
-## Task 4 — Manager and work execution
-
-- [ ] Inspect installed official SDK types. Write tests for tool Tender scope, structured source references, approvals and persisted work state with test doubles only in tests.
-- [ ] Implement manager conversation, source-backed findings, dynamic proposed plans, approved tasks and independent review using SDK agents-as-tools.
-- [ ] Persist events/usage/results and interruption state. Add configured live integration checks without pretending unconfigured runs succeeded.
-
-## Task 5 — Estimating, research and deliverables
-
-- [ ] Implement BOQ rows, Decimal rate build-ups, measured quantity proposals, tax treatments and engineer pricing decisions with real calculation tests.
-- [ ] Add web research with dated citations, supplier comparison/RFQ drafts, scoped authorised delivery integration, and response registration.
-- [ ] Generate source-linked Excel/Word deliverables and programme/register exports. Verify formulas/totals and render representative documents.
-
-## Task 6 — Full workflow and recovery
-
-- [ ] Complete revision impact, reusable approved knowledge, backups/recovery, resume paths and native startup/shutdown.
-- [ ] Run complete verification and independent code review. Fix findings, recheck affected workflows, and record exact evidence and limitations.
-- [ ] Provide a running application and concise test instructions. Continue remaining product work after each usable milestone.
+Native DWG processing, automatic OCR and a signed distributable installer remain outside the implemented local MVP. Unsupported sources stay visible and preserved; PDF/visual workflows do not claim complete automated takeoff accuracy.

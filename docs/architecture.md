@@ -34,3 +34,14 @@ Store API keys in the Windows credential store, with environment configuration a
 - https://developers.openai.com/api/docs/guides/tools-web-search
 - https://www.sqlite.org/fts5.html
 - https://v2.tauri.app/develop/sidecar/
+
+
+## MVP completion decisions
+
+Project structure and review scopes use ordinary SQLite records, source snapshots and append-only decisions. They do not require a graph database. Submission requirements use the same source/decision pattern, with output links and explicit satisfied/exception reviews.
+
+Client-format workbook export edits targeted OOXML members in a new copy so VBA, drawings and unsupported Excel objects can remain intact. The workflow rejects ambiguous targets instead of silently re-saving or repairing the source workbook. Final release records a checked local ZIP, its selected requirement coverage and engineer-approved scope; transmission is separate.
+
+Agent-produced drafts use approved plan authority rather than synthesizing an engineer decision. Their source snapshots and originating task remain stable through finalization. The primary service owns both publication and rollback cleanup. Calibrated and general quantity proposals retain author origin and remain separate from pricing approval.
+
+Current user instruction defers all development testing until the joint testing session. Source inspection and API declaration generation continue, but are not described as verification.

@@ -9,7 +9,7 @@ Build an adaptive, engineer-controlled Tender Office. The current specification 
 - All product copy uses plain construction-engineering language. The main contact is the Tender Manager.
 - Preserve supplied Tender files. Do not commit customer documents, API keys, private extracted content, or runtime databases.
 - Use source references for factual findings. Keep imported, extracted, analysed, and reviewed coverage distinct.
-- Write meaningful behaviour tests before implementation. Use targeted tests while developing and the complete verification gate before handing off a milestone. Do not build release packages during normal development.
+- Current user override: implement the complete MVP without writing or running tests, lint, typechecks, browser QA or live integration checks. Testing is deferred until the engineer tests with us. Do not describe untested changes as verified. Keep existing tests for that later session. Do not build release packages during normal development.
 - Read docs/contracts.md before changing a shared interface. Update API schemas and generated frontend types together.
 - User approval already covers architecture decisions, local implementation, installation of project dependencies, local verification, and reversible fixes. Continue work without routine permission questions.
 

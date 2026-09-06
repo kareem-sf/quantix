@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Quantix",
+  "version": "0.1.0",
+  "identifier": "com.quantix.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{
+      "title": "Quantix",
+      "width": 1440,
+      "height": 960,
+      "minWidth": 900,
+      "minHeight": 620,
+      "center": true
+    }],
+    "security": { "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost http://127.0.0.1:*; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'" }
+  },
+  "bundle": { "active": true, "targets": ["nsis"] }
+}
