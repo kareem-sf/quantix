@@ -1,0 +1,48 @@
+{
+  "name": "quantix",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Engineer-controlled Tender Office",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:ui": "vite --host 127.0.0.1 --port 1420 --strictPort",
+    "tauri": "tauri",
+    "check:ui": "tsc --noEmit",
+    "test:ui": "vitest run",
+    "test:backend": "backend/.venv/Scripts/python.exe -m pytest backend/tests -q",
+    "test": "npm run test:ui && npm run test:backend",
+    "check": "npm run check:ui && backend/.venv/Scripts/python.exe -m ruff check backend",
+    "format:check": "prettier --check src scripts *.json *.ts && backend/.venv/Scripts/python.exe -m ruff format --check backend",
+    "verify": "npm run check && npm test",
+    "bindings": "backend/.venv/Scripts/python.exe scripts/export_openapi.py && openapi-typescript .quantix-dev/openapi.json -o src/bindings/api.ts",
+    "build": "tsc --noEmit && vite build",
+    "build:desktop": "tauri build"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.2.8",
+    "@tauri-apps/api": "^2.10.1",
+    "@tanstack/react-query": "^5.90.21",
+    "lucide-react": "^1.32.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/node": "^25.3.5",
+    "@vitejs/plugin-react": "^6.0.5",
+    "jsdom": "^30.0.1",
+    "openapi-typescript": "^7.13.0",
+    "prettier": "^3.8.1",
+    "typescript": "~5.9.3",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.10"
+  }
+}

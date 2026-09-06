@@ -1,0 +1,7 @@
+backend/
+src/bindings/
+src-tauri/
+node_modules/
+dist/
+.quantix-dev/
+docs/design/*.png
