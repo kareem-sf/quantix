@@ -1,107 +1,37 @@
 [package]
-name = "quantix"
+name = "quantix-desktop"
 version = "0.1.0"
-description = "Engineer-controlled tender office"
-authors = ["Quantix contributors"]
 edition = "2021"
-license = "Apache-2.0"
-default-run = "quantix"
-
-[features]
-runtime-fixture = []
+description = "Engineer-controlled Tender Office"
+default-run = "quantix-desktop"
 
 [[bin]]
-name = "quantix-runtime-fixture"
-path = "tests/support/runtime_fixture.rs"
-required-features = ["runtime-fixture"]
-test = false
-bench = false
+name = "quantix-desktop"
+path = "src/main.rs"
 
 [[bin]]
-name = "quantix-storage-fixture"
-path = "tests/support/storage_fixture.rs"
-required-features = ["runtime-fixture"]
-test = false
-bench = false
-
-[[bin]]
-name = "quantix-product-acceptance"
-path = "src/bin/product_acceptance.rs"
-test = false
-bench = false
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "quantix_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
-
-[profile.test]
-debug = 0
+name = "quantix-ai-host"
+path = "src/bin/quantix-ai-host.rs"
 
 [build-dependencies]
-embed-resource = "3"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-anydoc = "0.1.9"
-base64 = "0.23.1"
-cacache = { version = "13.1.0", default-features = false, features = ["mmap", "tokio-runtime"] }
-calamine = { version = "0.36.1", default-features = false, features = ["dates"] }
-docx-rs = "0.4.22"
-fastembed = { version = "=6.0.0", default-features = false, features = ["ort-download-binaries"] }
-fs4 = "1.1.0"
-garde = { version = "0.23.0", features = ["derive"] }
-getrandom = "0.3"
-infer = "0.22.0"
-jsonschema = { version = "0.49.9", default-features = false }
-jiff = { version = "0.2.35", default-features = false, features = ["std"] }
-minisign-verify = "=0.2.5"
-processkit = { version = "=3.3.3", default-features = false }
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "query", "rustls", "blocking", "form"] }
-rusqlite = { version = "0.40.1", features = ["backup", "bundled", "hooks", "limits", "load_extension"] }
-rust_xlsxwriter = "0.98.0"
-rust_decimal = { version = "1.42.1", default-features = false, features = ["std"] }
-semver = "1.0.27"
-serde_json_canonicalizer = "0.3.2"
-sha2 = "0.11.0"
-tauri = { version = "2", features = ["macos-private-api"] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
-tauri-plugin-notification = "2"
+tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
-tauri-plugin-single-instance = "2.4.3"
-tauri-plugin-updater = "=2.10.1"
+url = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sqlite-vec = "=0.1.9"
-tempfile = "3.27.0"
-thiserror = "2.0.16"
-tokio = { version = "1.47.1", features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
-tokio-util = { version = "0.7.16", features = ["rt"] }
-tracing = "0.1.44"
-tracing-subscriber = "0.3.20"
-ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
-unicase = "2.9.0"
-unicode-bidi = "0.3.18"
-unicode-normalization = "0.1.25"
-unicode-script = "0.5.8"
-url = "=2.5.8"
-walkdir = "2.5.0"
-webbrowser = { version = "1.2.4", features = ["hardened"] }
-zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-zeroize = { version = "1.9.0", features = ["derive"] }
-
-[target.'cfg(windows)'.dependencies]
-junction = { version = "2.0.0", default-features = false }
-windows-permissions = "0.2.4"
-# wmi ranges `windows` and `windows-core` independently, so pin its pair to
-# one minor line. Tauri retains its own compatible 0.61 dependency line.
-windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
-windows-core = "=0.62.2"
+brotli-decompressor = "=5.0.3"
 
 [dev-dependencies]
-minisign = "0.9.1"
-tauri = { version = "2", features = ["test"] }
+tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

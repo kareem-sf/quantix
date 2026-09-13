@@ -1,17 +1,23 @@
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
-import { configDefaults, defineConfig } from "vitest/config";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = fileURLToPath(new URL("./", import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
-  define: {
-    __QUANTIX_WINDOWS_TITLEBAR__: true,
+  resolve: {
+    alias: {
+      "@": path.join(root, "src"),
+    },
   },
   test: {
-    clearMocks: true,
+    maxWorkers: 2,
+    testTimeout: 15000,
     environment: "jsdom",
-    exclude: [...configDefaults.exclude, ".worktrees/**"],
-    fileParallelism: false,
-    pool: "forks",
+    globals: true,
     setupFiles: ["./src/testSetup.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
   },
 });

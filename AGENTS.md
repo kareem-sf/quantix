@@ -1,56 +1,20 @@
-# AGENTS.md
+# Quantix
 
-- Do not preserve backward compatibility. Remove obsolete paths instead of adding compatibility layers, fallbacks, or migrations.
-- Choose the simplest implementation that fully meets the current requirements. Avoid speculative abstractions, configuration, and indirection.
-- Validate before implementing: confirm the approach and the facts it rests on (SDK/API behavior, provider terms, requirements) before writing code, so we always do the right thing via the shortest path — no over-engineering, no over-coding.
-- Grow the system in layers. Start from the smallest version that works end to end, and add each new capability on top of a product that already works. Never trade a working product for unfinished complexity.
-- Keep components modular and concerns clearly separated.
-- Prefer established, well-maintained libraries when they reduce overall complexity or improve reliability. Do not reimplement common functionality without a clear reason.
-- Lean on the dependencies already in the project before writing your own implementation or adding packages. Do not assume a library lacks a capability without checking its documentation and types.
-- Avoid custom implementations and hand-written protocol/integration code as much as possible. Prefer ready-made, maintained libraries — Rust, JavaScript/TypeScript, Python, or otherwise — and write custom code only when no library meets the need.
-- Write all UI/UX in plain language a construction engineer understands. Never use developer, AI, or agent jargon in product copy; name things the way the user thinks about the work.
-- Make architectural decisions for the long term. Do not accept a stopgap that only works for now and is meant to be replaced later.
-For every non-trivial task, use a manager-worker approach.
-- The primary agent owns planning, architecture, task decomposition, integration, review, and final verification.
-- Delegate concrete, bounded, independent subtasks to subagents whenever useful.
-- Prefer the fastest suitable lower-cost model for straightforward work, and use stronger models only when complexity requires them.
-- Keep subagent file ownership non-overlapping to prevent conflicting edits.
-- Continue discussing and planning with the user while subagents work.
-- Review every subagent result and inspect its changes before accepting them.
-- Run the relevant repository verification after integrating delegated work.
-- Do not delegate trivial tasks where coordination would cost more than doing the work directly.
+Build an adaptive, engineer-controlled Tender Office. The current specification is docs/spec.md and execution record is docs/progress.md. This is a fresh project; obsolete code and old GitHub specifications are not implementation requirements.
 
-## Repository commands
+- The primary agent owns architecture, integration, review, and verification. Inspect all changes.
+- Prefer maintained libraries, official SDKs, and documented APIs. Validate before implementing. Keep components small and responsibilities clear.
+- Build complete working increments; no compatibility layers, fake production behaviour, or speculative infrastructure.
+- All product copy uses plain construction-engineering language. The main contact is the Tender Manager.
+- Quantix's core UX principle is simple plain-language guidance with one clear next action. Keep details and advanced controls in More options while preserving every capability and actionable error.
+- Current AI scope keeps direct API keys for OpenAI, Anthropic, Google, xAI and OpenAI-compatible BYOK/custom, and restores supported ChatGPT/Codex and Grok subscription methods through the original official clients. Follow docs/subscription-connections.md and dated official-source research; other subscription routes remain unavailable unless their integration is documented and permitted. Direct APIs retain bundled SDK execution. Never copy OAuth tokens into API credentials or silently change billing/approved models. Keep Tender data permission, source validation and spending authority intact.
+- Preserve supplied Tender files. Do not commit customer documents, API keys, private extracted content, or runtime databases.
+- The normal Quantix application home is `~/.quantix`. Keep databases, imported copies, outputs, private AI software/account profiles, caches, logs, temporary work, connection records and supported desktop WebView state beneath it. Do not reintroduce AppData or repository `.quantix-dev` runtime storage. Source/dependencies/build artifacts stay in the project; OS-protected credentials and user-chosen original/export locations remain separate. Explicit isolated backend roots are for development verification only.
+- Use source references for factual findings. Keep imported, extracted, analysed, and reviewed coverage distinct.
+- Current user override for the approved 2026-09-09 redesign: implement docs/design/workspace-redesign.md with affected backend and UI tests, frontend typecheck, and visual user-journey checks in the real app, including light/dark and scaling. This supersedes the earlier verification restriction for this work. Do not build release packages. Use synthetic data for approvals and other acceptance mutations; approval of the real Tender and commercial sending remain the engineer's decisions.
+- Read docs/contracts.md before changing a shared interface. Update API schemas and generated frontend types together.
+- User approval already covers architecture decisions, local implementation, installation of project dependencies, local verification, and reversible fixes. Continue work without routine permission questions.
 
-- Install JavaScript dependencies: `npm install`
-- Run the desktop application in development: `npm run tauri dev`
-- Check formatting without changing files: `npm run format:check`
-- Run TypeScript typechecking and Rust clippy: `npm run check`
-- Run deterministic tests and regenerate Rust-owned TypeScript DTOs: `npm test`
-- Run targeted tests during development — fastest first: `cargo test --manifest-path src-tauri/Cargo.toml --target-dir src-tauri/target/tests --features runtime-fixture --test <test-file-name>` (or `--lib <filter>` for unit tests) and `npx vitest run <file>` for one renderer test file. Reserve the full `npm test` suite for final verification only — before committing or handing off completed work.
-- Record deterministic product acceptance from a command file: `npm run acceptance:deterministic -- <application-home> <command.json>`
-- Aggregate deterministic Product Acceptance Runs: `npm run acceptance:aggregate -- <application-home> <source-revision>`
-- Record one opted-in local live-provider run: `npm run acceptance:live -- <application-home> <command.json>`
-- Aggregate five clean private Windows runs: `npm run acceptance:private -- <application-home> <release-candidate-sha256>`
-- Validate native package evidence: `npm run acceptance:native -- <application-home> <native-command.json>`
-- Evaluate aggregate public release acceptance: `npm run acceptance:release -- <application-home> <gate-command.json>`
-- Build the production renderer: `npm run build`
-- Build the native desktop package: `npm run build:desktop`
-- Run the development verification gate without building: `npm run verify`
+## Commands
 
-Keep generated declarations under `src/bindings` committed. Do not edit them manually.
-Production builds are explicit release-stage operations; do not run them during normal development.
-
-## Agent skills
-
-### Issue tracker
-
-Issues and specs live as GitHub issues on `kareem-sf/quantix`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-The five canonical triage labels are used as-is (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context: one `CONTEXT.md` plus `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Commands are established by the bootstrap task and kept in README.md. Backend tests run with the project virtual environment. User data lives outside the repository unless a test explicitly uses a temporary directory.

@@ -1,0 +1,199 @@
+.other-outputs {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 20px 0;
+}
+.other-outputs label {
+  margin: 0;
+  font-size: var(--qx-text-body);
+}
+.other-outputs select {
+  display: block;
+  margin-top: 8px;
+  min-width: 230px;
+}
+.plain-fieldset {
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.output-form input,
+.output-form select,
+.output-form textarea,
+.submission-form input,
+.submission-form textarea {
+  font-size: var(--qx-text-section);
+}
+.output-form select {
+  width: 100%;
+}
+.programme-week {
+  border: 0;
+  padding: 10px 0;
+  display: flex;
+  gap: 4px 20px;
+  flex-wrap: wrap;
+}
+.programme-week .checkbox-label {
+  margin: 7px 0;
+  min-width: 110px;
+}
+.programme-activity {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 14px 18px 20px;
+  margin: 24px 0;
+  min-width: 0;
+}
+.programme-activity legend {
+  padding: 0 6px;
+  font-size: var(--qx-text-section);
+  font-weight: 500;
+}
+.submissions-section {
+  margin-top: 35px;
+  border-top: 1px solid var(--border);
+  padding-top: 28px;
+}
+.submission-selection {
+  border: 0;
+  padding: 0;
+  margin: 20px 0;
+  min-width: 0;
+}
+.submission-selection label {
+  border-bottom: 1px solid var(--border);
+  padding: 14px 0;
+}
+.submission-form {
+  overflow-wrap: anywhere;
+}
+.submission-form .checkbox-label {
+  font-size: var(--qx-text-body);
+  font-weight: 400;
+  align-items: flex-start;
+}
+.submission-preview-files {
+  margin: 20px 0;
+  padding: 0;
+  list-style: none;
+}
+.submission-preview-files li {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+.submission-preview-files code,
+.submission-record code {
+  font-size: var(--qx-text-caption);
+  overflow-wrap: anywhere;
+}
+.submission-blockers {
+  border-left: 3px solid #bf6e50;
+  background: #fffbf7;
+  padding: 15px 20px;
+  margin: 20px 0;
+  font-size: var(--qx-text-body);
+}
+.submission-record {
+  padding: 22px 0;
+  border-bottom: 1px solid var(--border);
+}
+.submission-record p {
+  font-size: var(--qx-text-body);
+  line-height: 1.7;
+  margin: 10px 0;
+  overflow-wrap: anywhere;
+}
+.submission-record details {
+  margin: 15px 0;
+  font-size: var(--qx-text-body);
+}
+.client-boq-form > p {
+  margin: 16px 0;
+  font-size: var(--qx-text-body);
+}
+.client-boq-mapping {
+  min-width: 0;
+  padding: 16px 18px 20px;
+  margin: 26px 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.client-boq-mapping legend {
+  padding: 0 6px;
+  font-weight: 500;
+  font-size: var(--qx-text-section);
+}
+.client-boq-row-picker,
+.client-boq-header-options {
+  max-height: 300px;
+  overflow-y: auto;
+  margin: 14px 0 18px;
+  border-top: 1px solid var(--border);
+}
+.client-boq-row,
+.client-boq-header-options > label {
+  padding: 14px 0;
+  margin: 0;
+  border-bottom: 1px solid var(--border);
+}
+.client-boq-row .checkbox-label,
+.client-boq-header-options .checkbox-label {
+  align-items: flex-start;
+  font-size: var(--qx-text-body);
+  font-weight: 400;
+  line-height: 1.7;
+  margin: 0;
+}
+.client-boq-row strong,
+.client-boq-header-options strong {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.client-boq-row .field-help,
+.client-boq-header-options .field-help,
+.client-boq-row .client-boq-warning {
+  display: block;
+  margin-top: 5px;
+}
+.client-boq-row .text-button {
+  margin: 10px 0 0 26px;
+  font-size: var(--qx-text-body);
+}
+.client-boq-warning {
+  color: #93631e;
+  font-size: var(--qx-text-body);
+  line-height: 1.7;
+  margin: 12px 0;
+}
+.client-boq-headers {
+  margin: 24px 0;
+}
+.client-boq-selected-headers > div {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.client-boq-selected-headers .text-button {
+  font-size: var(--qx-text-caption);
+}
+.client-boq-quantity-consent {
+  border-left: 3px solid #b3893d;
+  padding-left: 15px;
+}
+@media (max-width: 760px) {
+  .other-outputs > label,
+  .other-outputs select {
+    width: 100%;
+  }
+  .programme-activity {
+    padding: 10px 12px 18px;
+  }
+  .client-boq-mapping {
+    padding: 12px;
+  }
+}

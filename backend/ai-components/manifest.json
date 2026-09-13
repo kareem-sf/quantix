@@ -1,0 +1,735 @@
+{
+  "components": {
+    "api-anthropic": {
+      "locks": {
+        "linux-aarch64": {
+          "path": "locks/api-anthropic-linux-aarch64.txt",
+          "sha256": "e1bdff5122de29f7f53f6102241c6600dbda0cfbf1337f494c96410e4421e1c6"
+        },
+        "linux-x86_64": {
+          "path": "locks/api-anthropic-linux-x86_64.txt",
+          "sha256": "e1bdff5122de29f7f53f6102241c6600dbda0cfbf1337f494c96410e4421e1c6"
+        },
+        "macos-aarch64": {
+          "path": "locks/api-anthropic-macos-aarch64.txt",
+          "sha256": "e1bdff5122de29f7f53f6102241c6600dbda0cfbf1337f494c96410e4421e1c6"
+        },
+        "macos-x86_64": {
+          "path": "locks/api-anthropic-macos-x86_64.txt",
+          "sha256": "d821b2f13c3f15d6c78d78b845ae04f083ad470a8b7cbd6639f09e9f450b0eb3"
+        },
+        "windows-aarch64": {
+          "path": "locks/api-anthropic-windows-aarch64.txt",
+          "sha256": "9466acf857fd2b847c347a59ce5375445e7d4680c405d03e855396fae64e351a"
+        },
+        "windows-x86_64": {
+          "path": "locks/api-anthropic-windows-x86_64.txt",
+          "sha256": "9969acfc8ef5adf0cee70100e99d51ecd1a8dc9e2ae58609fd147315e43bc5a3"
+        }
+      },
+      "requirements": [
+        "mcp==2.1.1",
+        "pydantic==2.13.5",
+        "jsonschema==4.26.0",
+        "platformdirs==4.11.7",
+        "pydantic-ai-slim[anthropic]==2.40.0"
+      ],
+      "version": "1"
+    },
+    "api-anthropic-azure": {
+      "locks": {
+        "linux-aarch64": {
+          "path": "locks/api-anthropic-azure-linux-aarch64.txt",
+          "sha256": "f4e8262cad731722994565f6ec16563c7a8d8529fdf421586e666971801aef5e"
+        },
+        "linux-x86_64": {
+          "path": "locks/api-anthropic-azure-linux-x86_64.txt",
+          "sha256": "f4e8262cad731722994565f6ec16563c7a8d8529fdf421586e666971801aef5e"
+        },
+        "macos-aarch64": {
+          "path": "locks/api-anthropic-azure-macos-aarch64.txt",
+          "sha256": "f4e8262cad731722994565f6ec16563c7a8d8529fdf421586e666971801aef5e"
+        },
+        "macos-x86_64": {
+          "path": "locks/api-anthropic-azure-macos-x86_64.txt",
+          "sha256": "bac3055cd1edbc32ec296fb147e86b0760ed6065672da4c37a8d281554c16679"
+        },
+        "windows-aarch64": {
+          "path": "locks/api-anthropic-azure-windows-aarch64.txt",
+          "sha256": "f70d266eaad3b3f4d56a350e1ab24a7475434b5d1ed8f97984ca25c255faae16"
+        },
+        "windows-x86_64": {
+          "path": "locks/api-anthropic-azure-windows-x86_64.txt",
+          "sha256": "3181fa1a097d087da450366c1f36e4f80c1dcc4186a1163048f5074e1a21a1c9"
+        }
+      },
+      "requirements": [
+        "mcp==2.1.1",
+        "pydantic==2.13.5",
+        "jsonschema==4.26.0",
+        "platformdirs==4.11.7",
+        "pydantic-ai-slim[anthropic]==2.40.0",
+        "azure-identity==1.25.3",
+        "aiohttp==3.14.3"
+      ],
+      "version": "1"
+    },
+    "api-bedrock": {
+      "locks": {
+        "linux-aarch64": {
+          "path": "locks/api-bedrock-linux-aarch64.txt",
+          "sha256": "faf0696dc5016e69cc55b342a15d24b610887ef4f00aee02ec2724c13b324afe"
+        },
+        "linux-x86_64": {
+          "path": "locks/api-bedrock-linux-x86_64.txt",
+          "sha256": "faf0696dc5016e69cc55b342a15d24b610887ef4f00aee02ec2724c13b324afe"
+        },
+        "macos-aarch64": {
+          "path": "locks/api-bedrock-macos-aarch64.txt",
+          "sha256": "faf0696dc5016e69cc55b342a15d24b610887ef4f00aee02ec2724c13b324afe"
+        },
+        "macos-x86_64": {
+          "path": "locks/api-bedrock-macos-x86_64.txt",
+          "sha256": "e1e8578bc5ee5be1d25150d13447b304f61ea76bff8cd6959c7d2aa410a5d2c0"
+        },
+        "windows-aarch64": {
+          "path": "locks/api-bedrock-windows-aarch64.txt",
+          "sha256": "c312b5c9c7d05000a23dc59aeeac318e2347ea756a9017d23d026897d5fa562e"
+        },
+        "windows-x86_64": {
+          "path": "locks/api-bedrock-windows-x86_64.txt",
+          "sha256": "307aabcb546f56cc4a22b7d7f81bf40a5ddec4fb8299d88697eb99e701f5853f"
+        }
+      },
+      "requirements": [
+        "mcp==2.1.1",
+        "pydantic==2.13.5",
+        "jsonschema==4.26.0",
+        "platformdirs==4.11.7",
+        "pydantic-ai-slim[bedrock]==2.40.0"
+      ],
+      "version": "1"
+    },
+    "api-cohere": {
+      "locks": {
+        "linux-aarch64": {
+          "path": "locks/api-cohere-linux-aarch64.txt",
+          "sha256": "d828a534f5c67e566e88ff0deb07f661ff9e28a5b3aacee93b6831dc10670e1e"
+        },
+        "linux-x86_64": {
+          "path": "locks/api-cohere-linux-x86_64.txt",
+          "sha256": "d828a534f5c67e566e88ff0deb07f661ff9e28a5b3aacee93b6831dc10670e1e"
+        },
+        "macos-aarch64": {
+          "path": "locks/api-cohere-macos-aarch64.txt",
+          "sha256": "d828a534f5c67e566e88ff0deb07f661ff9e28a5b3aacee93b6831dc10670e1e"
+        },
+        "macos-x86_64": {
+          "path": "locks/api-cohere-macos-x86_64.txt",
+          "sha256": "6f301c6449086a9a3fd270ca71560832b38885cf35f67dee092489709a9339f3"
+        },
+        "windows-aarch64": {
+          "path": "locks/api-cohere-windows-aarch64.txt",
+          "sha256": "e74d91b7734ef1e019310a5539923a8a7c768875fff90fee377e23c73ca302a8"
+        },
+        "windows-x86_64": {
+          "path": "locks/api-cohere-windows-x86_64.txt",
+          "sha256": "de99048ef314a0fb34060f4cc5121bef805a119c0a499da2a8c8c3a12cc2026d"
+        }
+      },
+      "requirements": [
+        "mcp==2.1.1",
+        "pydantic==2.13.5",
+        "jsonschema==4.26.0",
+        "platformdirs==4.11.7",
+        "pydantic-ai-slim[cohere]==2.40.0"
+      ],
+      "version": "1"
+    },
+    "api-google": {
+      "locks": {
+        "linux-aarch64": {
+          "path": "locks/api-google-linux-aarch64.txt",
+          "sha256": "0d210a23272da42e76c585b9bc12e47750cf2c7e9af99372760c3a89d012c4b4"
+        },
+        "linux-x86_64": {
+          "path": "locks/api-google-linux-x86_64.txt",
+          "sha256": "0d210a23272da42e76c585b9bc12e47750cf2c7e9af99372760c3a89d012c4b4"
+        },
+        "macos-aarch64": {
+          "path": "locks/api-google-macos-aarch64.txt",
+          "sha256": "0d210a23272da42e76c585b9bc12e47750cf2c7e9af99372760c3a89d012c4b4"
+        },
+        "macos-x86_64": {
+          "path": "locks/api-google-macos-x86_64.txt",
+          "sha256": "7829f5206830bf1575cdcc156c3d651fa431b92211bd549b796f465453a8981a"
+        },
+        "windows-aarch64": {
+          "path": "locks/api-google-windows-aarch64.txt",
+          "sha256": "e464ce1b77e9bdb3ad806830cdf1f0f68622ed7a169ced17610596d09d6b6c7a"
+        },
+        "windows-x86_64": {
+          "path": "locks/api-google-windows-x86_64.txt",
+          "sha256": "9b453364589764c5972e7631ce99a9973654159c4df27dfebd0907cfdd0d48ba"
+        }
+      },
+      "requirements": [
+        "mcp==2.1.1",
+        "pydantic==2.13.5",
+        "jsonschema==4.26.0",
+        "platformdirs==4.11.7",
+        "pydantic-ai-slim[google]==2.40.0"
+      ],
+      "version": "1"
+    },
+    "api-mistral": {
+      "locks": {
+        "linux-aarch64": {
+          "path": "locks/api-mistral-linux-aarch64.txt",
+          "sha256": "2e8dfc6401144600b03ea2d59bf4a2aae7d47b268118f8aa24ba72e06127d2c5"
+        },
+        "linux-x86_64": {
+          "path": "locks/api-mistral-linux-x86_64.txt",
+          "sha256": "2e8dfc6401144600b03ea2d59bf4a2aae7d47b268118f8aa24ba72e06127d2c5"
+        },
+        "macos-aarch64": {
+          "path": "locks/api-mistral-macos-aarch64.txt",
+          "sha256": "2e8dfc6401144600b03ea2d59bf4a2aae7d47b268118f8aa24ba72e06127d2c5"
+        },
+        "macos-x86_64": {
+          "path": "locks/api-mistral-macos-x86_64.txt",
+          "sha256": "a854e04235b6b91afce6f30e343b368e2c2a6f32a27321e3e7bc55c5117ce753"
+        },
+        "windows-aarch64": {
+          "path": "locks/api-mistral-windows-aarch64.txt",
+          "sha256": "c8e2d97ce9e725603c1815c363f18e390d6322338c1defa3a8980494e161b43a"
+        },
+        "windows-x86_64": {
+          "path": "locks/api-mistral-windows-x86_64.txt",
+          "sha256": "1ec35c595e38d4f4378f5d2047cfc4a10a4832e92466724c0924eaf1a47ce206"
+        }
+      },
+      "requirements": [
+        "mcp==2.1.1",
+        "pydantic==2.13.5",
+        "jsonschema==4.26.0",
+        "platformdirs==4.11.7",
+        "pydantic-ai-slim[mistral]==2.40.0"
+      ],
+      "version": "1"
+    },
+    "api-openai": {
+      "locks": {
+        "linux-aarch64": {
+          "path": "locks/api-openai-linux-aarch64.txt",
+          "sha256": "d3617295c77ee306e304694824615ae2aa416b0e0b595445ab0287100c104562"
+        },
+        "linux-x86_64": {
+          "path": "locks/api-openai-linux-x86_64.txt",
+          "sha256": "d3617295c77ee306e304694824615ae2aa416b0e0b595445ab0287100c104562"
+        },
+        "macos-aarch64": {
+          "path": "locks/api-openai-macos-aarch64.txt",
+          "sha256": "d3617295c77ee306e304694824615ae2aa416b0e0b595445ab0287100c104562"
+        },
+        "macos-x86_64": {
+          "path": "locks/api-openai-macos-x86_64.txt",
+          "sha256": "48c3301d2c534b1b2b245ff8ef4ea0cab2ca88f9f761f46ddcf73d19493d569f"
+        },
+        "windows-x86_64": {
+          "path": "locks/api-openai-windows-x86_64.txt",
+          "sha256": "946d8ab3508820c8d19b4e9ba9f2b03ec82de6c32fc6befda75ee6a46e821201"
+        }
+      },
+      "requirements": [
+        "mcp==2.1.1",
+        "pydantic==2.13.5",
+        "jsonschema==4.26.0",
+        "platformdirs==4.11.7",
+        "pydantic-ai-slim[openai]==2.40.0"
+      ],
+      "version": "1"
+    },
+    "api-openai-azure": {
+      "locks": {
+        "linux-aarch64": {
+          "path": "locks/api-openai-azure-linux-aarch64.txt",
+          "sha256": "a6eda5a12718064601b349567a3870e3c25d7a8e29a76ebd482bd9d1f0402e5f"
+        },
+        "linux-x86_64": {
+          "path": "locks/api-openai-azure-linux-x86_64.txt",
+          "sha256": "a6eda5a12718064601b349567a3870e3c25d7a8e29a76ebd482bd9d1f0402e5f"
+        },
+        "macos-aarch64": {
+          "path": "locks/api-openai-azure-macos-aarch64.txt",
+          "sha256": "a6eda5a12718064601b349567a3870e3c25d7a8e29a76ebd482bd9d1f0402e5f"
+        },
+        "macos-x86_64": {
+          "path": "locks/api-openai-azure-macos-x86_64.txt",
+          "sha256": "50dfa5efcb7a279072a8ebb08c3a9c80f6a3da29941caee2bc0c827e184053f0"
+        },
+        "windows-x86_64": {
+          "path": "locks/api-openai-azure-windows-x86_64.txt",
+          "sha256": "4922a8d291996bcdd64fdac2ae0b9d3c0f40ae886347f5c1d6c3d9b97bce3982"
+        }
+      },
+      "requirements": [
+        "mcp==2.1.1",
+        "pydantic==2.13.5",
+        "jsonschema==4.26.0",
+        "platformdirs==4.11.7",
+        "pydantic-ai-slim[openai]==2.40.0",
+        "azure-identity==1.25.3",
+        "aiohttp==3.14.3"
+      ],
+      "version": "1"
+    },
+    "client-claude": {
+      "locks": {
+        "linux-aarch64": {
+          "path": "locks/client-claude-linux-aarch64.txt",
+          "sha256": "4dd6f39929525e6f362794abf15fbb3880742ad610ec0b319af3aac5bfcbc718"
+        },
+        "linux-x86_64": {
+          "path": "locks/client-claude-linux-x86_64.txt",
+          "sha256": "4dd6f39929525e6f362794abf15fbb3880742ad610ec0b319af3aac5bfcbc718"
+        },
+        "macos-aarch64": {
+          "path": "locks/client-claude-macos-aarch64.txt",
+          "sha256": "4dd6f39929525e6f362794abf15fbb3880742ad610ec0b319af3aac5bfcbc718"
+        },
+        "macos-x86_64": {
+          "path": "locks/client-claude-macos-x86_64.txt",
+          "sha256": "9433833c4b2c30435b45d6405da2525c4593bf5f4d133ead971eb1248e4dc143"
+        },
+        "windows-x86_64": {
+          "path": "locks/client-claude-windows-x86_64.txt",
+          "sha256": "92df705938d6ae0d38dc1f6e452cdebf8b294f9b62980880d77a6899cd1bb7ad"
+        }
+      },
+      "requirements": [
+        "mcp==2.1.1",
+        "pydantic==2.13.5",
+        "jsonschema==4.26.0",
+        "platformdirs==4.11.7",
+        "claude-agent-sdk==0.2.152",
+        "pydantic-ai-slim[anthropic]==2.40.0"
+      ],
+      "version": "1"
+    },
+    "client-codex": {
+      "locks": {
+        "linux-aarch64": {
+          "path": "locks/client-codex-linux-aarch64.txt",
+          "sha256": "7a3667daad783af369c2dcb6229e28e7bbb87086ac1ddf4319483bf803f16bc3"
+        },
+        "linux-x86_64": {
+          "path": "locks/client-codex-linux-x86_64.txt",
+          "sha256": "7a3667daad783af369c2dcb6229e28e7bbb87086ac1ddf4319483bf803f16bc3"
+        },
+        "macos-aarch64": {
+          "path": "locks/client-codex-macos-aarch64.txt",
+          "sha256": "7a3667daad783af369c2dcb6229e28e7bbb87086ac1ddf4319483bf803f16bc3"
+        },
+        "macos-x86_64": {
+          "path": "locks/client-codex-macos-x86_64.txt",
+          "sha256": "46450d32cb87219509de1447483d6f8312ec98dce0660af6c4e379f35f999eb9"
+        },
+        "windows-aarch64": {
+          "path": "locks/client-codex-windows-aarch64.txt",
+          "sha256": "cf12ec3bec241ea4f1bfd49ed92bca5b40aa790b1ee5ab15cb0cec68bed1bc27"
+        },
+        "windows-x86_64": {
+          "path": "locks/client-codex-windows-x86_64.txt",
+          "sha256": "92362fd99de5f05dacb92d6c7e0bd9b33291da1ff039d25018577b466e611cbb"
+        }
+      },
+      "requirements": [
+        "mcp==2.1.1",
+        "pydantic==2.13.5",
+        "jsonschema==4.26.0",
+        "platformdirs==4.11.7",
+        "openai-codex==0.147.0",
+        "openai-codex-cli-bin==0.147.0"
+      ],
+      "version": "1"
+    },
+    "client-copilot": {
+      "locks": {
+        "linux-aarch64": {
+          "path": "locks/client-copilot-linux-aarch64.txt",
+          "sha256": "2e7b0157bf24a090245dd1ccf6213c595332bc5415fab02f92fa5035e926171e"
+        },
+        "linux-x86_64": {
+          "path": "locks/client-copilot-linux-x86_64.txt",
+          "sha256": "2e7b0157bf24a090245dd1ccf6213c595332bc5415fab02f92fa5035e926171e"
+        },
+        "macos-aarch64": {
+          "path": "locks/client-copilot-macos-aarch64.txt",
+          "sha256": "2e7b0157bf24a090245dd1ccf6213c595332bc5415fab02f92fa5035e926171e"
+        },
+        "macos-x86_64": {
+          "path": "locks/client-copilot-macos-x86_64.txt",
+          "sha256": "bb14d7f099589c0182596b65299117012165348d6ec2200dfdd82e3b1463a84a"
+        },
+        "windows-aarch64": {
+          "path": "locks/client-copilot-windows-aarch64.txt",
+          "sha256": "016ce315fd2ba38e78038fdf2f296fd94ea09aec1e4256155d43f366d8fcf7be"
+        },
+        "windows-x86_64": {
+          "path": "locks/client-copilot-windows-x86_64.txt",
+          "sha256": "68bbd148fc45dfe446c3501daa4651a03501d1710ba1000366b7849fedbdefc3"
+        }
+      },
+      "npm": {
+        "directory": "account-client",
+        "lock": "npm/client-copilot/package-lock.json",
+        "lock_sha256": "8c7f67b5649fd16d56b863d5fd619761b157c0b6abb1d960b5f3cc08234c442e",
+        "omit_optional": false,
+        "package": "npm/client-copilot/package.json",
+        "package_sha256": "53bfc21a40c834f2ef22d013bf20643090c5c031b2a754d076dab8ea84fd3282"
+      },
+      "requirements": [
+        "mcp==2.1.1",
+        "pydantic==2.13.5",
+        "jsonschema==4.26.0",
+        "platformdirs==4.11.7",
+        "github-copilot-sdk==1.0.13"
+      ],
+      "version": "1"
+    },
+    "client-gemini": {
+      "locks": {
+        "linux-aarch64": {
+          "path": "locks/client-gemini-linux-aarch64.txt",
+          "sha256": "1e0d416025b27c6e5fd1423c5a4c2f6ba0db788d476356c3716440f666ec9c0f"
+        },
+        "linux-x86_64": {
+          "path": "locks/client-gemini-linux-x86_64.txt",
+          "sha256": "1e0d416025b27c6e5fd1423c5a4c2f6ba0db788d476356c3716440f666ec9c0f"
+        },
+        "macos-aarch64": {
+          "path": "locks/client-gemini-macos-aarch64.txt",
+          "sha256": "1e0d416025b27c6e5fd1423c5a4c2f6ba0db788d476356c3716440f666ec9c0f"
+        },
+        "macos-x86_64": {
+          "path": "locks/client-gemini-macos-x86_64.txt",
+          "sha256": "3b8580a720a81e8c9d363d20adabeb87b635b43ed4c4731171568522d9b149cf"
+        },
+        "windows-aarch64": {
+          "path": "locks/client-gemini-windows-aarch64.txt",
+          "sha256": "2fe36f6f0f0a2c9087b68377185313b0e2a902d55c1b44f0bcddac04cc4a527f"
+        },
+        "windows-x86_64": {
+          "path": "locks/client-gemini-windows-x86_64.txt",
+          "sha256": "0b1ad84d93604172348fb7414a1914b365dde45dc0df543e20a99ebea1373108"
+        }
+      },
+      "npm": {
+        "directory": "client",
+        "lock": "npm/client-gemini/package-lock.json",
+        "lock_sha256": "adff8295781b150a00c1491b5c828890eea8c6288d615d5c294e4273d7210cf4",
+        "omit_optional": true,
+        "package": "npm/client-gemini/package.json",
+        "package_sha256": "9b311b53a1575326f22729f09db860a999ec32915144c386cef6d30c12d81911"
+      },
+      "requirements": [
+        "mcp==2.1.1",
+        "pydantic==2.13.5",
+        "jsonschema==4.26.0",
+        "platformdirs==4.11.7"
+      ],
+      "version": "1"
+    },
+    "client-grok": {
+      "locks": {
+        "linux-aarch64": {
+          "path": "locks/client-grok-linux-aarch64.txt",
+          "sha256": "1e0d416025b27c6e5fd1423c5a4c2f6ba0db788d476356c3716440f666ec9c0f"
+        },
+        "linux-x86_64": {
+          "path": "locks/client-grok-linux-x86_64.txt",
+          "sha256": "1e0d416025b27c6e5fd1423c5a4c2f6ba0db788d476356c3716440f666ec9c0f"
+        },
+        "macos-aarch64": {
+          "path": "locks/client-grok-macos-aarch64.txt",
+          "sha256": "1e0d416025b27c6e5fd1423c5a4c2f6ba0db788d476356c3716440f666ec9c0f"
+        },
+        "macos-x86_64": {
+          "path": "locks/client-grok-macos-x86_64.txt",
+          "sha256": "3b8580a720a81e8c9d363d20adabeb87b635b43ed4c4731171568522d9b149cf"
+        },
+        "windows-aarch64": {
+          "path": "locks/client-grok-windows-aarch64.txt",
+          "sha256": "2fe36f6f0f0a2c9087b68377185313b0e2a902d55c1b44f0bcddac04cc4a527f"
+        },
+        "windows-x86_64": {
+          "path": "locks/client-grok-windows-x86_64.txt",
+          "sha256": "0b1ad84d93604172348fb7414a1914b365dde45dc0df543e20a99ebea1373108"
+        }
+      },
+      "native": {
+        "assets": {
+          "linux-aarch64": {
+            "compressed_executable": "bin/grok.br",
+            "cpu": "arm64",
+            "executable": "bin/grok",
+            "filename": "grok-linux-arm64-1.0.13.tgz",
+            "integrity": "sha512-hUfACShilnR5am+KVFyigNYSmL3FEVcRnXBRNKX2xz5eQ68ZoUMLt9IxNtZn27vogYS8NxsWiFkEsGI1rPeQ0w==",
+            "os": "linux",
+            "package": "@xai-official/grok-linux-arm64",
+            "root": "package",
+            "url": "https://registry.npmjs.org/@xai-official/grok-linux-arm64/-/grok-linux-arm64-1.0.13.tgz"
+          },
+          "linux-x86_64": {
+            "compressed_executable": "bin/grok.br",
+            "cpu": "x64",
+            "executable": "bin/grok",
+            "filename": "grok-linux-x64-1.0.13.tgz",
+            "integrity": "sha512-t0TpPmsEZwwS0utHq07L1oPX7tMgufAazIziccGn8IdTpo8ihqZ7KjaI6wikROXExfjvwTh83m4B0PL2ErPeiw==",
+            "os": "linux",
+            "package": "@xai-official/grok-linux-x64",
+            "root": "package",
+            "url": "https://registry.npmjs.org/@xai-official/grok-linux-x64/-/grok-linux-x64-1.0.13.tgz"
+          },
+          "macos-aarch64": {
+            "compressed_executable": "bin/grok.br",
+            "cpu": "arm64",
+            "executable": "bin/grok",
+            "filename": "grok-darwin-arm64-1.0.13.tgz",
+            "integrity": "sha512-Nctnwkzj550E512RZ+n+IUuhqGPZ2L7z/ZTIlZdVn0KqZHfzC58vIZPMBzdcOkoK42IrJlLD6GS7Eo6c1y+VGw==",
+            "os": "darwin",
+            "package": "@xai-official/grok-darwin-arm64",
+            "root": "package",
+            "url": "https://registry.npmjs.org/@xai-official/grok-darwin-arm64/-/grok-darwin-arm64-1.0.13.tgz"
+          },
+          "macos-x86_64": {
+            "compressed_executable": "bin/grok.br",
+            "cpu": "x64",
+            "executable": "bin/grok",
+            "filename": "grok-darwin-x64-1.0.13.tgz",
+            "integrity": "sha512-trI+fm4ZY/2skF05XLfCYCMQgk/NUj6jYVV1stL4jPafhYj41yDYxu0PHgLxEy6f8UtA8XCfZN084/KxgiYDKw==",
+            "os": "darwin",
+            "package": "@xai-official/grok-darwin-x64",
+            "root": "package",
+            "url": "https://registry.npmjs.org/@xai-official/grok-darwin-x64/-/grok-darwin-x64-1.0.13.tgz"
+          },
+          "windows-aarch64": {
+            "compressed_executable": "bin/grok.exe.br",
+            "cpu": "arm64",
+            "executable": "bin/grok.exe",
+            "filename": "grok-win32-arm64-1.0.13.tgz",
+            "integrity": "sha512-J+USAEgMyy7TaDRir2HvS1rj8yG8HjjtewK0qxz1dl2E7jjdqMjaKuN6H6l563ASvXwNDx17ye+1fkwwpjyKdg==",
+            "os": "win32",
+            "package": "@xai-official/grok-win32-arm64",
+            "root": "package",
+            "url": "https://registry.npmjs.org/@xai-official/grok-win32-arm64/-/grok-win32-arm64-1.0.13.tgz"
+          },
+          "windows-x86_64": {
+            "compressed_executable": "bin/grok.exe.br",
+            "cpu": "x64",
+            "executable": "bin/grok.exe",
+            "filename": "grok-win32-x64-1.0.13.tgz",
+            "integrity": "sha512-IAoQ+fDQVUzwzl1gYK+CMka2cH4yN5nbcsyodyvYTvkxSPixDIzzWeRtrOESOCPlft6YYpvFfdqisJppPOHekA==",
+            "os": "win32",
+            "package": "@xai-official/grok-win32-x64",
+            "root": "package",
+            "url": "https://registry.npmjs.org/@xai-official/grok-win32-x64/-/grok-win32-x64-1.0.13.tgz"
+          }
+        },
+        "compression": "brotli",
+        "directory": "client"
+      },
+      "requirements": [
+        "mcp==2.1.1",
+        "pydantic==2.13.5",
+        "jsonschema==4.26.0",
+        "platformdirs==4.11.7"
+      ],
+      "version": "1.0.13"
+    }
+  },
+  "copilot_version": "1.0.83",
+  "format": 1,
+  "node_version": "24.20.0",
+  "platforms": {
+    "linux-aarch64": {
+      "copilot": {
+        "filename": "github-copilot-1.0.83-linux-arm64.tgz",
+        "platform": "linux-arm64",
+        "root": "package",
+        "sha256": "364224054898291c92055996ae09144359fd18f199f389b8f48809b105c3860d",
+        "url": "https://github.com/github/copilot-cli/releases/download/v1.0.83/github-copilot-1.0.83-linux-arm64.tgz"
+      },
+      "node": {
+        "executable": "bin/node",
+        "filename": "node-v24.20.0-linux-arm64.tar.xz",
+        "root": "node-v24.20.0-linux-arm64",
+        "sha256": "5f4ddab610c1ab2016b3c227cebdbf6d9495161487e4739c7b90090595f465f7",
+        "url": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-linux-arm64.tar.xz"
+      },
+      "python": {
+        "executable": "python/bin/python3.12",
+        "filename": "cpython-3.12.14+20260901-aarch64-unknown-linux-gnu-install_only.tar.gz",
+        "sha256": "b61b856c3e1a4fc65b8f6e6b0495ef975dd0924f90c59f3ea61b38a079173b84",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14%2B20260901-aarch64-unknown-linux-gnu-install_only.tar.gz"
+      },
+      "rust_target": "aarch64-unknown-linux-gnu",
+      "uv": {
+        "executable": "uv-aarch64-unknown-linux-gnu/uv",
+        "filename": "uv-aarch64-unknown-linux-gnu.tar.gz",
+        "sha256": "9ff6b9d4665edcdd3a88dcc73cd1eb641754deb927f14e8c62ebfde6bf4f5f5e",
+        "url": "https://github.com/astral-sh/uv/releases/download/0.12.10/uv-aarch64-unknown-linux-gnu.tar.gz"
+      }
+    },
+    "linux-x86_64": {
+      "copilot": {
+        "filename": "github-copilot-1.0.83-linux-x64.tgz",
+        "platform": "linux-x64",
+        "root": "package",
+        "sha256": "888f8fbb4575c335afba4a8863c647ef04f81e5124c7c794bdcaee90c5fa4503",
+        "url": "https://github.com/github/copilot-cli/releases/download/v1.0.83/github-copilot-1.0.83-linux-x64.tgz"
+      },
+      "node": {
+        "executable": "bin/node",
+        "filename": "node-v24.20.0-linux-x64.tar.xz",
+        "root": "node-v24.20.0-linux-x64",
+        "sha256": "2f2c0da162318f0de47665410c7c8c2ed3d36c8f3105de4bbc61176c70a7cbf2",
+        "url": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-linux-x64.tar.xz"
+      },
+      "python": {
+        "executable": "python/bin/python3.12",
+        "filename": "cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only.tar.gz",
+        "sha256": "936c246dfdbbfa7cb22dd01814a21f582a892689fae96b06071a5e433baffa22",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14%2B20260901-x86_64-unknown-linux-gnu-install_only.tar.gz"
+      },
+      "rust_target": "x86_64-unknown-linux-gnu",
+      "uv": {
+        "executable": "uv-x86_64-unknown-linux-gnu/uv",
+        "filename": "uv-x86_64-unknown-linux-gnu.tar.gz",
+        "sha256": "173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b",
+        "url": "https://github.com/astral-sh/uv/releases/download/0.12.10/uv-x86_64-unknown-linux-gnu.tar.gz"
+      }
+    },
+    "macos-aarch64": {
+      "copilot": {
+        "filename": "github-copilot-1.0.83-darwin-arm64.tgz",
+        "platform": "darwin-arm64",
+        "root": "package",
+        "sha256": "9ecd130e0a73b9105a706a1d66b402c0ad4acc561831ea236fffe56353b45e07",
+        "url": "https://github.com/github/copilot-cli/releases/download/v1.0.83/github-copilot-1.0.83-darwin-arm64.tgz"
+      },
+      "node": {
+        "executable": "bin/node",
+        "filename": "node-v24.20.0-darwin-arm64.tar.xz",
+        "root": "node-v24.20.0-darwin-arm64",
+        "sha256": "b7bf7707070b950ba1ec5f1af3bb6de0f2b1962c5033973d94068ab021ef3014",
+        "url": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-darwin-arm64.tar.xz"
+      },
+      "python": {
+        "executable": "python/bin/python3.12",
+        "filename": "cpython-3.12.14+20260901-aarch64-apple-darwin-install_only.tar.gz",
+        "sha256": "3ee3ee547cedfeb7c2b16b2b7156039f7b470bb8f857e226fd3d2eb11db83c76",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14%2B20260901-aarch64-apple-darwin-install_only.tar.gz"
+      },
+      "rust_target": "aarch64-apple-darwin",
+      "uv": {
+        "executable": "uv-aarch64-apple-darwin/uv",
+        "filename": "uv-aarch64-apple-darwin.tar.gz",
+        "sha256": "51c6170e8e3a01cef9f33b94f582b7b81ac65046f55d40afb35f9cff5a68c179",
+        "url": "https://github.com/astral-sh/uv/releases/download/0.12.10/uv-aarch64-apple-darwin.tar.gz"
+      }
+    },
+    "macos-x86_64": {
+      "copilot": {
+        "filename": "github-copilot-1.0.83-darwin-x64.tgz",
+        "platform": "darwin-x64",
+        "root": "package",
+        "sha256": "fee187693baba75aa13f7572fc0d1dc953daa97d91f0cb1ef0045d8a53686392",
+        "url": "https://github.com/github/copilot-cli/releases/download/v1.0.83/github-copilot-1.0.83-darwin-x64.tgz"
+      },
+      "node": {
+        "executable": "bin/node",
+        "filename": "node-v24.20.0-darwin-x64.tar.xz",
+        "root": "node-v24.20.0-darwin-x64",
+        "sha256": "26fc30891004603d094eed11de5efcd03bbd2efbc35c177fc72648d5d7a7701b",
+        "url": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-darwin-x64.tar.xz"
+      },
+      "python": {
+        "executable": "python/bin/python3.12",
+        "filename": "cpython-3.12.14+20260901-x86_64-apple-darwin-install_only.tar.gz",
+        "sha256": "2e31b23f3f1319f707d0e620b48847a0046577541d357276821f9f1b5492e0ba",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14%2B20260901-x86_64-apple-darwin-install_only.tar.gz"
+      },
+      "rust_target": "x86_64-apple-darwin",
+      "uv": {
+        "executable": "uv-x86_64-apple-darwin/uv",
+        "filename": "uv-x86_64-apple-darwin.tar.gz",
+        "sha256": "5296d5aa2b9143360405eea866f8ef4d5dc8986b164eb0dc35e8f876a9304d30",
+        "url": "https://github.com/astral-sh/uv/releases/download/0.12.10/uv-x86_64-apple-darwin.tar.gz"
+      }
+    },
+    "windows-aarch64": {
+      "copilot": {
+        "filename": "github-copilot-1.0.83-win32-arm64.tgz",
+        "platform": "win32-arm64",
+        "root": "package",
+        "sha256": "036d9557331fcb693b6f5ed31d251ed4e3a799eed1fe3978b7af01b39410cd73",
+        "url": "https://github.com/github/copilot-cli/releases/download/v1.0.83/github-copilot-1.0.83-win32-arm64.tgz"
+      },
+      "node": {
+        "executable": "node.exe",
+        "filename": "node-v24.20.0-win-arm64.zip",
+        "root": "node-v24.20.0-win-arm64",
+        "sha256": "31c6799744de8a54601643098040c68c3697e56c94e407d61d0e5fa5f34191d7",
+        "url": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-win-arm64.zip"
+      },
+      "python": {
+        "executable": "python/python.exe",
+        "filename": "cpython-3.12.14+20260901-aarch64-pc-windows-msvc-install_only.tar.gz",
+        "sha256": "4e852236277eb8f7105cbe0f5adf45592f521af238bc0f700c351856e2c2e41a",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14%2B20260901-aarch64-pc-windows-msvc-install_only.tar.gz"
+      },
+      "rust_target": "aarch64-pc-windows-msvc",
+      "uv": {
+        "executable": "uv.exe",
+        "filename": "uv-aarch64-pc-windows-msvc.zip",
+        "sha256": "ee985c51c0c9c1f82267a5d80f959b34a7ff888c109182bd3b2b35c4661bbcde",
+        "url": "https://github.com/astral-sh/uv/releases/download/0.12.10/uv-aarch64-pc-windows-msvc.zip"
+      }
+    },
+    "windows-x86_64": {
+      "copilot": {
+        "filename": "github-copilot-1.0.83-win32-x64.tgz",
+        "platform": "win32-x64",
+        "root": "package",
+        "sha256": "3434f24ffd5ec01b179abef50d859904bb9a2aa580a996e0ceacd0ed161d6945",
+        "url": "https://github.com/github/copilot-cli/releases/download/v1.0.83/github-copilot-1.0.83-win32-x64.tgz"
+      },
+      "node": {
+        "executable": "node.exe",
+        "filename": "node-v24.20.0-win-x64.zip",
+        "root": "node-v24.20.0-win-x64",
+        "sha256": "6cac9ffbca8f6a47091e4b5c772e0606049c3871cb67d900c0cedde630e545ba",
+        "url": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-win-x64.zip"
+      },
+      "python": {
+        "executable": "python/python.exe",
+        "filename": "cpython-3.12.14+20260901-x86_64-pc-windows-msvc-install_only.tar.gz",
+        "sha256": "e90c1b6419da3bd812dd73bb3de40287a21abf153438147639ec5e20375ea93f",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14%2B20260901-x86_64-pc-windows-msvc-install_only.tar.gz"
+      },
+      "rust_target": "x86_64-pc-windows-msvc",
+      "uv": {
+        "executable": "uv.exe",
+        "filename": "uv-x86_64-pc-windows-msvc.zip",
+        "sha256": "f65744f94072152b1f86ba2aace4d01f1124d9a8ecb235805039e3718c36cac2",
+        "url": "https://github.com/astral-sh/uv/releases/download/0.12.10/uv-x86_64-pc-windows-msvc.zip"
+      }
+    }
+  },
+  "python_build": "20260901",
+  "python_version": "3.12.14",
+  "revision": "2026-09-07.1",
+  "uv_version": "0.12.10"
+}

@@ -1,46 +1,37 @@
-// @ts-expect-error Node builtin types are intentionally absent from the renderer.
-import { webcrypto } from "node:crypto";
-import { vi } from "vitest";
+import "@testing-library/jest-dom/vitest";
+import { cleanup, configure } from "@testing-library/react";
+import { afterEach } from "vitest";
 
-if (!globalThis.crypto?.subtle) {
-  Object.defineProperty(globalThis, "crypto", {
-    configurable: true,
-    value: webcrypto,
-  });
+// Large source and staff histories can render slowly in jsdom on desktop machines.
+configure({ asyncUtilTimeout: 5000 });
+
+// jsdom lacks browser APIs that shadcn/Base UI components use for responsive
+// layout and popup positioning.
+if (typeof window.matchMedia !== "function") {
+  window.matchMedia = (query: string) =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }) as MediaQueryList;
+}
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+}
+if (typeof Element.prototype.getAnimations !== "function") {
+  Element.prototype.getAnimations = () => [];
 }
 
-const testAppWindow = vi.hoisted(() => ({
-  close: vi.fn(() => Promise.resolve()),
-  isMaximized: vi.fn(() => Promise.resolve(false)),
-  minimize: vi.fn(() => Promise.resolve()),
-  onResized: vi.fn(() => Promise.resolve(vi.fn())),
-  toggleMaximize: vi.fn(() => Promise.resolve()),
-}));
-
-vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => {
-    // @ts-expect-error process is a Node.js global shared by the Vitest pool.
-    return process.__QUANTIX_TEST_APP_WINDOW__ as typeof testAppWindow;
-  },
-}));
-
-// @ts-expect-error process is a Node.js global shared by the Vitest pool.
-Object.defineProperty(process, "__QUANTIX_TEST_APP_WINDOW__", {
-  configurable: true,
-  value: testAppWindow,
-});
-
-Object.defineProperty(window, "matchMedia", {
-  configurable: true,
-  writable: true,
-  value: (query: string): MediaQueryList => ({
-    matches: query === "(min-width: 820px)",
-    media: query,
-    onchange: null,
-    addListener: () => undefined,
-    removeListener: () => undefined,
-    addEventListener: () => undefined,
-    removeEventListener: () => undefined,
-    dispatchEvent: () => false,
-  }),
+afterEach(() => {
+  cleanup();
+  window.localStorage.clear();
 });

@@ -1,0 +1,70 @@
+.factory-reset,
+.reset-confirmation,
+.reset-recovery {
+  display: grid;
+  gap: 20px;
+  line-height: 1.55;
+}
+.factory-reset > .button,
+.reset-recovery > .button {
+  justify-self: start;
+}
+.button.reset-button,
+[data-theme="dark"] .button.reset-button {
+  color: var(--button-foreground);
+  background: var(--danger);
+  border-color: var(--danger);
+}
+.button.reset-button:hover:not(:disabled) {
+  background: #983b36;
+  border-color: #983b36;
+}
+[data-theme="dark"] .button.reset-button:hover:not(:disabled) {
+  background: #fa9992;
+  border-color: #fa9992;
+}
+.reset-counts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 24px;
+  margin: 0;
+}
+.reset-counts > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+.reset-counts dd {
+  margin: 0;
+  font-weight: 600;
+}
+.reset-home {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  background: var(--surface-muted);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.reset-confirmation form {
+  display: grid;
+  gap: 20px;
+}
+.modal:has(.reset-confirmation-locked) > .modal-header > button {
+  display: none;
+}
+.reset-recovery {
+  width: min(100%, 760px);
+  margin: 0 auto;
+  padding: clamp(24px, 7vw, 80px) 24px;
+}
+@media (max-width: 480px) {
+  .reset-counts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .reset-confirmation .form-actions {
+    flex-wrap: wrap;
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "@github/copilot": "1.0.83"
+  },
+  "name": "quantix-client-copilot",
+  "private": true,
+  "version": "1.0.0"
+}

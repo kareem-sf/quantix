@@ -1,19 +1,26 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
-import "./quantixDesignSystem.css";
+import { AppErrorBoundary } from "./components/AppErrorBoundary";
+import { installRendererDiagnostics } from "./diagnostics";
+import "./index.css";
 
-async function startQuantix() {
-  if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
-    const { installBrowserPreviewHost } = await import("./browserPreviewHost");
-    await installBrowserPreviewHost();
-  }
+document.documentElement.lang = "en";
+document.documentElement.dir = "ltr";
 
-  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { refetchOnWindowFocus: false, staleTime: 1000 } },
+});
+
+installRendererDiagnostics();
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <AppErrorBoundary>
     <React.StrictMode>
-      <App />
-    </React.StrictMode>,
-  );
-}
-
-void startQuantix();
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
+    </React.StrictMode>
+  </AppErrorBoundary>,
+);

@@ -1,0 +1,6 @@
+mcp==2.1.1
+pydantic==2.13.5
+jsonschema==4.26.0
+platformdirs==4.11.7
+claude-agent-sdk==0.2.152
+pydantic-ai-slim[anthropic]==2.40.0

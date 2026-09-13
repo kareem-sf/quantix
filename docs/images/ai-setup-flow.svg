@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="230" viewBox="0 0 1060 230" role="img" aria-labelledby="title desc">
+  <title id="title">Connect your AI in Quantix</title><desc id="desc">Choose your AI, let Quantix prepare it, sign in, check the connection, then use it for a Tender.</desc>
+  <rect width="1060" height="230" rx="18" fill="#f4f8f8"/>
+  <g font-family="Arial, sans-serif" fill="#172a35"><text x="30" y="38" font-size="22" font-weight="700">You choose the AI. Quantix handles the setup.</text>
+  <g stroke="#c9dedd" fill="white"><rect x="30" y="68" width="178" height="116" rx="12"/><rect x="235" y="68" width="178" height="116" rx="12"/><rect x="440" y="68" width="178" height="116" rx="12"/><rect x="645" y="68" width="178" height="116" rx="12"/><rect x="850" y="68" width="178" height="116" rx="12"/></g>
+  <g fill="#177b73" font-size="23" font-weight="700"><text x="49" y="101">1</text><text x="254" y="101">2</text><text x="459" y="101">3</text><text x="664" y="101">4</text><text x="869" y="101">5</text></g>
+  <g font-size="18" font-weight="700"><text x="49" y="130">Choose your AI</text><text x="254" y="130">Prepare</text><text x="459" y="130">Sign in</text><text x="664" y="130">Check access</text><text x="869" y="130">Ready</text></g>
+  <g font-size="13" fill="#526c77"><text x="49" y="155">Use your own account</text><text x="254" y="155">Quantix downloads it</text><text x="459" y="155">Or enter an access key</text><text x="664" y="155">No Tender files sent</text><text x="869" y="155">Choose it for a Tender</text></g>
+  <g fill="#177b73" font-size="23"><text x="212" y="131">›</text><text x="417" y="131">›</text><text x="622" y="131">›</text><text x="827" y="131">›</text></g>
+  <text x="30" y="213" font-size="13" fill="#526c77">Illustration of the setup journey. The provider may open its official sign-in page.</text></g>
+</svg>

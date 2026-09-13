@@ -1,39 +1,39 @@
-# Logs
-logs
-.dev/
-.release-wizard/
-.worktrees/
-src-tauri/runtime/runtime-provenance.json
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-src-tauri/target*
-*.local
-
-# Local secrets and credentials
+node_modules/
+dist/
+backend/.venv/
+**/__pycache__/
+**/*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+src-tauri/target/
+.quantix-dev/
 .env
 .env.*
 !.env.example
-.secrets/
-*.key
-*.pem
-*.p12
-*.pfx
+*.log
+tmp/
+test-results/
+playwright-report/
+.superpowers/
+*.sqlite*
+*.db
+*.pdf
+*.dwg
+*.dxf
+*.doc
+*.docx
+!backend/quantix/benchmarks/fixtures/*/*.docx
+*.xls*
+*.zip
+!tests/fixtures/README.md
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+src-tauri/binaries/
+.packaging/
+
+# Bundled OCR and meaning-search engines (scripts/fetch_engines.py)
+backend/engines/
+backend/.engine-cache/
+
+# Local verification output
+/backend/results.txt

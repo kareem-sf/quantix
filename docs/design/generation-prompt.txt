@@ -1,0 +1,29 @@
+Use case: ui-mockup.
+Create one polished full-screen 1440x1000 desktop application UI screenshot for Quantix Tender Office, a local Windows app for a single engineer. The app has one Tender Manager that coordinates document analysis and specialist work. This is a detailed practical product screen, all text and controls eventually code-native, no marketing hero or decorative art. Full viewport with all described regions visible and extremely legible text.
+
+Visual direction: clean, restrained engineering office software; true bright white paper canvas #FFFFFF, very dark navy side rail #111D2B, slate primary text #172536, muted slate #697786, quiet cool gray hairlines #E2E7EB, rich teal accent #117D76. Inter or Segoe UI-like sans-serif. Strong 30px project title, 18px section headings, 14px text and controls. Generous useful density. Flat open paper sections, consistent line borders, subtle corner radii 6-8px, no card grid, no gradients, no shadows except a barely visible composer shadow, no glass. Lucide-style thin outline icons only where functional. No generated brand symbol: brand is simply wordmark "Quantix".
+
+Composition:
+Left sidebar width 228px full height, dark navy. Top Quantix wordmark, 24px semibold white at x24 y28. Below at y98 an outlined plus button "New tender" spanning 180px. At y173 small muted title "Tenders"; list items "Riverside Works" selected in softly lighter navy with a narrow teal left indicator; beneath "North Depot" and "Eastbank Drainage" dimmed. Bottom native settings gear and "Settings", then small quiet "Saved on this device".
+Main header starts x268 y34, title "Riverside Works", below a muted subtitle "Civil works · Tender preparation". Top right outlined upload button "Add files". Horizontal tabs under title around y130: "Manager" active with teal underline, then "Files", "Work", "Estimate". Header and tabs span remaining app width.
+Below tab rule, central content column x270-1078, white; right contextual rail x1110-1440 separated by vertical gray rule, with 28px padding.
+Central starts at y194 with text heading "Tender Manager", small simple outlined square icon on its left, muted right-aligned "Ready for review". Below a restrained gray body text line "I've reviewed the imported documents. Here is the scope and a proposed plan."
+At y294 section heading "Document analysis". Below 3 concise open prose rows with generous line spacing, each preceded by a tiny teal check:
+"Earthworks, drainage and concrete works are included in the scope."
+Under it two small pale slate rectangular source chips "Specification · p. 12" and "BOQ · Sheet 1".
+"The bill of quantities is the starting point for pricing."
+Under it source chip "BOQ · Sheet 1".
+"The drawings need a quantity check before the estimate is prepared."
+Under it source chip "Drawings · p. 3".
+Light horizontal rule after analysis.
+At y561 heading "Proposed work plan", small muted caption "Review the plan before work starts."
+Three clean compact numbered list rows with fine gray separators, no nested cards:
+"1   Review scope"  with smaller muted "Confirm requirements and exclusions"
+"2   Check quantities" with smaller muted "Compare the bill of quantities with the drawings"
+"3   Prepare estimate" with smaller muted "Build the cost breakdown and record assumptions"
+Teal button "Approve plan" at bottom of plan, secondary plain text button "Request changes".
+Composer fixed at bottom central column x270 y888 width 808 height 84, white with fine slate border, 8px radius. Placeholder "Ask the manager or add an instruction…" at left with muted text. Tiny paperclip at lower left, solid teal square Send icon button at lower right. Small quiet text just above composer "You stay in control of scope and approvals."
+
+Right contextual rail starts y200 with heading "Project scope", then label/value pairs: "Work type" / "Civil works"; "Location" / "Not confirmed"; "Currency" / "EGP". Fine line divider; heading "Document coverage" around y425. Three file rows using document outline icon: "Specification.pdf", secondary "Read"; "Bill of quantities.xlsx", secondary "Read"; "Drawings.pdf", secondary "Needs review". A small understated amber dot next to Needs review. Divider then heading "Open questions", small body "Confirm the project location and pricing basis." No charts, metrics, stats, avatars, model picker, finance widgets, extra navigation or invented AI jargon.
+
+All project/document content is fictional sample text for a design specification. No confidential source material exists. Exactly reproduce labels as specified. Prioritize crisp spacing, aligned baselines, readable useful details and senior product design finish. Show complete primary screen, no device mockup, no browser frame, no perspective, no crop. Other empty/import/settings/source-preview states will be specified in writing with this exact visual system.

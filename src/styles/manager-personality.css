@@ -1,0 +1,246 @@
+.manager-personality {
+  width: min(100%, 58rem);
+  color: var(--text);
+}
+
+.manager-personality-state {
+  max-width: 44rem;
+}
+
+.manager-personality-state-heading {
+  margin-bottom: 1.25rem;
+}
+
+.manager-personality-state-heading h2 {
+  margin-bottom: 0.45rem;
+}
+
+.manager-personality-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.5rem;
+}
+
+.manager-personality-header h2 {
+  margin-bottom: 0.45rem;
+}
+
+.manager-personality-header .icon-button {
+  flex: 0 0 auto;
+  margin-top: -0.25rem;
+}
+
+.manager-personality-lede {
+  max-width: 68ch;
+  color: var(--text-muted);
+  line-height: 1.65;
+}
+
+.manager-personality-version {
+  margin: 1rem 0 1.5rem;
+  color: var(--text-muted);
+  font-size: var(--qx-text-body);
+}
+
+.manager-personality-version strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.manager-personality-form fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.manager-personality-primary {
+  padding: 1.25rem 1.35rem 1.35rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--legacy-accent-soft) 45%, var(--surface));
+}
+
+.manager-personality-primary label {
+  margin: 0;
+}
+
+.manager-personality-primary-label {
+  display: block;
+  margin-bottom: 0.7rem;
+  font-size: var(--qx-text-title);
+  font-weight: 600;
+  letter-spacing: var(--qx-tracking-tight);
+}
+
+.manager-personality-primary textarea {
+  min-height: 9.5rem;
+  background: var(--surface);
+}
+
+.manager-personality-more {
+  margin-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.manager-personality-more > summary {
+  padding: 1rem 0;
+  color: var(--text);
+  cursor: pointer;
+  font-size: var(--qx-text-body);
+  font-weight: 600;
+}
+
+.manager-personality-more > summary::marker {
+  color: var(--legacy-accent);
+}
+
+.manager-personality-more-body {
+  display: grid;
+  gap: 2rem;
+  padding: 0.25rem 0 2rem;
+}
+
+.manager-personality-more-body > section {
+  padding-top: 1.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.manager-personality-more-body > section:first-child {
+  padding-top: 0.75rem;
+  border-top: 0;
+}
+
+.manager-personality-section-heading {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+}
+
+.manager-personality-section-heading h3 {
+  margin: 0;
+  font-size: var(--qx-text-section);
+}
+
+.manager-personality-section-heading p {
+  max-width: 70ch;
+  font-size: var(--qx-text-body);
+}
+
+.manager-personality-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 1rem;
+}
+
+.manager-personality-stack {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.manager-personality-stack label,
+.manager-personality-grid label {
+  margin: 0.75rem 0 0;
+}
+
+.manager-personality-stack textarea,
+.manager-personality-grid textarea {
+  min-height: 5.5rem;
+}
+
+.manager-personality-boundary {
+  margin: 1.25rem 0 0;
+  color: var(--text-muted);
+  font-size: var(--qx-text-body);
+  line-height: 1.65;
+}
+
+.manager-personality-conflict {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.25rem;
+  margin-top: 1rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid color-mix(in srgb, var(--warning) 55%, var(--border));
+  border-radius: 0.625rem;
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+}
+
+.manager-personality-conflict strong {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.manager-personality-conflict p {
+  max-width: 64ch;
+  color: var(--text-muted);
+  font-size: var(--qx-text-body);
+  line-height: 1.6;
+}
+
+.manager-personality-conflict .button {
+  flex: 0 0 auto;
+}
+
+.manager-personality-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.manager-personality .field-help {
+  max-width: 70ch;
+}
+
+.manager-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 700px) {
+  .manager-personality-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .manager-personality-conflict {
+    flex-direction: column;
+  }
+
+  .manager-personality-conflict .button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .manager-personality-primary {
+    padding: 1rem;
+  }
+
+  .manager-personality-actions {
+    justify-content: stretch;
+  }
+
+  .manager-personality-actions .button {
+    flex: 1 1 auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .manager-personality * {
+    scroll-behavior: auto;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -1,0 +1,4 @@
+Illustrations: DiceBear Notionists, derived from Notionists by Zoish, CC0 1.0.
+https://www.dicebear.com/styles/notionists/
+Locally rendered demonstration identities only; no production employee roster.
+Inter: bundled existing @fontsource/inter assets; see INTER-LICENSE.txt.

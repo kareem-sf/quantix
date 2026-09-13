@@ -4,63 +4,37 @@
   "version": "0.1.0",
   "identifier": "com.quantix.desktop",
   "build": {
-    "beforeDevCommand": "npm run prepare:runtime && npm run dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run prepare:runtime && npm run build",
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run bundle:ui",
     "frontendDist": "../dist"
   },
   "app": {
-    "macOSPrivateApi": true,
     "windows": [
       {
-        "label": "main",
         "title": "Quantix",
-        "width": 1200,
-        "height": 760,
-        "minWidth": 760,
+        "create": false,
+        "width": 1440,
+        "height": 960,
+        "minWidth": 900,
         "minHeight": 620,
-        "visible": false
-      },
-      {
-        "label": "splashscreen",
-        "title": "Quantix",
-        "url": "splash.html",
-        "width": 360,
-        "height": 360,
-        "visible": true,
-        "resizable": false,
-        "maximizable": false,
-        "minimizable": false,
-        "closable": true,
-        "decorations": false,
         "center": true,
-        "focus": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "shadow": false,
-        "transparent": true
+        "visible": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; font-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'"
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost http://127.0.0.1:*; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'"
     }
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
     "targets": "all",
-    "resources": ["runtime", "../fixtures/acceptance"],
     "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
+      "icons/brand-v4/dark/32x32.png",
+      "icons/brand-v4/dark/128x128.png",
+      "icons/brand-v4/dark/128x128@2x.png",
+      "icons/brand-v4/dark/icon.icns",
+      "icons/brand-v4/dark/icon.ico"
     ]
-  },
-  "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZDODJEQTYzMzkxQzMzRjcKUldUM014dzVZOXFDYk9aU2tNVzBvOTA2UFpsZWhHTEw1S2pqeGxmNFpSOTFpcGJwRHQ3c05Pd2QK"
-    }
   }
 }
