@@ -8,7 +8,7 @@
   margin: 10px 0 18px;
 }
 .rate-proposal-empty {
-  color: var(--muted);
+  color: var(--legacy-muted);
   margin: 20px 0;
 }
 .rate-proposal-list {
@@ -27,7 +27,7 @@
   width: 100%;
   padding: 17px 0;
   text-align: left;
-  font-size: 16px;
+  font-size: var(--qx-text-section);
 }
 .rate-proposal-row strong {
   display: block;
@@ -37,7 +37,7 @@
 .rate-proposal-row .muted,
 .rate-proposal-row .warning-text {
   display: block;
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   margin-top: 5px;
 }
 .rate-proposal-row[aria-expanded="true"] strong {
@@ -48,12 +48,12 @@
   min-width: 0;
 }
 .rate-proposal-description {
-  font-size: 18px;
+  font-size: var(--qx-text-title);
   margin-top: 12px;
 }
 .rate-proposal-state {
   margin: 16px 0;
-  color: var(--muted);
+  color: var(--legacy-muted);
 }
 .rate-proposal-warning {
   margin: 18px 0;
@@ -67,11 +67,11 @@
   grid-template-columns: minmax(165px, 1fr) minmax(0, 2fr);
   gap: 14px 24px;
   margin: 20px 0;
-  font-size: 16px;
+  font-size: var(--qx-text-section);
   line-height: 1.5;
 }
 .rate-proposal-facts dt {
-  color: var(--muted);
+  color: var(--legacy-muted);
 }
 .rate-proposal-facts dd {
   margin: 0;
@@ -107,10 +107,10 @@
 .rate-proposal-quantities summary {
   cursor: pointer;
   color: var(--teal);
-  font-size: 16px;
+  font-size: var(--qx-text-section);
 }
 .rate-proposal-basis pre {
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -123,7 +123,7 @@
   display: block;
   overflow-wrap: anywhere;
   margin: 8px 0 16px;
-  font-size: 13px;
+  font-size: var(--qx-text-body);
 }
 .rate-build-up {
   overflow-x: auto;
@@ -133,7 +133,7 @@
   width: 100%;
   min-width: 580px;
   border-collapse: collapse;
-  font-size: 16px;
+  font-size: var(--qx-text-section);
   line-height: 1.5;
 }
 .rate-build-up th,
@@ -144,9 +144,9 @@
   font-variant-numeric: tabular-nums;
 }
 .rate-build-up th {
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   font-weight: 500;
-  color: var(--muted);
+  color: var(--legacy-muted);
 }
 .rate-build-up th:first-child,
 .rate-build-up td:first-child {
@@ -162,7 +162,7 @@
 .rate-proposal-decision label,
 .rate-proposal-decision textarea,
 .rate-proposal-decision .button {
-  font-size: 16px;
+  font-size: var(--qx-text-section);
 }
 .rate-proposal-check {
   display: flex;

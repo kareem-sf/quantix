@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -9,7 +9,9 @@ import {
   useResource,
   type Schema,
 } from "../api";
-import { ErrorNotice, Loading } from "../components/ui";
+import { ErrorNotice, Loading } from "../components/common";
+import { FieldError } from "../components/FieldError";
+import { createDraftScope, useFormDraft } from "./useFormDraft";
 
 const restorationKey = ["prepared-restoration"];
 type PreparedRestoration = {
@@ -17,7 +19,11 @@ type PreparedRestoration = {
   serviceStopped: boolean;
 };
 
-export function Backups() {
+export function Backups({
+  onAttention,
+}: {
+  onAttention?: (attention: boolean) => void;
+} = {}) {
   const api = useApi(),
     refresh = useRefresh(),
     client = useQueryClient();
@@ -41,12 +47,28 @@ export function Backups() {
       path: string;
       result: Schema<"BackupInspection">;
     } | null>(null),
-    [rationale, setRationale] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState<unknown>(null),
     [notice, setNotice] = useState("");
+  const draft = useFormDraft(
+    createDraftScope(
+      "settings",
+      "office",
+      "restore-note",
+      checked?.result.backup.sha256 ?? "unselected",
+    ),
+    { rationale: "" },
+    ["rationale"],
+  );
+  const { rationale } = draft.value;
+  const setRationale = (value: string) => draft.setField("rationale", value);
   const locked =
     busy || pendingRestore.isPending || !!pendingRestore.error || !!ready;
+  const attention =
+    !!error || !!pendingRestore.error || !!latestRestore.error || !!ready;
+  useEffect(() => {
+    onAttention?.(attention);
+  }, [attention, onAttention]);
   async function act(action: () => Promise<void>) {
     setBusy(true);
     setError(null);
@@ -247,6 +269,7 @@ export function Backups() {
                 onChange={(event) => setRationale(event.target.value)}
                 rows={2}
               />
+              <FieldError error={error} name="rationale" />
             </label>
             <button
               type="button"
@@ -254,6 +277,7 @@ export function Backups() {
               disabled={busy || !rationale.trim()}
               onClick={() =>
                 void act(async () => {
+                  const acceptedRevision = draft.revision;
                   const result = await api.post<Schema<"RestoreReady">>(
                     "/backups/restore",
                     {
@@ -263,6 +287,7 @@ export function Backups() {
                       rationale: rationale.trim(),
                     } satisfies Schema<"RestoreBackupRequest">,
                   );
+                  draft.markAccepted(acceptedRevision);
                   client.setQueryData(["/backups/pending"], result);
                   client.setQueryData<PreparedRestoration>(restorationKey, {
                     path: checked.path,

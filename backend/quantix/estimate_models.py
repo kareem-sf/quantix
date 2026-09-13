@@ -16,9 +16,23 @@ class EstimateModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
+class SourceBoqProposal(EstimateModel):
+    source_id: str = Field(min_length=1, max_length=100)
+    row_reference: str = Field(min_length=1, max_length=100)
+    source_excerpt: str = Field(min_length=1, max_length=6000)
+    description: str = Field(min_length=1, max_length=6000)
+    unit: str = Field(min_length=1, max_length=100)
+    quantity: DecimalText
+    replaces_item_id: str | None = Field(default=None, min_length=1, max_length=100)
+
+
 class EngineerDecision(EstimateModel):
     engineer_confirmed: Literal[True]
     rationale: str = Field(min_length=1, max_length=4000)
+
+
+class SourceRowExclusion(EngineerDecision):
+    current_artifact_id: str | None
 
 
 class RateComponent(EstimateModel):
@@ -146,6 +160,11 @@ class EstimateItem(EstimateModel):
     line_ex_vat: str | None
     line_inc_vat: str | None
     quantity_proposals: list[QuantityProposal]
+    source_excerpt: str | None = None
+    row_reference: str | None = None
+    origin: str | None = None
+    run_id: str | None = None
+    source_proposal: SourceBoqProposal | None = None
 
 
 class CurrencyTotal(EstimateModel):
@@ -154,6 +173,17 @@ class CurrencyTotal(EstimateModel):
     total_ex_vat: str | None
     total_inc_vat: str | None
     complete: bool
+
+
+class RetiredSourceRow(EstimateModel):
+    id: str
+    description: str
+    source_id: str
+    artifact_id: str
+    current_artifact_id: str | None = None
+    row_reference: str
+    unit: str
+    supplied_quantity: str | None
 
 
 class EstimateView(EstimateModel):
@@ -168,6 +198,7 @@ class EstimateView(EstimateModel):
     unresolved_quantity_count: int
     blocking_reasons: list[str]
     coverage_note: str
+    retired_source_rows: list[RetiredSourceRow] = Field(default_factory=list)
 
 
 class DraftDocumentProposal(EstimateModel):

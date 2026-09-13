@@ -1,5 +1,6 @@
 import { EvidencePicker } from "./EvidencePicker";
 import type { Schema } from "../api";
+import { FieldError } from "../components/FieldError";
 
 type ActivityDraft = {
   key: number;
@@ -26,15 +27,23 @@ export const emptyProgramme = (): ProgrammeDraft => ({
   assumptions: "",
   activities: [],
 });
-export function programmeDraft(programme: Schema<"ConstructionProgramme">): ProgrammeDraft {
+export function programmeDraft(
+  programme: Schema<"ConstructionProgramme">,
+): ProgrammeDraft {
   return {
-    title: programme.title, start: programme.start_date,
-    week: programme.working_week, holidays: (programme.holidays ?? []).join("\n"),
+    title: programme.title,
+    start: programme.start_date,
+    week: programme.working_week,
+    holidays: (programme.holidays ?? []).join("\n"),
     assumptions: (programme.assumptions ?? []).join("\n"),
     activities: programme.activities.map((activity, index) => ({
-      key: index + 1, id: activity.id, title: activity.title, duration: String(activity.duration_days),
+      key: index + 1,
+      id: activity.id,
+      title: activity.title,
+      duration: String(activity.duration_days),
       predecessors: (activity.predecessor_ids ?? []).join(", "),
-      sourceIds: activity.source_ids ?? [], assumptions: (activity.assumptions ?? []).join("\n"),
+      sourceIds: activity.source_ids ?? [],
+      assumptions: (activity.assumptions ?? []).join("\n"),
     })),
   };
 }
@@ -90,10 +99,12 @@ export function ProgrammeForm({
   tenderId,
   value,
   onChange,
+  error,
 }: {
   tenderId: string;
   value: ProgrammeDraft;
   onChange: (value: ProgrammeDraft) => void;
+  error?: unknown;
 }) {
   const update = (key: number, patch: Partial<ActivityDraft>) =>
     onChange({
@@ -118,6 +129,7 @@ export function ProgrammeForm({
             onChange({ ...value, title: event.target.value })
           }
         />
+        <FieldError error={error} path={["programme", "title"]} />
       </label>
       <label>
         Start date
@@ -129,6 +141,7 @@ export function ProgrammeForm({
             onChange({ ...value, start: event.target.value })
           }
         />
+        <FieldError error={error} path={["programme", "start_date"]} />
       </label>
       <fieldset className="programme-week">
         <legend>Working days</legend>
@@ -160,6 +173,7 @@ export function ProgrammeForm({
           }
           placeholder="One YYYY-MM-DD date per line"
         />
+        <FieldError error={error} path={["programme", "holidays"]} />
       </label>
       <label>
         Programme assumptions
@@ -172,6 +186,7 @@ export function ProgrammeForm({
           }
           placeholder="One assumption per line"
         />
+        <FieldError error={error} path={["programme", "assumptions"]} />
       </label>
       {value.activities.map((activity, index) => (
         <fieldset key={activity.key} className="programme-activity">
@@ -188,6 +203,10 @@ export function ProgrammeForm({
                   update(activity.key, { id: event.target.value })
                 }
               />
+              <FieldError
+                error={error}
+                path={["programme", "activities", index, "id"]}
+              />
             </label>
             <label>
               Duration in working days
@@ -202,6 +221,10 @@ export function ProgrammeForm({
                   update(activity.key, { duration: event.target.value })
                 }
               />
+              <FieldError
+                error={error}
+                path={["programme", "activities", index, "duration_days"]}
+              />
             </label>
           </div>
           <label>
@@ -214,6 +237,10 @@ export function ProgrammeForm({
                 update(activity.key, { title: event.target.value })
               }
             />
+            <FieldError
+              error={error}
+              path={["programme", "activities", index, "title"]}
+            />
           </label>
           <label>
             Predecessor activity IDs
@@ -223,6 +250,10 @@ export function ProgrammeForm({
                 update(activity.key, { predecessors: event.target.value })
               }
               placeholder="Activity IDs separated by commas"
+            />
+            <FieldError
+              error={error}
+              path={["programme", "activities", index, "predecessor_ids"]}
             />
           </label>
           <label>
@@ -234,6 +265,10 @@ export function ProgrammeForm({
                 update(activity.key, { assumptions: event.target.value })
               }
               placeholder="One assumption per line"
+            />
+            <FieldError
+              error={error}
+              path={["programme", "activities", index, "assumptions"]}
             />
           </label>
           <EvidencePicker

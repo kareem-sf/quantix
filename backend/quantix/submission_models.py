@@ -73,10 +73,23 @@ class SubmissionApproval(SubmissionSelection):
     rationale: str = Field(min_length=1, max_length=4000)
 
 
+class SubmissionRepairTarget(SubmissionModel):
+    kind: Literal["requirement", "output", "package"]
+    record_id: str
+    output_ids: list[str] = Field(default_factory=list)
+
+
+class SubmissionBlocker(SubmissionModel):
+    code: Literal["requirement_approval", "requirement_source", "requirement_review", "requirement_document", "missing_output", "output_changed"]
+    message: str
+    target: SubmissionRepairTarget
+
+
 class SubmissionPreview(SubmissionModel):
     fingerprint: str
     outputs: list[dict[str, Any]]
     blocking_reasons: list[str]
+    blockers: list[SubmissionBlocker] = Field(default_factory=list)
     warnings: list[str]
     requirements: list[dict[str, Any]]
     requirement_ids: list[str]

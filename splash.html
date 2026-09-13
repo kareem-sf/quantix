@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Quantix</title>
+    <link rel="preload" as="image" href="/brand/v4/web/light/favicon.svg" />
+    <link rel="preload" as="image" href="/brand/v4/web/dark/favicon.svg" />
+    <style>
+      /*
+       * Launch splash, shown in its own frameless transparent window
+       * (src-tauri/src/splash.rs) while the main window loads hidden. Only the
+       * logo and wordmark; the logo paths are the unedited v4 flat artwork, with
+       * the light or dark brand colours chosen to suit the desktop behind it.
+       */
+      :root {
+        --qx-ease: cubic-bezier(0.16, 1, 0.3, 1);
+        --qx-spring: cubic-bezier(0.2, 1.3, 0.35, 1);
+        --qx-word: #2d3137;
+        --qx-word-shine: #b27a00;
+        --qx-glow: 255 210 31;
+        --qx-glow-strength: 0.22;
+        --qx-mark: url(/brand/v4/web/light/favicon.svg);
+        --yellow-side: #a77c04;
+        --yellow-face: #f7c600;
+        --pearl-side: #4b5056;
+        --throat: #30343a;
+        --return: #30343a;
+        --tail-side: #a77c04;
+        --pearl-face: #dce0e3;
+        --pearl-stroke: #92999f;
+        --tail-face: #f7c600;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --qx-word: #f8f8f5;
+          --qx-word-shine: #ffd21f;
+          --qx-glow-strength: 0.32;
+          --qx-mark: url(/brand/v4/web/dark/favicon.svg);
+          --yellow-side: #2f353b;
+          --yellow-face: #3e444c;
+          --pearl-side: #b27a00;
+          --throat: #2a2e33;
+          --return: #2a2e33;
+          --tail-side: #2f353b;
+          --pearl-face: #ffd21f;
+          --pearl-stroke: none;
+          --tail-face: #3e444c;
+        }
+      }
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        user-select: none;
+        cursor: default;
+      }
+      body {
+        display: grid;
+        place-items: center;
+      }
+      .qx-lockup {
+        display: flex;
+        align-items: center;
+        gap: 24px;
+        font-size: 60px;
+      }
+      .qx-leaving .qx-lockup {
+        animation: qx-leave 340ms cubic-bezier(0.7, 0, 0.84, 0) both;
+      }
+      .qx-logo {
+        position: relative;
+        width: 136px;
+        height: 136px;
+        flex: none;
+        transform: translateX(calc((3.55em + 24px) / 2));
+        animation: qx-settle 900ms var(--qx-ease) 1650ms both;
+      }
+      .qx-glow {
+        position: absolute;
+        inset: -60%;
+        border-radius: 50%;
+        background: radial-gradient(
+          closest-side,
+          rgb(var(--qx-glow) / var(--qx-glow-strength)),
+          rgb(var(--qx-glow) / 0.06) 45%,
+          transparent 70%
+        );
+        opacity: 0;
+        animation: qx-glow 1900ms ease-out 250ms both;
+      }
+      .qx-flat,
+      .qx-layer,
+      .qx-mark,
+      .qx-sheen {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .qx-layer {
+        overflow: visible;
+        opacity: 0;
+      }
+      .qx-yellow-side { fill: var(--yellow-side); }
+      .qx-yellow-face { fill: var(--yellow-face); }
+      .qx-pearl-side { fill: var(--pearl-side); }
+      .qx-throat { fill: var(--throat); }
+      .qx-return { fill: var(--return); }
+      .qx-tail-side { fill: var(--tail-side); }
+      .qx-pearl-face {
+        fill: var(--pearl-face);
+        stroke: var(--pearl-stroke);
+        stroke-width: 1.35;
+        stroke-linejoin: round;
+      }
+      .qx-tail-face { fill: var(--tail-face); }
+      .qx-plate {
+        --qx-from: translate(30%, -22%) scale(0.9);
+        animation: qx-arrive 950ms var(--qx-spring) 120ms both;
+      }
+      .qx-hook {
+        --qx-from: translate(-34%, 10%) scale(0.9);
+        animation: qx-arrive 950ms var(--qx-spring) 280ms both;
+      }
+      .qx-tail {
+        --qx-from: translate(26%, 26%) scale(0.9);
+        animation: qx-arrive 950ms var(--qx-spring) 440ms both;
+      }
+      .qx-flat {
+        animation: qx-out 380ms ease-in 1180ms both;
+      }
+      .qx-mark {
+        background: var(--qx-mark) center / contain no-repeat;
+        opacity: 0;
+        animation: qx-light 520ms var(--qx-ease) 1080ms both;
+      }
+      .qx-sheen {
+        -webkit-mask: var(--qx-mark) center / contain no-repeat;
+        mask: var(--qx-mark) center / contain no-repeat;
+        background: linear-gradient(
+            115deg,
+            transparent 40%,
+            rgb(255 255 255 / 0.7) 50%,
+            transparent 60%
+          )
+          150% 0 / 260% 100% no-repeat;
+        mix-blend-mode: soft-light;
+        animation: qx-sheen 1000ms var(--qx-ease) 1400ms both;
+      }
+      .qx-word {
+        font-family: "Segoe UI Variable Display", "Segoe UI", system-ui,
+          sans-serif;
+        font-weight: 600;
+        line-height: 1;
+        letter-spacing: -0.02em;
+        white-space: nowrap;
+        color: transparent;
+        background: linear-gradient(
+            100deg,
+            var(--qx-word) 0 38%,
+            var(--qx-word-shine) 50%,
+            var(--qx-word) 62% 100%
+          )
+          100% 0 / 300% 100% no-repeat;
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-mask: linear-gradient(90deg, #000 44%, transparent 56%) 100% 0 /
+          250% 100% no-repeat;
+        mask: linear-gradient(90deg, #000 44%, transparent 56%) 100% 0 / 250%
+          100% no-repeat;
+        animation:
+          qx-word 1000ms var(--qx-ease) 1800ms both,
+          qx-shimmer 1500ms var(--qx-ease) 1900ms both;
+      }
+      @keyframes qx-arrive {
+        from {
+          opacity: 0;
+          transform: var(--qx-from);
+          filter: blur(14px);
+        }
+        45% {
+          opacity: 1;
+        }
+        to {
+          opacity: 1;
+          transform: none;
+          filter: blur(0);
+        }
+      }
+      @keyframes qx-glow {
+        from {
+          opacity: 0;
+          transform: scale(0.4);
+        }
+        55% {
+          opacity: 1;
+          transform: scale(1.1);
+        }
+        to {
+          opacity: 0.5;
+          transform: scale(1);
+        }
+      }
+      @keyframes qx-out {
+        to {
+          opacity: 0;
+        }
+      }
+      @keyframes qx-light {
+        from {
+          opacity: 0;
+          transform: scale(0.97);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      @keyframes qx-sheen {
+        from {
+          background-position: 150% 0;
+        }
+        to {
+          background-position: -50% 0;
+        }
+      }
+      @keyframes qx-settle {
+        to {
+          transform: none;
+        }
+      }
+      @keyframes qx-word {
+        from {
+          filter: blur(12px);
+          transform: translateX(-14px);
+          mask-position: 100% 0;
+          -webkit-mask-position: 100% 0;
+        }
+        to {
+          filter: blur(0);
+          transform: none;
+          mask-position: 0 0;
+          -webkit-mask-position: 0 0;
+        }
+      }
+      @keyframes qx-shimmer {
+        to {
+          background-position: 0 0;
+        }
+      }
+      @keyframes qx-leave {
+        to {
+          opacity: 0;
+          transform: scale(0.94);
+          filter: blur(6px);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .qx-lockup *,
+        .qx-lockup {
+          animation: none !important;
+        }
+        .qx-logo,
+        .qx-word {
+          transform: none;
+        }
+        .qx-flat,
+        .qx-sheen {
+          display: none;
+        }
+        .qx-mark {
+          opacity: 1;
+        }
+        .qx-glow {
+          opacity: 0.5;
+        }
+        .qx-word {
+          color: var(--qx-word);
+          background: none;
+          -webkit-mask: none;
+          mask: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="qx-lockup" role="img" aria-label="Quantix">
+      <div class="qx-logo" aria-hidden="true">
+        <div class="qx-glow"></div>
+        <div class="qx-flat">
+          <svg class="qx-layer qx-plate" viewBox="0 0 1024 1024"><g transform="translate(19.2 49.23) scale(0.77)"><path class="qx-yellow-side" d="M495 151L563 108C606 80 648 77 687 101L1025 332C1071 362 1095 392 1095 437V777C1095 810 1086 830 1074 839L617 466Z"/><path class="qx-yellow-face" d="M495 151L563 108C604 81 646 81 684 105L1020 335C1063 364 1083 394 1083 433V763C1083 791 1078 812 1068 825L617 453Z"/></g></svg>
+          <svg class="qx-layer qx-hook" viewBox="0 0 1024 1024"><g transform="translate(19.2 49.23) scale(0.77)"><path class="qx-pearl-side" d="M502 145C541 125 578 141 608 163L674 213C701 234 711 259 711 289V355C711 386 697 410 671 427L448 562C417 582 409 614 437 645L729 862C750 879 762 901 765 928V1017C765 1062 733 1098 690 1110C647 1122 588 1124 557 1101L210 871C176 847 157 814 157 774V430C157 391 177 359 209 338L502 145Z"/></g></svg>
+          <svg class="qx-layer qx-tail" viewBox="0 0 1024 1024"><g transform="translate(19.2 49.23) scale(0.77)"><path class="qx-throat" d="M815 617C820 625 820 635 817 643L884 662L900 690Z"/><path class="qx-return" d="M592 778C615 763 641 774 663 793L803 910C820 925 819 946 802 960L740 1013L692 916Z"/><path class="qx-tail-side" d="M592 778L811 643C838 625 862 627 884 644L1090 827C1115 850 1127 875 1127 905V998C1127 1037 1105 1067 1074 1082C1038 1100 1003 1091 975 1067L646 814C622 794 609 779 592 778Z"/></g></svg>
+          <svg class="qx-layer qx-hook" viewBox="0 0 1024 1024"><g transform="translate(19.2 49.23) scale(0.77)"><path class="qx-pearl-face" d="M502 145C531 129 558 137 585 155L649 201C674 219 685 241 685 268V334C685 365 670 387 646 403L434 535C402 555 386 576 386 599C386 619 398 638 419 654L708 870C737 892 755 915 755 949V1007C755 1055 726 1085 682 1092C659 1096 628 1095 603 1095C578 1095 556 1087 536 1072L222 853C192 832 180 807 180 775V438C180 397 195 368 227 345L502 145Z"/></g></svg>
+          <svg class="qx-layer qx-tail" viewBox="0 0 1024 1024"><g transform="translate(19.2 49.23) scale(0.77)"><path class="qx-tail-face" d="M592 778L811 643C838 625 862 627 884 644L1090 827C1114 849 1124 871 1124 900V983C1124 1021 1103 1049 1072 1064C1037 1081 1002 1075 976 1051L646 797C625 779 609 772 592 778Z"/></g></svg>
+        </div>
+        <div class="qx-mark"></div>
+        <div class="qx-sheen"></div>
+      </div>
+      <span class="qx-word" aria-hidden="true">Quantix</span>
+    </div>
+  </body>
+</html>

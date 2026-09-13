@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -30,6 +31,9 @@ function setup(options: { blocked?: boolean; refusal?: boolean } = {}) {
         if (path.endsWith("/preview"))
           return Response.json({
             fingerprint: "a".repeat(64),
+            requirements: [],
+            requirement_ids: [],
+            blockers: [],
             outputs: outputs.filter((output) =>
               body.output_ids.includes(output.id),
             ),
@@ -108,6 +112,7 @@ it("binds final approval to the exact preview, selected outputs, explicit scope 
   await waitFor(() => expect(writes).toHaveLength(2));
   expect(writes[1].body).toEqual({
     output_ids: ["one"],
+    requirement_ids: null,
     fingerprint: "a".repeat(64),
     engineer_confirmed: true,
     final_review_confirmed: true,
@@ -162,4 +167,115 @@ it("retains the engineer scope after refusal and requires a fresh preview and re
   expect(
     within(dialog).getByRole("button", { name: "Approve local export" }),
   ).toBeDisabled();
+});
+
+it("returns from a typed requirement repair with a new fingerprint and retained notes but renewed consent", async () => {
+  const writes: Record<string, unknown>[] = [];
+  let reviews = 0;
+  const repair = vi.fn();
+  const api = createApi(
+    { base_url: "http://localhost/api", token: "test" },
+    async (url, init) => {
+      if (init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        writes.push(body);
+        if (String(url).endsWith("/preview")) {
+          reviews += 1;
+          return Response.json({
+            fingerprint: (reviews === 1 ? "a" : "b").repeat(64),
+            outputs: [outputs[0]],
+            requirements: [],
+            requirement_ids: ["required-one"],
+            warnings: [],
+            blocking_reasons:
+              reviews === 1 ? ["Completion review needed."] : [],
+            blockers:
+              reviews === 1
+                ? [
+                    {
+                      code: "requirement_review",
+                      message: "Completion review needed.",
+                      target: {
+                        kind: "requirement",
+                        record_id: "required-one",
+                        output_ids: [],
+                      },
+                    },
+                  ]
+                : [],
+          });
+        }
+        return Response.json({ id: "approved" });
+      }
+      return Response.json([]);
+    },
+  );
+  function Journey() {
+    const [away, setAway] = useState(false),
+      [record, setRecord] = useState<string>();
+    return away ? (
+      <button onClick={() => setAway(false)}>Return to package review</button>
+    ) : (
+      <Submissions
+        tenderId="repair-tender"
+        outputs={outputs}
+        recordId={record}
+        onReviewChange={(open) => setRecord(open ? "review" : undefined)}
+        onRepair={(path) => {
+          repair(path);
+          setAway(true);
+        }}
+      />
+    );
+  }
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ApiContext.Provider value={api}>
+        <Journey />
+      </ApiContext.Provider>
+    </QueryClientProvider>,
+  );
+  const user = userEvent.setup({ delay: null });
+  const first = await review(user);
+  await user.type(
+    within(first).getByLabelText("Approved scope"),
+    "Reviewed programme only",
+  );
+  await user.type(
+    within(first).getByLabelText("Export approval note"),
+    "Requirement now linked",
+  );
+  await user.click(
+    within(first).getByRole("checkbox", { name: /I completed/ }),
+  );
+  await user.click(
+    within(first).getByRole("button", { name: "Review this requirement" }),
+  );
+  expect(repair).toHaveBeenCalledWith(
+    "/tenders/repair-tender/submission?view=requirements&record=required-one",
+  );
+  await user.click(
+    screen.getByRole("button", { name: "Return to package review" }),
+  );
+  const fresh = await screen.findByRole("dialog", {
+    name: "Review local export",
+  });
+  expect(reviews).toBe(2);
+  expect(within(fresh).getByLabelText("Approved scope")).toHaveValue(
+    "Reviewed programme only",
+  );
+  expect(
+    within(fresh).getByRole("checkbox", { name: /I completed/ }),
+  ).not.toBeChecked();
+  expect(
+    within(fresh).getByRole("button", { name: "Approve local export" }),
+  ).toBeDisabled();
+  await user.click(
+    within(fresh).getByRole("checkbox", { name: /I completed/ }),
+  );
+  await user.click(
+    within(fresh).getByRole("button", { name: "Approve local export" }),
+  );
+  await waitFor(() => expect(writes).toHaveLength(3));
+  expect(writes[2].fingerprint).toBe("b".repeat(64));
 });

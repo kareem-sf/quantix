@@ -60,7 +60,8 @@ def test_image_only_page_has_a_durable_scoped_source_reference(drawing):
     context = OfficeContext(repo, tender["id"], run["id"])
     output = asyncio.run(module().visual_source(context, artifact["id"], 1, [0, 0, 1, 1]))
     assert any(
-        getattr(item, "image_url", "").startswith("data:image/png;base64,") for item in output
+        item.get("type") == "image" and item.get("mime_type") == "image/png" and item.get("data")
+        for item in output
     )
     assert len(context.seen_sources) == 1
     source_id = next(iter(context.seen_sources))

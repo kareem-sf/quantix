@@ -1,0 +1,52 @@
+name: Build unsigned desktop packages
+
+# Explicit release preparation only; normal development does not build installers.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Linux desktop libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+      - name: Install build dependencies
+        run: |
+          python -m venv backend/.venv
+          node scripts/python.mjs -m pip install -e "./backend[packaging]"
+          npm ci
+      - name: Package local service
+        run: npm run package:service -- --target ${{ matrix.target }}
+      - name: Build desktop application
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+        run: npm run build:desktop -- --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: quantix-unsigned-${{ matrix.target }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,214 @@
+.document-register {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.document-register .document-register-table {
+  width: 100%;
+  min-width: 650px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  color: var(--text);
+}
+.document-register-table th,
+.document-register-table td {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+  font-size: var(--qx-text-body);
+  overflow-wrap: anywhere;
+}
+.document-register-table th {
+  padding-block: 12px;
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.document-register-table th:first-child {
+  width: 40%;
+}
+.document-register-table th:last-child {
+  width: 19%;
+}
+.document-register-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.document-register-table tbody tr:hover {
+  background: var(--surface-muted);
+}
+.document-register-table td small {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-size: var(--qx-text-caption);
+}
+.register-document-name {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.register-document-name > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+.register-document-name > div {
+  min-width: 0;
+}
+.document-register-table .file-title {
+  color: var(--text);
+  font-weight: 500;
+}
+.document-register-table .file-title:hover {
+  color: var(--legacy-accent);
+}
+.document-register-table .file-path {
+  color: var(--text-muted);
+}
+.document-register-table .document-warnings {
+  color: var(--text-muted);
+}
+.document-register-empty {
+  padding: 16px;
+  color: var(--text-muted);
+}
+.document-coverage-note {
+  margin: 0 0 20px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 16px;
+  color: var(--text-muted);
+  font-size: var(--qx-text-body);
+}
+
+.source-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: -5px 0 16px;
+  color: var(--text-muted);
+  font-size: var(--qx-text-caption);
+}
+
+.source-context span {
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.preview-toolbar {
+  gap: 12px;
+  padding: 8px 10px;
+  flex-wrap: wrap;
+}
+
+.page-jump {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  margin: 0;
+}
+
+.page-jump label {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--qx-text-caption);
+  font-weight: 600;
+}
+
+.page-jump input {
+  width: 74px;
+  margin: 4px 0 0;
+  padding: 7px 8px;
+  font-size: var(--qx-text-body);
+}
+
+.page-jump .button {
+  min-height: 35px;
+  padding: 7px 11px;
+  font-size: var(--qx-text-body);
+}
+
+.page-status {
+  color: var(--text-muted);
+  font-size: var(--qx-text-body);
+  white-space: nowrap;
+}
+
+.preview-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  color: var(--text-muted);
+  font-size: var(--qx-text-body);
+}
+
+.preview-tools .button {
+  min-height: 34px;
+  padding: 7px 11px;
+  font-size: var(--qx-text-body);
+}
+
+.source-preview-viewport {
+  width: 100%;
+  overflow: auto;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.source-preview-viewport .source-preview {
+  margin: 0;
+  border: 0;
+  transform-origin: top left;
+}
+
+.worksheet-navigation {
+  margin-block: 18px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.worksheet-navigation-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+
+.worksheet-navigation-fields label {
+  flex: 1 1 150px;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--qx-text-caption);
+  font-weight: 600;
+}
+
+.worksheet-navigation-fields input,
+.worksheet-navigation-fields select {
+  width: 100%;
+  min-width: 0;
+  margin: 5px 0 0;
+  padding: 8px;
+  font-size: var(--qx-text-body);
+}
+
+.worksheet-navigation-fields .button {
+  min-height: 37px;
+  padding: 8px 12px;
+  font-size: var(--qx-text-body);
+}
+
+.worksheet-navigation .field-help {
+  margin: 10px 0 0;
+}
+
+.source-text pre {
+  unicode-bidi: plaintext;
+}

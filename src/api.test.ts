@@ -2,6 +2,68 @@ import { describe, expect, it, vi } from "vitest";
 import { createApi } from "./api";
 
 describe("local API transport", () => {
+  it("preserves intentional cancellation when the browser rejects an aborted read as TypeError", async () => {
+    const controller = new AbortController();
+    const api = createApi(
+      { base_url: "http://localhost/api", token: "test" },
+      async () => {
+        controller.abort();
+        throw new TypeError("Failed to fetch");
+      },
+    );
+    await expect(
+      api.get("/tenders/one/office", controller.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+  it("redacts a credential echoed by a validator without keeping input or context", async () => {
+    const secret = "private-key-value";
+    const api = createApi(
+      { base_url: "http://localhost/api", token: "test" },
+      async () =>
+        Response.json(
+          {
+            detail: [
+              {
+                loc: ["body", "connection", "credentials", "api_key"],
+                msg: `Value error, invalid key: ${secret}`,
+                input: secret,
+                ctx: { error: secret },
+              },
+            ],
+          },
+          { status: 422 },
+        ),
+    );
+    try {
+      await api.post("/ai/setup/configure", {
+        connection: { credentials: { api_key: secret } },
+      });
+    } catch (failure) {
+      expect((failure as Error).message).toContain("[hidden]");
+      expect(JSON.stringify(failure)).not.toContain(secret);
+      expect(JSON.stringify(failure)).not.toContain("input");
+    }
+  });
+  it("sends the pending instruction identity and revision with DELETE", async () => {
+    const body = { pending_id: "pending-one", expected_revision: 3 };
+    const fetcher = vi.fn(
+      async (_url: RequestInfo | URL, init?: RequestInit) => {
+        expect(init?.method).toBe("DELETE");
+        expect(new Headers(init?.headers).get("Content-Type")).toBe(
+          "application/json",
+        );
+        expect(JSON.parse(String(init?.body))).toEqual(body);
+        return new Response(JSON.stringify({ cancelled: true }));
+      },
+    );
+    const api = createApi(
+      { base_url: "http://localhost/api", token: "test" },
+      fetcher,
+    );
+    await expect(api.delete("/tenders/one/pending", body)).resolves.toEqual({
+      cancelled: true,
+    });
+  });
   it("shows validation messages without exposing submitted secret values", async () => {
     const api = createApi(
       { base_url: "http://localhost/api", token: "test" },
@@ -31,6 +93,51 @@ describe("local API transport", () => {
       "String should have at least 8 characters",
     );
     expect((failure as Error).message).not.toContain("private-password-value");
+    expect((failure as { fieldErrors?: unknown[] }).fieldErrors).toEqual([
+      {
+        path: ["body", "smtp_password"],
+        message: "String should have at least 8 characters",
+      },
+    ]);
+  });
+
+  it("keeps safe validation paths for multiple fields and drops input/context", async () => {
+    const api = createApi(
+      { base_url: "http://localhost/api", token: "test" },
+      async () =>
+        new Response(
+          JSON.stringify({
+            detail: [
+              {
+                loc: ["body", "currency"],
+                msg: "Use three letters",
+                input: "EGP",
+              },
+              {
+                loc: ["body", "credentials", "api_key"],
+                msg: "Invalid key",
+                input: "secret",
+                ctx: { secret: "secret" },
+              },
+            ],
+          }),
+          { status: 422 },
+        ),
+    );
+    let failure: unknown;
+    try {
+      await api.post("/tenders/one/estimate", {
+        currency: "EGP",
+        credentials: { api_key: "secret" },
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect((failure as { fieldErrors?: unknown[] }).fieldErrors).toEqual([
+      { path: ["body", "currency"], message: "Use three letters" },
+      { path: ["body", "credentials", "api_key"], message: "Invalid key" },
+    ]);
+    expect(JSON.stringify(failure)).not.toContain("secret");
   });
   it("explains an unavailable local service without hiding the failure", async () => {
     const api = createApi(

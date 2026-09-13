@@ -16,7 +16,7 @@
 .quote-editor label,
 .quote-editor input,
 .quote-editor textarea {
-  font-size: 16px;
+  font-size: var(--qx-text-section);
 }
 .quote-list {
   list-style: none;
@@ -46,7 +46,7 @@
 .quote-list-button .muted {
   display: block;
   margin-top: 5px;
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   overflow-wrap: anywhere;
 }
 .quote-list-button[aria-expanded="true"] strong {
@@ -65,7 +65,7 @@
   margin: 18px 0;
 }
 .quote-envelope dt {
-  color: var(--muted);
+  color: var(--legacy-muted);
 }
 .quote-envelope dd {
   margin: 0;
@@ -101,13 +101,13 @@
 .quote-attachments code,
 .quote-fingerprint code {
   display: block;
-  font-size: 13px;
+  font-size: var(--qx-text-body);
   overflow-wrap: anywhere;
   margin-top: 6px;
 }
 .quote-fingerprint {
   margin: 18px 0;
-  font-size: 14px;
+  font-size: var(--qx-text-body);
 }
 .correspondence-check {
   display: flex;
@@ -133,7 +133,7 @@
 .correspondence legend,
 .quote-editor legend {
   padding: 0;
-  font-size: 18px;
+  font-size: var(--qx-text-title);
   font-weight: 500;
   margin-bottom: 8px;
 }
@@ -145,8 +145,8 @@
   border-radius: 5px;
 }
 .quote-attachment-summary {
-  font-size: 13px;
-  color: var(--muted);
+  font-size: var(--qx-text-body);
+  color: var(--legacy-muted);
   margin: 8px 0 12px;
 }
 .quote-attachment-selector .correspondence-check {
@@ -177,7 +177,7 @@
 }
 .quote-source-picker .source-result span {
   display: block;
-  color: var(--muted);
+  color: var(--legacy-muted);
   margin-top: 5px;
 }
 .quote-replies {
@@ -190,7 +190,7 @@
   padding: 20px 0;
 }
 .quote-reply > .muted {
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   margin: 6px 0;
 }
 .quote-reply .quote-body {

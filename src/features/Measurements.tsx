@@ -8,9 +8,9 @@ import {
   useResource,
   type Schema,
 } from "../api";
-import { ErrorNotice, Loading } from "../components/ui";
+import { ErrorNotice, Loading } from "../components/common";
 import { MeasurementCanvas, type MeasurementPoint } from "./MeasurementCanvas";
-import "../styles/measurements.css";
+import { createDraftScope, useFormDraft } from "./useFormDraft";
 
 type Measurement = Schema<"MeasurementRecord">;
 type Calculation = Schema<"MeasurementCalculation">;
@@ -29,11 +29,14 @@ const units: Record<string, string[]> = {
 export function Measurements(props: {
   tenderId: string;
   artifactId: string;
+  initialPage?: number;
+  artifactVersion?: number;
+  contentHash?: string;
   onClose?: () => void;
 }) {
   return (
     <MeasurementPanel
-      key={`${props.tenderId}:${props.artifactId}`}
+      key={`${props.tenderId}:${props.artifactId}:${props.artifactVersion ?? ""}:${props.contentHash ?? ""}:${props.initialPage ?? 1}`}
       {...props}
     />
   );
@@ -42,15 +45,21 @@ export function Measurements(props: {
 function MeasurementPanel({
   tenderId,
   artifactId,
+  initialPage = 1,
+  artifactVersion,
+  contentHash,
   onClose,
 }: {
   tenderId: string;
   artifactId: string;
+  initialPage?: number;
+  artifactVersion?: number;
+  contentHash?: string;
   onClose?: () => void;
 }) {
   const api = useApi(),
     base = tenderPath(tenderId);
-  const [page, setPage] = useState(1),
+  const [page, setPage] = useState(Math.max(1, initialPage)),
     [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<Measurement | null>(null),
     [saving, setSaving] = useState(false);
@@ -168,6 +177,8 @@ function MeasurementPanel({
               tenderId={tenderId}
               source={loaded.data.source}
               url={url}
+              artifactVersion={artifactVersion}
+              contentHash={contentHash}
               onSaving={setSaving}
               onSaved={setSelected}
             />
@@ -208,10 +219,11 @@ function MeasurementPanel({
             <span>
               <strong>{record.scope_label}</strong>
               <small>
-                {record.origin === "agent" ? "Agent proposal" : "Engineer measurement"} · Page {record.source.page} · {labels[record.mode]} ·{" "}
-                {record.is_current
-                  ? "Current source"
-                  : "Source needs recheck"}
+                {record.origin === "agent"
+                  ? "Agent proposal"
+                  : "Engineer measurement"}{" "}
+                · Page {record.source.page} · {labels[record.mode]} ·{" "}
+                {record.is_current ? "Current source" : "Source needs recheck"}
               </small>
             </span>
             <strong>
@@ -244,25 +256,53 @@ function MeasurementEditor({
   tenderId,
   source,
   url,
+  artifactVersion,
+  contentHash,
   onSaved,
   onSaving,
 }: {
   tenderId: string;
   source: Schema<"MeasurementPage">;
   url: string;
+  artifactVersion?: number;
+  contentHash?: string;
   onSaved: (record: Measurement) => void;
   onSaving: (saving: boolean) => void;
 }) {
   const api = useApi(),
     refresh = useRefresh();
-  const [mode, setMode] = useState<Mode>("length"),
-    [tool, setTool] = useState<"calibration" | "shape">("calibration");
-  const [points, setPoints] = useState<MeasurementPoint[]>([]),
-    [calibration, setCalibration] = useState<MeasurementPoint[]>([]);
-  const [metres, setMetres] = useState(""),
-    [scope, setScope] = useState(""),
-    [rationale, setRationale] = useState(""),
-    [consent, setConsent] = useState(false);
+  const draftScope = createDraftScope(
+    "measurements",
+    tenderId,
+    source.artifact_id,
+    `${contentHash ?? source.content_hash}:${artifactVersion ?? source.version}:${source.page}`,
+  );
+  const draft = useFormDraft(
+    draftScope,
+    {
+      mode: "length" as Mode,
+      tool: "calibration" as "calibration" | "shape",
+      points: [] as MeasurementPoint[],
+      calibration: [] as MeasurementPoint[],
+      metres: "",
+      scope: "",
+      rationale: "",
+    },
+    ["mode", "tool", "points", "calibration", "metres", "scope", "rationale"],
+  );
+  const { mode, tool, points, calibration, metres, scope, rationale } =
+    draft.value;
+  const setMode = (next: Mode) => draft.setField("mode", next);
+  const setTool = (next: "calibration" | "shape") =>
+    draft.setField("tool", next);
+  const setPoints = (next: MeasurementPoint[]) =>
+    draft.setField("points", next);
+  const setCalibration = (next: MeasurementPoint[]) =>
+    draft.setField("calibration", next);
+  const setMetres = (next: string) => draft.setField("metres", next);
+  const setScope = (next: string) => draft.setField("scope", next);
+  const setRationale = (next: string) => draft.setField("rationale", next);
+  const [consent, setConsent] = useState(false);
   const [result, setResult] = useState<Calculation | null>(null),
     [error, setError] = useState<unknown>(null),
     [busy, setBusy] = useState<"calculate" | "save" | null>(null);
@@ -281,24 +321,38 @@ function MeasurementEditor({
   }
   function addPoint(point: MeasurementPoint) {
     changed();
-    if (tool === "calibration" && mode !== "count")
-      setCalibration((previous) =>
-        previous.length >= 2 ? [point] : [...previous, point],
-      );
-    else
-      setPoints((previous) =>
-        previous.length < 500 ? [...previous, point] : previous,
-      );
+    draft.setValue((previous) => {
+      if (tool === "calibration" && mode !== "count") {
+        return {
+          ...previous,
+          calibration:
+            previous.calibration.length >= 2
+              ? [point]
+              : [...previous.calibration, point],
+        };
+      }
+      return {
+        ...previous,
+        points:
+          previous.points.length < 500
+            ? [...previous.points, point]
+            : previous.points,
+      };
+    });
   }
   function reset() {
     changed();
-    setPoints([]);
-    setCalibration([]);
-    setMetres("");
-    setScope("");
-    setRationale("");
+    draft.setValue((previous) => ({
+      ...previous,
+      points: [],
+      calibration: [],
+      metres: "",
+      scope: "",
+      rationale: "",
+      tool: mode === "count" ? "shape" : "calibration",
+    }));
+    draft.clear();
     setBusy(null);
-    setTool(mode === "count" ? "shape" : "calibration");
   }
   const input: Schema<"MeasurementInput"> = {
     artifact_id: source.artifact_id,
@@ -331,6 +385,7 @@ function MeasurementEditor({
   }
   async function save() {
     if (!result || !consent || !scope.trim() || !rationale.trim()) return;
+    const acceptedRevision = draft.revision;
     setError(null);
     setBusy("save");
     onSaving(true);
@@ -344,6 +399,7 @@ function MeasurementEditor({
           rationale,
         } satisfies Schema<"MeasurementCreate">,
       );
+      draft.markAccepted(acceptedRevision);
       void refresh();
       onSaved(saved);
     } catch (caught) {
@@ -457,7 +513,7 @@ function MeasurementEditor({
           Cancel measurement
         </button>
       </div>
-      <ErrorNotice error={error} />
+      <ErrorNotice error={error || draft.error} />
       {result ? (
         <div className="measurement-review">
           <h4>2. Review the proposal</h4>
@@ -580,7 +636,8 @@ function SavedMeasurement({
       </p>
       {measurement.origin === "agent" ? (
         <p className="measurement-caution">
-          Agent-proposed geometry. {measurement.links.length
+          Agent-proposed geometry.{" "}
+          {measurement.links.length
             ? "An engineer review was recorded for the BOQ link below. Quantity approval remains separate."
             : "The engineer has not reviewed this proposal. Inspect the drawing, supporting dimensions and marked scope before creating a BOQ link."}
         </p>
@@ -617,18 +674,40 @@ function SavedMeasurement({
           </dd>
           <dt>Engineer review</dt>
           <dd>
-            {measurement.reviewed_at
-              ? <>{measurement.review_rationale} · {measurement.reviewed_at}</>
-              : measurement.links.length
-                ? measurement.links.map(link => <p key={link.proposal_id}>{link.rationale} · {link.created_at}</p>)
-                : "No engineer review recorded."}
+            {measurement.reviewed_at ? (
+              <>
+                {measurement.review_rationale} · {measurement.reviewed_at}
+              </>
+            ) : measurement.links.length ? (
+              measurement.links.map((link) => (
+                <p key={link.proposal_id}>
+                  {link.rationale} · {link.created_at}
+                </p>
+              ))
+            ) : (
+              "No engineer review recorded."
+            )}
           </dd>
           <dt>Proposal origin</dt>
-          <dd>{measurement.origin === "agent" ? "Tender Office agent" : "Engineer"}{measurement.run_id ? ` · run ${measurement.run_id}` : ""}</dd>
-          {(measurement.supporting_sources ?? []).length ? <>
-            <dt>Supporting references</dt>
-            <dd>{measurement.supporting_sources?.map(source => <p key={source.source_id}>{source.relative_path} · {source.locator} · version {source.version}</p>)}</dd>
-          </> : null}
+          <dd>
+            {measurement.origin === "agent"
+              ? "Tender Office agent"
+              : "Engineer"}
+            {measurement.run_id ? ` · run ${measurement.run_id}` : ""}
+          </dd>
+          {(measurement.supporting_sources ?? []).length ? (
+            <>
+              <dt>Supporting references</dt>
+              <dd>
+                {measurement.supporting_sources?.map((source) => (
+                  <p key={source.source_id}>
+                    {source.relative_path} · {source.locator} · version{" "}
+                    {source.version}
+                  </p>
+                ))}
+              </dd>
+            </>
+          ) : null}
           <dt>Calculation</dt>
           <dd>{measurement.calculation_version}</dd>
         </dl>

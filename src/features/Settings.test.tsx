@@ -1,86 +1,89 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiContext, createApi } from "../api";
 import { Settings } from "./Settings";
 
-it("treats configured credentials as untested and clears a saved secret from the form", async () => {
-  const user = userEvent.setup();
-  const api = createApi(
-    { base_url: "http://localhost/api", token: "test" },
-    async (_url, init) => {
-      if (init?.method === "PATCH")
-        expect(JSON.parse(String(init.body)).api_key).toBe("private-key");
-      return new Response(
-        JSON.stringify({
-          provider_ready: true,
-          model: "gpt-6-astra",
-          default_currency: "EGP",
-          home: "C:/local",
-          provider_detail: "",
-          preferences: "",
-        }),
-      );
-    },
-  );
-  render(
-    <QueryClientProvider
-      client={
-        new QueryClient({ defaultOptions: { queries: { retry: false } } })
-      }
-    >
-      <ApiContext.Provider value={api}>
-        <Settings />
-      </ApiContext.Provider>
-    </QueryClientProvider>,
-  );
-  expect(
-    await screen.findByText("Configured · connection not tested"),
-  ).toBeInTheDocument();
-  const key = screen.getByLabelText("API key");
-  await user.type(screen.getByLabelText("Model"), "another-model");
-  expect(screen.getByLabelText("Model")).toHaveValue("gpt-6-astra");
-  await user.type(key, "private-key");
-  await user.click(screen.getByRole("button", { name: "Save settings" }));
-  await waitFor(() => expect(key).toHaveValue(""));
-  expect(await screen.findByRole("status")).toHaveTextContent("Settings saved");
-  expect(Object.values(window.localStorage).join(" ")).not.toContain(
-    "private-key",
-  );
-});
-
-it("opens the reusable-note approval form from Settings without submitting connection settings", async () => {
-  const writes: string[] = [];
+function setup(
+  section?: string,
+  configure?: {
+    connectionId?: string;
+    onConnectionClose?: () => void;
+    save?: (body: Record<string, unknown>) => Promise<Response>;
+    capabilities?: string[];
+  },
+) {
+  const reads: string[] = [],
+    writes: Record<string, unknown>[] = [];
   const api = createApi(
     { base_url: "http://localhost/api", token: "test" },
     async (address, init) => {
       const path = new URL(String(address)).pathname;
-      if (init?.method !== "GET") writes.push(path);
-      return new Response(
-        JSON.stringify(
-          path.endsWith("/health")
-            ? { capabilities: ["knowledge"] }
-            : path.endsWith("/settings")
-              ? {
-                  provider_ready: false,
-                  model: "gpt-6-astra",
-                  default_currency: "EGP",
-                  home: "C:/local",
-                  preferences: "",
-                }
-              : [],
-        ),
-      );
+      if (init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body));
+        writes.push(body);
+        return configure?.save ? configure.save(body) : Response.json({});
+      }
+      reads.push(path);
+      if (path === "/api/settings")
+        return Response.json({
+          default_currency: "EGP",
+          preferences: "",
+          home: "C:/synthetic",
+        });
+      if (path.endsWith("/health"))
+        return Response.json({
+          ai_setup_revision: 7,
+          capabilities: configure?.capabilities ?? ["knowledge", "quotations"],
+        });
+      if (path.endsWith("/accounts/specific"))
+        return Response.json({
+          id: "specific",
+          supported: false,
+          service_title: "OpenAI",
+          models: [],
+          connection: {
+            name: "Specific saved account",
+            provider_id: "openai",
+            protocol: "openai_responses",
+            credential_state: "missing",
+            settings: {},
+            base_url: "https://api.openai.com/v1",
+          },
+        });
+      return Response.json([]);
     },
   );
-  const user = userEvent.setup();
-  render(
-    <QueryClientProvider client={new QueryClient()}>
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const renderSettings = (current?: string) => (
+    <QueryClientProvider client={client}>
       <ApiContext.Provider value={api}>
-        <Settings />
+        <Settings
+          section={current}
+          connectionId={configure?.connectionId}
+          onConnectionClose={configure?.onConnectionClose}
+        />
       </ApiContext.Provider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const ui = render(renderSettings(section));
+  return {
+    reads,
+    writes,
+    user: userEvent.setup({ delay: null }),
+    switchSection: (next: string) => ui.rerender(renderSettings(next)),
+  };
+}
+it("keeps sections focused and opens reusable knowledge without saving account preferences", async () => {
+  const { user, writes, switchSection } = setup();
+  await screen.findByRole("heading", { name: "AI accounts" });
+  expect(
+    screen.queryByRole("button", { name: "New reusable note" }),
+  ).not.toBeInTheDocument();
+  // Section navigation lives in the app sidebar (see AppSidebar.test.tsx).
+  switchSection("knowledge");
   await user.click(
     await screen.findByRole("button", { name: "New reusable note" }),
   );
@@ -88,7 +91,53 @@ it("opens the reusable-note approval form from Settings without submitting conne
   expect(
     within(dialog).getByRole("button", { name: "Approve and save note" }),
   ).toBeDisabled();
-  expect(within(dialog).getByLabelText("Supporting tender")).toHaveValue("");
   expect(dialog.querySelector("form form")).toBeNull();
-  expect(writes).toHaveLength(0);
+  expect(writes).toEqual([]);
+});
+it("opens the exact account requested by a repair and closes through the return callback", async () => {
+  const close = vi.fn();
+  const { user, reads } = setup("accounts", {
+    connectionId: "specific",
+    onConnectionClose: close,
+  });
+  const panel = await screen.findByRole("dialog", {
+    name: "Specific saved account",
+  });
+  expect(reads).toContain("/api/ai/setup/accounts/specific");
+  await user.click(within(panel).getByRole("button", { name: "Close" }));
+  expect(close).toHaveBeenCalledOnce();
+});
+it("keeps a newer preference draft when an earlier save finishes", async () => {
+  let finish!: (response: Response) => void;
+  const { user, writes, switchSection } = setup("preferences", {
+    save: () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  });
+  const field = await screen.findByLabelText("Instructions for the office");
+  await user.type(field, "Earlier note");
+  await user.click(screen.getByRole("button", { name: "Save preferences" }));
+  await waitFor(() => expect(writes).toHaveLength(1));
+  await user.type(field, " with later detail");
+  finish(Response.json({}));
+  await screen.findByText("Working preferences saved.");
+  switchSection("accounts");
+  switchSection("preferences");
+  expect(
+    await screen.findByLabelText("Instructions for the office"),
+  ).toHaveValue("Earlier note with later detail");
+  expect(writes[0]).toEqual({
+    default_currency: "EGP",
+    preferences: "Earlier note",
+  });
+});
+
+it("opens the reset section directly and explains desktop support without sending a reset", async () => {
+  const { writes } = setup("reset");
+  expect(
+    await screen.findByRole("heading", { name: "Reset Quantix" }),
+  ).toBeVisible();
+  expect(screen.getByText(/Open the Quantix desktop app/)).toBeVisible();
+  expect(writes).toEqual([]);
 });

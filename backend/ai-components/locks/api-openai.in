@@ -1,0 +1,5 @@
+mcp==2.1.1
+pydantic==2.13.5
+jsonschema==4.26.0
+platformdirs==4.11.7
+pydantic-ai-slim[openai]==2.40.0

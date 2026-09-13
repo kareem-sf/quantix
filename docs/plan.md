@@ -17,7 +17,18 @@ The engineer's latest instruction is to finish implementation without tests, lin
 - [x] Source-backed submission requirements, output linking, completion/exception review and scoped final ZIP exports.
 - [x] Backups/recovery, private credentials, Windows shell and local launcher.
 - [x] API declaration generation and current implementation/limitation notes.
+- [x] Named user-owned AI connections, native API SDKs, cloud identity, gateways and local/custom endpoints.
+- [x] Official runtime adapters, guided client installation/sign-in and supported model discovery.
+- [x] Tender data-route approval, proposed AI teams, revision-bound approval and explicit alternatives.
+- [x] Recorded model usage, conservative cost reservations, budgets and engineer reconciliation.
+- [x] AI connection, Tender setup, team and usage interface controls; generated API declarations.
+- [x] Cross-platform workspace paths, release-only service packaging and native lifecycle source.
+- [x] Explicit desktop browser links for account setup and evidence, atomic AI authority/queue coordination, and paid-budget review after workspace restore.
+- [x] Guided plain-English AI accounts, on-demand component/worker isolation, one Tender allowance, nonce-based readiness-check code and separate setup-charge records.
+- [x] Illustrated beginner guide, isolated-worker architecture and dated provider support notes.
+- [x] Grok 1.0.13 subscription connection, on-demand native preparation, browser/device sign-in, scoped worker execution, included-only guards and explicitly approved provider-managed extras.
 - [ ] Joint testing of the latest MVP changes, after the engineer resumes testing.
 - [ ] Configured live Manager/research and specifically authorised mail use.
+- [ ] Build/exercise native packages on each supported OS; publisher signing and distribution.
 
-Native DWG processing, automatic OCR and a signed distributable installer remain outside the implemented local MVP. Unsupported sources stay visible and preserved; PDF/visual workflows do not claim complete automated takeoff accuracy.
+Native DWG processing, automatic OCR and a signed distributable installer remain unavailable. Unsupported sources stay visible and preserved; PDF/visual workflows do not claim complete automated takeoff accuracy. Provider/runtime limits and remaining acceptance are in [AI connections](ai-connections.md).

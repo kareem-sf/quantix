@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   tenderPath,
   useApi,
@@ -6,15 +6,23 @@ import {
   useResource,
   type Schema,
 } from "../api";
-import { ErrorNotice, Loading, Modal } from "../components/ui";
-import "../styles/deliverables.css";
+import { ErrorNotice, Loading, Modal } from "../components/common";
+import { FieldError } from "../components/FieldError";
+import { recordRoute } from "../navigation/routes";
+import { createDraftScope, useFormDraft } from "./useFormDraft";
 
 export function Submissions({
   tenderId,
   outputs,
+  recordId,
+  onReviewChange,
+  onRepair,
 }: {
   tenderId: string;
   outputs: Schema<"OutputRecord">[];
+  recordId?: string;
+  onReviewChange?: (open: boolean) => void;
+  onRepair?: (path: string) => void;
 }) {
   const api = useApi(),
     refresh = useRefresh(),
@@ -22,14 +30,42 @@ export function Submissions({
   const records = useResource<Schema<"SubmissionRecord">[]>(
     `${base}/submissions`,
   );
-  const [selected, setSelected] = useState<string[]>([]),
-    [checkRequirements, setCheckRequirements] = useState(true),
-    [preview, setPreview] = useState<Schema<"SubmissionPreview"> | null>(null),
+  const selectionDraft = useFormDraft(
+    createDraftScope("submission", tenderId, "package-selection", 1),
+    { selected: [] as string[], checkRequirements: true },
+    ["selected", "checkRequirements"],
+  );
+  const { selected, checkRequirements } = selectionDraft.value;
+  const setSelected = (value: string[] | ((current: string[]) => string[])) =>
+    selectionDraft.setField(
+      "selected",
+      typeof value === "function" ? value(selected) : value,
+    );
+  const setCheckRequirements = (value: boolean) =>
+    selectionDraft.setField("checkRequirements", value);
+  const resumedReview = useRef(false);
+  const [preview, setPreview] = useState<Schema<"SubmissionPreview"> | null>(
+      null,
+    ),
     [busy, setBusy] = useState(false),
     [error, setError] = useState<unknown>(null),
     [notice, setNotice] = useState("");
-  const close = useCallback(() => setPreview(null), []);
-  async function review() {
+  const close = useCallback(() => {
+    setPreview(null);
+    onReviewChange?.(false);
+  }, [onReviewChange]);
+  useEffect(() => {
+    if (recordId !== "review") {
+      resumedReview.current = false;
+      return;
+    }
+    if (!resumedReview.current && selected.length) {
+      resumedReview.current = true;
+      void review();
+    }
+  }, [recordId, selected.length]);
+  async function review(outputIds = selected) {
+    resumedReview.current = true;
     setBusy(true);
     setError(null);
     setNotice("");
@@ -37,9 +73,13 @@ export function Submissions({
       setPreview(
         await api.post<Schema<"SubmissionPreview">>(
           `${base}/submissions/preview`,
-          { output_ids: selected, requirement_ids: checkRequirements ? null : [] } satisfies Schema<"SubmissionSelection">,
+          {
+            output_ids: outputIds,
+            requirement_ids: checkRequirements ? null : [],
+          } satisfies Schema<"SubmissionSelection">,
         ),
       );
+      onReviewChange?.(true);
     } catch (failure) {
       setError(failure);
     } finally {
@@ -48,7 +88,7 @@ export function Submissions({
   }
   return (
     <section className="submissions-section">
-      <h2>Reviewed local exports</h2>
+      <h3>Package and export history</h3>
       <p className="muted">
         Select saved drafts, review their current sources and record the exact
         scope before approving a local package.
@@ -56,10 +96,23 @@ export function Submissions({
       {outputs.length ? (
         <>
           <label className="checkbox-label">
-            <input type="checkbox" checked={checkRequirements} disabled={busy} onChange={(event) => { setCheckRequirements(event.target.checked); setPreview(null); }} />
+            <input
+              type="checkbox"
+              checked={checkRequirements}
+              disabled={busy}
+              onChange={(event) => {
+                setCheckRequirements(event.target.checked);
+                setPreview(null);
+              }}
+            />
             Check all registered submission requirements for this export.
           </label>
-          {!checkRequirements ? <p className="field-help">This is a partial export. Omitted requirements will be listed for explicit acknowledgement.</p> : null}
+          {!checkRequirements ? (
+            <p className="field-help">
+              This is a partial export. Omitted requirements will be listed for
+              explicit acknowledgement.
+            </p>
+          ) : null}
           <fieldset className="submission-selection" disabled={busy}>
             <legend>Files to review</legend>
             {outputs.map((output) => (
@@ -110,6 +163,14 @@ export function Submissions({
       ))}
       {preview ? (
         <ExportReview
+          key={preview.fingerprint}
+          onRepair={onRepair}
+          onInclude={async (ids) => {
+            const next = [...new Set([...selected, ...ids])];
+            setSelected(next);
+            setPreview(null);
+            await review(next);
+          }}
           tenderId={tenderId}
           outputIds={selected}
           requirementIds={checkRequirements ? null : []}
@@ -118,6 +179,8 @@ export function Submissions({
           onApproved={async () => {
             setPreview(null);
             setSelected([]);
+            selectionDraft.clear();
+            onReviewChange?.(false);
             await refresh();
             setNotice("Local export approved. No files were sent.");
           }}
@@ -134,6 +197,8 @@ function ExportReview({
   initial,
   onClose,
   onApproved,
+  onRepair,
+  onInclude,
 }: {
   tenderId: string;
   outputIds: string[];
@@ -141,17 +206,25 @@ function ExportReview({
   initial: Schema<"SubmissionPreview">;
   onClose: () => void;
   onApproved: () => Promise<void>;
+  onRepair?: (path: string) => void;
+  onInclude: (ids: string[]) => Promise<void>;
 }) {
   const api = useApi(),
     base = tenderPath(tenderId);
   const [preview, setPreview] = useState(initial),
     [validPreview, setValidPreview] = useState(true),
     [acknowledged, setAcknowledged] = useState<string[]>([]),
-    [scope, setScope] = useState(""),
-    [rationale, setRationale] = useState(""),
     [confirmed, setConfirmed] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState<unknown>(null);
+  const draft = useFormDraft(
+    createDraftScope("submission", tenderId, "package-review", 1),
+    { scope: "", rationale: "" },
+    ["scope", "rationale"],
+  );
+  const { scope, rationale } = draft.value;
+  const setScope = (value: string) => draft.setField("scope", value),
+    setRationale = (value: string) => draft.setField("rationale", value);
   const canApprove =
     validPreview &&
     !preview.blocking_reasons.length &&
@@ -169,7 +242,10 @@ function ExportReview({
       setPreview(
         await api.post<Schema<"SubmissionPreview">>(
           `${base}/submissions/preview`,
-          { output_ids: outputIds, requirement_ids: requirementIds } satisfies Schema<"SubmissionSelection">,
+          {
+            output_ids: outputIds,
+            requirement_ids: requirementIds,
+          } satisfies Schema<"SubmissionSelection">,
         ),
       );
       setValidPreview(true);
@@ -188,6 +264,7 @@ function ExportReview({
           if (!canApprove || busy) return;
           setBusy(true);
           setError(null);
+          const acceptedRevision = draft.revision;
           try {
             await api.post<Schema<"SubmissionRecord">>(`${base}/submissions`, {
               output_ids: outputIds,
@@ -201,6 +278,7 @@ function ExportReview({
               ),
               rationale: rationale.trim(),
             } satisfies Schema<"SubmissionApproval">);
+            draft.markAccepted(acceptedRevision);
             await onApproved();
           } catch (failure) {
             setError(failure);
@@ -240,7 +318,9 @@ function ExportReview({
             <h3>Submission requirements in this review</h3>
             {preview.requirements.map((requirement, index) => (
               <p key={String(requirement.id ?? index)}>
-                <strong>{String(requirement.title)}</strong> · {String(requirement.status)} · {String(requirement.review_status)}
+                <strong>{String(requirement.title)}</strong> ·{" "}
+                {String(requirement.status)} ·{" "}
+                {String(requirement.review_status)}
               </p>
             ))}
           </section>
@@ -253,9 +333,70 @@ function ExportReview({
           <div className="submission-blockers">
             <strong>Resolve these items before final export</strong>
             <ul>
-              {preview.blocking_reasons.map((reason) => (
-                <li key={reason}>{reason}</li>
+              {(preview.blockers ?? []).map((blocker, index) => (
+                <li
+                  className="commercial-blocker"
+                  key={`${blocker.code}-${blocker.target.record_id}-${index}`}
+                >
+                  {blocker.message}
+                  {blocker.target.kind === "package" ? (
+                    <button
+                      type="button"
+                      className="text-button"
+                      disabled={
+                        busy ||
+                        outputIds.length +
+                          (blocker.target.output_ids ?? []).filter(
+                            (id) => !outputIds.includes(id),
+                          ).length >
+                          30
+                      }
+                      onClick={() => {
+                        setValidPreview(false);
+                        setConfirmed(false);
+                        setAcknowledged([]);
+                        void onInclude(blocker.target.output_ids ?? []);
+                      }}
+                    >
+                      Include required documents and refresh review
+                    </button>
+                  ) : onRepair ? (
+                    <button
+                      type="button"
+                      className="text-button"
+                      disabled={busy}
+                      onClick={() => {
+                        setValidPreview(false);
+                        setConfirmed(false);
+                        setAcknowledged([]);
+                        onRepair(
+                          recordRoute(tenderId, "submission", {
+                            view:
+                              blocker.target.kind === "requirement"
+                                ? "requirements"
+                                : "documents",
+                            recordId: blocker.target.record_id,
+                          }),
+                        );
+                      }}
+                    >
+                      {blocker.target.kind === "requirement"
+                        ? "Review this requirement"
+                        : "Review this document"}
+                    </button>
+                  ) : null}
+                </li>
               ))}
+              {preview.blocking_reasons
+                .filter(
+                  (reason) =>
+                    !(preview.blockers ?? []).some(
+                      (blocker) => blocker.message === reason,
+                    ),
+                )
+                .map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
             </ul>
           </div>
         ) : null}
@@ -269,6 +410,7 @@ function ExportReview({
               value={scope}
               onChange={(event) => setScope(event.target.value)}
             />
+            <FieldError error={error} name="acknowledged_scope" />
           </label>
           <h3>Scope limits and gaps</h3>
           {preview.warnings.map((warning) => (
@@ -296,6 +438,7 @@ function ExportReview({
               value={rationale}
               onChange={(event) => setRationale(event.target.value)}
             />
+            <FieldError error={error} name="rationale" />
           </label>
           <label className="checkbox-label">
             <input
@@ -308,7 +451,7 @@ function ExportReview({
             local export.
           </label>
         </fieldset>
-        <ErrorNotice error={error} />
+        <ErrorNotice error={error || draft.error} />
         {!validPreview ? (
           <p className="field-help">
             Refresh the review and check the current files and scope limits

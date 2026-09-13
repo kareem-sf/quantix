@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { tenderPath, useResource, type Schema } from "../api";
-import { ErrorNotice, Loading } from "../components/ui";
+import { ErrorNotice, Loading } from "../components/common";
 
 export function ProgrammeSuggestions({ tenderId, onSelect }: {
   tenderId: string;

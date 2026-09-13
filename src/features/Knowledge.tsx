@@ -1,3 +1,5 @@
+import { createDraftScope, useFormDraft } from "./useFormDraft";
+import { FieldError } from "../components/FieldError";
 import { useCallback, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -7,10 +9,9 @@ import {
   tenderPath,
   type Schema,
 } from "../api";
-import { Empty, ErrorNotice, Loading, Modal, Status } from "../components/ui";
+import { Empty, ErrorNotice, Loading, Modal, Status } from "../components/common";
 import { EvidencePicker } from "./EvidencePicker";
 import { Citations, SourceDrawer, type SourceSelection } from "./Sources";
-import "../styles/knowledge.css";
 
 type Category = Schema<"KnowledgeCreate">["category"];
 type SourceVisit = { tenderId: string; selection: SourceSelection };
@@ -223,15 +224,48 @@ function CreateNote({
   const api = useApi(),
     refresh = useRefresh();
   const tenders = useResource<Schema<"Tender">[]>("/tenders");
-  const [title, setTitle] = useState(""),
-    [content, setContent] = useState(""),
-    [category, setCategory] = useState<Category>("preference"),
-    [sourceTender, setSourceTender] = useState(""),
-    [sourceIds, setSourceIds] = useState<string[]>([]),
-    [verifiedOn, setVerifiedOn] = useState(""),
-    [recheckAfter, setRecheckAfter] = useState(""),
-    [rationale, setRationale] = useState(""),
-    [confirmed, setConfirmed] = useState(false),
+  const draft = useFormDraft(
+    createDraftScope("knowledge", "office", "new-note", 1),
+    {
+      title: "",
+      content: "",
+      category: "preference" as Category,
+      sourceTender: "",
+      sourceIds: [] as string[],
+      verifiedOn: "",
+      recheckAfter: "",
+      rationale: "",
+    },
+    [
+      "title",
+      "content",
+      "category",
+      "sourceTender",
+      "sourceIds",
+      "verifiedOn",
+      "recheckAfter",
+      "rationale",
+    ],
+  );
+  const {
+    title,
+    content,
+    category,
+    sourceTender,
+    sourceIds,
+    verifiedOn,
+    recheckAfter,
+    rationale,
+  } = draft.value;
+  const setTitle = (v: string) => draft.setField("title", v),
+    setContent = (v: string) => draft.setField("content", v),
+    setCategory = (v: Category) => draft.setField("category", v),
+    setSourceTender = (v: string) => draft.setField("sourceTender", v),
+    setSourceIds = (v: string[]) => draft.setField("sourceIds", v),
+    setVerifiedOn = (v: string) => draft.setField("verifiedOn", v),
+    setRecheckAfter = (v: string) => draft.setField("recheckAfter", v),
+    setRationale = (v: string) => draft.setField("rationale", v);
+  const [confirmed, setConfirmed] = useState(false),
     [pending, setPending] = useState(false),
     [error, setError] = useState<unknown>(null),
     [scopeNotice, setScopeNotice] = useState("");
@@ -241,6 +275,7 @@ function CreateNote({
     setPending(true);
     setError(null);
     try {
+      const acceptedRevision = draft.revision;
       const record = await api.post<Schema<"KnowledgeRecord">>("/knowledge", {
         title: title.trim(),
         content: content.trim(),
@@ -252,6 +287,7 @@ function CreateNote({
         engineer_confirmed: true,
         rationale: rationale.trim(),
       } satisfies Schema<"KnowledgeCreate">);
+      draft.markAccepted(acceptedRevision);
       await refresh();
       onSaved(record);
     } catch (failure) {
@@ -276,6 +312,7 @@ function CreateNote({
               value={title}
               onChange={(event) => setTitle(event.target.value)}
             />
+            <FieldError error={error} name="title" />
           </label>
           <label>
             Category
@@ -299,6 +336,7 @@ function CreateNote({
               value={content}
               onChange={(event) => setContent(event.target.value)}
             />
+            <FieldError error={error} name="content" />
           </label>
           {category === "price" || category === "tax" ? (
             <p className="knowledge-commercial field-help">
@@ -392,6 +430,7 @@ function CreateNote({
               value={rationale}
               onChange={(event) => setRationale(event.target.value)}
             />
+            <FieldError error={error} name="rationale" />
           </label>
           <label className="knowledge-confirmation">
             <input
@@ -627,8 +666,19 @@ function WithdrawNote({
   const api = useApi(),
     refresh = useRefresh(),
     client = useQueryClient();
-  const [rationale, setRationale] = useState(""),
-    [confirmed, setConfirmed] = useState(false),
+  const draft = useFormDraft(
+    createDraftScope(
+      "knowledge",
+      record.source_tender_id ?? "office",
+      `withdraw-${record.id}`,
+      1,
+    ),
+    { rationale: "" },
+    ["rationale"],
+  );
+  const { rationale } = draft.value;
+  const setRationale = (value: string) => draft.setField("rationale", value);
+  const [confirmed, setConfirmed] = useState(false),
     [pending, setPending] = useState(false),
     [error, setError] = useState<unknown>(null);
   return (
@@ -641,6 +691,7 @@ function WithdrawNote({
           setPending(true);
           setError(null);
           try {
+            const acceptedRevision = draft.revision;
             const result = await api.post<Schema<"KnowledgeRecord">>(
               `/knowledge/${record.id}/withdraw`,
               {
@@ -648,6 +699,7 @@ function WithdrawNote({
                 rationale: rationale.trim(),
               } satisfies Schema<"KnowledgeDecision">,
             );
+            draft.markAccepted(acceptedRevision);
             client.setQueryData([`/knowledge/${record.id}`], result);
             await refresh();
             onClose();
@@ -672,6 +724,7 @@ function WithdrawNote({
               value={rationale}
               onChange={(event) => setRationale(event.target.value)}
             />
+            <FieldError error={error} name="rationale" />
           </label>
           <label className="knowledge-confirmation">
             <input

@@ -16,7 +16,12 @@ from .db import dump, new_id, now, record
 from .documents import MAX_FILE_BYTES, _pdf_lock
 from .estimate_models import QuantityProposal
 from .estimates import EstimateService
-from .measurement_models import AgentMeasurementProposal, MeasurementCreate, MeasurementInput, MeasurementLink
+from .measurement_models import (
+    AgentMeasurementProposal,
+    MeasurementCreate,
+    MeasurementInput,
+    MeasurementLink,
+)
 
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS measurements(id TEXT PRIMARY KEY,tender_id TEXT NOT NULL REFERENCES tenders(id),artifact_id TEXT NOT NULL REFERENCES artifacts(id),source_id TEXT NOT NULL REFERENCES evidence(id),data_json TEXT NOT NULL,created_at TEXT NOT NULL)",

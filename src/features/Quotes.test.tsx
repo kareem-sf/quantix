@@ -502,3 +502,26 @@ async function fill(
   await user.click(input);
   await user.paste(value);
 }
+
+it("restores an unsent quotation draft after leaving its editor without approving or sending", async () => {
+  const { user, writes } = setup();
+  await user.click(
+    screen.getByRole("button", { name: "New quotation request" }),
+  );
+  await fill(user, screen.getByLabelText("To"), "draft@example.com");
+  await fill(user, screen.getByLabelText("Subject"), "Pending review");
+  await fill(
+    user,
+    screen.getByLabelText("Message"),
+    "Keep my unsent scope note.",
+  );
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  await user.click(
+    screen.getByRole("button", { name: "New quotation request" }),
+  );
+  expect(screen.getByLabelText("Subject")).toHaveValue("Pending review");
+  expect(screen.getByLabelText("Message")).toHaveValue(
+    "Keep my unsent scope note.",
+  );
+  expect(writes).toEqual([]);
+});

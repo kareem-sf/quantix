@@ -2,11 +2,10 @@
 
 import json
 
-from agents import RunContextWrapper, function_tool
-
+from .ai_tools import ToolContext
 from .knowledge import KnowledgeService
 from .knowledge_models import KnowledgeCategory
-from .office_tools import OfficeContext, redact_text
+from .office_tools import OfficeContext, redact_text, scoped_tool
 
 
 def _clean(value):
@@ -20,14 +19,16 @@ def _clean(value):
 
 
 def knowledge_tools():
-    @function_tool(failure_error_function=None)
+    @scoped_tool
     async def list_reusable_notes(
-        ctx: RunContextWrapper[OfficeContext],
+        ctx: ToolContext[OfficeContext],
         category: KnowledgeCategory | None,
         offset: int,
         limit: int,
     ) -> str:
         """List engineer-approved reusable guidance. These notes are not current Tender facts. Price/tax notes always require fresh research."""
+        ctx.context.require_tool("list_reusable_notes")
+        ctx.context.ensure_scope_current()
         if not 0 <= offset or not 1 <= limit <= 20:
             raise ValueError("Read at most 20 reusable notes at a time using a nonnegative offset.")
         notes = KnowledgeService(ctx.context.repo).list(
@@ -60,16 +61,31 @@ def knowledge_tools():
             ensure_ascii=False,
         )
 
-    @function_tool(failure_error_function=None)
+    @scoped_tool
     async def read_reusable_note(
-        ctx: RunContextWrapper[OfficeContext], knowledge_id: str, offset: int = 0, limit: int = 8000
+        ctx: ToolContext[OfficeContext], knowledge_id: str, offset: int = 0, limit: int = 8000
     ) -> str:
         """Inspect approved or withdrawn reusable guidance, with current provenance/revalidation flags and bounded full-text pages."""
+        ctx.context.require_tool("read_reusable_note")
+        ctx.context.ensure_scope_current()
         if not 0 <= offset or not 1 <= limit <= 8000:
             raise ValueError(
                 "Read up to 8,000 note characters at a time using a nonnegative offset."
             )
         note = _clean(KnowledgeService(ctx.context.repo).get(knowledge_id))
+        # Reusable guidance is a separately authorized input.  Its supporting
+        # sources retain foreign provenance and are never reinterpreted as
+        # evidence in this Tender.
+        if ctx.context.is_staff:
+            note["sources"] = [
+                {
+                    key: source[key]
+                    for key in ("source_id", "tender_id", "artifact_id", "version", "content_hash", "locator")
+                    if key in source
+                }
+                | {"provenance": "foreign_reusable_note"}
+                for source in note.get("sources", [])
+            ]
         content = note["content"]
         note.update(
             content=content[offset : offset + limit],
@@ -78,8 +94,7 @@ def knowledge_tools():
             next_offset=offset + limit if offset + limit < len(content) else None,
             current_tender_evidence=False,
         )
-        ctx.context.repo.event(
-            ctx.context.run_id,
+        ctx.context.emit_event(
             "reusable_note_read",
             "An approved reusable note was inspected.",
             {

@@ -1,9 +1,19 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { CircleCheck, Sparkles } from "lucide-react";
 import type { operations } from "../bindings/api";
 import { isActive, tenderPath, useApi, useRefresh, type Schema } from "../api";
-import { ErrorNotice, Loading } from "../components/ui";
-import { RunRow } from "./Work";
+import { ErrorNotice, Loading } from "../components/common";
+import { Button } from "@/components/ui/button";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
+import { RunRow } from "./RunRow";
 
 export type SearchMethod = NonNullable<
   NonNullable<
@@ -53,62 +63,81 @@ export function SearchPreparation({
   }, [started.data?.status, status.refetch, client, base]);
   const unavailable =
     status.data?.status === "empty" || status.data?.status === "limit_exceeded";
+
+  async function prepare() {
+    setStarting(true);
+    setError(null);
+    try {
+      const job = await api.post<Schema<"Run">>(`${base}/search-index`);
+      setRunId(job.id);
+      await refresh();
+    } catch (failure) {
+      setError(failure);
+    } finally {
+      setStarting(false);
+    }
+  }
+
   return (
-    <div className="search-preparation">
+    <div className="flex flex-col gap-3">
       <ErrorNotice error={status.error || started.error || error} />
-      {status.isPending ? <Loading>Checking meaning search…</Loading> : null}
+      {status.isPending ? (
+        <Loading>Checking the evidence index…</Loading>
+      ) : null}
       {status.data?.ready ? (
-        <p className="field-help">
-          Meaning search is ready for the current documents.
+        <p className="flex items-center gap-2 text-xs text-muted-foreground">
+          <CircleCheck
+            className="size-3.5 text-emerald-600 dark:text-emerald-400"
+            aria-hidden="true"
+          />
+          Tender evidence is indexed for meaning search.
         </p>
       ) : status.data ? (
-        <div className="search-readiness">
-          <div>
-            <strong>
+        <Item variant="outline" className="bg-card">
+          <ItemMedia variant="icon" className="size-9 rounded-lg bg-muted">
+            <Sparkles />
+          </ItemMedia>
+          <ItemContent>
+            <ItemTitle>
               {status.data.status === "empty"
-                ? "Add documents before preparing search"
+                ? "Add documents before indexing"
                 : status.data.status === "stale"
-                  ? "Meaning search needs an update"
+                  ? "The evidence index needs an update"
                   : status.data.status === "limit_exceeded"
-                    ? "Meaning search cannot cover this package yet"
-                    : "Meaning search is not prepared"}
-            </strong>
-            <p>{status.data.detail}</p>
-          </div>
-          <button
-            type="button"
-            className="button"
-            disabled={
-              starting ||
-              !!active ||
-              (!!run && isActive(run.status)) ||
-              unavailable
-            }
-            onClick={async () => {
-              setStarting(true);
-              setError(null);
-              try {
-                const job = await api.post<Schema<"Run">>(
-                  `${base}/search-index`,
-                );
-                setRunId(job.id);
-                await refresh();
-              } catch (failure) {
-                setError(failure);
-              } finally {
-                setStarting(false);
+                    ? "The evidence index cannot cover this package yet"
+                    : "Tender evidence is not indexed yet"}
+            </ItemTitle>
+            <ItemDescription>{status.data.detail}</ItemDescription>
+          </ItemContent>
+          <ItemActions>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={
+                starting ||
+                !!active ||
+                (!!run && isActive(run.status)) ||
+                unavailable
               }
-            }}
-          >
-            {starting ? "Starting…" : "Prepare search"}
-          </button>
-        </div>
+              onClick={() => void prepare()}
+            >
+              {starting ? "Starting…" : "Index tender evidence"}
+            </Button>
+          </ItemActions>
+        </Item>
       ) : null}
       {run ? <RunRow run={run} compact /> : null}
       {run && onWork ? (
-        <button type="button" className="text-button" onClick={onWork}>
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="h-auto self-start p-0"
+          onClick={onWork}
+        >
           View progress in Work
-        </button>
+        </Button>
       ) : null}
     </div>
   );

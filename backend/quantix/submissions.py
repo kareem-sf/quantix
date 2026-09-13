@@ -53,7 +53,7 @@ class SubmissionService:
         selection = SubmissionSelection.model_validate(values)
         with self.repo.atomic():
             self.repo.get_tender(tender_id)
-            outputs, blockers = [], []
+            outputs, blockers, repairs = [], [], []
             warnings = [
                 "Approval covers only the selected files and the engineer stated scope. Full Tender compliance, complete source coverage and external transmission are not established by this export."
             ]
@@ -66,6 +66,7 @@ class SubmissionService:
                 requirement_ids = [row["id"] for row in active_requirements]
             requirement_basis = self.requirements.submission_basis(tender_id, requirement_ids, selection.output_ids)
             blockers.extend(requirement_basis["blocking_reasons"])
+            repairs.extend(requirement_basis["blockers"])
             warnings.extend(requirement_basis["warnings"])
             omitted = [row["title"] for row in active_requirements if row["id"] not in requirement_ids]
             if omitted:
@@ -78,12 +79,11 @@ class SubmissionService:
                 try:
                     self.outputs.path(tender_id, identifier)
                     captured = self.outputs.check_current(tender_id, output)
-                    blockers.extend(
-                        output["filename"] + ": " + reason
-                        for reason in captured["blocking_reasons"]
-                    )
+                    output_reasons = [output["filename"] + ": " + reason for reason in captured["blocking_reasons"]]
                 except (ValueError, KeyError) as exc:
-                    blockers.append(output["filename"] + ": " + str(exc))
+                    output_reasons = [output["filename"] + ": " + str(exc)]
+                blockers.extend(output_reasons)
+                repairs.extend({"code": "output_changed", "message": reason, "target": {"kind": "output", "record_id": identifier, "output_ids": []}} for reason in output_reasons)
                 warnings.extend(
                     output["filename"] + ": " + warning
                     for warning in output["metadata"].get("warnings", [])
@@ -91,6 +91,7 @@ class SubmissionService:
             result = {
                 "outputs": outputs,
                 "blocking_reasons": sorted(set(blockers)),
+                "blockers": repairs,
                 "warnings": sorted(set(warnings)),
                 "requirements": requirement_basis["requirements"],
                 "requirement_ids": sorted(requirement_ids),

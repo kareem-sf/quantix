@@ -244,7 +244,7 @@ def test_model_download_cancellation_stops_child_without_customer_text(setup, mo
     def process(command, **kwargs):
         if command[-2:] == ["/T", "/F"]:
             return actual(command, **kwargs)
-        assert command[-2] == "download"
+        assert command[-2] == "semantic-download"
         assert "HF_HUB_DISABLE_IMPLICIT_TOKEN" in kwargs["env"]
         child = actual([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
         processes.append(child)

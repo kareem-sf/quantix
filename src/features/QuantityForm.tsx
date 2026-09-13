@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { tenderPath, useApi, useRefresh, type Schema } from "../api";
-import { ErrorNotice } from "../components/ui";
+import { ErrorNotice } from "../components/common";
+import { FieldError } from "../components/FieldError";
 import { EvidencePicker } from "./EvidencePicker";
 import { decimalPattern } from "./RateForm";
+import { createDraftScope, useFormDraft } from "./useFormDraft";
 
 export function QuantityForm({
   item,
@@ -13,11 +15,22 @@ export function QuantityForm({
 }) {
   const api = useApi(),
     refresh = useRefresh();
-  const [quantity, setQuantity] = useState(""),
-    [calculation, setCalculation] = useState(""),
-    [sources, setSources] = useState<string[]>([]),
-    [note, setNote] = useState(""),
-    [checked, setChecked] = useState(false),
+  const draft = useFormDraft(
+    createDraftScope(
+      "estimate",
+      tenderId,
+      `quantity-${item.id}`,
+      item.source_id,
+    ),
+    { quantity: "", calculation: "", sources: [] as string[], note: "" },
+    ["quantity", "calculation", "sources", "note"],
+  );
+  const { quantity, calculation, sources, note } = draft.value;
+  const setQuantity = (v: string) => draft.setField("quantity", v),
+    setCalculation = (v: string) => draft.setField("calculation", v),
+    setSources = (v: string[]) => draft.setField("sources", v),
+    setNote = (v: string) => draft.setField("note", v);
+  const [checked, setChecked] = useState(false),
     [pending, setPending] = useState(false),
     [error, setError] = useState<unknown>(null),
     [saved, setSaved] = useState(false);
@@ -25,7 +38,8 @@ export function QuantityForm({
     <form
       onSubmit={async (event) => {
         event.preventDefault();
-        if (!checked || !sources.length) return;
+        if (!checked || !sources.length || pending) return;
+        const acceptedRevision = draft.revision;
         setPending(true);
         setError(null);
         setSaved(false);
@@ -40,6 +54,8 @@ export function QuantityForm({
               source_ids: sources,
             } satisfies Schema<"QuantityRequest">,
           );
+          draft.markAccepted(acceptedRevision);
+          setChecked(false);
           await refresh();
           setSaved(true);
         } catch (failure) {
@@ -58,6 +74,7 @@ export function QuantityForm({
           value={quantity}
           onChange={(event) => setQuantity(event.target.value)}
         />
+        <FieldError error={error} name="quantity" />
       </label>
       <label>
         Calculation and quantity basis
@@ -69,12 +86,14 @@ export function QuantityForm({
           onChange={(event) => setCalculation(event.target.value)}
           placeholder="Record dimensions, grouping, deductions, arithmetic and the scope covered"
         />
+        <FieldError error={error} name="calculation" />
       </label>
       <EvidencePicker
         tenderId={tenderId}
         selected={sources}
         onChange={setSources}
       />
+      <FieldError error={error} name="source_ids" />
       <label>
         Quantity proposal note
         <textarea
@@ -85,6 +104,7 @@ export function QuantityForm({
           onChange={(event) => setNote(event.target.value)}
         />
       </label>
+      <FieldError error={error} name="rationale" />
       <label className="checkbox-label">
         <input
           required
@@ -94,7 +114,7 @@ export function QuantityForm({
         />
         I confirm this calculation and its supporting sources.
       </label>
-      <ErrorNotice error={error} />
+      <ErrorNotice error={error || draft.error} />
       {saved ? (
         <p role="status" className="success-text">
           Quantity proposal saved. The supplied quantity remains in use until

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import math
+import os
 import posixpath
 import threading
 import warnings
@@ -28,6 +29,11 @@ MAX_ZIP_BYTES = 128 * 1024 * 1024
 MAX_ZIP_ENTRY_BYTES = 32 * 1024 * 1024
 MAX_ZIP_MEMBERS = 10_000
 MAX_PDF_PAGES = 2_000
+# Text recognition is slow, so only the first scanned pages of a document are read.
+# Every scanned page is recognised; pages below this word confidence are flagged
+# for a second reading (AI vision when the Tender's AI supports images).
+OCR_LOW_CONFIDENCE = 60.0
+OCR_WORKERS = max(1, min(4, (os.cpu_count() or 2) // 2))
 MAX_ROWS = 20_000
 MAX_COLUMNS = 256
 MAX_CELLS = 500_000
@@ -198,16 +204,50 @@ def extract_document(
                             "message": "This archive is not a supported Excel or Word document.",
                         }
                     )
+        elif Path(original_name).suffix.lower() == ".dxf":
+            result.kind = "cad"
+            from .cad_reader import CadReaderService
+
+            try:
+                inspection = CadReaderService().inspect(path=path)
+                result.metadata["cad"] = inspection
+                if not inspection.get("complete_coverage", True):
+                    result.status = "needs_attention"
+                    result.warnings.append(
+                        {
+                            "code": "cad_incomplete",
+                            "message": "DXF coverage is incomplete. Missing xrefs or units are recorded as exceptions.",
+                        }
+                    )
+            except Exception as exc:
+                result.status = "needs_attention"
+                result.warnings.append(
+                    {
+                        "code": "dxf_read_error",
+                        "message": f"The DXF drawing could not be fully read ({type(exc).__name__}).",
+                    }
+                )
         elif header[:2] == b"AC" and header[2:6].isdigit():
             result.kind = "cad"
-            result.status = "unsupported"
             result.metadata["dwg_version"] = header[:6].decode("ascii")
-            result.warnings.append(
-                {
-                    "code": "dwg_conversion_required",
-                    "message": "DWG identified. A supported local CAD converter is required; use associated PDF drawings for visual review.",
-                }
-            )
+            from .legacy_converter import CadConversionUnavailable, convert_dwg
+
+            try:
+                dxf = convert_dwg(path)
+                from .cad_reader import CadReaderService
+
+                inspection = CadReaderService().inspect(path=dxf)
+                result.metadata["cad"] = inspection
+                if not inspection.get("complete_coverage", True):
+                    result.status = "needs_attention"
+            except CadConversionUnavailable as exc:
+                result.status = "unsupported"
+                result.warnings.append(
+                    {
+                        "code": "dwg_conversion_required",
+                        "message": str(exc),
+                    }
+                )
         elif (
             header.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
             and Path(original_name).suffix.lower() == ".doc"
@@ -285,6 +325,7 @@ def extract_document(
 
 def _extract_pdf(path, result, collector, cancelled):
     result.metadata["extraction_scope"] = "embedded_text"
+    scanned = []
     with _pdf_lock(cancelled), pdfium.PdfDocument(path) as document:
         result.metadata["page_count"] = len(document)
         if not len(document):
@@ -295,12 +336,8 @@ def _extract_pdf(path, result, collector, cancelled):
             with closing(document[index]) as page, closing(page.get_textpage()) as textpage:
                 text = textpage.get_text_bounded(errors="replace").replace("\r\n", "\n")
                 if not text.strip():
-                    _warn(
-                        result,
-                        "pdf_no_text",
-                        "No readable embedded text was found on this page. It may be blank or require OCR/visual review.",
-                        locator,
-                    )
+                    # Rendering needs the same PDFium lock, so read these after.
+                    scanned.append((index + 1, page.get_width(), page.get_height()))
                 else:
                     collector.add(
                         Segment(
@@ -327,6 +364,80 @@ def _extract_pdf(path, result, collector, cancelled):
                 result,
                 "page_limit",
                 f"Only the first {MAX_PDF_PAGES} pages were indexed; remaining pages need processing.",
+            )
+    _read_scanned_pages(path, result, collector, cancelled, scanned)
+
+
+def _read_scanned_pages(path, result, collector, cancelled, pages):
+    """Read pages with no stored text using local text recognition, when it is installed."""
+
+    if not pages:
+        return
+    from concurrent.futures import ThreadPoolExecutor
+
+    from . import extraction_worker
+    from .extraction_worker import OCRProcessError, OCRTimeoutError
+    from .tesseract_runtime import tesseract_languages
+
+    unreadable = (
+        "This page has no text Quantix can read. It may be blank or scanned; check the page preview."
+    )
+    if extraction_worker.ocr_available().get("available") is not True:
+        for number, _width, _height in pages:
+            _warn(result, "pdf_no_text", unreadable, f"page:{number}")
+        return
+    installed = tesseract_languages()
+    languages = "+".join(code for code in ("eng", "ara") if code in installed) or "eng"
+    stop = cancelled or (lambda: False)
+
+    def recognise(number):
+        # Rendering shares the PDFium lock; recognition runs in parallel processes.
+        image = extraction_worker.render_page_png(path, number, cancelled=stop, for_ocr=True)
+        return extraction_worker.ocr_page(image, languages=languages, cancelled=stop)
+
+    recognised = 0
+    with ThreadPoolExecutor(max_workers=OCR_WORKERS, thread_name_prefix="quantix-ocr") as pool:
+        futures = [(number, width, height, pool.submit(recognise, number)) for number, width, height in pages]
+        for number, width, height, future in futures:
+            _cancel(cancelled)
+            locator = f"page:{number}"
+            try:
+                page = future.result()
+            except InterruptedError:
+                for *_rest, pending in futures:
+                    pending.cancel()
+                raise
+            except (OCRTimeoutError, OCRProcessError, OSError, ValueError):
+                page = None
+            if page is None or not page.text.strip():
+                _warn(result, "pdf_no_text", unreadable, locator)
+                continue
+            collector.add(
+                Segment(
+                    locator,
+                    page.text,
+                    page=number,
+                    metadata={"page_width": width, "page_height": height, "method": "ocr",
+                              "ocr_confidence": page.confidence},
+                )
+            )
+            if page.confidence < OCR_LOW_CONFIDENCE:
+                _warn(
+                    result,
+                    "ocr_low_confidence",
+                    "Text recognition on this page is uncertain; it will be read again before it is relied on.",
+                    locator,
+                )
+            recognised += 1
+    if recognised:
+        result.metadata["extraction_scope"] = "embedded_text+ocr"
+        result.metadata["ocr_pages"] = recognised
+        if "ara" not in installed:
+            _warn(
+                result,
+                "ocr_language_missing",
+                "Arabic text recognition is not installed, so Arabic pages may be read incorrectly. "
+                "Add the Arabic language data to Tesseract and import again.",
             )
 
 

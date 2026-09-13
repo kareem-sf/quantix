@@ -1,11 +1,12 @@
 """Source-backed submission requirements and explicit engineer review decisions."""
 
 from datetime import date
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
 from .estimate_models import EngineerDecision, EstimateModel
+from .submission_models import SubmissionBlocker
 
 DeliverableKind = Literal[
     "boq_xlsx", "analysis_docx", "technical_docx", "registers_xlsx",
@@ -20,6 +21,10 @@ class RequirementProposal(EstimateModel):
     source_ids: list[str] = Field(min_length=1, max_length=50)
     deliverable_kind: DeliverableKind
     due_date: date | None = None
+    source_quote: str = Field(default="", max_length=6000)
+    applicability: Literal["unconditional", "conditional", "unknown"] = "unknown"
+    condition: str = Field(default="", max_length=3000)
+    exceptions: list[Annotated[str, Field(min_length=1, max_length=3000)]] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def distinct_sources(self):
@@ -32,6 +37,7 @@ class RequirementProposal(EstimateModel):
 
 class RequirementDecision(EngineerDecision):
     decision: RequirementAction
+    applicability_reviewed: bool = False
 
 
 class RequirementOutputLink(EngineerDecision):
@@ -92,10 +98,12 @@ class RequirementRecord(RequirementProposal):
     overdue: bool
     warnings: list[str]
     audit: list[RequirementAudit]
+    applicability_reviewed: bool = False
 
 
 class RequirementSubmissionBasis(EstimateModel):
     requirements: list[RequirementRecord]
     blocking_reasons: list[str]
+    blockers: list[SubmissionBlocker] = Field(default_factory=list)
     warnings: list[str]
     fingerprint: str

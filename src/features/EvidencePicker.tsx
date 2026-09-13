@@ -2,7 +2,7 @@ import { useDeferredValue, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { tenderPath, useApi, type Schema } from "../api";
-import { ErrorNotice, Loading } from "../components/ui";
+import { ErrorNotice, Loading } from "../components/common";
 
 export function EvidencePicker({
   tenderId,

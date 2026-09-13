@@ -147,11 +147,17 @@ def _snapshot_database(home, target):
             snapshot.execute("VACUUM")
 
 
-def _database_references(database):
+def _package_object_size(home, name):
+    path = _inside(home, name)
+    return path.stat().st_size if path.is_file() else 0
+
+
+def _database_references(database, package_size):
     try:
         with closing(sqlite3.connect(database.as_uri() + "?mode=ro&immutable=1", uri=True)) as conn:
             conn.execute("PRAGMA trusted_schema=OFF")
-            if conn.execute("PRAGMA user_version").fetchone()[0] != 1:
+            schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if schema_version not in {1, 2, 3}:
                 raise ValueError("The backup uses an unsupported database format.")
             if (
                 conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok"
@@ -191,6 +197,7 @@ def _database_references(database):
                     )
                     outputs += 1
             counts = {
+                "database_schema": schema_version,
                 "tender_count": conn.execute("SELECT COUNT(*) FROM tenders").fetchone()[0],
                 "original_count": originals,
                 "unavailable_original_count": unavailable,
@@ -230,7 +237,9 @@ def _create_archive(home, purpose="manual"):
         with _scratch(home) as work:
             database = work / "snapshot.sqlite"
             _snapshot_database(home, database)
-            references, counts = _database_references(database)
+            references, counts = _database_references(
+                database, lambda name: _package_object_size(home, name)
+            )
             references["quantix.sqlite"] = (_sha(database), database.stat().st_size)
             if (
                 len(references) > MAX_FILES
@@ -273,7 +282,6 @@ def _create_archive(home, purpose="manual"):
                     format_version=1,
                     id=identifier,
                     created_at=now(),
-                    database_schema=1,
                     purpose=purpose,
                     files=files,
                     **counts,
@@ -299,7 +307,9 @@ def _capture_recovery_evidence(home):
         with _scratch(home) as work:
             database = work / "snapshot.sqlite"
             _snapshot_database(home, database)
-            references, counts = _database_references(database)
+            references, counts = _database_references(
+                database, lambda name: _package_object_size(home, name)
+            )
             references["quantix.sqlite"] = (_sha(database), database.stat().st_size)
             if len(references) > MAX_FILES:
                 raise ValueError("Recovery evidence exceeds the file-count limit.")
@@ -449,7 +459,9 @@ def _validate_archive(home, path, destination=None):
                     raise ValueError("A backup file failed its SHA-256 integrity check.")
             if destination is not None:
                 database = _inside(destination, "quantix.sqlite")
-            references, counts = _database_references(database)
+            references, counts = _database_references(
+                database, lambda name: expected[name].size if name in expected else 0
+            )
             if set(references) | {"quantix.sqlite"} != set(expected):
                 raise ValueError(
                     "The archive does not contain exactly the snapshot's referenced files."

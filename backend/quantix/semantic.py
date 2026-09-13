@@ -6,6 +6,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -20,6 +21,7 @@ import numpy as np
 from .db import record
 from .processes import stop_owned_process_tree
 from .semantic_models import SemanticStatus, SemanticUnavailable
+from .storage import cache_dir, current_home
 
 MODEL_NAME = "intfloat/multilingual-e5-small"
 MODEL_REVISION = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
@@ -52,7 +54,7 @@ try:
 except importlib.metadata.PackageNotFoundError:
     _FASTEMBED_VERSION = "0.8.0"
 MODEL_FINGERPRINT = _hash(
-    f"{MODEL_NAME}:{MODEL_REVISION}:{MODEL_DIM}:MEAN:normalized:query:passage:fastembed={_FASTEMBED_VERSION}:chunks-v1:{CHUNK_CHARS}:{CHUNK_OVERLAP}"
+    f"{MODEL_NAME}:{MODEL_REVISION}:{MODEL_DIM}:MEAN:normalized:query:passage:fastembed={_FASTEMBED_VERSION}:chunks-v2-structure-bilingual1:{CHUNK_CHARS}:{CHUNK_OVERLAP}"
 )
 EXTRACTOR_FINGERPRINT = hashlib.sha256(
     b"".join(
@@ -95,6 +97,8 @@ def load_model(path: Path):
         raise SemanticUnavailable(
             "model_missing", "Local embedding dependencies are not installed."
         ) from exc
+    embedding_cache = cache_dir(current_home()) / "fastembed"
+    embedding_cache.mkdir(parents=True, exist_ok=True)
     with _MODEL_LOCK:
         if not any(m["model"] == MODEL_NAME for m in TextEmbedding.list_supported_models()):
             TextEmbedding.add_custom_model(
@@ -108,7 +112,7 @@ def load_model(path: Path):
         return TextEmbedding(
             model_name=MODEL_NAME,
             specific_model_path=str(path),
-            cache_dir=str(path.parent),
+            cache_dir=str(embedding_cache),
             local_files_only=True,
             providers=["CPUExecutionProvider"],
             threads=2,
@@ -137,11 +141,14 @@ def _ensure_model(path: Path, cancelled=None, progress=None):
         progress, 5, "Downloading the local multilingual search model. No Tender text is sent."
     )
     path.parent.mkdir(parents=True, exist_ok=True)
+    cache = cache_dir(current_home()) / "huggingface"
+    cache.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env.update(
         {
-            "HF_HOME": str(path.parent / "huggingface"),
-            "HF_XET_CACHE": str(path.parent / "xet"),
+            "HF_HOME": str(cache),
+            "HF_HUB_CACHE": str(cache / "hub"),
+            "HF_XET_CACHE": str(cache / "xet"),
             "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1",
             "HF_HUB_DISABLE_TELEMETRY": "1",
             "HF_HUB_DISABLE_XET": "1",
@@ -149,7 +156,15 @@ def _ensure_model(path: Path, cancelled=None, progress=None):
         }
     )
     process = subprocess.Popen(
-        [sys.executable, "-m", "quantix.semantic", "download", str(path)],
+        [
+            sys.executable,
+            *(
+                ["semantic-download", "--home", str(current_home())]
+                if getattr(sys, "frozen", False)
+                else ["-m", "quantix", "--home", str(current_home()), "semantic-download"]
+            ),
+            str(path),
+        ],
         env=env,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -196,6 +211,15 @@ def _chunks(text, model):
     start = 0
     while start < len(text):
         end = min(start + CHUNK_CHARS, len(text))
+        if end < len(text):
+            boundaries = (
+                text.rfind("\n\n", start, end),
+                text.rfind("\n", start, end),
+                text.rfind(". ", start, end),
+            )
+            preferred = max(boundaries)
+            if preferred > start + max(80, (end - start) // 2):
+                end = preferred + (2 if text[preferred : preferred + 2] == ". " else 0)
         # E5 is trained for 512 tokens. token_count may itself be capped by the
         # tokenizer; splitting below 480 prevents silently indexing a truncation.
         while model.token_count("passage: " + text[start:end]) >= 480:
@@ -212,21 +236,83 @@ def _chunks(text, model):
         start = max(start + 1, end - min(CHUNK_OVERLAP, (end - start) // 5))
 
 
+_BILINGUAL_GROUPS = (
+    {"concrete", "خرسانة", "خرساني", "خرسانية"},
+    {"pump", "pumping", "مضخة", "ضخ"},
+    {"capacity", "output", "production", "قدرة", "انتاج", "إنتاج"},
+)
+_TERM = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def _normal_term(value: str) -> str:
+    value = value.casefold()
+    if value.startswith("ال") and len(value) > 4:
+        value = value[2:]
+    return value
+
+
+def _bilingual_boost(query: str, passage: str) -> float:
+    query_terms = {_normal_term(item) for item in _TERM.findall(query)}
+    passage_terms = {_normal_term(item) for item in _TERM.findall(passage)}
+    relevant = [group for group in _BILINGUAL_GROUPS if group & query_terms]
+    if not relevant:
+        return 0.0
+    matched = sum(bool(group & passage_terms) for group in relevant)
+    return 0.05 * matched / len(relevant)
+
+
+def _language(text: str) -> str:
+    arabic = bool(re.search(r"[\u0600-\u06ff]", text))
+    latin = bool(re.search(r"[A-Za-z]", text))
+    if arabic and latin:
+        return "mixed"
+    if arabic:
+        return "ar"
+    if latin:
+        return "en"
+    return "other"
+
+
+def _structure(row: dict) -> dict:
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    return {
+        "heading": metadata.get("heading"),
+        "block_kind": metadata.get("block_kind") or row.get("kind"),
+        "page": row.get("page"),
+        "sheet": row.get("sheet"),
+        "cell_range": row.get("cell_range"),
+        "locator": row.get("locator"),
+    }
+
+
 class SemanticService:
     def __init__(self, repo):
         self.repo = repo
         self.path = repo.home / "semantic.sqlite"
-        self.model_path = repo.home / "models" / f"multilingual-e5-small-{MODEL_REVISION}"
+        from .engines import model_path
+
+        # The bundled model ships with Quantix; the workspace copy is a development fallback.
+        self.model_path = model_path(MODEL_NAME, MODEL_REVISION) or (
+            repo.home / "models" / f"multilingual-e5-small-{MODEL_REVISION}"
+        )
         self._model = None
         self._model_fingerprint = None
         self._inference_lock = threading.Lock()
         with self._connect() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS vectors(model TEXT NOT NULL,chunk_hash TEXT NOT NULL,vector BLOB NOT NULL,PRIMARY KEY(model,chunk_hash));
-                CREATE TABLE IF NOT EXISTS occurrences(tender_id TEXT NOT NULL,evidence_id TEXT NOT NULL,chunk_hash TEXT NOT NULL,start INTEGER NOT NULL,end INTEGER NOT NULL,PRIMARY KEY(tender_id,evidence_id,start));
+                CREATE TABLE IF NOT EXISTS occurrences(tender_id TEXT NOT NULL,evidence_id TEXT NOT NULL,chunk_hash TEXT NOT NULL,start INTEGER NOT NULL,end INTEGER NOT NULL,structure_json TEXT NOT NULL DEFAULT '{}',language TEXT NOT NULL DEFAULT 'other',chunk_sha256 TEXT NOT NULL DEFAULT '',PRIMARY KEY(tender_id,evidence_id,start));
                 CREATE INDEX IF NOT EXISTS occurrences_tender ON occurrences(tender_id,chunk_hash);
                 CREATE TABLE IF NOT EXISTS states(tender_id TEXT PRIMARY KEY,data_json TEXT NOT NULL);
             """)
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(occurrences)")}
+            for name, definition in (
+                ("structure_json", "TEXT NOT NULL DEFAULT '{}'"),
+                ("language", "TEXT NOT NULL DEFAULT 'other'"),
+                ("chunk_sha256", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE occurrences ADD COLUMN {name} {definition}")
 
     @contextmanager
     def _connect(self):
@@ -364,10 +450,22 @@ class SemanticService:
             )
             for row in rows:
                 _cancel(cancelled)
+                structure = _structure(row)
                 for start, end, text in _chunks(row["text"], model):
                     digest = _hash(text)
                     texts[digest] = text
-                    occurrences.append((tid, row["id"], digest, start, end))
+                    occurrences.append(
+                        (
+                            tid,
+                            row["id"],
+                            digest,
+                            start,
+                            end,
+                            json.dumps(structure, ensure_ascii=False, separators=(",", ":")),
+                            _language(text),
+                            digest,
+                        )
+                    )
                     if len(texts) > MAX_CHUNKS or len(occurrences) > MAX_OCCURRENCES:
                         raise SemanticUnavailable(
                             "limit_exceeded",
@@ -437,7 +535,15 @@ class SemanticService:
             }
             with self._connect() as conn:
                 conn.execute("DELETE FROM occurrences WHERE tender_id=?", (tid,))
-                conn.executemany("INSERT INTO occurrences VALUES(?,?,?,?,?)", occurrences)
+                conn.executemany(
+                    """
+                    INSERT INTO occurrences(
+                        tender_id,evidence_id,chunk_hash,start,end,structure_json,
+                        language,chunk_sha256
+                    ) VALUES(?,?,?,?,?,?,?,?)
+                    """,
+                    occurrences,
+                )
                 conn.execute("INSERT OR REPLACE INTO states VALUES(?,?)", (tid, json.dumps(state)))
             _progress(progress, 100, "Local semantic indexing completed.")
             return self.status(tid)
@@ -481,14 +587,16 @@ class SemanticService:
                 raise SemanticUnavailable(
                     "limit_exceeded", "The stored index exceeds the local search limit."
                 )
-            scores = {
+            semantic_scores = {
                 row["chunk_hash"]: float(
                     np.dot(_vector(np.frombuffer(row["vector"], dtype="<f4")), query_vector)
                 )
                 for row in vectors
             }
             references = conn.execute(
-                """SELECT o.evidence_id,o.chunk_hash,o.start,o.end,a.content_hash,e.locator
+                """SELECT o.evidence_id,o.chunk_hash,o.start,o.end,o.structure_json,
+                o.language,o.chunk_sha256,a.content_hash,a.version AS source_version,e.locator,
+                substr(e.text,o.start+1,o.end-o.start) AS chunk_text
                 FROM occurrences o JOIN source.evidence e ON e.id=o.evidence_id JOIN source.artifacts a ON a.id=e.artifact_id
                 WHERE o.tender_id=? AND a.tender_id=? AND a.is_current=1
                 AND (? IS NULL OR a.area=?) AND (? IS NULL OR a.status=?)""",
@@ -497,11 +605,27 @@ class SemanticService:
             best = {}
             identities = {}
             for row in references:
-                score = scores.get(row["chunk_hash"])
+                semantic_score = semantic_scores.get(row["chunk_hash"])
                 eid = row["evidence_id"]
                 identities[eid] = (row["content_hash"], row["locator"])
-                if score is not None and (eid not in best or score > best[eid]["score"]):
-                    best[eid] = {"score": score, "start": row["start"], "end": row["end"]}
+                if semantic_score is None:
+                    continue
+                passage = row["chunk_text"]
+                boost = _bilingual_boost(query, passage)
+                score = semantic_score + boost
+                if eid not in best or score > best[eid]["score"]:
+                    best[eid] = {
+                        "score": score,
+                        "semantic_score": semantic_score,
+                        "bilingual_lexical_boost": boost,
+                        "start": row["start"],
+                        "end": row["end"],
+                        "structure": json.loads(row["structure_json"]),
+                        "language": row["language"],
+                        "chunk_sha256": row["chunk_sha256"],
+                        "source_content_hash": row["content_hash"],
+                        "source_version": row["source_version"],
+                    }
             selected = []
             seen = set()
             for eid in sorted(best, key=lambda eid: (-best[eid]["score"], eid)):
@@ -533,6 +657,13 @@ class SemanticService:
                     "end": end,
                     "text": item["text"][start:end],
                     "model": MODEL_NAME,
+                    "semantic_score": match["semantic_score"],
+                    "bilingual_lexical_boost": match["bilingual_lexical_boost"],
+                    "chunk_sha256": match["chunk_sha256"],
+                    "language": match["language"],
+                    "structure": match["structure"],
+                    "source_content_hash": match["source_content_hash"],
+                    "source_version": match["source_version"],
                 }
             }
             results.append(item)

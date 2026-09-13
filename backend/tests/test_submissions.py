@@ -19,7 +19,7 @@ from quantix.repository import Repository
 def workspace(tmp_path):
     repo = Repository(tmp_path)
     tid = repo.create_tender("Foundation works")["id"]
-    original = b"Synthetic preserved source"
+    original = b"Synthetic preserved source".ljust(100, b" ")
     digest = hashlib.sha256(original).hexdigest()
     seed(repo, tid, digest=digest)
     (repo.objects / digest).write_bytes(original)
@@ -215,6 +215,49 @@ def test_draft_can_have_gaps_but_final_boq_requires_approved_commercial_basis(wo
     assert service.preview(tid, {"output_ids": [output["id"]]})["blocking_reasons"]
     with pytest.raises(ValueError):
         release(service, tid, output)
+
+
+def test_package_blockers_identify_exact_requirement_and_output_records(workspace):
+    from quantix.submission_models import SubmissionPreview
+
+    repo, tid, estimates, outputs = workspace
+    service = submission_service(repo)
+    source = estimates.view(tid)["items"][0]["source_id"]
+    requirement = service.requirements.propose(tid, {
+        "title": "Construction sequence", "detail": "Provide a programme.",
+        "source_ids": [source], "deliverable_kind": "programme_xlsx",
+    })
+    draft = outputs.generate(tid, approval(kind="programme_xlsx", programme=programme()))
+    preview = SubmissionPreview.model_validate(service.preview(tid, {"output_ids": [draft["id"]]}))
+    assert {blocker.code for blocker in preview.blockers} == {"requirement_approval", "requirement_review"}
+    assert all(blocker.target.kind == "requirement" and blocker.target.record_id == requirement["id"] for blocker in preview.blockers)
+    assert service.requirements.get(tid, requirement["id"])["status"] == "proposed"
+    outputs.path(tid, draft["id"]).write_bytes(b"changed synthetic draft")
+    changed = service.preview(tid, {"output_ids": [draft["id"]]})
+    target = next(blocker["target"] for blocker in changed["blockers"] if blocker["code"] == "output_changed")
+    assert target == {"kind": "output", "record_id": draft["id"], "output_ids": []}
+    assert changed["fingerprint"] != preview.fingerprint
+
+
+def test_package_missing_linked_documents_carries_exact_selection_ids(workspace):
+    repo, tid, estimates, outputs = workspace
+    service = submission_service(repo)
+    source = estimates.view(tid)["items"][0]["source_id"]
+    requirement = service.requirements.propose(tid, {
+        "title": "Programme", "detail": "Supply the reviewed programme.",
+        "source_ids": [source], "deliverable_kind": "programme_xlsx",
+    })
+    required = outputs.generate(tid, approval(kind="programme_xlsx", programme=programme()))
+    other = outputs.generate(tid, approval(kind="registers_xlsx"))
+    service.requirements.decide(tid, requirement["id"], approval(decision="approve", applicability_reviewed=True))
+    service.requirements.link_output(tid, requirement["id"], approval(output_id=required["id"]))
+    service.requirements.decide(tid, requirement["id"], approval(decision="satisfied"))
+    missing = service.preview(tid, {"output_ids": [other["id"]]})
+    target = next(blocker["target"] for blocker in missing["blockers"] if blocker["code"] == "missing_output")
+    assert target == {"kind": "package", "record_id": requirement["id"], "output_ids": [required["id"]]}
+    repaired = service.preview(tid, {"output_ids": [other["id"], required["id"]]})
+    assert not repaired["blocking_reasons"]
+    assert repaired["fingerprint"] != missing["fingerprint"]
 
 
 def test_final_scope_and_current_gap_acknowledgement_are_mandatory(workspace):

@@ -22,7 +22,7 @@ class BackupManifest(BackupModel):
     format_version: Literal[1]
     id: Identifier
     created_at: str
-    database_schema: Literal[1]
+    database_schema: Literal[1, 2, 3]
     tender_count: int = Field(ge=0)
     original_count: int = Field(ge=0)
     unavailable_original_count: int = Field(ge=0)

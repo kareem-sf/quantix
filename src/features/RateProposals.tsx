@@ -7,14 +7,18 @@ import {
   useResource,
   type Schema,
 } from "../api";
-import { ErrorNotice, Loading, Status } from "../components/ui";
+import { ErrorNotice, Loading, Status } from "../components/common";
 import { Citations, type SourceSelection } from "./Sources";
-import "../styles/rate-proposals.css";
+import { ExternalLink } from "../components/ExternalLink";
+import { FieldError } from "../components/FieldError";
+import { createDraftScope, useFormDraft } from "./useFormDraft";
 
 type Props = {
   tenderId: string;
   items: Schema<"EstimateItem">[];
   onSource: (selection: SourceSelection) => void;
+  selectedId?: string | null;
+  onSelect?: (id: string | null) => void;
 };
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -91,10 +95,21 @@ export function RateProposals(props: Props) {
   return <ProposalWorkspace key={props.tenderId} {...props} />;
 }
 
-function ProposalWorkspace({ tenderId, items, onSource }: Props) {
+function ProposalWorkspace({
+  tenderId,
+  items,
+  onSource,
+  selectedId,
+  onSelect,
+}: Props) {
   const path = `${tenderPath(tenderId)}/estimate/rate-proposals`;
   const proposals = useResource<Schema<"RateProposalRecord">[]>(path);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [localSelected, setLocalSelected] = useState<string | null>(null);
+  const selected = selectedId === undefined ? localSelected : selectedId;
+  const setSelected = (id: string | null) => {
+    setLocalSelected(id);
+    onSelect?.(id);
+  };
   const active = proposals.data?.find((proposal) => proposal.id === selected);
   const itemsById = new Map(items.map((item) => [item.id, item]));
   return (
@@ -184,8 +199,14 @@ function ProposalReview({
   const api = useApi(),
     refresh = useRefresh(),
     client = useQueryClient();
-  const [rationale, setRationale] = useState(""),
-    [confirmed, setConfirmed] = useState(false);
+  const draft = useFormDraft(
+    createDraftScope("estimate", tenderId, `rate-proposal-${proposal.id}`, 1),
+    { rationale: "" },
+    ["rationale"],
+  );
+  const { rationale } = draft.value;
+  const setRationale = (value: string) => draft.setField("rationale", value);
+  const [confirmed, setConfirmed] = useState(false);
   const [confirmSource, setConfirmSource] = useState(false),
     [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null),
@@ -325,6 +346,7 @@ function ProposalReview({
             setError(null);
             try {
               const path = `${tenderPath(tenderId)}/estimate/rate-proposals`;
+              const acceptedRevision = draft.revision;
               const approved = await api.post<Schema<"RateProposalRecord">>(
                 `${path}/${encodeURIComponent(proposal.id)}/approve`,
                 {
@@ -344,6 +366,7 @@ function ProposalReview({
                     record.id === approved.id ? approved : record,
                   ),
               );
+              draft.markAccepted(acceptedRevision);
               setSaved(true);
               setConfirmed(false);
               await refresh();
@@ -377,6 +400,7 @@ function ProposalReview({
                 value={rationale}
                 onChange={(event) => setRationale(event.target.value)}
               />
+              <FieldError error={error} name="rationale" />
             </label>
             {!item?.confirmed ? (
               <>
@@ -415,7 +439,7 @@ function ProposalReview({
           </fieldset>
         </form>
       ) : null}
-      <ErrorNotice error={error} />
+      <ErrorNotice error={error || draft.error} />
       {saved ? (
         <p role="status" className="success-text">
           Rate approval recorded. Review the updated estimate and any remaining
@@ -488,9 +512,7 @@ function RateProvenance({ provenance }: { provenance: Schema<"RateSource"> }) {
           {provenance.urls.map((url, index) => (
             <li key={`${url}:${index}`}>
               {sourceUrl(url) ? (
-                <a href={url} target="_blank" rel="noreferrer">
-                  {url}
-                </a>
+                <ExternalLink href={url}>{url}</ExternalLink>
               ) : (
                 <span>{url} · Unsupported link</span>
               )}

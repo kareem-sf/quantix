@@ -13,6 +13,7 @@ from .estimates import EstimateService
 from .output_programme import schedule_programme
 from .output_word import _technical_word, _word
 from .output_workbooks import _excel, _extra_excel
+from .report_analysis import select_report_analysis
 
 
 def fingerprint(value):
@@ -183,7 +184,7 @@ class OutputService:
                     data["overview"],
                     data["view"],
                     data["findings"],
-                    data["messages"],
+                    data["analysis"],
                     sources,
                 )
             elif request.kind == "technical_docx":
@@ -269,8 +270,12 @@ class OutputService:
                     warnings.append("Awaiting engineer decision: " + finding["title"])
         if request.kind == "analysis_docx":
             data.update(
-                messages=self.repo.messages(tender_id), overview=self.repo.overview(tender_id)
+                analysis=select_report_analysis(self.repo, tender_id),
+                overview=self.repo.overview(tender_id),
             )
+            if data["analysis"]["status"] == "unavailable":
+                warnings.append(data["analysis"]["note"])
+                warnings.append("Review limitation: " + data["analysis"]["review_limitation"])
         if request.kind in {"boq_xlsx", "analysis_docx"}:
             blockers.extend(data["view"]["blocking_reasons"])
             warnings.append(data["view"]["coverage_note"])

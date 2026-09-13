@@ -42,7 +42,11 @@ const calculation = {
 };
 
 function setup(
-  options: { previewError?: boolean; calculate?: () => Promise<Response> } = {},
+  options: {
+    previewError?: boolean;
+    calculate?: () => Promise<Response>;
+    initialPage?: number;
+  } = {},
 ) {
   const writes: { path: string; body: Record<string, unknown> }[] = [];
   const client = new QueryClient({
@@ -95,7 +99,11 @@ function setup(
   const view = render(
     <QueryClientProvider client={client}>
       <ApiContext.Provider value={api}>
-        <Measurements tenderId="tender" artifactId="drawing" />
+        <Measurements
+          tenderId="tender"
+          artifactId="drawing"
+          initialPage={options.initialPage}
+        />
       </ApiContext.Provider>
     </QueryClientProvider>,
   );
@@ -103,6 +111,7 @@ function setup(
 }
 
 beforeEach(() => {
+  window.localStorage.clear();
   vi.stubGlobal(
     "URL",
     class extends URL {
@@ -112,6 +121,14 @@ beforeEach(() => {
       static revokeObjectURL() {}
     },
   );
+});
+
+test("opens the requested source page and keeps its revision in the measurement basis", async () => {
+  setup({ initialPage: 2 });
+  expect(
+    await screen.findByRole("img", { name: "Plan.pdf, page 2" }),
+  ).toBeInTheDocument();
+  expect(screen.getByText(/Page 2 of 2/)).toBeInTheDocument();
 });
 afterEach(() => vi.unstubAllGlobals());
 

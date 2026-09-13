@@ -6,11 +6,22 @@ import {
   useResource,
   type Schema,
 } from "../api";
-import { ErrorNotice, Loading, Modal } from "../components/ui";
-import { ProgrammeForm, emptyProgramme, programmeValue, programmeDraft } from "./ProgrammeForm";
+import { ErrorNotice, Loading, Modal } from "../components/common";
+import { FieldError } from "../components/FieldError";
+import { createDraftScope, useFormDraft } from "./useFormDraft";
+import {
+  ProgrammeForm,
+  emptyProgramme,
+  programmeValue,
+  programmeDraft,
+} from "./ProgrammeForm";
 import { ProgrammeSuggestions } from "./ProgrammeSuggestions";
-import { ClientBoqForm, emptyClientBoq, clientBoqValue } from "./ClientBoqForm";
-import "../styles/deliverables.css";
+import {
+  ClientBoqForm,
+  emptyClientBoq,
+  clientBoqValue,
+  type ClientBoqDraft,
+} from "./ClientBoqForm";
 
 export const documentTitles: Record<Schema<"OutputRequest">["kind"], string> = {
   boq_xlsx: "Create BOQ workbook",
@@ -25,18 +36,61 @@ export function OutputForm({
   tenderId,
   kind,
   onClose,
+  onCreated,
+  onTask,
 }: {
   tenderId: string;
   kind: Schema<"OutputRequest">["kind"];
   onClose: () => void;
+  onCreated?: (output: Schema<"OutputRecord">) => void;
+  onTask?: (id: string) => void;
 }) {
   const api = useApi(),
     refresh = useRefresh();
-  const [taskId, setTaskId] = useState(""),
-    [programme, setProgramme] = useState(emptyProgramme),
-    [clientBoq, setClientBoq] = useState(emptyClientBoq),
-    [clientReady, setClientReady] = useState(false),
-    [rationale, setRationale] = useState(""),
+  const emptyClient = emptyClientBoq();
+  const draft = useFormDraft(
+    createDraftScope("submission", tenderId, `output-${kind}`, 1),
+    {
+      taskId: "",
+      programme: emptyProgramme(),
+      clientBoq: {
+        artifactId: emptyClient.artifactId,
+        currency: emptyClient.currency,
+        taxBasis: emptyClient.taxBasis,
+        mappings: emptyClient.mappings,
+      },
+      rationale: "",
+    },
+    ["taskId", "programme", "clientBoq", "rationale"],
+  );
+  const { taskId, programme, rationale } = draft.value;
+  const setTaskId = (value: string) => {
+    draft.setField("taskId", value);
+    setConfirmed(false);
+  };
+  const setProgramme = (value: ReturnType<typeof emptyProgramme>) => {
+    draft.setField("programme", value);
+    setConfirmed(false);
+  };
+  const setRationale = (value: string) => draft.setField("rationale", value);
+  const [mappingReviewed, setMappingReviewed] = useState(false),
+    [quantityApproved, setQuantityApproved] = useState(false);
+  const clientBoq: ClientBoqDraft = {
+    ...draft.value.clientBoq,
+    mappingReviewed,
+    quantityApproved,
+  };
+  const setClientBoq = (value: ClientBoqDraft) => {
+    setMappingReviewed(value.mappingReviewed);
+    setQuantityApproved(value.quantityApproved);
+    draft.setField("clientBoq", {
+      artifactId: value.artifactId,
+      currency: value.currency,
+      taxBasis: value.taxBasis,
+      mappings: value.mappings,
+    });
+  };
+  const [clientReady, setClientReady] = useState(false),
     [confirmed, setConfirmed] = useState(false),
     [pending, setPending] = useState(false),
     [error, setError] = useState<unknown>(null);
@@ -58,8 +112,9 @@ export function OutputForm({
           if (!valid || pending) return;
           setPending(true);
           setError(null);
+          const acceptedRevision = draft.revision;
           try {
-            await api.post<Schema<"OutputRecord">>(
+            const output = await api.post<Schema<"OutputRecord">>(
               `${tenderPath(tenderId)}/outputs`,
               {
                 kind,
@@ -70,8 +125,10 @@ export function OutputForm({
                 ...(clientInput ? { client_boq: clientInput } : {}),
               } satisfies Schema<"OutputRequest">,
             );
+            draft.markAccepted(acceptedRevision);
             await refresh();
-            onClose();
+            if (onCreated) onCreated(output);
+            else onClose();
           } catch (failure) {
             setError(failure);
           } finally {
@@ -89,26 +146,38 @@ export function OutputForm({
               tenderId={tenderId}
               value={taskId}
               onChange={setTaskId}
+              onTask={onTask}
+              error={error}
             />
           ) : null}
           {kind === "programme_xlsx" ? (
             <>
-            <ProgrammeSuggestions tenderId={tenderId} onSelect={proposal => {
-              setProgramme(programmeDraft(proposal));
-              setConfirmed(false);
-            }} />
-            <ProgrammeForm
-              tenderId={tenderId}
-              value={programme}
-              onChange={setProgramme}
-            />
+              <ProgrammeSuggestions
+                tenderId={tenderId}
+                onSelect={(proposal) => {
+                  setProgramme(programmeDraft(proposal));
+                  setConfirmed(false);
+                }}
+              />
+              <ProgrammeForm
+                tenderId={tenderId}
+                value={programme}
+                onChange={setProgramme}
+                error={error}
+              />
             </>
           ) : null}
           {kind === "client_boq" ? (
-            <ClientBoqForm tenderId={tenderId} value={clientBoq} onChange={value => {
-              setClientBoq(value);
-              setConfirmed(false);
-            }} onReadyChange={setClientReady} />
+            <ClientBoqForm
+              error={error}
+              tenderId={tenderId}
+              value={clientBoq}
+              onChange={(value) => {
+                setClientBoq(value);
+                setConfirmed(false);
+              }}
+              onReadyChange={setClientReady}
+            />
           ) : null}
           <label>
             Document review note
@@ -119,6 +188,7 @@ export function OutputForm({
               value={rationale}
               onChange={(event) => setRationale(event.target.value)}
             />
+            <FieldError error={error} name="rationale" />
           </label>
           <label className="checkbox-label">
             <input
@@ -130,7 +200,7 @@ export function OutputForm({
             I reviewed these inputs and approve creating a draft.
           </label>
         </fieldset>
-        <ErrorNotice error={error} />
+        <ErrorNotice error={error || draft.error} />
         <div className="form-actions">
           <button
             type="button"
@@ -152,10 +222,14 @@ function CompletedTasks({
   tenderId,
   value,
   onChange,
+  onTask,
+  error,
 }: {
   tenderId: string;
   value: string;
   onChange: (value: string) => void;
+  onTask?: (id: string) => void;
+  error?: unknown;
 }) {
   const tasks = useResource<Schema<"Task">[]>(`${tenderPath(tenderId)}/tasks`),
     completed = tasks.data?.filter((task) => task.status === "completed") ?? [];
@@ -180,7 +254,17 @@ function CompletedTasks({
             </option>
           ))}
         </select>
+        <FieldError error={error} name="task_id" />
       </label>
+      {value && onTask ? (
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => onTask(value)}
+        >
+          Open selected task
+        </button>
+      ) : null}
       {tasks.data && !completed.length ? (
         <p className="field-help">
           Complete and review specialist work before creating its technical

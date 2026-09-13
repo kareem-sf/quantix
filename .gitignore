@@ -23,6 +23,17 @@ playwright-report/
 *.dxf
 *.doc
 *.docx
+!backend/quantix/benchmarks/fixtures/*/*.docx
 *.xls*
 *.zip
 !tests/fixtures/README.md
+
+src-tauri/binaries/
+.packaging/
+
+# Bundled OCR and meaning-search engines (scripts/fetch_engines.py)
+backend/engines/
+backend/.engine-cache/
+
+# Local verification output
+/backend/results.txt

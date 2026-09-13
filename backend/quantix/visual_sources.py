@@ -8,7 +8,6 @@ import math
 from contextlib import closing
 
 import pypdfium2
-from agents import ToolOutputImage, ToolOutputText
 
 from .db import dump, new_id
 from .documents import PDFIUM_LOCK
@@ -48,36 +47,80 @@ def render_region(path, page, region):
 
 
 async def visual_source(context, artifact_id, page, region):
+    if context.is_staff and context._draft() is None:
+        with context.read_scope():
+            result = await _visual_source(context, artifact_id, page, region)
+            json.dumps(result, ensure_ascii=False)
+            return result
+    result = await _visual_source(context, artifact_id, page, region)
+    json.dumps(result, ensure_ascii=False)
+    return result
+
+
+async def _visual_source(context, artifact_id, page, region):
     repo, tender_id = context.repo, context.tender_id
-    artifact = repo.get_artifact(tender_id, artifact_id)
+    context.require_tool("view_document_page")
+    context.ensure_scope_current()
+    artifact = context.ensure_artifact_allowed(artifact_id)
     if artifact["kind"] != "pdf":
         raise ValueError(
             "Choose a PDF source for visual inspection. CAD originals need a supported PDF or CAD reader."
         )
     path = repo.object_path(tender_id, artifact_id)
     png = await asyncio.to_thread(render_region, path, page, region)
-    with repo.db.connect(write=True) as conn:
+    # A source revision or binding revocation during rendering must not become
+    # an attributable read for the old bytes.
+    artifact = context.ensure_artifact_allowed(artifact_id)
+    with repo.db.connect() as conn:
         existing = conn.execute(
             "SELECT id FROM evidence WHERE artifact_id=? AND page=? ORDER BY rowid LIMIT 1",
             (artifact_id, page),
         ).fetchone()
         if existing:
             source_id = existing[0]
-        else:
+        elif context.is_staff:
             source_id = new_id()
-            conn.execute(
-                "INSERT INTO evidence(id,artifact_id,locator,text,page,kind,metadata_json) VALUES(?,?,?,?,?,?,?)",
+            context.stage_evidence(
                 (
                     source_id,
                     artifact_id,
                     f"Page {page}",
                     "",
                     page,
+                    None,
+                    None,
                     "visual",
                     dump({"visual_reference": True, "text_extracted": False}),
-                ),
+                )
             )
-    context.seen_sources.add(source_id)
+        else:
+            source_id = new_id()
+            with repo.atomic() as write_conn:
+                write_conn.execute(
+                    "INSERT INTO evidence(id,artifact_id,locator,text,page,kind,metadata_json) VALUES(?,?,?,?,?,?,?)",
+                    (
+                        source_id,
+                        artifact_id,
+                        f"Page {page}",
+                        "",
+                        page,
+                        "visual",
+                        dump({"visual_reference": True, "text_extracted": False}),
+                    ),
+                )
+    if context.is_staff and context._draft() is not None and not existing:
+        evidence = {
+            "id": source_id,
+            "artifact_id": artifact_id,
+            "artifact_name": artifact["name"],
+            "locator": f"Page {page}",
+            "text": "",
+            "page": page,
+            "kind": "visual",
+            "metadata": {"visual_reference": True, "text_extracted": False},
+        }
+    else:
+        evidence = repo.get_evidence(tender_id, source_id)
     reference = {
         "source_id": source_id,
         "artifact_name": artifact["name"],
@@ -86,15 +129,30 @@ async def visual_source(context, artifact_id, page, region):
         "coordinate_system": "x,y,width,height as fractions from the page's top-left",
         "instruction": "Inspect the image. Cite this source ID; distinguish printed dimensions from your interpretation. This is not a verified quantity takeoff.",
     }
-    repo.event(
-        context.run_id,
+    context.record_visual_receipt(evidence, artifact, page, region)
+    context.add_seen_source(source_id)
+    event_data = {
+        "source_id": source_id,
+        "artifact_id": artifact_id,
+        "page": page,
+        "region": region,
+    }
+    if context.actor_id is not None:
+        event_data["actor_id"] = context.actor_id
+    if context.is_staff:
+        event_data.update(
+            {
+                "assignment_id": context.assignment_id,
+                "profile_version": context.staff_version,
+                "route_binding_id": context.route_binding_id,
+            }
+        )
+    context.emit_event(
         "visual_source_viewed",
         "A source drawing region was inspected.",
-        {"source_id": source_id, "artifact_id": artifact_id, "page": page, "region": region},
+        event_data,
     )
     return [
-        ToolOutputText(text=json.dumps(reference)),
-        ToolOutputImage(
-            image_url="data:image/png;base64," + base64.b64encode(png).decode(), detail="high"
-        ),
+        {"type": "text", "text": json.dumps(reference)},
+        {"type": "image", "mime_type": "image/png", "data": base64.b64encode(png).decode()},
     ]

@@ -14,7 +14,7 @@
   border-bottom: 1px solid var(--border);
 }
 .map-coverage > h3 {
-  font-size: 18px;
+  font-size: var(--qx-text-title);
   margin-bottom: 20px;
 }
 .map-coverage dl {
@@ -24,13 +24,13 @@
   margin: 0;
 }
 .map-coverage dt {
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--legacy-muted);
+  font-size: var(--qx-text-body);
   line-height: 1.6;
 }
 .map-coverage dd {
   margin: 6px 0 0;
-  font-size: 24px;
+  font-size: var(--qx-text-title);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
@@ -48,7 +48,7 @@
 .map-filters > label {
   margin: 0;
   min-width: 145px;
-  font-size: 13px;
+  font-size: var(--qx-text-body);
 }
 .map-filters > label:first-child {
   flex: 1;
@@ -83,7 +83,7 @@
   text-align: left;
   font-weight: 500;
   line-height: 1.7;
-  font-size: 16px;
+  font-size: var(--qx-text-section);
   padding: 0;
   overflow-wrap: anywhere;
 }
@@ -101,12 +101,12 @@
   flex-wrap: wrap;
   gap: 8px 15px;
   margin-top: 9px;
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--legacy-muted);
+  font-size: var(--qx-text-caption);
 }
 .map-entity-detail {
-  color: var(--muted);
-  font-size: 14px;
+  color: var(--legacy-muted);
+  font-size: var(--qx-text-body);
   line-height: 1.7;
   margin: 10px 0 0;
   display: -webkit-box;
@@ -119,13 +119,13 @@
   padding-left: 26px;
 }
 .map-review-rail h3 {
-  font-size: 19px;
+  font-size: var(--qx-text-title);
   margin-bottom: 12px;
 }
 .map-review-record {
   padding: 17px 0;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: var(--qx-text-body);
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
@@ -145,14 +145,14 @@
 .map-review-record time {
   display: block;
   margin-top: 9px;
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--legacy-muted);
+  font-size: var(--qx-text-caption);
 }
 .map-warning {
   color: #92671b;
 }
 .map-form > p {
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   line-height: 1.7;
 }
 .map-form fieldset {
@@ -164,13 +164,13 @@
 .map-form input,
 .map-form textarea,
 .map-form select {
-  font-size: 16px;
+  font-size: var(--qx-text-section);
 }
 .map-form select {
   width: 100%;
 }
 .map-form .checkbox-label {
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   font-weight: 400;
   line-height: 1.7;
   align-items: flex-start;
@@ -178,7 +178,7 @@
 .map-detail {
   overflow-y: auto;
   padding: 24px 28px 38px;
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   line-height: 1.8;
 }
 .map-detail-text {
@@ -191,7 +191,7 @@
   border-top: 1px solid var(--border);
 }
 .map-detail h3 {
-  font-size: 18px;
+  font-size: var(--qx-text-title);
   margin-bottom: 14px;
 }
 .map-detail-list {
@@ -206,23 +206,23 @@
   text-align: left;
 }
 .map-source-identity {
-  font-size: 12px;
-  color: var(--muted);
+  font-size: var(--qx-text-caption);
+  color: var(--legacy-muted);
   overflow-wrap: anywhere;
 }
 .map-source-identity code {
-  font-size: 11px;
+  font-size: var(--qx-text-caption);
 }
 .map-empty {
   padding: 28px 0;
 }
 .map-empty h3 {
-  font-size: 20px;
+  font-size: var(--qx-text-title);
   margin-bottom: 12px;
 }
 .map-directory-groups {
   margin: 28px 0;
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   line-height: 1.8;
 }
 .map-directory-groups summary {
@@ -237,7 +237,7 @@
   padding: 12px 15px;
   background: #f5f8f9;
   border-left: 2px solid var(--teal);
-  font-size: 13px;
+  font-size: var(--qx-text-body);
   line-height: 1.8;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

@@ -2,8 +2,9 @@ import hashlib
 import json
 
 import pytest
+from office_test_support import api_result_for, approve_plan_and_team, invoke_json_tool
+from test_catalog_authority import configured_office
 from test_estimates import cell
-from test_office import call_tool, result_for
 from test_rate_proposals import proposal_payload
 
 from quantix import office
@@ -16,9 +17,17 @@ from quantix.repository import Repository
 
 
 @pytest.fixture
-def setup(tmp_path):
+def setup(tmp_path, monkeypatch):
     repo = Repository(tmp_path)
     tid = repo.create_tender("Concrete tender")["id"]
+    configured_office(
+        tmp_path,
+        monkeypatch,
+        repo=repo,
+        tender={"id": tid},
+        model_id="gpt-6-astra",
+        reasoning="xhigh",
+    )
     source = b"Synthetic saved BOQ source"
     digest = hashlib.sha256(source).hexdigest()
     (repo.objects / digest).write_bytes(source)
@@ -58,13 +67,12 @@ def setup(tmp_path):
 async def test_agent_results_prepare_business_proposals_then_publish_atomically(setup, monkeypatch):
     repo, tid, artifact, estimates, item, quotes, run = setup
 
-    async def provider(agent, prompt, **kwargs):
-        context = kwargs["context"]
-        result = json.loads(
-            await call_tool(agent, "inspect_estimate", context, {"offset": 0, "limit": 10})
+    async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
+        result = await invoke_json_tool(
+            context, "inspect_estimate", {"offset": 0, "limit": 10}, options=kwargs
         )
         assert result["items"][0]["source"]["id"] == item["source_id"]
-        return result_for(
+        return api_result_for(
             OfficeOutput.model_validate(
                 {
                     "summary": "Draft request and rate allowance are ready for review.",
@@ -83,8 +91,8 @@ async def test_agent_results_prepare_business_proposals_then_publish_atomically(
             )
         )
 
-    monkeypatch.setattr(office.Runner, "run", provider)
-    prepared = await office.run_manager(repo, tid, run["id"], run["instruction"], "test-key")
+    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
+    prepared = await office.run_manager(repo, tid, run["id"], run["instruction"])
     assert quotes.list_drafts(tid) == []
     assert estimates.list_rate_proposals(tid) == []
     with repo.atomic():
@@ -99,8 +107,8 @@ async def test_agent_results_prepare_business_proposals_then_publish_atomically(
 async def test_unread_item_or_invented_supplier_recipient_cannot_be_published(setup, monkeypatch):
     repo, tid, artifact, estimates, item, quotes, run = setup
 
-    async def provider(agent, prompt, **kwargs):
-        return result_for(
+    async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
+        return api_result_for(
             OfficeOutput.model_validate(
                 {
                     "summary": "Proposed allowance",
@@ -109,9 +117,9 @@ async def test_unread_item_or_invented_supplier_recipient_cannot_be_published(se
             )
         )
 
-    monkeypatch.setattr(office.Runner, "run", provider)
+    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
     with pytest.raises(ValueError, match="read|item|basis"):
-        await office.run_manager(repo, tid, run["id"], run["instruction"], "test-key")
+        await office.run_manager(repo, tid, run["id"], run["instruction"])
     assert estimates.list_rate_proposals(tid) == []
 
 
@@ -121,26 +129,20 @@ async def test_semantic_unavailable_is_explicit_and_source_pagination_keeps_matc
 ):
     repo, tid, artifact, estimates, item, quotes, run = setup
     context = OfficeContext(repo, tid, run["id"])
-    agent = office._agent("Tender Manager", "gpt-6-astra")
     monkeypatch.setattr(
         repo,
         "search",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("No keyword fallback")),
     )
-    result = json.loads(
-        await call_tool(
-            agent, "search_semantic_sources", context, {"query": "foundation concrete", "limit": 5}
-        )
+    result = await invoke_json_tool(
+        context, "search_semantic_sources", {"query": "foundation concrete", "limit": 5}
     )
     assert result["available"] is False
     assert result["status"] in {"model_missing", "not_indexed", "empty"}
-    source = json.loads(
-        await call_tool(
-            agent,
-            "read_source",
-            context,
-            {"source_id": item["source_id"], "offset": 9, "limit": 12},
-        )
+    source = await invoke_json_tool(
+        context,
+        "read_source",
+        {"source_id": item["source_id"], "offset": 9, "limit": 12},
     )
     assert source["text_offset"] == 9
     assert source["text"] == "12.5 m3. Sup"
@@ -172,8 +174,7 @@ async def test_prepared_business_result_rechecks_item_before_any_publication(set
 
     repo, tid, artifact, estimates, item, quotes, run = setup
     context = OfficeContext(repo, tid, run["id"])
-    agent = office._agent("Tender Manager", "gpt-6-astra")
-    await call_tool(agent, "inspect_estimate", context, {"offset": 0, "limit": 10})
+    await invoke_json_tool(context, "inspect_estimate", {"offset": 0, "limit": 10})
     output = OfficeOutput(
         summary="Draft prepared",
         quote_drafts=[
@@ -199,8 +200,7 @@ async def test_prepared_business_result_rechecks_item_before_any_publication(set
 async def test_publication_failure_rolls_back_quotes_and_rate_proposals(setup, monkeypatch):
     repo, tid, artifact, estimates, item, quotes, run = setup
     context = OfficeContext(repo, tid, run["id"])
-    agent = office._agent("Tender Manager", "gpt-6-astra")
-    await call_tool(agent, "inspect_estimate", context, {"offset": 0, "limit": 10})
+    await invoke_json_tool(context, "inspect_estimate", {"offset": 0, "limit": 10})
     output = OfficeOutput(
         summary="Draft prepared",
         quote_drafts=[
@@ -242,13 +242,8 @@ async def test_reply_tool_returns_citable_text_without_accepting_commercial_data
         },
     )
     context = OfficeContext(repo, tid, run["id"])
-    result = json.loads(
-        await call_tool(
-            office._agent("Tender Manager", "gpt-6-astra"),
-            "read_quote_replies",
-            context,
-            {"quote_id": quote["id"], "offset": 0, "limit": 5},
-        )
+    result = await invoke_json_tool(
+        context, "read_quote_replies", {"quote_id": quote["id"], "offset": 0, "limit": 5}
     )
     assert "EGP 125" in result["replies"][0]["sources"][0]["text"]
     assert reply["source_ids"][0] in context.seen_sources
@@ -273,13 +268,8 @@ async def test_semantic_hit_reads_matching_offset_instead_of_source_start(setup)
             ]
 
     context = OfficeContext(repo, tid, run["id"], semantic_service=SemanticDouble())
-    result = json.loads(
-        await call_tool(
-            office._agent("Tender Manager", "gpt-6-astra"),
-            "search_semantic_sources",
-            context,
-            {"query": "matched clause", "limit": 5},
-        )
+    result = await invoke_json_tool(
+        context, "search_semantic_sources", {"query": "matched clause", "limit": 5}
     )
     assert result["sources"][0]["text"].startswith("MATCHED CLAUSE")
     assert result["sources"][0]["text_offset"] == 15000
@@ -302,13 +292,20 @@ async def test_supplier_named_in_approved_engineer_scope_is_preserved_for_public
             }
         ],
     )
-    repo.approve_plan(
-        tid, plan["id"], "Prepare the request for named.contact@supplier.example; do not send it."
+    repo.update_run(run["id"], status="completed")
+    approve_plan_and_team(
+        repo,
+        tid,
+        plan,
+        "Prepare the request for named.contact@supplier.example; do not send it.",
     )
+    run = repo.create_run(tid, "manager", "Prepare the approved request")
 
-    async def provider(agent, prompt, **kwargs):
-        await call_tool(agent, "read_source", kwargs["context"], {"source_id": item["source_id"]})
-        return result_for(
+    async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
+        await invoke_json_tool(
+            context, "read_source", {"source_id": item["source_id"]}, options=kwargs
+        )
+        return api_result_for(
             OfficeOutput(
                 summary="Request drafted for review",
                 quote_drafts=[
@@ -322,10 +319,8 @@ async def test_supplier_named_in_approved_engineer_scope_is_preserved_for_public
             )
         )
 
-    monkeypatch.setattr(office.Runner, "run", provider)
-    prepared = await office.run_manager(
-        repo, tid, run["id"], "Prepare the approved request", "test-key"
-    )
+    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
+    prepared = await office.run_manager(repo, tid, run["id"], "Prepare the approved request")
     with repo.atomic():
         result = office.publish_prepared(repo, prepared)
     assert result["quote_drafts"][0]["to"] == ["named.contact@supplier.example"]
@@ -347,14 +342,15 @@ async def test_full_engineer_instruction_and_preferences_reach_manager_and_speci
         + " Reference C:\\x only. KEEP_THIS_FINAL_ENGINEER_LIMIT"
     )
 
-    async def provider(agent, prompt, **kwargs):
+    async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
         data = json.loads(prompt)
         assert data["engineer_request"].endswith("KEEP_THIS_FINAL_ENGINEER_LIMIT")
         assert data["standing_engineer_preferences"] == preferences
-        return result_for(OfficeOutput(summary="Scope recorded for review"))
+        return api_result_for(OfficeOutput(summary="Scope recorded for review"))
 
-    monkeypatch.setattr(office.Runner, "run", provider)
-    await office.run_manager(repo, tid, run["id"], instruction, "test-key")
+    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
+    await office.run_manager(repo, tid, run["id"], instruction)
+    repo.update_run(run["id"], status="completed")
     plan = repo.create_plan(
         tid,
         "Scope review",
@@ -367,8 +363,9 @@ async def test_full_engineer_instruction_and_preferences_reach_manager_and_speci
             }
         ],
     )
-    approved = repo.approve_plan(tid, plan["id"], "Proceed with the complete written scope.")
-    await office.run_specialist(repo, tid, run["id"], approved["tasks"][0], "test-key")
+    approved = approve_plan_and_team(repo, tid, plan, "Proceed with the complete written scope.")
+    specialist_run = repo.create_run(tid, "task", approved["tasks"][0]["description"])
+    await office.run_specialist(repo, tid, specialist_run["id"], approved["tasks"][0])
 
 
 def test_oversized_worker_instruction_is_rejected_instead_of_clipped(setup):
@@ -388,32 +385,23 @@ async def test_remaining_findings_and_full_work_records_are_paginated_and_scoped
     finding = repo.add_finding(tid, "Full finding", detail, "assumption", [item["source_id"]])
     repo.decide_finding(tid, finding["id"], "accept", "Engineer accepts this recorded assumption.")
     context = OfficeContext(repo, tid, run["id"])
-    agent = office._agent("Tender Manager", "gpt-6-astra")
-    page = json.loads(
-        await call_tool(
-            agent,
-            "inspect_tender_records",
-            context,
-            {"record_type": "findings", "offset": 40, "limit": 10},
-        )
+    page = await invoke_json_tool(
+        context, "inspect_tender_records", {"record_type": "findings", "offset": 40, "limit": 10}
     )
     assert len(page["records"]) == 3
     assert page["records"][-1]["state"] == "accepted"
     assert page["records"][-1]["is_stale"] is False
     offset, pieces = 0, []
     while offset is not None:
-        chunk = json.loads(
-            await call_tool(
-                agent,
-                "read_tender_record",
-                context,
-                {
-                    "record_type": "findings",
-                    "record_id": finding["id"],
-                    "offset": offset,
-                    "limit": 4000,
-                },
-            )
+        chunk = await invoke_json_tool(
+            context,
+            "read_tender_record",
+            {
+                "record_type": "findings",
+                "record_id": finding["id"],
+                "offset": offset,
+                "limit": 4000,
+            },
         )
         pieces.append(chunk["json_text"])
         offset = chunk["next_offset"]
@@ -428,13 +416,11 @@ async def test_remaining_findings_and_full_work_records_are_paginated_and_scoped
 def test_validated_web_research_can_propose_supplier_contacts_but_not_invent_them(
     setup, recipient, allowed
 ):
-    from test_office import web_response
-
     repo, tid, artifact, estimates, item, quotes, run = setup
     context = OfficeContext(repo, tid, run["id"])
     research = ResearchRecord(context)
     url = "https://supplier.example/contact"
-    research.collect(web_response(url))
+    research.add_sources([{"url": url, "title": "Supplier price list", "cited": True}])
     output = OfficeOutput(
         summary="Supplier request proposed",
         web_findings=[

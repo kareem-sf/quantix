@@ -257,9 +257,24 @@ class QuoteService:
             row = conn.execute("SELECT data_json FROM mail_settings WHERE id=1").fetchone()
         return MailAccount.model_validate_json(row[0]) if row else MailAccount()
 
-    def _password(self, protocol):
+    def _credential_user(self, protocol, account):
+        """Name a saved password after the exact server account it was entered for.
+
+        Changing the host, port, security or username therefore never reuses a
+        password saved for another destination; switching back finds it again.
+        """
+        if protocol == "smtp":
+            parts = ("smtp", account.smtp_host.lower(), str(account.smtp_port),
+                     account.smtp_security, account.smtp_username)
+        else:
+            parts = ("imap", account.imap_host.lower(), str(account.imap_port), "ssl",
+                     account.imap_username)
+        return f"{protocol}:{hashlib.sha256(chr(31).join(parts).encode()).hexdigest()[:32]}"
+
+    def _password(self, protocol, account=None):
+        account = account if account is not None else self._account()
         try:
-            return keyring.get_password(self.keyring_service, protocol)
+            return keyring.get_password(self.keyring_service, self._credential_user(protocol, account))
         except keyring.errors.KeyringError as exc:
             raise ValueError("Windows could not read the mail account credential.") from exc
 
@@ -271,10 +286,10 @@ class QuoteService:
                 account.smtp_host
                 and account.smtp_username
                 and account.from_address
-                and self._password("smtp")
+                and self._password("smtp", account)
             ),
             "imap_ready": bool(
-                account.imap_host and account.imap_username and self._password("imap")
+                account.imap_host and account.imap_username and self._password("imap", account)
             ),
             "detail": "Saved account details are not a verified connection. Only SSL or STARTTLS is supported.",
         }
@@ -292,11 +307,15 @@ class QuoteService:
                 if len(password) > 4000:
                     raise ValueError("The mail account password is too long.")
                 try:
+                    user = self._credential_user(protocol, account)
                     if password:
-                        keyring.set_password(self.keyring_service, protocol, password)
+                        keyring.set_password(self.keyring_service, user, password)
                     else:
                         with suppress(keyring.errors.PasswordDeleteError):
-                            keyring.delete_password(self.keyring_service, protocol)
+                            keyring.delete_password(self.keyring_service, user)
+                    # Earlier versions saved one unbound password per protocol.
+                    with suppress(keyring.errors.KeyringError):
+                        keyring.delete_password(self.keyring_service, protocol)
                 except keyring.errors.KeyringError as exc:
                     raise ValueError(
                         "Windows could not securely save the mail account password."
@@ -525,7 +544,7 @@ class QuoteService:
                 raise ValueError(
                     "The current recipients, message and attachments need engineer approval. Sent or uncertain messages cannot be retried."
                 )
-            password = self._password("smtp")
+            password = self._password("smtp", account)
             if not preview["smtp_ready"] or not password:
                 raise ValueError("Configure the SMTP account before sending this approved request.")
             self._reserve_delivery(quote, account.from_address, decision)
@@ -749,7 +768,7 @@ class QuoteService:
         limit = SyncRequest(max_messages=max_messages).max_messages
         with _SYNC_LOCK:
             account = self._account()
-            password = self._password("imap")
+            password = self._password("imap", account)
             if not account.imap_host or not account.imap_username or not password:
                 raise ValueError("Configure the IMAP SSL account before checking replies.")
             mailbox_key = hashlib.sha256(

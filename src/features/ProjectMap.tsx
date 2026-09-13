@@ -2,10 +2,9 @@ import { useCallback, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CornerDownRight, Plus } from "lucide-react";
 import { tenderPath, useApi, useRefresh, useResource, type Schema } from "../api";
-import { ErrorNotice, Loading, Modal, Status } from "../components/ui";
+import { ErrorNotice, Loading, Modal, Status } from "../components/common";
 import { EvidencePicker } from "./EvidencePicker";
 import { Citations, type SourceSelection } from "./Sources";
-import "../styles/project-map.css";
 
 type Node = Schema<"NodeRecord">;
 type NodeKind = Schema<"NodeInput">["kind"];

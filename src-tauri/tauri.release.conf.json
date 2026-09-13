@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "externalBin": [
+      "binaries/quantix-service"
+    ],
+    "resources": {
+      "../backend/engines/": "engines/"
+    }
+  }
+}

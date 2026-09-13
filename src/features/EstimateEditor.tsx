@@ -1,10 +1,12 @@
 import { useCallback, useState } from "react";
 import { tenderPath, useApi, useRefresh, type Schema } from "../api";
-import { ErrorNotice, Modal, Status } from "../components/ui";
+import { ErrorNotice, Modal, Status } from "../components/common";
 import { Citations, type SourceSelection } from "./Sources";
 import { DecisionForm } from "./Work";
 import { RateForm } from "./RateForm";
 import { QuantityForm } from "./QuantityForm";
+import { FieldError } from "../components/FieldError";
+import { createDraftScope, useFormDraft } from "./useFormDraft";
 
 export function EstimateEditor({
   item,
@@ -22,11 +24,50 @@ export function EstimateEditor({
   const api = useApi(),
     refresh = useRefresh();
   const [proposalId, setProposalId] = useState<string | null>(null);
+  const sections = useFormDraft(
+    createDraftScope(
+      "estimate",
+      tenderId,
+      `row-view-${item.id}`,
+      item.source_id,
+    ),
+    {
+      source: !item.confirmed,
+      rate: false,
+      components: false,
+      quantity: false,
+    },
+    ["source", "rate", "components", "quantity"],
+  );
+  const rememberSection = (
+    name: keyof typeof sections.value,
+    open: boolean,
+  ) => {
+    if (sections.value[name] !== open) sections.setField(name, open);
+  };
   const closeApproval = useCallback(() => setProposalId(null), []);
   return (
     <Modal drawer title="Review estimate row" onClose={onClose}>
       <div className="estimate-editor">
         <h3>{item.description}</h3>
+        {item.source_proposal ? (
+          <section aria-label="Proposed source row">
+            <p className="muted">
+              Source BOQ proposal ·{" "}
+              {item.confirmed
+                ? "Engineer confirmation recorded"
+                : "Not yet confirmed by an engineer"}
+            </p>
+            <dl>
+              <dt>Row reference</dt>
+              <dd>{item.row_reference || "Not recorded"}</dd>
+            </dl>
+            <h4>Exact source excerpt</h4>
+            <blockquote className="whitespace-pre-wrap">
+              {item.source_excerpt || "Not recorded"}
+            </blockquote>
+          </section>
+        ) : null}
         <Citations
           ids={[item.source_id]}
           tenderId={tenderId}
@@ -67,7 +108,13 @@ export function EstimateEditor({
             ))}
           </ul>
         ) : null}
-        <details className="editor-section" open={!item.confirmed}>
+        <details
+          className="editor-section"
+          open={sections.value.source}
+          onToggle={(event) =>
+            rememberSection("source", event.currentTarget.open)
+          }
+        >
           <summary>Confirm the supplied source row</summary>
           <p className="muted">
             Check the description, unit and quantity in the original source
@@ -75,7 +122,13 @@ export function EstimateEditor({
           </p>
           <SourceConfirmation item={item} tenderId={tenderId} />
         </details>
-        <details className="editor-section">
+        <details
+          className="editor-section"
+          open={sections.value.rate}
+          onToggle={(event) =>
+            rememberSection("rate", event.currentTarget.open)
+          }
+        >
           <summary>Rate and tax treatment</summary>
           <p className="muted">
             Record a direct unit rate with its dated source, location and
@@ -89,7 +142,13 @@ export function EstimateEditor({
           />
         </details>
         {item.components.length ? (
-          <details className="editor-section">
+          <details
+            className="editor-section"
+            open={sections.value.components}
+            onToggle={(event) =>
+              rememberSection("components", event.currentTarget.open)
+            }
+          >
             <summary>Current rate build-up</summary>
             <div className="table-scroll">
               <table>
@@ -115,7 +174,13 @@ export function EstimateEditor({
             </div>
           </details>
         ) : null}
-        <details className="editor-section">
+        <details
+          className="editor-section"
+          open={sections.value.quantity}
+          onToggle={(event) =>
+            rememberSection("quantity", event.currentTarget.open)
+          }
+        >
           <summary>Propose a different quantity</summary>
           <p className="muted">
             The supplied quantity remains the default. A quantity proposal is
@@ -135,11 +200,20 @@ export function EstimateEditor({
                   <Status value={proposal.status} />
                 </div>
                 <p className="muted">
-                  {proposal.origin === "agent" ? "Tender Office agent proposal" : "Engineer proposal"}
+                  {proposal.origin === "agent"
+                    ? "Tender Office agent proposal"
+                    : "Engineer proposal"}
                   {proposal.run_id ? ` · run ${proposal.run_id}` : ""}
                 </p>
                 <p>{proposal.calculation}</p>
-                {proposal.origin === "agent" && proposal.status === "proposed" ? <p className="muted">Review the dimensions, grouping, deductions, arithmetic and BOQ unit before approval. The agent's calculation has not received engineer approval.</p> : null}
+                {proposal.origin === "agent" &&
+                proposal.status === "proposed" ? (
+                  <p className="muted">
+                    Review the dimensions, grouping, deductions, arithmetic and
+                    BOQ unit before approval. The agent's calculation has not
+                    received engineer approval.
+                  </p>
+                ) : null}
                 <Citations
                   ids={proposal.source_ids}
                   tenderId={tenderId}
@@ -159,6 +233,12 @@ export function EstimateEditor({
         ) : null}
         {proposalId ? (
           <DecisionForm
+            draftScope={createDraftScope(
+              "estimate",
+              tenderId,
+              `quantity-approval-${proposalId}`,
+              1,
+            )}
             title="Approve proposed quantity"
             action="Approve quantity"
             description="Review the source dimensions, grouping, deductions, arithmetic and BOQ unit. This proposal will become the quantity used for pricing. The original supplied quantity and calculation remain in the record."
@@ -194,9 +274,20 @@ function SourceConfirmation({
     item.effective_quantity !== null;
   const measurementResolvesQuantity =
     hasApprovedMeasurement && item.supplied_quantity === null;
-  const [cell, setCell] = useState(item.quantity_cell ?? ""),
-    [note, setNote] = useState(""),
-    [checked, setChecked] = useState(false),
+  const draft = useFormDraft(
+    createDraftScope(
+      "estimate",
+      tenderId,
+      `source-confirmation-${item.id}`,
+      item.source_id,
+    ),
+    { cell: item.quantity_cell ?? "", note: "" },
+    ["cell", "note"],
+  );
+  const { cell, note } = draft.value;
+  const setCell = (value: string) => draft.setField("cell", value),
+    setNote = (value: string) => draft.setField("note", value);
+  const [checked, setChecked] = useState(false),
     [pending, setPending] = useState(false),
     [error, setError] = useState<unknown>(null),
     [saved, setSaved] = useState(false);
@@ -204,7 +295,8 @@ function SourceConfirmation({
     <form
       onSubmit={async (event) => {
         event.preventDefault();
-        if (!checked) return;
+        if (!checked || pending) return;
+        const acceptedRevision = draft.revision;
         setPending(true);
         setError(null);
         setSaved(false);
@@ -219,6 +311,8 @@ function SourceConfirmation({
             } satisfies Schema<"ItemUpdate">,
           );
           await refresh();
+          draft.markAccepted(acceptedRevision);
+          setChecked(false);
           setSaved(true);
         } catch (failure) {
           setError(failure);
@@ -229,31 +323,40 @@ function SourceConfirmation({
     >
       {measurementResolvesQuantity ? (
         <p className="field-help">
-          The supplied quantity is unresolved. The approved quantity proposal provides{" "}
-          {item.effective_quantity} {item.unit}. Confirm the source description,
-          unit and measurement basis; the original quantity warning stays in the
-          record.
+          The supplied quantity is unresolved. The approved quantity proposal
+          provides {item.effective_quantity} {item.unit}. Confirm the source
+          description, unit and measurement basis; the original quantity warning
+          stays in the record.
         </p>
       ) : null}
-      <label>
-        Quantity source cell
-        <select
-          value={cell}
-          onChange={(event) => setCell(event.target.value)}
-          required={!hasApprovedMeasurement}
-        >
-          <option value="">
-            {hasApprovedMeasurement
-              ? "Use the approved measured quantity"
-              : "Choose the quantity cell"}
-          </option>
-          {Object.entries(item.quantity_candidates).map(([address, value]) => (
-            <option key={address} value={address}>
-              {address} · {value}
+      {!item.source_proposal ? (
+        <label>
+          Quantity source cell
+          <select
+            value={cell}
+            onChange={(event) => setCell(event.target.value)}
+            required={!hasApprovedMeasurement}
+          >
+            <option value="">
+              {hasApprovedMeasurement
+                ? "Use the approved measured quantity"
+                : "Choose the quantity cell"}
             </option>
-          ))}
-        </select>
-      </label>
+            {Object.entries(item.quantity_candidates).map(
+              ([address, value]) => (
+                <option key={address} value={address}>
+                  {address} · {value}
+                </option>
+              ),
+            )}
+          </select>
+        </label>
+      ) : (
+        <p className="field-help">
+          Check the exact cited excerpt and row reference. The supplied quantity
+          is {item.supplied_quantity ?? "unresolved"} {item.unit}.
+        </p>
+      )}
       <label>
         Source review note
         <textarea
@@ -263,6 +366,7 @@ function SourceConfirmation({
           value={note}
           onChange={(event) => setNote(event.target.value)}
         />
+        <FieldError error={error} name="rationale" />
       </label>
       <label className="checkbox-label">
         <input
@@ -273,9 +377,11 @@ function SourceConfirmation({
         />
         {measurementResolvesQuantity
           ? "I have checked this source row and its approved measurement basis."
-          : "I have checked this source row and quantity cell."}
+          : item.source_proposal
+            ? "I have checked this source row, exact excerpt, unit and quantity."
+            : "I have checked this source row and quantity cell."}
       </label>
-      <ErrorNotice error={error} />
+      <ErrorNotice error={error || draft.error} />
       {saved ? (
         <p role="status" className="success-text">
           Source confirmation recorded.
@@ -286,7 +392,7 @@ function SourceConfirmation({
         disabled={
           pending ||
           !checked ||
-          (!cell && !hasApprovedMeasurement) ||
+          (!cell && !hasApprovedMeasurement && !item.source_proposal) ||
           !note.trim()
         }
       >

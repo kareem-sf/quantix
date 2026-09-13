@@ -111,6 +111,9 @@ class RequirementService:
                 raise KeyError("The proposal run is outside the selected Tender.")
             cache = {}
             sources = [self._capture_source(tender_id, source_id, cache) for source_id in request.source_ids]
+            from .requirement_qualifications import validate_qualification
+
+            validate_qualification(self.repo, tender_id, request, manager=origin == "manager")
             identifier, stamp = new_id(), now()
             payload = request.model_dump(mode="json") | {"sources": sources, "origin": origin, "run_id": run_id}
             conn.execute("INSERT INTO submission_requirements VALUES(?,?,?,?)", (identifier, tender_id, dump(payload), stamp))
@@ -159,6 +162,10 @@ class RequirementService:
             "deliverable_kind": requirement["deliverable_kind"],
             "due_date": requirement["due_date"],
             "linked_outputs": requirement["linked_outputs"],
+            "source_quote": requirement.get("source_quote", ""),
+            "applicability": requirement.get("applicability", "unknown"),
+            "condition": requirement.get("condition", ""),
+            "exceptions": requirement.get("exceptions", []),
         })
 
     def get(self, tender_id, requirement_id, *, _source_cache=None, _output_cache=None):
@@ -190,10 +197,25 @@ class RequirementService:
             reasons = list(dict.fromkeys(reason for source in sources for reason in source["recheck_reasons"]))
             overdue = bool(payload["due_date"] and date.fromisoformat(payload["due_date"]) < datetime.now(UTC).date())
             warnings = []
+            qualification = {
+                "source_quote": payload.get("source_quote", ""),
+                "applicability": payload.get("applicability", "unknown"),
+                "condition": payload.get("condition", ""),
+                "exceptions": payload.get("exceptions", []),
+            }
+            applicability_reviewed = any(
+                event["payload"].get("applicability_reviewed") is True
+                for event in events if event["action"] in {"approve", "satisfied", "exception"}
+            )
+            if qualification["applicability"] == "unknown":
+                warnings.append("Applicability was not recorded. Check the complete source clause, its conditions and exceptions before approving or releasing this requirement.")
+            elif qualification["applicability"] == "conditional":
+                warnings.append("This requirement applies only under its stated condition. The engineer must establish whether that condition applies.")
             if overdue:
                 warnings.append("The recorded due date has passed. Check the current submission instructions.")
             result = {
-                **payload, "id": requirement_id, "tender_id": tender_id, "created_at": row["created_at"],
+                **payload, **qualification, "applicability_reviewed": applicability_reviewed,
+                "id": requirement_id, "tender_id": tender_id, "created_at": row["created_at"],
                 "sources": sources, "status": status, "is_current": not reasons,
                 "recheck_reasons": reasons, "linked_outputs": linked_outputs,
                 "review_status": reviewed["action"] if reviewed else "pending",
@@ -234,10 +256,15 @@ class RequirementService:
                 return self.get(tender_id, requirement_id)
             if not requirement["is_current"]:
                 raise ValueError("The requirement source has changed or is unavailable. Propose it again from current sources.")
+            needs_applicability = requirement["applicability"] != "unconditional" or bool(requirement["exceptions"])
+            if (decision.decision in {"approve", "satisfied", "exception"} and needs_applicability
+                    and not requirement["applicability_reviewed"] and not decision.applicability_reviewed):
+                raise ValueError("Review the requirement's applicability, conditions and exceptions before recording this decision.")
             if decision.decision == "approve":
                 if requirement["status"] != "proposed":
                     raise ValueError("Only a proposed requirement can be approved.")
-                self._event(conn, tender_id, requirement_id, "approve", decision.rationale)
+                self._event(conn, tender_id, requirement_id, "approve", decision.rationale,
+                            {"applicability_reviewed": decision.applicability_reviewed})
             else:
                 if requirement["status"] != "approved":
                     raise ValueError("Approve the requirement before recording its completion review.")
@@ -246,7 +273,8 @@ class RequirementService:
                         raise ValueError("Link the generated document that satisfies this requirement before marking it satisfied.")
                     if any(not linked["is_current"] for linked in requirement["linked_outputs"]):
                         raise ValueError("A linked document is missing, changed or blocked. Resolve its basis before marking the requirement satisfied.")
-                self._event(conn, tender_id, requirement_id, decision.decision, decision.rationale, {"basis_fingerprint": self._review_basis(requirement)})
+                self._event(conn, tender_id, requirement_id, decision.decision, decision.rationale,
+                            {"basis_fingerprint": self._review_basis(requirement), "applicability_reviewed": decision.applicability_reviewed})
             return self.get(tender_id, requirement_id)
 
     def link_output(self, tender_id, requirement_id, values):
@@ -291,28 +319,34 @@ class RequirementService:
         selected_outputs = set(output_ids)
         for output_id in selected_outputs:
             self.outputs.get(tender_id, output_id)
-        requirements, blockers, warnings = [], [], []
+        requirements, blockers, warnings, repairs = [], [], [], []
         with self.repo.atomic():
             source_cache, output_cache = {}, {}
             for identifier in sorted(requirement_ids):
                 requirement = self.get(tender_id, identifier, _source_cache=source_cache, _output_cache=output_cache)
                 requirements.append(requirement)
                 title = requirement["title"] + ": "
+                def block(code, message, output_ids=None):
+                    blockers.append(title + message)
+                    repairs.append({"code": code, "message": title + message, "target": {"kind": "package" if output_ids else "requirement", "record_id": identifier, "output_ids": output_ids or []}})
                 if requirement["status"] != "approved":
-                    blockers.append(title + "the requirement is not currently approved.")
+                    block("requirement_approval", "the requirement is not currently approved.")
+                if ((requirement["applicability"] != "unconditional" or requirement["exceptions"])
+                        and not requirement["applicability_reviewed"]):
+                    block("requirement_review", "review the applicability, conditions and exceptions.")
                 if not requirement["is_current"]:
-                    blockers.append(title + "the source has changed or is unavailable.")
+                    block("requirement_source", "the source has changed or is unavailable.")
                 if not requirement["review_is_current"]:
-                    blockers.append(title + "a current engineer completion review is required.")
+                    block("requirement_review", "a current engineer completion review is required.")
                 elif requirement["review_status"] == "exception":
                     warnings.append(title + "engineer-reviewed exception: " + requirement["review_rationale"])
                 elif requirement["review_status"] == "satisfied":
                     linked = requirement["linked_outputs"]
                     if not linked or any(not output["is_current"] for output in linked):
-                        blockers.append(title + "a linked document is missing, changed or blocked.")
+                        block("requirement_document", "a linked document is missing, changed or blocked.")
                     missing = [output["filename"] for output in linked if output["output_id"] not in selected_outputs]
                     if missing:
-                        blockers.append(title + "include the reviewed linked documents: " + ", ".join(missing))
+                        block("missing_output", "include the reviewed linked documents: " + ", ".join(missing), [output["output_id"] for output in linked if output["output_id"] not in selected_outputs])
                 warnings.extend(title + warning for warning in requirement["warnings"])
-            result = {"requirements": requirements, "blocking_reasons": sorted(set(blockers)), "warnings": sorted(set(warnings))}
+            result = {"requirements": requirements, "blocking_reasons": sorted(set(blockers)), "blockers": repairs, "warnings": sorted(set(warnings))}
             return result | {"fingerprint": fingerprint(result)}

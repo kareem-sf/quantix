@@ -1,12 +1,18 @@
 """SQLite connections, schema and transaction boundaries."""
 
+import asyncio
 import json
 import sqlite3
 import threading
+from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
+
+from filelock import FileLock
+
+from .storage import prepare_process_environment, resolve_home
 
 
 def now() -> str:
@@ -24,7 +30,8 @@ def dump(value) -> str:
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tenders (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'intake',
- revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+ revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ name_source TEXT NOT NULL DEFAULT 'engineer'
 );
 CREATE TABLE IF NOT EXISTS artifacts (
  id TEXT PRIMARY KEY, tender_id TEXT NOT NULL REFERENCES tenders(id),
@@ -81,6 +88,19 @@ CREATE TABLE IF NOT EXISTS run_events (
  id INTEGER PRIMARY KEY AUTOINCREMENT,run_id TEXT NOT NULL REFERENCES runs(id),kind TEXT NOT NULL,
  message TEXT NOT NULL,data_json TEXT NOT NULL DEFAULT '{}',created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS run_events_run_cursor ON run_events(run_id,id);
+CREATE INDEX IF NOT EXISTS run_events_activity_operation ON run_events(run_id,json_extract(data_json,'$.operation_id'),id);
+CREATE TABLE IF NOT EXISTS run_activity_operations (
+ id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+ metadata_json TEXT NOT NULL,created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS run_activity_payloads (
+ event_id INTEGER PRIMARY KEY REFERENCES run_events(id) ON DELETE CASCADE,
+ content TEXT NOT NULL,redacted INTEGER NOT NULL DEFAULT 0,unavailable_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS run_activity_failures (
+ run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS decisions (
  id TEXT PRIMARY KEY,tender_id TEXT NOT NULL REFERENCES tenders(id),target_type TEXT NOT NULL,
  target_id TEXT NOT NULL,decision TEXT NOT NULL,rationale TEXT NOT NULL,created_at TEXT NOT NULL
@@ -90,42 +110,168 @@ CREATE TRIGGER IF NOT EXISTS decisions_immutable_delete BEFORE DELETE ON decisio
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value_json TEXT NOT NULL);
 """
 
+CURRENT_SCHEMA_VERSION = 3
+# Forward migrations keyed by the user_version they produce. Version 1 is the
+# initial SCHEMA applied from an empty database. Callables receive an open
+# connection already inside an immediate transaction.
+def _source_boq_migration(conn):
+    from .source_boq import migrate_source_rows
+
+    migrate_source_rows(conn)
+
+
+def _tender_name_source_migration(conn):
+    # Where the Tender name came from: the engineer, the package folder while
+    # the project is being identified, or the AI identification pass.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(tenders)")}
+    if "name_source" not in columns:
+        conn.execute("ALTER TABLE tenders ADD COLUMN name_source TEXT NOT NULL DEFAULT 'engineer'")
+
+
+FORWARD_MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
+    2: _source_boq_migration,
+    3: _tender_name_source_migration,
+}
+
+
+class SchemaMigrationError(ValueError):
+    """A schema change failed; the previous database remains usable."""
+
+
+def _sidecar(path: Path, suffix: str) -> Path:
+    return Path(str(path) + suffix)
+
+
+def _replace_database_files(source: Path, destination: Path) -> None:
+    destination.write_bytes(source.read_bytes())
+    for suffix in ("-wal", "-shm"):
+        extra = _sidecar(source, suffix)
+        target = _sidecar(destination, suffix)
+        if extra.exists():
+            target.write_bytes(extra.read_bytes())
+        else:
+            target.unlink(missing_ok=True)
+
+
+def apply_forward_migrations(
+    path: Path, *, migrations: dict[int, Callable[[sqlite3.Connection], None]] | None = None
+) -> None:
+    """Apply serial migrations after a file snapshot so failure restores the prior database."""
+
+    mapping = dict(FORWARD_MIGRATIONS if migrations is None else migrations)
+    if not mapping:
+        return
+    probe = sqlite3.connect(path, timeout=30)
+    try:
+        version = probe.execute("PRAGMA user_version").fetchone()[0]
+        pending = sorted(target for target in mapping if target > version)
+        if not pending:
+            return
+        probe.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        probe.commit()
+    finally:
+        probe.close()
+
+    snapshot = path.with_name(path.name + ".pre-migration")
+    try:
+        _replace_database_files(path, snapshot)
+        conn = sqlite3.connect(path, timeout=30)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            for target in pending:
+                mapping[target](conn)
+                conn.execute(f"PRAGMA user_version={int(target)}")
+            if conn.execute("PRAGMA foreign_key_check").fetchone():
+                raise ValueError("The upgraded database contains a broken source reference.")
+            conn.commit()
+        except BaseException as error:
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+            conn.close()
+            conn = None
+            _replace_database_files(snapshot, path)
+            raise SchemaMigrationError(
+                "The workspace database could not be upgraded. The previous database is still usable."
+            ) from error
+        finally:
+            if conn is not None:
+                conn.close()
+    finally:
+        snapshot.unlink(missing_ok=True)
+        for suffix in ("-wal", "-shm"):
+            _sidecar(snapshot, suffix).unlink(missing_ok=True)
+
 
 class Database:
     def __init__(self, home: Path):
-        self._local = threading.local()
-        self.home = home.resolve()
+        # One held connection per thread and asyncio task. Coroutines sharing
+        # a thread must never share a connection: an interleaved borrower
+        # could otherwise see another branch's open transaction.
+        self._held: dict[tuple[int, int | None], sqlite3.Connection] = {}
+        self._held_lock = threading.Lock()
+        self.home = resolve_home(home)
+        # Keep temporary and library cache writes inside this explicit
+        # workspace before opening any database or dependent service work.
+        prepare_process_environment(self.home)
         self.home.mkdir(parents=True, exist_ok=True)
         self.path = self.home / "quantix.sqlite"
-        with self.connect() as conn:
-            version = conn.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1):
-                raise ValueError("This workspace was created by an unsupported version of Quantix.")
-            conn.executescript(SCHEMA)
-            conn.execute("PRAGMA user_version=1")
+        # Journal mode persists in SQLite. Serialize its initial transition;
+        # changing it on every connection can fail when another reader is
+        # initializing the same workspace, even with a busy timeout.
+        with FileLock(self.home / "runtime" / "database-init.lock", timeout=30):
+            with self.connect() as conn:
+                if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+                    conn.execute("PRAGMA journal_mode=WAL")
+                version = conn.execute("PRAGMA user_version").fetchone()[0]
+                known = {0, 1, CURRENT_SCHEMA_VERSION, *FORWARD_MIGRATIONS}
+                if version not in known:
+                    raise ValueError("This workspace was created by an unsupported version of Quantix.")
+                conn.executescript(SCHEMA)
+                if version == 0:
+                    conn.execute(f"PRAGMA user_version={CURRENT_SCHEMA_VERSION}")
+            apply_forward_migrations(self.path)
+
+    @staticmethod
+    def _owner() -> tuple[int, int | None]:
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            task = None
+        return (threading.get_ident(), None if task is None else id(task))
+
+    def held_connection(self):
+        """Return this thread/task's open connection, if it holds one."""
+
+        with self._held_lock:
+            return self._held.get(self._owner())
 
     @contextmanager
     def connect(self, *, write=False):
-        existing = getattr(self._local, "connection", None)
+        owner = self._owner()
+        with self._held_lock:
+            existing = self._held.get(owner)
         if existing is not None:
             yield existing
             return
         conn = sqlite3.connect(self.path, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=FULL")
         try:
             if write:
                 conn.execute("BEGIN IMMEDIATE")
-            self._local.connection = conn
+            with self._held_lock:
+                self._held[owner] = conn
             yield conn
             conn.commit()
         except BaseException:
             conn.rollback()
             raise
         finally:
-            self._local.connection = None
+            with self._held_lock:
+                self._held.pop(owner, None)
             conn.close()
 
 

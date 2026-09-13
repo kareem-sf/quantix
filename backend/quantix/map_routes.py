@@ -2,7 +2,14 @@
 
 from fastapi import APIRouter
 
-from .map_models import NodeDecision, NodeInput, NodeRecord, ProjectMapView, ReviewInput, ReviewRecord
+from .map_models import (
+    NodeDecision,
+    NodeInput,
+    NodeRecord,
+    ProjectMapView,
+    ReviewInput,
+    ReviewRecord,
+)
 from .project_map import ProjectMapService
 
 

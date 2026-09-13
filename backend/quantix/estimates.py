@@ -17,9 +17,11 @@ from .estimate_models import (
     RateApproval,
     UnitRateInput,
 )
+from .source_boq import BOQ_TABLE, EXCLUSION_SCHEMA
 
 SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS boq_items(id TEXT PRIMARY KEY,tender_id TEXT NOT NULL REFERENCES tenders(id),source_id TEXT NOT NULL REFERENCES evidence(id),artifact_id TEXT NOT NULL REFERENCES artifacts(id),active INTEGER NOT NULL DEFAULT 1,data_json TEXT NOT NULL,UNIQUE(tender_id,source_id))",
+    BOQ_TABLE,
+    *EXCLUSION_SCHEMA,
     "CREATE TABLE IF NOT EXISTS estimate_state(tender_id TEXT PRIMARY KEY REFERENCES tenders(id),revision INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS quantity_proposals(id TEXT PRIMARY KEY,tender_id TEXT NOT NULL REFERENCES tenders(id),item_id TEXT NOT NULL REFERENCES boq_items(id),status TEXT NOT NULL,data_json TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS rate_proposals(id TEXT PRIMARY KEY,tender_id TEXT NOT NULL REFERENCES tenders(id),item_id TEXT NOT NULL REFERENCES boq_items(id),payload_json TEXT NOT NULL,basis_json TEXT NOT NULL,basis_fingerprint TEXT NOT NULL,approved_basis_fingerprint TEXT,source_ids_json TEXT NOT NULL,run_id TEXT REFERENCES runs(id),status TEXT NOT NULL DEFAULT 'proposed',created_at TEXT NOT NULL)",
@@ -218,11 +220,23 @@ class EstimateService:
             for statement in SCHEMA:
                 conn.execute(statement)
 
+    def propose_source_row(self, tender_id, values, *, run_id=None):
+        from .source_boq import propose_source_row
+
+        return propose_source_row(self, tender_id, values, run_id=run_id)
+
+    def exclude_source_row(self, tender_id, item_id, values):
+        from .source_boq import exclude_source_row
+
+        return exclude_source_row(self, tender_id, item_id, values)
+
     def refresh(self, tender_id):
         with self.repo.atomic():
             tender = self.repo.get_tender(tender_id)
             with self.repo.db.connect(write=True) as conn:
                 conn.execute("UPDATE boq_items SET active=0 WHERE tender_id=?", (tender_id,))
+                conn.execute("""UPDATE boq_items SET active=1 WHERE tender_id=? AND row_key<>''
+                    AND EXISTS (SELECT 1 FROM artifacts a WHERE a.id=boq_items.artifact_id AND a.is_current=1)""", (tender_id,))
                 for artifact in self.repo.list_artifacts(tender_id):
                     if artifact["kind"] != "spreadsheet":
                         continue
@@ -237,7 +251,7 @@ class EstimateService:
                             if data is None:
                                 continue
                             conn.execute(
-                                "INSERT INTO boq_items VALUES(?,?,?,?,1,?) ON CONFLICT(tender_id,source_id) DO UPDATE SET active=1",
+                                "INSERT INTO boq_items(id,tender_id,source_id,artifact_id,active,data_json) VALUES(?,?,?,?,1,?) ON CONFLICT(tender_id,source_id,row_key) DO UPDATE SET active=1",
                                 (new_id(), tender_id, evidence["id"], artifact["id"], dump(data)),
                             )
                         offset += len(rows)
@@ -267,10 +281,12 @@ class EstimateService:
         conn.execute("UPDATE boq_items SET data_json=? WHERE id=?", (dump(data), item["id"]))
 
     def _decision(self, conn, tender_id, target, identifier, decision, rationale):
+        decision_id = new_id()
         conn.execute(
             "INSERT INTO decisions VALUES(?,?,?,?,?,?,?)",
-            (new_id(), tender_id, target, identifier, decision, rationale, now()),
+            (decision_id, tender_id, target, identifier, decision, rationale, now()),
         )
+        return decision_id
 
     def rate_basis(self, tender_id, item_id):
         """Capture current source, quantity selection and installed commercial values."""
@@ -423,6 +439,10 @@ class EstimateService:
             raise ValueError("VAT percentage must be between zero and 100.")
         with self.repo.db.connect(write=True) as conn:
             item = self._item(conn, tender_id, item_id)
+            if item.get("source_proposal"):
+                from .source_boq import validate_source_row
+
+                validate_source_row(self.repo, tender_id, item["source_proposal"])
             if request.provenance:
                 source = request.provenance
                 for source_id in source.source_ids:
@@ -641,6 +661,11 @@ class EstimateService:
             items = []
             for identifier in identifiers:
                 item = self._item(conn, tender_id, identifier)
+                if item.get("source_proposal"):
+                    evidence = self.repo.get_evidence(tender_id, item["source_id"])
+                    if item["source_excerpt"] not in evidence["text"]:
+                        item["confirmed"] = False
+                        item["issues"].append("The extracted source passage changed. Review and replace this BOQ proposal before pricing.")
                 proposals = [
                     record(row)
                     for row in conn.execute(
@@ -712,7 +737,10 @@ class EstimateService:
             ),
             "unresolved_quantity_count": sum(item["effective_quantity"] is None for item in items),
         }
-        complete = bool(items) and not refresh_required and not any(counts.values())
+        from .source_boq import retired_source_rows
+
+        retired = retired_source_rows(self.repo, tender_id)
+        complete = bool(items) and not refresh_required and not any(counts.values()) and not retired
         totals = []
         for currency in sorted({item["currency"] for item in items if item["currency"]}):
             group = [item for item in items if item["currency"] == currency]
@@ -728,6 +756,7 @@ class EstimateService:
             )
             net_complete = (
                 not refresh_required
+                and not retired
                 and all(item["line_ex_vat"] is not None for item in group)
                 and not counts["unpriced_count"]
             )
@@ -759,8 +788,10 @@ class EstimateService:
         ]
         if refresh_required:
             reasons.append("Refresh BOQ candidates after source changes.")
+        if retired:
+            reasons.append(f"{len(retired)} BOQ rows from earlier source revisions need a checked replacement or an explicit scope decision.")
         if not items:
-            reasons.append("No BOQ candidates have been confirmed from spreadsheet evidence.")
+            reasons.append("No current BOQ rows are saved. Review revised rows above, refresh Excel source rows or add a row from an exact source passage.")
         return {
             "tender_id": tender_id,
             "items": items,
@@ -769,5 +800,6 @@ class EstimateService:
             "refresh_required": refresh_required,
             **counts,
             "blocking_reasons": reasons,
-            "coverage_note": "Spreadsheet row candidates only. Extraction does not establish complete BOQ coverage or a checked takeoff.",
+            "coverage_note": "Excel rows and source-based BOQ proposals. Check each row against its source; this does not establish complete scope coverage or a complete takeoff.",
+            "retired_source_rows": retired,
         }

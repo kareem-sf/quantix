@@ -22,8 +22,8 @@
   justify-content: center;
 }
 .measurement-source {
-  font-size: 12px;
-  color: var(--muted);
+  font-size: var(--qx-text-caption);
+  color: var(--legacy-muted);
   overflow-wrap: anywhere;
 }
 .measurements fieldset {
@@ -35,7 +35,7 @@
 .measurements label {
   display: grid;
   gap: 7px;
-  font-size: 13px;
+  font-size: var(--qx-text-body);
   font-weight: 600;
 }
 .measurements input:not([type="checkbox"]),
@@ -59,7 +59,7 @@
   gap: 12px;
 }
 .measurement-tools legend {
-  font-weight: 650;
+  font-weight: 600;
   margin-bottom: 12px;
 }
 .measurement-tools .inline-actions {
@@ -72,7 +72,7 @@
   border-color: var(--teal);
 }
 .measurement-help {
-  font-size: 13px;
+  font-size: var(--qx-text-body);
   line-height: 1.6;
 }
 .measurement-canvas {
@@ -123,8 +123,8 @@
   stroke-width: 1.5px;
 }
 .measurement-coordinates {
-  font-size: 12px;
-  color: var(--muted);
+  font-size: var(--qx-text-caption);
+  color: var(--legacy-muted);
 }
 .measurement-coordinates fieldset {
   display: flex;
@@ -142,7 +142,7 @@
   background: #f7fbfa;
 }
 .measurement-quantity {
-  font-size: 27px;
+  font-size: var(--qx-text-display);
   color: var(--teal);
 }
 .measurements .measurement-consent {
@@ -183,7 +183,7 @@
 .measurement-record small {
   display: block;
   margin-top: 5px;
-  color: var(--muted);
+  color: var(--legacy-muted);
 }
 .measurement-record > strong {
   white-space: nowrap;
@@ -192,11 +192,11 @@
   display: grid;
   grid-template-columns: 110px minmax(0, 1fr);
   gap: 10px;
-  font-size: 12px;
+  font-size: var(--qx-text-caption);
   line-height: 1.6;
 }
 .measurement-basis dt {
-  color: var(--muted);
+  color: var(--legacy-muted);
 }
 .measurement-basis dd {
   margin: 0;
@@ -212,7 +212,7 @@
 }
 .measurements summary {
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--qx-text-body);
   font-weight: 600;
 }
 @media (max-width: 560px) {

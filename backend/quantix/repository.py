@@ -1,9 +1,14 @@
 """Durable Tender records and the narrow access surface used by the office."""
 
+import base64
+import json
 import re
 from pathlib import Path, PurePosixPath
 
 from .db import Database, dump, new_id, now, record
+from .diagnostics import initialize
+from .pending import ensure_schema as ensure_pending_schema
+from .storage import logs_dir
 
 
 def text(value: str, label: str, limit: int = 20000) -> str:
@@ -16,9 +21,11 @@ class Repository:
     def __init__(self, home: Path):
         self.db = Database(home)
         self.home = self.db.home
+        initialize(logs_dir(self.home))
         self.objects = self.home / "objects"
         self.objects.mkdir(exist_ok=True)
         (self.home / "extractions").mkdir(exist_ok=True)
+        ensure_pending_schema(self)
 
     def atomic(self):
         """Group validated synchronous domain operations in one SQLite transaction."""
@@ -30,15 +37,29 @@ class Repository:
                 record(r) for r in conn.execute("SELECT * FROM tenders ORDER BY updated_at DESC,id")
             ]
 
-    def create_tender(self, name: str):
-        name = text(name, "a Tender name", 200)
+    def create_tender(self, name: str | None = None):
+        # Without a name the Tender is named by analysing its package.
+        source = "engineer" if name is not None else "pending"
+        name = text(name, "a Tender name", 200) if name is not None else "New tender"
         identifier, stamp = new_id(), now()
         with self.db.connect(write=True) as conn:
             conn.execute(
-                "INSERT INTO tenders(id,name,created_at,updated_at) VALUES(?,?,?,?)",
-                (identifier, name, stamp, stamp),
+                "INSERT INTO tenders(id,name,name_source,created_at,updated_at) VALUES(?,?,?,?,?)",
+                (identifier, name, source, stamp, stamp),
             )
         return self.get_tender(identifier)
+
+    def rename_tender(self, tender_id, name: str, *, source: str = "engineer"):
+        if source not in {"engineer", "pending", "package", "ai"}:
+            raise ValueError("Unknown Tender name source.")
+        name = text(name, "a Tender name", 200)
+        self.get_tender(tender_id)
+        with self.db.connect(write=True) as conn:
+            conn.execute(
+                "UPDATE tenders SET name=?, name_source=?, revision=revision+1, updated_at=? WHERE id=?",
+                (name, source, now(), tender_id),
+            )
+        return self.get_tender(tender_id)
 
     def get_tender(self, tender_id):
         with self.db.connect() as conn:
@@ -162,15 +183,54 @@ class Repository:
             )
         return self.get_artifact(tender_id, identifier), True
 
-    def artifact_evidence(self, tender_id, artifact_id, offset=0, limit=50):
+    @staticmethod
+    def _cell_range_bounds(value):
+        from openpyxl.utils.cell import range_boundaries
+
+        try:
+            if not isinstance(value, str) or not value.strip() or len(value) > 80:
+                raise ValueError
+            first_col, first_row, last_col, last_row = range_boundaries(value.strip().upper())
+            first_col, last_col = first_col or 1, last_col or 16384
+            first_row = 1 if first_row is None else first_row
+            last_row = 1048576 if last_row is None else last_row
+            if not (1 <= first_col <= last_col <= 16384 and 1 <= first_row <= last_row <= 1048576):
+                raise ValueError
+            return first_col, first_row, last_col, last_row
+        except (TypeError, ValueError):
+            raise ValueError("Enter a valid cell range such as A1:D20.") from None
+
+    def artifact_evidence(self, tender_id, artifact_id, offset=0, limit=50, *, sheet=None, cell_range=None):
         self.get_artifact(tender_id, artifact_id)
+        bounds = self._cell_range_bounds(cell_range) if cell_range is not None else None
+        offset, limit = max(0, int(offset)), max(1, min(int(limit), 200))
         with self.db.connect() as conn:
-            rows = conn.execute(
-                """SELECT e.*,a.name AS artifact_name,a.relative_path FROM evidence e JOIN artifacts a ON a.id=e.artifact_id
-                WHERE a.tender_id=? AND a.id=? ORDER BY e.rowid LIMIT ? OFFSET ?""",
-                (tender_id, artifact_id, max(1, min(int(limit), 200)), max(0, int(offset))),
-            )
-            return [record(r) | {"score": 0.0} for r in rows]
+            query = """SELECT e.*,a.name AS artifact_name,a.relative_path FROM evidence e JOIN artifacts a ON a.id=e.artifact_id
+                WHERE a.tender_id=? AND a.id=? AND (? IS NULL OR e.sheet=?) ORDER BY e.rowid"""
+            parameters = (tender_id, artifact_id, sheet, sheet)
+            if bounds is None:
+                return [record(row) | {"score": 0.0} for row in conn.execute(query + " LIMIT ? OFFSET ?", (*parameters, limit, offset))]
+            matches, skipped = [], 0
+            for row in conn.execute(query, parameters):
+                item = record(row)
+                source_range = item.get("cell_range")
+                if not source_range and type(item.get("metadata", {}).get("row")) is int:
+                    source_range = f"A{item['metadata']['row']}:XFD{item['metadata']['row']}"
+                if not source_range:
+                    continue
+                try:
+                    source = self._cell_range_bounds(source_range)
+                except ValueError:
+                    continue
+                if source[0] > bounds[2] or source[2] < bounds[0] or source[1] > bounds[3] or source[3] < bounds[1]:
+                    continue
+                if skipped < offset:
+                    skipped += 1
+                    continue
+                matches.append(item | {"score": 0.0})
+                if len(matches) == limit:
+                    break
+            return matches
 
     def get_evidence(self, tender_id, evidence_id):
         with self.db.connect() as conn:
@@ -294,15 +354,149 @@ class Repository:
                 conn.execute("SELECT * FROM findings WHERE id=?", (finding_id,)).fetchone()
             )
 
+    @staticmethod
+    def _message_cursor(message_id: str) -> str:
+        return base64.urlsafe_b64encode(f"messages-before:{message_id}".encode()).decode().rstrip("=")
+
+    @staticmethod
+    def _message_anchor(cursor: str | None) -> str | None:
+        if not cursor:
+            return None
+        if not isinstance(cursor, str) or len(cursor) > 100:
+            raise ValueError("The message history cursor is invalid.")
+        try:
+            padded = cursor + "=" * (-len(cursor) % 4)
+            decoded = base64.urlsafe_b64decode(padded.encode()).decode()
+            prefix, value = decoded.split(":", 1)
+            if prefix != "messages-before" or not re.fullmatch(r"[0-9a-f]{32}", value):
+                raise ValueError
+            return value
+        except (ValueError, UnicodeDecodeError, base64.binascii.Error):
+            raise ValueError("The message history cursor is invalid.") from None
+
+    def _message_result_links(self, conn, tender_id: str, run_id: str | None) -> list[dict]:
+        """Build result cards from records persisted by this exact run."""
+
+        if not run_id:
+            return []
+        run = conn.execute(
+            "SELECT id FROM runs WHERE id=? AND tender_id=?", (run_id, tender_id)
+        ).fetchone()
+        if run is None:
+            return []
+        links = []
+        for row in conn.execute(
+            "SELECT id,title FROM findings WHERE tender_id=? AND run_id=? ORDER BY rowid",
+            (tender_id, run_id),
+        ):
+            links.append(
+                {
+                    "kind": "finding",
+                    "id": row["id"],
+                    "title": row["title"],
+                    "target": f"/tenders/{tender_id}/work?view=decisions&record={row['id']}",
+                }
+            )
+        for row in conn.execute(
+            "SELECT id,title FROM plans WHERE tender_id=? AND run_id=? ORDER BY rowid",
+            (tender_id, run_id),
+        ):
+            links.append(
+                {
+                    "kind": "plan",
+                    "id": row["id"],
+                    "title": row["title"],
+                    "target": f"/tenders/{tender_id}/work?view=plan&record={row['id']}",
+                }
+            )
+        for task in conn.execute(
+            "SELECT id,title FROM tasks WHERE tender_id=? AND run_id=? ORDER BY rowid",
+            (tender_id, run_id),
+        ):
+            links.append(
+                {
+                    "kind": "task",
+                    "id": task["id"],
+                    "title": task["title"],
+                    "target": f"/tenders/{tender_id}/work?view=tasks&record={task['id']}",
+                }
+            )
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='generated_outputs'"
+        ).fetchone():
+            for row in conn.execute(
+                "SELECT record_json FROM generated_outputs WHERE tender_id=? ORDER BY rowid",
+                (tender_id,),
+            ):
+                try:
+                    output = json.loads(row["record_json"])
+                except (TypeError, ValueError):
+                    continue
+                if output.get("metadata", {}).get("run_id") != run_id:
+                    continue
+                output_id = output.get("id")
+                if not isinstance(output_id, str):
+                    continue
+                links.append(
+                    {
+                        "kind": "output",
+                        "id": output_id,
+                        "title": output.get("kind", "Prepared document"),
+                        "target": f"/tenders/{tender_id}/submission?view=documents&record={output_id}",
+                    }
+                )
+        from .result_links import saved_work_links
+
+        return links + saved_work_links(conn, tender_id, run_id)
+
+    def _message_record(self, conn, tender_id: str, row) -> dict:
+        item = record(row)
+        item["result_links"] = self._message_result_links(conn, tender_id, item.get("run_id"))
+        return item
+
     def messages(self, tender_id):
+        """Return the complete history for internal workers and legacy callers."""
+
         self.get_tender(tender_id)
         with self.db.connect() as conn:
             return [
-                record(r)
-                for r in conn.execute(
+                self._message_record(conn, tender_id, row)
+                for row in conn.execute(
                     "SELECT * FROM messages WHERE tender_id=? ORDER BY rowid", (tender_id,)
                 )
             ]
+
+    def message_page(self, tender_id, *, limit=50, cursor=None):
+        self.get_tender(tender_id)
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            raise ValueError("Message history limit is invalid.") from None
+        if not 1 <= limit <= 100:
+            raise ValueError("Message history limit must be between 1 and 100.")
+        anchor = self._message_anchor(cursor)
+        with self.db.connect() as conn:
+            before = None
+            if anchor:
+                boundary = conn.execute(
+                    "SELECT rowid FROM messages WHERE id=? AND tender_id=? AND role IN ('engineer','manager')",
+                    (anchor, tender_id),
+                ).fetchone()
+                if boundary is None:
+                    raise ValueError("The message history cursor is invalid for this Tender.")
+                before = boundary[0]
+            rows = conn.execute(
+                "SELECT * FROM messages WHERE tender_id=? AND role IN ('engineer','manager') "
+                "AND (? IS NULL OR rowid<?) ORDER BY rowid DESC LIMIT ?",
+                (tender_id, before, before, limit + 1),
+            ).fetchall()
+            selected = rows[:limit]
+            # Initial loads show current dialogue; continuation walks strictly
+            # before its oldest returned message. Concurrent appends cannot
+            # move the older-page boundary as they would with an offset.
+            items = [self._message_record(conn, tender_id, row) for row in reversed(selected)]
+            next_cursor = self._message_cursor(selected[-1]["id"]) if len(rows) > limit else None
+        return {"items": items, "next_cursor": next_cursor}
 
     def add_message(self, tender_id, role, content, source_ids=None, run_id=None):
         self.get_tender(tender_id)
@@ -533,7 +727,7 @@ class Repository:
 
     def create_run(self, tender_id, kind, instruction=""):
         self.get_tender(tender_id)
-        if kind not in {"import", "manager", "task", "research", "index"}:
+        if kind not in {"import", "manager", "conversation", "task", "research", "index", "identify", "analysis"}:
             raise ValueError("Unknown work type.")
         identifier, stamp = new_id(), now()
         with self.db.connect(write=True) as conn:
@@ -591,6 +785,22 @@ class Repository:
             columns = ",".join(f"{key}=?" for key in updates)
             conn.execute(f"UPDATE runs SET {columns} WHERE id=?", (*updates.values(), run_id))
 
+    def update_active_run_detail(self, run_id, detail):
+        """Project trusted live activity without touching a terminal run."""
+        if not isinstance(detail, str) or not detail.strip() or len(detail) > 200:
+            raise ValueError("Work activity must be a short nonblank description.")
+        with self.db.connect(write=True) as conn:
+            row = conn.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone()
+            if row is None:
+                raise KeyError("This item could not be found in the selected Tender.")
+            if row["status"] not in {"queued", "running"}:
+                return False
+            conn.execute(
+                "UPDATE runs SET detail=?,updated_at=? WHERE id=? AND status IN ('queued','running')",
+                (detail, now(), run_id),
+            )
+            return True
+
     def event(self, run_id, kind, message, data=None):
         self.get_run(run_id)
         with self.db.connect(write=True) as conn:
@@ -619,6 +829,19 @@ class Repository:
                 "UPDATE tasks SET status='interrupted',updated_at=? WHERE status='running'",
                 (now(),),
             )
+            from .run_activity import ActivityRecordingError, settle_open_operations
+
+            for row in conn.execute("SELECT DISTINCT r.id FROM runs r JOIN run_activity_operations o ON o.run_id=r.id WHERE r.status IN ('failed','cancelled','interrupted')").fetchall():
+                try:
+                    settle_open_operations(self, row[0], "interrupted", "Quantix closed before this step had a confirmed completion.")
+                except ActivityRecordingError:
+                    pass  # Recovery must still revoke abandoned work authority.
+        # Any pending instruction that survived a process restart must require
+        # an explicit engineer confirmation.  This also covers a crash after
+        # the prior run committed but before its follow-up could be scheduled.
+        from .pending import PendingInstructionService
+
+        PendingInstructionService(self).hold_for_interrupted_runs()
 
     def overview(self, tender_id):
         tender = self.get_tender(tender_id)

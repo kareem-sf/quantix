@@ -1,0 +1,74 @@
+{
+  "all_pngs_transparent": true,
+  "all_svgs_no_background_rect": true,
+  "png_checks": [
+    {
+      "path": "03-icons/png/dark/quantix-32.png",
+      "corner_alpha": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "transparent_corners": true
+    },
+    {
+      "path": "03-icons/png/dark/quantix-256.png",
+      "corner_alpha": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "transparent_corners": true
+    },
+    {
+      "path": "03-icons/png/light/quantix-256.png",
+      "corner_alpha": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "transparent_corners": true
+    },
+    {
+      "path": "05-desktop/dark/icon.png",
+      "corner_alpha": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "transparent_corners": true
+    },
+    {
+      "path": "04-web/dark/android-chrome-512x512.png",
+      "corner_alpha": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "transparent_corners": true
+    }
+  ],
+  "svg_checks": [
+    {
+      "path": "03-icons/svg/Quantix-Icon-Dark.svg",
+      "contains_background_rect": false
+    },
+    {
+      "path": "03-icons/svg/Quantix-Icon-Light.svg",
+      "contains_background_rect": false
+    },
+    {
+      "path": "03-icons/svg/Quantix-Icon-Dark-Flat.svg",
+      "contains_background_rect": false
+    },
+    {
+      "path": "03-icons/svg/Quantix-Icon-Light-Flat.svg",
+      "contains_background_rect": false
+    }
+  ]
+}

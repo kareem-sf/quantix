@@ -102,30 +102,12 @@ it("leaves stored passwords untouched when fields are blank and reports save fai
   expect(writes[0].body).not.toHaveProperty("imap_password");
 });
 
-it("checks the read-only mailbox only on click and shows bounded results", async () => {
-  const { user, writes } = setup();
-  const sync = await screen.findByRole("button", {
-    name: "Check supplier replies",
-  });
-  expect(writes).toHaveLength(0);
-  await user.click(sync);
-  expect(
-    await screen.findByText(/Checked 30 messages · 2 replies registered/),
-  ).toBeInTheDocument();
-  expect(screen.getByText(/More messages are available/)).toBeInTheDocument();
-  expect(
-    screen.getByText("One reply exceeds the import size limit."),
-  ).toBeInTheDocument();
-  expect(writes).toEqual([
-    { path: "http://localhost/api/mail/sync", body: { max_messages: 30 } },
-  ]);
-});
-
-it("does not enable inbox access without configured credentials", async () => {
+it("keeps operational inbox checks outside mail account settings", async () => {
   setup(false);
+  await screen.findByLabelText("SMTP host");
   expect(
-    await screen.findByRole("button", { name: "Check supplier replies" }),
-  ).toBeDisabled();
+    screen.queryByRole("button", { name: /Check.*replies/ }),
+  ).not.toBeInTheDocument();
 });
 
 async function fill(

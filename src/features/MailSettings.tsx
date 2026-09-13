@@ -1,16 +1,31 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useApi, useRefresh, useResource, type Schema } from "../api";
-import { ErrorNotice, Loading } from "../components/ui";
-import "../styles/correspondence.css";
+import { ErrorNotice, Loading } from "../components/common";
+import { FieldError } from "../components/FieldError";
 
-export function MailSettings() {
+export function MailSettings({
+  onAttention,
+}: {
+  onAttention?: (attention: boolean) => void;
+} = {}) {
   const settings = useResource<Schema<"MailSettings">>("/mail/settings");
+  useEffect(() => {
+    if (!settings.data) onAttention?.(!!settings.error);
+  }, [onAttention, settings.data, settings.error]);
   if (settings.isPending) return <Loading>Loading mail settings…</Loading>;
   if (!settings.data) return <ErrorNotice error={settings.error} />;
-  return <MailSettingsForm settings={settings.data} />;
+  return (
+    <MailSettingsForm settings={settings.data} onAttention={onAttention} />
+  );
 }
 
-function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
+function MailSettingsForm({
+  settings,
+  onAttention,
+}: {
+  settings: Schema<"MailSettings">;
+  onAttention?: (attention: boolean) => void;
+}) {
   const api = useApi(),
     refresh = useRefresh();
   const [account, setAccount] = useState<Schema<"MailSettingsPatch">>(() => ({
@@ -30,21 +45,14 @@ function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
     [clearImap, setClearImap] = useState(false);
   const [pending, setPending] = useState(false),
     [saved, setSaved] = useState(false);
-  const [syncing, setSyncing] = useState(false),
-    [sync, setSync] = useState<Schema<"SyncResult"> | null>(null);
   const [error, setError] = useState<unknown>(null);
+  useEffect(() => {
+    onAttention?.(!!error);
+  }, [error, onAttention]);
   const changed = (patch: Partial<Schema<"MailSettingsPatch">>) => {
     setAccount((current) => ({ ...current, ...patch }));
     setSaved(false);
   };
-  const dirty =
-    Object.entries(account).some(
-      ([key, value]) => settings[key as keyof typeof settings] !== value,
-    ) ||
-    !!smtpPassword ||
-    !!imapPassword ||
-    clearSmtp ||
-    clearImap;
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -90,7 +98,7 @@ function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
         Sending requires approval of each message.
       </p>
       <form onSubmit={save}>
-        <fieldset disabled={pending || syncing}>
+        <fieldset disabled={pending}>
           <legend>Outgoing mail · SMTP</legend>
           <p className="connection-state">
             {settings.smtp_ready
@@ -106,6 +114,7 @@ function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
                 pattern="[A-Za-z0-9.-]*"
                 onChange={(event) => changed({ smtp_host: event.target.value })}
               />
+              <FieldError error={error} name="smtp_host" />
             </label>
             <label>
               SMTP port
@@ -119,6 +128,7 @@ function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
                   changed({ smtp_port: Number(event.target.value) })
                 }
               />
+              <FieldError error={error} name="smtp_port" />
             </label>
             <label>
               SMTP security
@@ -133,6 +143,7 @@ function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
                 <option value="ssl">SSL / TLS</option>
                 <option value="starttls">STARTTLS</option>
               </select>
+              <FieldError error={error} name="smtp_security" />
             </label>
             <label>
               SMTP username
@@ -144,6 +155,7 @@ function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
                   changed({ smtp_username: event.target.value })
                 }
               />
+              <FieldError error={error} name="smtp_username" />
             </label>
             <label>
               Sender email
@@ -154,6 +166,7 @@ function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
                   changed({ from_address: event.target.value })
                 }
               />
+              <FieldError error={error} name="from_address" />
             </label>
             <label>
               SMTP password
@@ -167,6 +180,7 @@ function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
                   setSaved(false);
                 }}
               />
+              <FieldError error={error} name="smtp_password" />
             </label>
           </div>
           <label className="correspondence-check">
@@ -181,7 +195,7 @@ function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
             Remove saved SMTP password when saving
           </label>
         </fieldset>
-        <fieldset disabled={pending || syncing}>
+        <fieldset disabled={pending}>
           <legend>Incoming replies · IMAP SSL (optional)</legend>
           <p className="connection-state">
             {settings.imap_ready
@@ -197,6 +211,7 @@ function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
                 pattern="[A-Za-z0-9.-]*"
                 onChange={(event) => changed({ imap_host: event.target.value })}
               />
+              <FieldError error={error} name="imap_host" />
             </label>
             <label>
               IMAP port
@@ -210,6 +225,7 @@ function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
                   changed({ imap_port: Number(event.target.value) })
                 }
               />
+              <FieldError error={error} name="imap_port" />
             </label>
             <label>
               IMAP username
@@ -220,6 +236,7 @@ function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
                   changed({ imap_username: event.target.value })
                 }
               />
+              <FieldError error={error} name="imap_username" />
             </label>
             <label>
               Mailbox folder
@@ -231,6 +248,7 @@ function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
                   changed({ imap_mailbox: event.target.value })
                 }
               />
+              <FieldError error={error} name="imap_mailbox" />
             </label>
             <label>
               IMAP password
@@ -244,6 +262,7 @@ function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
                   setSaved(false);
                 }}
               />
+              <FieldError error={error} name="imap_password" />
             </label>
           </div>
           <label className="correspondence-check">
@@ -272,64 +291,10 @@ function MailSettingsForm({ settings }: { settings: Schema<"MailSettings"> }) {
             Mail settings saved. Connections have not been tested.
           </p>
         ) : null}
-        <button className="button primary" disabled={pending || syncing}>
+        <button className="button primary" disabled={pending}>
           {pending ? "Saving…" : "Save mail settings"}
         </button>
       </form>
-      <div className="mail-sync">
-        <h3>Check supplier replies</h3>
-        <p className="muted">
-          Reads up to 30 messages from the saved mailbox using read-only access.
-          Matching replies become Tender evidence; supplier prices still need
-          review.
-        </p>
-        {dirty ? (
-          <p className="field-help">
-            Save your mail changes before checking replies.
-          </p>
-        ) : null}
-        <button
-          className="button"
-          disabled={!settings.imap_ready || dirty || pending || syncing}
-          onClick={async () => {
-            setSyncing(true);
-            setError(null);
-            setSync(null);
-            try {
-              setSync(
-                await api.post<Schema<"SyncResult">>("/mail/sync", {
-                  max_messages: 30,
-                } satisfies Schema<"SyncRequest">),
-              );
-              await refresh();
-            } catch (failure) {
-              setError(failure);
-            } finally {
-              setSyncing(false);
-            }
-          }}
-        >
-          {syncing ? "Checking replies…" : "Check supplier replies"}
-        </button>
-        {sync ? (
-          <div role="status" className="mail-sync-result">
-            <p>
-              Checked {sync.checked} messages · {sync.matched} replies
-              registered · {sync.skipped} skipped
-            </p>
-            {sync.more_available ? (
-              <p>
-                More messages are available. Check again to read the next batch.
-              </p>
-            ) : null}
-            {sync.warnings.map((warning, index) => (
-              <p className="warning-text" key={index}>
-                {warning}
-              </p>
-            ))}
-          </div>
-        ) : null}
-      </div>
     </section>
   );
 }

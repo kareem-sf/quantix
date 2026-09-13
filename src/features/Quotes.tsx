@@ -14,9 +14,11 @@ import {
   Modal,
   Status,
   statusLabel,
-} from "../components/ui";
+} from "../components/common";
 import { Citations, type SourceSelection } from "./Sources";
-import "../styles/correspondence.css";
+import { FieldError } from "../components/FieldError";
+import { createDraftScope, useFormDraft } from "./useFormDraft";
+import { MailReplyCheck } from "./MailReplyCheck";
 
 type SourceAction = (source: SourceSelection) => void;
 const blockedStates = new Set([
@@ -40,30 +42,33 @@ const splitAddresses = (value: string) => [
   ),
 ];
 
-export function Quotes({
-  tenderId,
-  onSource,
-}: {
+type QuotesProps = {
   tenderId: string;
   onSource?: SourceAction;
-}) {
-  return (
-    <QuoteWorkspace key={tenderId} tenderId={tenderId} onSource={onSource} />
-  );
+  selectedId?: string | null;
+  onSelect?: (id: string | null) => void;
+  onSettings?: (quoteId?: string) => void;
+};
+export function Quotes(props: QuotesProps) {
+  return <QuoteWorkspace key={props.tenderId} {...props} />;
 }
-
 function QuoteWorkspace({
   tenderId,
   onSource,
-}: {
-  tenderId: string;
-  onSource?: SourceAction;
-}) {
+  selectedId,
+  onSelect,
+  onSettings,
+}: QuotesProps) {
   const quotes = useResource<Schema<"QuoteRecord">[]>(
     `${tenderPath(tenderId)}/quotes`,
   );
   const refresh = useRefresh();
-  const [selected, setSelected] = useState<string | null>(null);
+  const [localSelected, setLocalSelected] = useState<string | null>(null);
+  const selected = selectedId === undefined ? localSelected : selectedId;
+  const setSelected = (id: string | null) => {
+    setLocalSelected(id);
+    onSelect?.(id);
+  };
   const [editing, setEditing] = useState<
     Schema<"QuoteRecord"> | null | undefined
   >(undefined);
@@ -80,6 +85,11 @@ function QuoteWorkspace({
         Prepare requests, review the exact message and attachments, and record
         supplier replies.
       </p>
+      <MailReplyCheck
+        onSettings={
+          onSettings ? () => onSettings(selected ?? undefined) : undefined
+        }
+      />
       <ErrorNotice error={quotes.error} />
       {quotes.isPending ? <Loading>Loading quotation requests…</Loading> : null}
       {quotes.data?.length === 0 ? (
@@ -156,12 +166,36 @@ function DraftEditor({
   const artifacts = useResource<Schema<"Artifact">[]>(
     `${tenderPath(tenderId)}/artifacts`,
   );
-  const [to, setTo] = useState(initial?.to.join(", ") ?? ""),
-    [cc, setCc] = useState(initial?.cc?.join(", ") ?? "");
-  const [subject, setSubject] = useState(initial?.subject ?? ""),
-    [body, setBody] = useState(initial?.body ?? "");
-  const [attachments, setAttachments] = useState(initial?.attachment_ids ?? []),
-    [sources, setSources] = useState(initial?.source_ids ?? []);
+  const draftState = useFormDraft(
+    createDraftScope(
+      "quotes",
+      tenderId,
+      `request-${initial?.id ?? "new"}`,
+      initial?.updated_at ?? 1,
+    ),
+    {
+      to: initial?.to.join(", ") ?? "",
+      cc: initial?.cc?.join(", ") ?? "",
+      subject: initial?.subject ?? "",
+      body: initial?.body ?? "",
+      attachments: initial?.attachment_ids ?? [],
+      sources: initial?.source_ids ?? [],
+    },
+    ["to", "cc", "subject", "body", "attachments", "sources"],
+  );
+  const { to, cc, subject, body, attachments, sources } = draftState.value;
+  const setTo = (value: string) => draftState.setField("to", value),
+    setCc = (value: string) => draftState.setField("cc", value),
+    setSubject = (value: string) => draftState.setField("subject", value),
+    setBody = (value: string) => draftState.setField("body", value);
+  const setAttachments = (
+    value: string[] | ((current: string[]) => string[]),
+  ) =>
+    draftState.setField(
+      "attachments",
+      typeof value === "function" ? value(attachments) : value,
+    );
+  const setSources = (value: string[]) => draftState.setField("sources", value);
   const [attachmentFilter, setAttachmentFilter] = useState("");
   const [pending, setPending] = useState(false),
     [error, setError] = useState<unknown>(null);
@@ -191,6 +225,7 @@ function DraftEditor({
     if (pending) return;
     setPending(true);
     setError(null);
+    const acceptedRevision = draftState.revision;
     const draft: Schema<"DraftInput"> = {
       to: splitAddresses(to),
       cc: splitAddresses(cc),
@@ -211,6 +246,7 @@ function DraftEditor({
             `${tenderPath(tenderId)}/quotes`,
             draft,
           );
+      draftState.markAccepted(acceptedRevision);
       await onSaved(quote);
     } catch (failure) {
       setError(failure);
@@ -235,6 +271,7 @@ function DraftEditor({
               value={to}
               onChange={(event) => setTo(event.target.value)}
             />
+            <FieldError error={error} name="to" />
           </label>
           <p className="field-help">
             Plain email addresses, separated by commas. Up to 30 recipients.
@@ -242,6 +279,7 @@ function DraftEditor({
           <label>
             Cc
             <input value={cc} onChange={(event) => setCc(event.target.value)} />
+            <FieldError error={error} name="cc" />
           </label>
           <label>
             Subject
@@ -251,6 +289,7 @@ function DraftEditor({
               value={subject}
               onChange={(event) => setSubject(event.target.value)}
             />
+            <FieldError error={error} name="subject" />
           </label>
           <label>
             Message
@@ -261,6 +300,7 @@ function DraftEditor({
               value={body}
               onChange={(event) => setBody(event.target.value)}
             />
+            <FieldError error={error} name="body" />
           </label>
         </fieldset>
         <fieldset disabled={pending || artifacts.isPending}>
@@ -351,7 +391,7 @@ function DraftEditor({
           onSource={onSource}
           disabled={pending}
         />
-        <ErrorNotice error={error} />
+        <ErrorNotice error={error || draftState.error} />
         <div className="form-actions">
           <button
             className="button"
@@ -519,9 +559,17 @@ function QuoteReview({
   const quote = preview.quote,
     base = quotePath(tenderId, quote.id),
     blocked = isBlocked(quote);
-  const [rationale, setRationale] = useState(""),
-    [confirmed, setConfirmed] = useState(false);
-  const [reconciliation, setReconciliation] = useState(""),
+  const decisionDraft = useFormDraft(
+    createDraftScope("quotes", tenderId, `decision-${quote.id}`, 1),
+    { rationale: "", reconciliation: "" },
+    ["rationale", "reconciliation"],
+  );
+  const { rationale, reconciliation } = decisionDraft.value;
+  const setRationale = (value: string) =>
+      decisionDraft.setField("rationale", value),
+    setReconciliation = (value: string) =>
+      decisionDraft.setField("reconciliation", value);
+  const [confirmed, setConfirmed] = useState(false),
     [restoreRefused, setRestoreRefused] = useState(false);
   const needsReconciliation =
     preview.restore_reconciliation_required || restoreRefused;
@@ -547,6 +595,7 @@ function QuoteReview({
     setPending(true);
     setError(null);
     setNotice("");
+    const acceptedRevision = decisionDraft.revision;
     const decision: Schema<"SendDecision"> = {
       fingerprint: preview.fingerprint,
       engineer_confirmed: true,
@@ -563,6 +612,7 @@ function QuoteReview({
           "Submission result recorded. Review the delivery status above.",
         );
       } else setNotice("Approval recorded. No mail was sent by this action.");
+      decisionDraft.markAccepted(acceptedRevision);
       setConfirmed(false);
       await refresh();
     } catch (failure) {
@@ -955,13 +1005,26 @@ function ReplyEditor({
 }) {
   const api = useApi(),
     refresh = useRefresh();
-  const [sender, setSender] = useState(""),
-    [receivedAt, setReceivedAt] = useState("");
-  const [subject, setSubject] = useState(""),
-    [text, setText] = useState(""),
-    [headers, setHeaders] = useState("");
-  const [sources, setSources] = useState<string[]>([]),
-    [pending, setPending] = useState(false),
+  const draft = useFormDraft(
+    createDraftScope("quotes", tenderId, `reply-${quoteId}`, 1),
+    {
+      sender: "",
+      receivedAt: "",
+      subject: "",
+      text: "",
+      headers: "",
+      sources: [] as string[],
+    },
+    ["sender", "receivedAt", "subject", "text", "headers", "sources"],
+  );
+  const { sender, receivedAt, subject, text, headers, sources } = draft.value;
+  const setSender = (v: string) => draft.setField("sender", v),
+    setReceivedAt = (v: string) => draft.setField("receivedAt", v),
+    setSubject = (v: string) => draft.setField("subject", v),
+    setText = (v: string) => draft.setField("text", v),
+    setHeaders = (v: string) => draft.setField("headers", v),
+    setSources = (v: string[]) => draft.setField("sources", v);
+  const [pending, setPending] = useState(false),
     [error, setError] = useState<unknown>(null);
   return (
     <Modal
@@ -985,6 +1048,7 @@ function ReplyEditor({
             );
             return;
           }
+          const acceptedRevision = draft.revision;
           setPending(true);
           try {
             await api.post<Schema<"ReplyRecord">>(
@@ -998,6 +1062,7 @@ function ReplyEditor({
                 source_ids: sources,
               } satisfies Schema<"ManualReply">,
             );
+            draft.markAccepted(acceptedRevision);
             await refresh();
             onClose();
           } catch (failure) {
@@ -1016,6 +1081,7 @@ function ReplyEditor({
               value={sender}
               onChange={(event) => setSender(event.target.value)}
             />
+            <FieldError error={error} name="sender" />
           </label>
           <label>
             Received date and time with time zone
@@ -1025,6 +1091,7 @@ function ReplyEditor({
               placeholder="2026-09-06T13:00:00+03:00"
               onChange={(event) => setReceivedAt(event.target.value)}
             />
+            <FieldError error={error} name="received_at" />
           </label>
           <p className="field-help">
             Copy the received date with its UTC offset. This is recorded as an
@@ -1037,6 +1104,7 @@ function ReplyEditor({
               maxLength={500}
               onChange={(event) => setSubject(event.target.value)}
             />
+            <FieldError error={error} name="subject" />
           </label>
           <label>
             Reply text
@@ -1047,6 +1115,7 @@ function ReplyEditor({
               value={text}
               onChange={(event) => setText(event.target.value)}
             />
+            <FieldError error={error} name="text" />
           </label>
           <details>
             <summary>Original headers (optional)</summary>
@@ -1058,6 +1127,7 @@ function ReplyEditor({
                 value={headers}
                 onChange={(event) => setHeaders(event.target.value)}
               />
+              <FieldError error={error} name="headers" />
             </label>
           </details>
         </fieldset>
@@ -1068,7 +1138,7 @@ function ReplyEditor({
           onSource={onSource}
           disabled={pending}
         />
-        <ErrorNotice error={error} />
+        <ErrorNotice error={error || draft.error} />
         <div className="form-actions">
           <button
             className="button"

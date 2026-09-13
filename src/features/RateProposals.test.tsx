@@ -40,6 +40,7 @@ const item: Schema<"EstimateItem"> = {
       source_ids: ["boq-source"],
       status: "approved",
       created_at: "2026-09-06T10:00:00Z",
+      origin: "engineer",
     },
   ],
 };

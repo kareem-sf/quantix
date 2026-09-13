@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "@google/gemini-cli": "0.58.0"
+  },
+  "name": "quantix-client-gemini",
+  "private": true,
+  "version": "1.0.0"
+}

@@ -7,7 +7,7 @@
 }
 .other-outputs label {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--qx-text-body);
 }
 .other-outputs select {
   display: block;
@@ -24,7 +24,7 @@
 .output-form textarea,
 .submission-form input,
 .submission-form textarea {
-  font-size: 16px;
+  font-size: var(--qx-text-section);
 }
 .output-form select {
   width: 100%;
@@ -49,7 +49,7 @@
 }
 .programme-activity legend {
   padding: 0 6px;
-  font-size: 16px;
+  font-size: var(--qx-text-section);
   font-weight: 500;
 }
 .submissions-section {
@@ -71,7 +71,7 @@
   overflow-wrap: anywhere;
 }
 .submission-form .checkbox-label {
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   font-weight: 400;
   align-items: flex-start;
 }
@@ -86,7 +86,7 @@
 }
 .submission-preview-files code,
 .submission-record code {
-  font-size: 11px;
+  font-size: var(--qx-text-caption);
   overflow-wrap: anywhere;
 }
 .submission-blockers {
@@ -94,25 +94,25 @@
   background: #fffbf7;
   padding: 15px 20px;
   margin: 20px 0;
-  font-size: 14px;
+  font-size: var(--qx-text-body);
 }
 .submission-record {
   padding: 22px 0;
   border-bottom: 1px solid var(--border);
 }
 .submission-record p {
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   line-height: 1.7;
   margin: 10px 0;
   overflow-wrap: anywhere;
 }
 .submission-record details {
   margin: 15px 0;
-  font-size: 13px;
+  font-size: var(--qx-text-body);
 }
 .client-boq-form > p {
   margin: 16px 0;
-  font-size: 14px;
+  font-size: var(--qx-text-body);
 }
 .client-boq-mapping {
   min-width: 0;
@@ -124,7 +124,7 @@
 .client-boq-mapping legend {
   padding: 0 6px;
   font-weight: 500;
-  font-size: 16px;
+  font-size: var(--qx-text-section);
 }
 .client-boq-row-picker,
 .client-boq-header-options {
@@ -142,7 +142,7 @@
 .client-boq-row .checkbox-label,
 .client-boq-header-options .checkbox-label {
   align-items: flex-start;
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   font-weight: 400;
   line-height: 1.7;
   margin: 0;
@@ -160,11 +160,11 @@
 }
 .client-boq-row .text-button {
   margin: 10px 0 0 26px;
-  font-size: 13px;
+  font-size: var(--qx-text-body);
 }
 .client-boq-warning {
   color: #93631e;
-  font-size: 13px;
+  font-size: var(--qx-text-body);
   line-height: 1.7;
   margin: 12px 0;
 }
@@ -179,7 +179,7 @@
   margin: 12px 0;
 }
 .client-boq-selected-headers .text-button {
-  font-size: 12px;
+  font-size: var(--qx-text-caption);
 }
 .client-boq-quantity-consent {
   border-left: 3px solid #b3893d;

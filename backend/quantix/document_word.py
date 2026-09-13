@@ -18,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .processes import stop_owned_process_tree
+from .storage import current_home, runtime_tmp_dir
 
 WORD_TIMEOUT_SECONDS = 60
 MAX_WORD_BYTES = 32 * 1024 * 1024
@@ -73,14 +74,17 @@ def _convert_legacy_word(path: Path, cancelled: Callable[[], bool] | None) -> by
     path = Path(path)
     if path.stat().st_size > MAX_WORD_BYTES:
         raise WordConversionUnavailable("This legacy Word file exceeds the conversion size limit.")
-    with tempfile.TemporaryDirectory(prefix="quantix-word-") as folder:
+    temp_root = runtime_tmp_dir(current_home())
+    temp_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="quantix-word-", dir=temp_root) as folder:
         temp = Path(folder)
         source, target, state = temp / "source.doc", temp / "converted.docx", temp / "worker.json"
         shutil.copyfile(path, source)
         command = [
             sys.executable,
-            "-m",
-            "quantix.document_word",
+            *(["word-convert", "--home", str(current_home())]
+              if getattr(sys, "frozen", False)
+              else ["-m", "quantix.document_word"]),
             str(source),
             str(target),
             str(state),

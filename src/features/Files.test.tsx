@@ -81,6 +81,11 @@ it("sends area and reading-status filters to Meaning search and shows the matche
     ),
   ).toBeInTheDocument();
   expect(screen.queryByText("Unrelated introduction")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Clear search" }));
+  expect(screen.getByLabelText("Search source text")).toHaveValue("");
+  expect(screen.getByLabelText("Search source text")).toHaveFocus();
+  expect(screen.getByLabelText("Filter by area")).toHaveValue("Area B");
+  expect(screen.getByRole("button", { name: "Search" })).toBeInTheDocument();
 });
 
 it("keeps Both selected and reports meaning-search failures without substituting Words", async () => {
@@ -182,7 +187,7 @@ it("fetches actual historical files and opens the selected original revision", a
   await user.selectOptions(screen.getByLabelText("Filter by revision"), "all");
   const previous = await screen.findByText("Previous revision");
   await user.click(
-    within(previous.closest("article")!).getByRole("button", {
+    within(previous.closest("tr")!).getByRole("button", {
       name: "BOQ.pdf",
     }),
   );
@@ -265,4 +270,110 @@ it("explains when document filters exclude all search results", async () => {
       "No source matches these search and document filters.",
     ),
   ).toBeInTheDocument();
+});
+
+it("shows recorded reading status without inventing document analysis or human review", () => {
+  const artifact: Schema<"Artifact"> = {
+    id: "pdf",
+    tender_id: "one",
+    relative_path: "Area B/Scope.pdf",
+    name: "Scope.pdf",
+    version: 2,
+    content_hash: "hash",
+    size: 100,
+    kind: "pdf",
+    status: "extracted",
+    area: "Area B",
+    metadata: { analysis_status: "complete", review_status: "not_started" },
+    warnings: [],
+    is_current: true,
+    created_at: "",
+  };
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ApiContext.Provider
+        value={createApi(
+          { base_url: "http://localhost/api", token: "test" },
+          async () => Response.json([]),
+        )}
+      >
+        <Files
+          tenderId="one"
+          artifacts={[artifact]}
+          onImport={() => {}}
+          onSource={() => {}}
+        />
+      </ApiContext.Provider>
+    </QueryClientProvider>,
+  );
+  expect(
+    screen.getByRole("table", { name: "Document register" }),
+  ).toBeInTheDocument();
+  const row = screen.getByRole("row", { name: /Scope\.pdf/ });
+  expect(
+    within(row).getByText("Read", { exact: true }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("AI analysis: Complete")).not.toBeInTheDocument();
+  expect(
+    screen.queryByText("Human review: Not started"),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByText(
+      /Reading a document is not an engineering analysis or\s+review/i,
+    ),
+  ).toBeInTheDocument();
+  expect(
+    within(row).getAllByRole("button", { name: "Scope.pdf" }),
+  ).toHaveLength(1);
+});
+
+it("finds a filename without extracted text and restores each Tender's register filters", async () => {
+  const artifact: Schema<"Artifact"> = {
+    id: "drawing",
+    tender_id: "one",
+    name: "Drawing.pdf",
+    relative_path: "Drawing.pdf",
+    version: 1,
+    content_hash: "hash",
+    size: 100,
+    kind: "pdf",
+    status: "needs_attention",
+    area: "General",
+    metadata: {},
+    warnings: [],
+    is_current: true,
+    created_at: "",
+  };
+  const api = createApi(
+    { base_url: "http://localhost/api", token: "test" },
+    async () => Response.json([]),
+  );
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const view = (tenderId: string) => (
+    <QueryClientProvider client={client}>
+      <ApiContext.Provider value={api}>
+        <Files
+          tenderId={tenderId}
+          artifacts={tenderId === "one" ? [artifact] : []}
+          onImport={() => {}}
+          onSource={() => {}}
+        />
+      </ApiContext.Provider>
+    </QueryClientProvider>
+  );
+  const user = userEvent.setup();
+  const rendered = render(view("one"));
+  await user.type(screen.getByLabelText("Search source text"), "Drawing");
+  expect(
+    await screen.findByRole("button", { name: "Drawing.pdf" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByText("No source matches these search and document filters."),
+  ).not.toBeInTheDocument();
+  rendered.rerender(view("two"));
+  expect(screen.getByLabelText("Search source text")).toHaveValue("");
+  rendered.rerender(view("one"));
+  expect(screen.getByLabelText("Search source text")).toHaveValue("Drawing");
 });

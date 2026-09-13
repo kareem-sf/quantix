@@ -22,13 +22,15 @@ function setup() {
           },
           { id: "waiting", title: "Unfinished report", status: "ready" },
         ]);
+      if (new URL(String(address)).pathname.endsWith("/estimate"))
+        return Response.json({ items: [], refresh_required: false });
       return Response.json([]);
     },
   );
   render(
     <QueryClientProvider client={new QueryClient()}>
       <ApiContext.Provider value={api}>
-        <Outputs tenderId="one" />
+        <Outputs tenderId="one" view="documents" />
       </ApiContext.Provider>
     </QueryClientProvider>,
   );
@@ -38,11 +40,11 @@ function setup() {
 it("requires a completed task for the selected technical document and keeps its exact task id", async () => {
   const { user, writes } = setup();
   await user.selectOptions(
-    screen.getByLabelText("Other document type"),
+    screen.getByLabelText("Document to create"),
     "technical_docx",
   );
   await user.click(
-    screen.getByRole("button", { name: "Create selected document" }),
+    screen.getByRole("button", { name: "Create draft document" }),
   );
   const dialog = screen.getByRole("dialog", {
     name: "Create technical document",
@@ -74,11 +76,11 @@ it("requires a completed task for the selected technical document and keeps its 
 it("creates a programme only from explicit activities and calendar without inserting sample construction work", async () => {
   const { user, writes } = setup();
   await user.selectOptions(
-    screen.getByLabelText("Other document type"),
+    screen.getByLabelText("Document to create"),
     "programme_xlsx",
   );
   await user.click(
-    screen.getByRole("button", { name: "Create selected document" }),
+    screen.getByRole("button", { name: "Create draft document" }),
   );
   const dialog = screen.getByRole("dialog", {
     name: "Create construction programme",
@@ -141,4 +143,79 @@ it("creates a programme only from explicit activities and calendar without inser
     },
   });
   expect(writes[0]).not.toHaveProperty("task_id");
+});
+
+it("keeps all seven document kinds grouped and restores programme drafts without consent", async () => {
+  const { user, writes } = setup();
+  const kinds = screen.getByLabelText("Document to create");
+  expect(within(kinds).getAllByRole("option")).toHaveLength(7);
+  await user.selectOptions(kinds, "programme_xlsx");
+  await user.click(
+    screen.getByRole("button", { name: "Create draft document" }),
+  );
+  let panel = screen.getByRole("dialog", {
+    name: "Create construction programme",
+  });
+  await user.type(
+    within(panel).getByLabelText("Programme title"),
+    "North wing sequence",
+  );
+  await user.type(
+    within(panel).getByLabelText("Document review note"),
+    "Keep this draft across views",
+  );
+  await user.click(
+    within(panel).getByRole("checkbox", { name: /I reviewed these inputs/ }),
+  );
+  await user.click(within(panel).getByRole("button", { name: "Cancel" }));
+  await user.click(
+    screen.getByRole("button", { name: "Create draft document" }),
+  );
+  panel = screen.getByRole("dialog", { name: "Create construction programme" });
+  expect(within(panel).getByLabelText("Programme title")).toHaveValue(
+    "North wing sequence",
+  );
+  expect(within(panel).getByLabelText("Document review note")).toHaveValue(
+    "Keep this draft across views",
+  );
+  expect(
+    within(panel).getByRole("checkbox", { name: /I reviewed these inputs/ }),
+  ).not.toBeChecked();
+  expect(writes).toEqual([]);
+});
+
+it("retains client workbook draft inputs but never saves mapping or quantity approval", async () => {
+  const { user, writes } = setup();
+  await user.selectOptions(
+    screen.getByLabelText("Document to create"),
+    "client_boq",
+  );
+  await user.click(
+    screen.getByRole("button", { name: "Create draft document" }),
+  );
+  let panel = screen.getByRole("dialog", { name: "Create client BOQ copy" });
+  await user.type(within(panel).getByLabelText("Workbook currency"), "EGP");
+  await user.click(
+    within(panel).getByRole("checkbox", {
+      name: /I checked the workbook currency/,
+    }),
+  );
+  await user.click(within(panel).getByRole("button", { name: "Cancel" }));
+  const saved = Object.values(window.localStorage).join(" ");
+  expect(saved).not.toContain("mappingReviewed");
+  expect(saved).not.toContain("quantityApproved");
+  await user.click(
+    screen.getByRole("button", { name: "Create draft document" }),
+  );
+  panel = screen.getByRole("dialog", { name: "Create client BOQ copy" });
+  expect(within(panel).getByLabelText("Workbook currency")).toHaveValue("EGP");
+  expect(
+    within(panel).getByRole("checkbox", {
+      name: /I checked the workbook currency/,
+    }),
+  ).not.toBeChecked();
+  expect(
+    within(panel).getByRole("button", { name: "Create draft" }),
+  ).toBeDisabled();
+  expect(writes).toEqual([]);
 });

@@ -51,12 +51,12 @@ it("reports a failed preparation run instead of announcing that Meaning search i
     </QueryClientProvider>,
   );
   await user.click(
-    await screen.findByRole("button", { name: "Prepare search" }),
+    await screen.findByRole("button", { name: "Index tender evidence" }),
   );
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "The search files could not be downloaded.",
   );
   expect(
-    screen.queryByText("Meaning search is ready for the current documents."),
+    screen.queryByText("Tender evidence is indexed for meaning search."),
   ).not.toBeInTheDocument();
 });

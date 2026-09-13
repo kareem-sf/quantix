@@ -5,11 +5,10 @@ import json
 import math
 from typing import Literal
 
-from agents import RunContextWrapper, function_tool
-
+from .ai_tools import ToolContext
 from .measurement_models import AgentMeasurementProposal, MeasurementInput
 from .measurements import MeasurementService
-from .office_tools import OfficeContext, redact_text
+from .office_tools import OfficeContext, redact_text, scoped_tool
 
 
 def _clean(value):
@@ -24,27 +23,81 @@ def _clean(value):
 
 def validate_agent_measurement(context, values):
     """Root calls this before accepting/publishing an agent drawing proposal."""
+    if context.is_staff:
+        context.require_tool("calculate_drawing_measurement")
     proposal = AgentMeasurementProposal.model_validate(values)
+    context.ensure_scope_current()
+    context.ensure_artifact_allowed(proposal.artifact_id)
     context.validate_sources(proposal.source_ids)
     viewed_regions = []
-    for event in context.repo.run_events(context.run_id):
-        data = event.get("data") or {}
-        if (
-            event["kind"] != "visual_source_viewed"
-            or data.get("artifact_id") != proposal.artifact_id
-            or data.get("page") != proposal.page
-            or data.get("source_id") not in context.seen_sources
+    if context.is_staff:
+        from .staff_context import StaffContextService
+
+        for receipt in StaffContextService(context.repo).list_visual_receipts(
+            context.tender_id,
+            actor_id=context.actor_id,
+            profile_version=context.staff_version,
+            assignment_id=context.assignment_id,
+            route_binding_id=context.route_binding_id,
+            root_run_id=context.run_id,
+            artifact_id=proposal.artifact_id,
+            page=proposal.page,
         ):
-            continue
-        region = data.get("region")
-        if not isinstance(region, list) or len(region) != 4:
-            continue
-        if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) for value in region):
-            continue
-        x, y, width, height = region
-        if min(x, y) < 0 or min(width, height) <= 0 or x + width > 1 or y + height > 1:
-            continue
-        viewed_regions.append(region)
+            if (
+                receipt.method != "visual"
+                or not context.has_seen_source(receipt.source_id)
+                or receipt.actor_id != context.actor_id
+                or receipt.profile_id != context.actor_id
+                or receipt.profile_version != context.staff_version
+                or receipt.assignment_id != context.assignment_id
+                or receipt.route_binding_id != context.route_binding_id
+                or receipt.root_run_id != context.run_id
+                or receipt.artifact_id != proposal.artifact_id
+                or receipt.page != proposal.page
+            ):
+                continue
+            basis = context.reviewed_artifacts.get(receipt.artifact_id)
+            expected_hash = (
+                basis.content_hash if hasattr(basis, "content_hash") else basis["content_hash"]
+            ) if basis is not None else None
+            if receipt.content_hash != expected_hash:
+                continue
+            region = receipt.region
+            if region is None or any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                for value in region
+            ):
+                continue
+            x, y, width, height = region
+            if min(x, y) < 0 or min(width, height) <= 0 or x + width > 1 or y + height > 1:
+                continue
+            viewed_regions.append(region)
+    else:
+        for event in context.repo.run_events(context.run_id):
+            data = event.get("data") or {}
+            if (
+                event["kind"] != "visual_source_viewed"
+                or data.get("artifact_id") != proposal.artifact_id
+                or data.get("page") != proposal.page
+                or not context.has_seen_source(data.get("source_id"))
+            ):
+                continue
+            region = data.get("region")
+            if not isinstance(region, list) or len(region) != 4:
+                continue
+            if any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                for value in region
+            ):
+                continue
+            x, y, width, height = region
+            if min(x, y) < 0 or min(width, height) <= 0 or x + width > 1 or y + height > 1:
+                continue
+            viewed_regions.append(region)
     if not viewed_regions:
         raise ValueError("Inspect the measured drawing page with view_document_page before proposing a measurement.")
     for px, py in [*proposal.points, *(proposal.calibration_points or [])]:
@@ -65,7 +118,7 @@ async def calculate_agent_measurement(context, values):
     )
     context.validate_sources(proposal.source_ids)
     supporting = service.supporting_sources(context.tender_id, proposal)
-    context.repo.event(context.run_id, "drawing_measurement_calculated", "A drawing quantity was calculated for an agent proposal, without engineer approval.", {
+    context.emit_event("drawing_measurement_calculated", "A drawing quantity was calculated for an agent proposal, without engineer approval.", {
         "artifact_id": proposal.artifact_id, "page": proposal.page,
         "source_ids": proposal.source_ids, "mode": proposal.mode,
         "origin": "agent", "status": "proposed",
@@ -84,9 +137,9 @@ async def calculate_agent_measurement(context, values):
 
 
 def measurement_tools():
-    @function_tool(failure_error_function=None)
+    @scoped_tool
     async def calculate_drawing_measurement(
-        ctx: RunContextWrapper[OfficeContext],
+        ctx: ToolContext[OfficeContext],
         artifact_id: str,
         page: int,
         mode: Literal["length", "area", "count"],
@@ -97,6 +150,7 @@ def measurement_tools():
         source_ids: list[str],
     ) -> str:
         """Calculate a proposed length, area or count after viewing the drawing regions and reading supporting dimension sources. Points are top-left page fractions. Count requires null calibration. This neither saves nor approves a measurement."""
+        ctx.context.require_tool("calculate_drawing_measurement")
         result = await calculate_agent_measurement(ctx.context, {
             "artifact_id": artifact_id, "page": page, "mode": mode, "points": points,
             "calibration_points": calibration_points, "calibration_metres": calibration_metres,

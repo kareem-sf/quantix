@@ -64,7 +64,7 @@ def _technical_word(path, tender, task, sources, warnings):
     document.save(path)
 
 
-def _word(path, tender, overview, view, findings, messages, sources):
+def _word(path, tender, overview, view, findings, analysis, sources):
     document = Document()
     section = document.sections[0]
     section.top_margin = section.bottom_margin = Inches(0.7)
@@ -88,13 +88,14 @@ def _word(path, tender, overview, view, findings, messages, sources):
         )
     )
     document.add_heading("Tender Manager analysis", 1)
-    latest = next((message for message in reversed(messages) if message["role"] == "manager"), None)
-    if latest:
-        for paragraph in latest["content"].split("\n"):
+    if analysis["message"]:
+        for paragraph in analysis["message"]["content"].split("\n"):
             if paragraph.strip():
                 document.add_paragraph(paragraph)
     else:
-        document.add_paragraph("The Tender Manager has not yet recorded an analysis.")
+        document.add_paragraph(analysis["note"])
+        document.add_heading("Review limitation", 2)
+        document.add_paragraph(analysis["review_limitation"])
     document.add_heading("Document coverage", 1)
     coverage = overview["coverage"]
     document.add_paragraph(

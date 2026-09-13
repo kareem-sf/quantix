@@ -2,7 +2,9 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .pending import PendingInstruction
 
 
 class ApiModel(BaseModel):
@@ -16,9 +18,29 @@ class Tender(ApiModel):
     revision: int
     created_at: str
     updated_at: str
+    # engineer: typed by the engineer; pending: the package is still being
+    # analysed (shown as "Analyzing tender package"); package: a provisional
+    # folder name after analysis could not name the project; ai: named by analysis.
+    name_source: Literal["engineer", "pending", "package", "ai"] = "engineer"
 
 
 class CreateTender(ApiModel):
+    # Omitted when the package is added straight away: Quantix names the Tender
+    # from the package and then identifies the project from its documents.
+    name: str | None = Field(default=None, max_length=200)
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("Enter a Tender name.")
+        return value
+
+
+class RenameTender(ApiModel):
     name: str = Field(min_length=1, max_length=200)
 
     @field_validator("name")
@@ -62,6 +84,13 @@ class Evidence(ApiModel):
     score: float = 0
 
 
+class ResultLink(ApiModel):
+    kind: Literal["finding", "plan", "task", "output", "requirement", "boq_item", "work_product", "calculation"]
+    id: str
+    title: str
+    target: str
+
+
 class Finding(ApiModel):
     id: str
     tender_id: str
@@ -85,6 +114,12 @@ class Message(ApiModel):
     source_ids: list[str]
     run_id: str | None = None
     created_at: str
+    result_links: list[ResultLink] = Field(default_factory=list)
+
+
+class MessagePage(ApiModel):
+    items: list[Message]
+    next_cursor: str | None = None
 
 
 class Task(ApiModel):
@@ -129,6 +164,20 @@ class Run(ApiModel):
     updated_at: str
 
 
+class MessageSubmission(ApiModel):
+    outcome: Literal["immediate", "pending"]
+    run: Run | None = None
+    pending: PendingInstruction | None = None
+
+    @model_validator(mode="after")
+    def matching_result(self):
+        if self.outcome == "immediate" and (self.run is None or self.pending is not None):
+            raise ValueError("An immediate message submission must include its run.")
+        if self.outcome == "pending" and (self.pending is None or self.run is not None):
+            raise ValueError("A pending message submission must include its pending instruction.")
+        return self
+
+
 class RunEvent(ApiModel):
     id: int
     run_id: str
@@ -164,6 +213,8 @@ class ImportRequest(ApiModel):
 
 class MessageRequest(ApiModel):
     content: str = Field(min_length=1, max_length=20000)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=160)
+    action: Literal["review_documents"] | None = None
 
 
 class DecisionRequest(ApiModel):
@@ -173,6 +224,7 @@ class DecisionRequest(ApiModel):
 
 class ApprovalRequest(ApiModel):
     rationale: str = Field(min_length=1, max_length=4000)
+    ai_team_fingerprint: str | None = None
 
 
 class Settings(ApiModel):
@@ -185,14 +237,16 @@ class Settings(ApiModel):
 
 
 class SettingsPatch(ApiModel):
-    api_key: SecretStr | None = None
-    model: Literal["gpt-6-astra"] | None = None
     default_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     preferences: str | None = Field(default=None, max_length=10000)
 
 
 class Health(ApiModel):
     version: str
+    ai_setup_revision: int = 7
+    workspace_revision: int = 1
+    office_revision: int = 0
+    reset_pending: bool = False
     provider_ready: bool
     model: str
     home: str

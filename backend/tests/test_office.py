@@ -1,8 +1,12 @@
 import asyncio
 import importlib
+import json
 from types import SimpleNamespace
 
 import pytest
+
+from quantix import diagnostics
+from quantix.office_tools import source_tools
 
 
 class MemoryRepository:
@@ -50,7 +54,7 @@ class MemoryRepository:
         return {"id": tender_id, "name": "School extension"}
 
     def get_run(self, run_id):
-        return {"id": run_id, "tender_id": "tender-1", "status": "running"}
+        return {"id": run_id, "tender_id": "tender-1", "status": "running", "kind": "manager"}
 
     def overview(self, tender_id):
         self.get_tender(tender_id)
@@ -155,22 +159,71 @@ class MemoryRepository:
         self.events.append(dict(run_id=run_id, kind=kind, message=message, data=data))
 
 
-def result_for(output, raw_responses=None):
-    return SimpleNamespace(
-        final_output=output,
-        interruptions=[],
-        raw_responses=raw_responses or [],
-        context_wrapper=SimpleNamespace(
-            usage=SimpleNamespace(
-                requests=1,
-                input_tokens=100,
-                output_tokens=50,
-                total_tokens=150,
-                input_tokens_details=SimpleNamespace(cached_tokens=10),
-                output_tokens_details=SimpleNamespace(reasoning_tokens=25),
-            )
-        ),
-    )
+def api_result_for(output, web_sources=None):
+    return {
+        "output": output,
+        "web_sources": web_sources or [],
+        "usage": {
+            "requests": 1,
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "total_tokens": 150,
+            "cached_input_tokens": 10,
+            "reasoning_tokens": 25,
+            "usage_complete": True,
+            "request_details": [{"input_tokens": 100, "output_tokens": 50}],
+        },
+    }
+
+
+@pytest.fixture(autouse=True)
+def configured_memory_repository(tmp_path, monkeypatch, request):
+    """Keep unit evidence fixtures while using real account and budget services."""
+    from test_catalog_authority import configured_office
+
+    from quantix.repository import Repository
+
+    original = MemoryRepository.__init__
+
+    def initialize(self):
+        original(self)
+        backing = Repository(tmp_path)
+        tender = backing.create_tender("School extension")
+        with backing.db.connect(write=True) as conn:
+            conn.execute("UPDATE tenders SET id='tender-1' WHERE id=?", (tender["id"],))
+        configured_office(
+            tmp_path,
+            monkeypatch,
+            repo=backing,
+            tender={"id": "tender-1"},
+            model_id="gpt-6-astra",
+            reasoning="xhigh",
+            search=True,
+        )
+        run = backing.create_run("tender-1", "manager", "Synthetic work")
+        with backing.db.connect(write=True) as conn:
+            conn.execute("UPDATE runs SET id='run-1' WHERE id=?", (run["id"],))
+        self.db, self.home = backing.db, backing.home
+        self.atomic = backing.atomic
+        self.list_runs = backing.list_runs
+        self.get_task = backing.get_task
+
+    monkeypatch.setattr(MemoryRepository, "__init__", initialize)
+
+    def close_temp_writer():
+        writer = diagnostics._writer
+        if writer is None or writer.directory is None:
+            return
+        root = tmp_path.resolve()
+        directory = writer.directory.resolve()
+        if directory != root and root not in directory.parents:
+            return
+        writer.close()
+        with diagnostics._writer_lock:
+            if diagnostics._writer is writer:
+                diagnostics._writer = None
+
+    request.addfinalizer(close_temp_writer)
 
 
 def office_module():
@@ -200,16 +253,12 @@ def test_derived_measurement_source_keeps_its_proposal_origin_and_status():
     assert result["metadata"]["source_version"] == "1"
 
 
-async def call_tool(agent, name, context, arguments):
-    import json
+async def call_api_tool(options, name, context, arguments):
+    from quantix.office_tools import source_tools
 
-    from agents.tool_context import ToolContext
-
-    tool = next(tool for tool in agent.tools if tool.name == name)
-    encoded = json.dumps(arguments)
-    return await tool.on_invoke_tool(
-        ToolContext(context, tool_name=name, tool_call_id="call-1", tool_arguments=encoded), encoded
-    )
+    definitions = source_tools() + ([options["consult"]] if options.get("consult") else [])
+    definition = next(item for item in definitions if item.name == name)
+    return await definition.invoke(context, arguments)
 
 
 @pytest.mark.asyncio
@@ -217,11 +266,9 @@ async def test_manager_prepares_source_bound_proposals_without_publishing(monkey
     office = office_module()
     repo = MemoryRepository()
 
-    async def provider(agent, prompt, **kwargs):
-        await call_tool(
-            agent, "search_sources", kwargs["context"], {"query": "concrete", "limit": 5}
-        )
-        return result_for(
+    async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
+        await call_api_tool(kwargs, "search_sources", context, {"query": "concrete", "limit": 5})
+        return api_result_for(
             office.OfficeOutput.model_validate(
                 {
                     "summary": "The concrete specification requires review.",
@@ -249,8 +296,8 @@ async def test_manager_prepares_source_bound_proposals_without_publishing(monkey
             )
         )
 
-    monkeypatch.setattr(office.Runner, "run", provider)
-    result = await office.run_manager(repo, "tender-1", "run-1", "Review the package", "test-key")
+    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
+    result = await office.run_manager(repo, "tender-1", "run-1", "Review the package")
     assert result.output.source_ids == ["source-1"]
     assert result.output.findings[0].kind == "requirement"
     assert result.output.plan.tasks[0].role == "Concrete specification reviewer"
@@ -267,12 +314,14 @@ async def test_unread_or_fabricated_source_rejects_entire_output_before_writes(
     office = office_module()
     repo = MemoryRepository()
 
-    async def provider(agent, prompt, **kwargs):
-        return result_for(office.OfficeOutput(summary="Unsupported fact", source_ids=[source_id]))
+    async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
+        return api_result_for(
+            office.OfficeOutput(summary="Unsupported fact", source_ids=[source_id])
+        )
 
-    monkeypatch.setattr(office.Runner, "run", provider)
+    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
     with pytest.raises(ValueError, match="source|evidence"):
-        await office.run_manager(repo, "tender-1", "run-1", "Review", "test-key")
+        await office.run_manager(repo, "tender-1", "run-1", "Review")
     assert repo.replies == []
     assert repo.findings == []
     assert repo.plans == []
@@ -285,40 +334,46 @@ async def test_production_agent_has_bounded_turns_strict_scoped_tools_and_privat
     office = office_module()
     repo = MemoryRepository()
 
-    async def provider(agent, prompt, **kwargs):
-        assert agent.model == "gpt-6-astra"
-        assert agent.model_settings.reasoning.effort == "xhigh"
-        assert 1 <= kwargs["max_turns"] <= 16
-        assert kwargs["run_config"].tracing_disabled is True
-        assert "test-key" not in prompt
+    async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
+        assert route["model_id"] == "gpt-6-astra"
+        assert route["reasoning"] == "xhigh"
+        assert 1 <= connection["_execution_limits"]["max_requests"] <= 16
+        assert credentials == {"api_key": "synthetic-key"}
+        assert "synthetic-key" not in prompt
         assert "C:\\" not in prompt
-        for tool in agent.tools:
-            if hasattr(tool, "params_json_schema"):
-                assert tool.strict_json_schema is True
-                assert tool.params_json_schema["additionalProperties"] is False
-                assert "tender_id" not in tool.params_json_schema["properties"]
-        assert any(tool.name == "web_search" for tool in agent.tools)
-        return result_for(office.OfficeOutput(summary="No project evidence has been analysed."))
+        for definition in source_tools():
+            assert definition.parameters["additionalProperties"] is False
+            assert "tender_id" not in definition.parameters["properties"]
+        assert route["web_search"] is True
+        return api_result_for(office.OfficeOutput(summary="No project evidence has been analysed."))
 
-    monkeypatch.setattr(office.Runner, "run", provider)
-    await office.run_manager(repo, "tender-1", "run-1", "Review", "test-key")
+    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
+    await office.run_manager(repo, "tender-1", "run-1", "Review")
 
 
 @pytest.mark.asyncio
 async def test_specialist_uses_saved_task_sources_and_returns_proposals(monkeypatch):
     office = office_module()
     repo = MemoryRepository()
+    from quantix.ai_policy import AIPolicyService
 
-    async def provider(agent, prompt, **kwargs):
+    actual_routes = AIPolicyService.routes_for
+    # This unit fixture supplies its saved scope directly. Full persisted
+    # plan/team authority is exercised by the combined approval tests.
+    monkeypatch.setattr(
+        AIPolicyService, "routes_for", lambda self, tender_id, **_: actual_routes(self, tender_id)
+    )
+
+    async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
         assert "35 MPa" in prompt
-        assert "Concrete reviewer" in agent.name
-        return result_for(
+        assert json.loads(prompt)["assigned_task"]["role"] == "Concrete reviewer"
+        return api_result_for(
             office.OfficeOutput(
                 summary="Concrete grade checked against the clause.", source_ids=["source-1"]
             )
         )
 
-    monkeypatch.setattr(office.Runner, "run", provider)
+    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
     task = {
         "id": "task-1",
         "plan_id": "plan-1",
@@ -327,7 +382,7 @@ async def test_specialist_uses_saved_task_sources_and_returns_proposals(monkeypa
         "role": "Concrete reviewer",
         "source_ids": ["source-1"],
     }
-    result = await office.run_specialist(repo, "tender-1", "run-1", task, "test-key")
+    result = await office.run_specialist(repo, "tender-1", "run-1", task)
     assert result.output.source_ids == ["source-1"]
     assert result.run_id == "run-1"
     assert repo.replies == []
@@ -341,9 +396,9 @@ async def test_cancellation_propagates_without_a_success_reply(monkeypatch):
     async def provider(*args, **kwargs):
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(office.Runner, "run", provider)
+    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
     with pytest.raises(asyncio.CancelledError):
-        await office.run_manager(repo, "tender-1", "run-1", "Review", "test-key")
+        await office.run_manager(repo, "tender-1", "run-1", "Review")
     assert repo.replies == []
 
 
@@ -353,41 +408,17 @@ async def test_run_cannot_be_used_for_another_tender(monkeypatch):
     repo = MemoryRepository()
     repo.get_run = lambda run_id: {"id": run_id, "tender_id": "other-tender"}
     with pytest.raises(ValueError, match="Tender|tender"):
-        await office.run_manager(repo, "tender-1", "run-1", "Review", "test-key")
+        await office.run_manager(repo, "tender-1", "run-1", "Review")
     assert repo.replies == []
 
 
-def web_response(url="https://supplier.example/products/rebar"):
-    from agents.items import ModelResponse
-    from agents.usage import Usage
-    from openai.types.responses import ResponseOutputMessage
-
-    message = ResponseOutputMessage(
-        id="msg-web",
-        role="assistant",
-        status="completed",
-        type="message",
-        content=[
-            {
-                "type": "output_text",
-                "text": "Published rebar price.",
-                "annotations": [
-                    {
-                        "type": "url_citation",
-                        "url": url,
-                        "title": "Supplier price list",
-                        "start_index": 0,
-                        "end_index": 21,
-                    },
-                ],
-            }
-        ],
-    )
-    return ModelResponse(
-        output=[message],
-        usage=Usage(requests=1, input_tokens=100, output_tokens=50, total_tokens=150),
-        response_id="resp-web",
-    )
+def web_source(url="https://supplier.example/products/rebar"):
+    return {
+        "url": url,
+        "title": "Supplier price list",
+        "retrieved_at": "2026-09-09T00:00:00Z",
+        "cited": True,
+    }
 
 
 def price_proposal(url="https://supplier.example/products/rebar", basis="observed"):
@@ -412,8 +443,8 @@ async def test_research_retains_provider_citations_and_unapproved_price_basis(mo
     repo = MemoryRepository()
     url = "https://supplier.example/products/rebar"
 
-    async def provider(agent, prompt, **kwargs):
-        return result_for(
+    async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
+        return api_result_for(
             office.OfficeOutput.model_validate(
                 {
                     "summary": "A published rebar price is available; commercial terms need confirmation.",
@@ -427,13 +458,11 @@ async def test_research_retains_provider_citations_and_unapproved_price_basis(mo
                     "price_proposals": [price_proposal()],
                 }
             ),
-            [web_response()],
+            [web_source()],
         )
 
-    monkeypatch.setattr(office.Runner, "run", provider)
-    result = await office.run_manager(
-        repo, "tender-1", "run-1", "Research current prices", "test-key"
-    )
+    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
+    result = await office.run_manager(repo, "tender-1", "run-1", "Research current prices")
     assert result.web_sources[0]["url"] == url
     assert result.web_sources[0]["retrieved_at"]
     assert result.output.price_proposals[0].basis == "observed"
@@ -447,20 +476,20 @@ async def test_fabricated_web_price_source_rejects_output_before_writes(monkeypa
     office = office_module()
     repo = MemoryRepository()
 
-    async def provider(agent, prompt, **kwargs):
-        return result_for(
+    async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
+        return api_result_for(
             office.OfficeOutput.model_validate(
                 {
                     "summary": "A price was found.",
                     "price_proposals": [price_proposal("https://invented.example/price")],
                 }
             ),
-            [web_response()],
+            [web_source()],
         )
 
-    monkeypatch.setattr(office.Runner, "run", provider)
+    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
     with pytest.raises(ValueError, match="URL|source|search"):
-        await office.run_manager(repo, "tender-1", "run-1", "Research", "test-key")
+        await office.run_manager(repo, "tender-1", "run-1", "Research")
     assert repo.replies == []
     assert repo.findings == []
 
@@ -470,54 +499,182 @@ async def test_model_output_cannot_include_approval_fields(monkeypatch):
     office = office_module()
     repo = MemoryRepository()
 
-    async def provider(agent, prompt, **kwargs):
-        return result_for({"summary": "Approved", "approved": True})
+    async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
+        return api_result_for({"summary": "Approved", "approved": True})
 
-    monkeypatch.setattr(office.Runner, "run", provider)
+    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
     with pytest.raises(ValueError):
-        await office.run_manager(repo, "tender-1", "run-1", "Review", "test-key")
+        await office.run_manager(repo, "tender-1", "run-1", "Review")
     assert repo.replies == []
 
 
 @pytest.mark.asyncio
-async def test_manager_can_consult_scoped_specialist_without_recursive_delegation(monkeypatch):
-    import json
+async def test_manager_can_consult_scoped_specialist_without_recursive_delegation(tmp_path, monkeypatch):
+    """Keep the historical test target while exercising queued staff work."""
+    from test_catalog_authority import configured_office
+    from test_dynamic_staff import _order, _profile
+    from test_repository import source
+
+    from quantix import ai_execution as ai_execution_module
+    from quantix import staff_runtime as staff_runtime_module
+    from quantix.jobs import JobManager
+    from quantix.plan_review import PlanReviewService
+    from quantix.staff_assignments import StaffAssignmentService
+    from quantix.staff_runtime_models import StaffCompletedDraft, StaffProviderOutput
+    from quantix.staff_store import StaffStore
 
     office = office_module()
-    repo = MemoryRepository()
+    repo, tender, _connections, _connection, _model, policy, _route = configured_office(
+        tmp_path, monkeypatch, model_id="gpt-6-astra", reasoning="xhigh"
+    )
+    tender_id = tender["id"]
+    _, evidence, _ = source(repo, tender_id)
+    plan = repo.create_plan(
+        tender_id,
+        "Synthetic concrete review",
+        [{
+            "title": "Review concrete",
+            "description": "Check the supplied concrete clause.",
+            "role": "Concrete specification reviewer",
+            "source_ids": [evidence["id"]],
+        }],
+    )
+    jobs = JobManager(repo, object())
+    review_service = PlanReviewService(
+        repo,
+        save_runs_in_transaction=jobs.queue_approved_plan_runs,
+        schedule_after_commit=jobs.schedule_approved_plan_runs,
+    )
+    condition = "Use supplied sources only; no market research."
+    review = review_service.review(tender_id, plan["id"])
+    approval = review_service.approve_and_start(
+        tender_id,
+        plan["id"],
+        {"fingerprint": review["fingerprint"], "engineer_confirmed": True, "rationale": condition},
+    )
+    root_id = approval["work_intents"][0]["run_id"]
+    phases = []
 
-    async def provider(starting_agent, input, **kwargs):
-        if starting_agent.name == "Tender Manager":
-            answer = await call_tool(
-                starting_agent,
-                "consult_specialist",
-                kwargs["context"],
-                {
-                    "role": "Concrete specification reviewer",
-                    "brief": "Check concrete requirements",
-                    "source_ids": ["source-1"],
-                },
+    async def provider(route, connection, context, prompt, output_type, **kwargs):
+        # This adapter-shaped test provider is intentionally shared by Manager
+        # and staff so the controller's persisted handoff remains observable.
+        reservation = await kwargs["before_request"](200, 200)
+        usage = {
+            "requests": 1,
+            "input_tokens": 200,
+            "output_tokens": 100,
+            "web_search_calls": 0,
+            "usage_complete": True,
+        }
+        await kwargs["on_response"](usage, reservation)
+        definitions = {item.name: item for item in kwargs["definitions"]}
+        payload = json.loads(prompt.rsplit("\n\n", 1)[-1])
+        assert kwargs.get("consult") is None
+        if context.is_staff:
+            phases.append("staff")
+            assert set(definitions) == {"read_source"}
+            assert "execute_staff" not in definitions
+            assert context.seen_sources == set()
+            packet = payload
+            assert packet["engineer_approved_scope"]["rationale"] == condition
+            assert packet["engineer_request"] == repo.get_run(root_id)["instruction"]
+            await definitions["read_source"].invoke(context, {"source_id": evidence["id"]})
+            child_output = office.OfficeOutput(
+                summary="The colleague inspected the concrete clause.",
+                source_ids=[evidence["id"]],
+                findings=[{
+                    "title": "Child proposed source observation",
+                    "detail": "The supplied source states 30 MPa.",
+                    "kind": "observation",
+                    "source_ids": [evidence["id"]],
+                }],
             )
-            assert json.loads(answer)["source_ids"] == ["source-1"]
-            return result_for(
-                office.OfficeOutput(summary="Concrete review is ready.", source_ids=["source-1"])
-            )
-        assert "35 MPa" in input
-        assert "Concrete specification reviewer" in input
-        assert starting_agent.model_settings.reasoning.effort == "xhigh"
-        assert not any(tool.name == "consult_specialist" for tool in starting_agent.tools)
-        assert kwargs["max_turns"] <= 8
-        return result_for(
-            office.OfficeOutput(
-                summary="Concrete strength is specified as 35 MPa.", source_ids=["source-1"]
-            )
-        )
+            return {
+                "output": StaffProviderOutput(
+                    result=StaffCompletedDraft(output=child_output)
+                ),
+                "usage": usage,
+                "web_sources": [],
+            }
 
-    monkeypatch.setattr(office.Runner, "run", provider)
-    result = await office.run_manager(repo, "tender-1", "run-1", "Review concrete", "test-key")
-    assert result.output.source_ids == ["source-1"]
-    assert any(event["kind"] == "specialist_result" for event in repo.events)
-    assert repo.replies == []
+        phases.append("manager")
+        assert route["reasoning"] == "xhigh"
+        assert connection["_execution_limits"]["max_requests"] <= 12
+        assert payload["engineer_approved_scope"]["rationale"] == condition
+        assert "consult_specialist" not in definitions
+        if phases.count("manager") == 1:
+            await definitions["read_source"].invoke(context, {"source_id": evidence["id"]})
+            profile = _profile(role="Concrete specification reviewer").model_dump(mode="json")
+            profile["requested_tool_ids"] = ["read_source"]
+            order = _order(source_ids=[evidence["id"]]).model_dump(mode="json")
+            created = json.loads(
+                await definitions["create_staff"].invoke(
+                    context, {"profile": profile, "work_order": order}, invocation_id="create-staff"
+                )
+            )
+            staff = StaffStore(repo).get_staff(tender_id, created["staff"]["id"])
+            work_order = StaffStore(repo).get_work_order(tender_id, created["work_order"]["id"])
+            queued = json.loads(
+                await definitions["execute_staff"].invoke(
+                    context,
+                    {
+                        "staff_id": staff.id,
+                        "work_order_id": work_order.id,
+                        "route_option_id": payload["reviewed_delegation"]["route_options"][0]["id"],
+                    },
+                    invocation_id="queue-staff",
+                )
+            )
+            assert queued["assignment"]["status"] == "queued"
+            return {"output": office.OfficeOutput(summary="The scoped colleague is queued."), "usage": usage, "web_sources": []}
+
+        assignments = StaffAssignmentService(repo)
+        assignment = assignments.list(tender_id)[0]
+        assert assignment.result_id
+        manager_sources_before_draft = set(context.seen_sources)
+        await definitions["read_staff_result"].invoke(context, {"result_id": assignment.result_id})
+        assert context.seen_sources == manager_sources_before_draft
+        await definitions["read_source"].invoke(context, {"source_id": evidence["id"]})
+        return {
+            "output": office.OfficeOutput(
+                summary="The Manager consolidated the colleague's review.",
+                source_ids=[evidence["id"]],
+                findings=[{
+                    "title": "Manager consolidation",
+                    "detail": "The source-backed colleague result is ready for engineer review.",
+                    "kind": "observation",
+                    "source_ids": [evidence["id"]],
+                }],
+            ),
+            "usage": usage,
+            "web_sources": [],
+        }
+
+    async def adapter(route, connection, credentials, context, prompt, output_type, **kwargs):
+        return await provider(route, connection, context, prompt, output_type, **kwargs)
+
+    try:
+        with monkeypatch.context() as local:
+            local.setattr("quantix.ai_execution.execute_api", adapter)
+            local.setattr("quantix.staff_runtime.execute_api", adapter)
+            await asyncio.gather(*list(jobs.tasks.values()))
+    finally:
+        # ``staff_runtime`` imports the executor by value.  Restore that
+        # module-level alias before the next test module starts.
+        staff_runtime_module.execute_api = ai_execution_module.execute_api
+
+    root = repo.get_run(root_id)
+    assert phases == ["manager", "staff", "manager"], root.get("error")
+    assert root["status"] == "completed", root.get("error")
+    with repo.db.connect() as conn:
+        assert policy._totals(conn, tender_id, root_id)[2] == 3
+    saved_assignment = StaffAssignmentService(repo).list(tender_id)[0]
+    saved_result = StaffAssignmentService(repo).get_result(tender_id, saved_assignment.result_id)
+    assert saved_assignment.status == "completed"
+    assert saved_result.office_output.findings[0].title == "Child proposed source observation"
+    assert [finding["title"] for finding in repo.list_findings(tender_id)] == ["Manager consolidation"]
+    assert len(StaffStore(repo).list_staff(tender_id)) == 1
+    await jobs.close()
 
 
 @pytest.mark.asyncio
@@ -541,17 +698,17 @@ async def test_source_read_keeps_spreadsheet_formula_context_and_marks_truncatio
         "private_path": r"C:\private\pricing.xlsx",
     }
 
-    async def provider(agent, prompt, **kwargs):
+    async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
         source = json.loads(
-            await call_tool(agent, "read_source", kwargs["context"], {"source_id": "source-1"})
+            await call_api_tool(kwargs, "read_source", context, {"source_id": "source-1"})
         )
         assert source["text_is_partial"] is True
         assert source["metadata"]["cells"][0]["formula"] == "=D12*E12"
         assert "private_path" not in source["metadata"]
-        return result_for(office.OfficeOutput(summary="This source needs further inspection."))
+        return api_result_for(office.OfficeOutput(summary="This source needs further inspection."))
 
-    monkeypatch.setattr(office.Runner, "run", provider)
-    await office.run_manager(repo, "tender-1", "run-1", "Inspect", "test-key")
+    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
+    await office.run_manager(repo, "tender-1", "run-1", "Inspect")
 
 
 @pytest.mark.asyncio
@@ -590,15 +747,15 @@ async def test_existing_engineer_decisions_and_plan_survive_manager_context(monk
 
     repo.overview = overview
 
-    async def provider(agent, prompt, **kwargs):
+    async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
         context = json.loads(prompt)
         assert context["existing_findings"][0]["state"] == "accepted"
         assert context["plan"]["status"] == "approved"
         assert context["plan"]["tasks"][0]["title"] == "Check delivery"
-        return result_for(office.OfficeOutput(summary="The approved work remains visible."))
+        return api_result_for(office.OfficeOutput(summary="The approved work remains visible."))
 
-    monkeypatch.setattr(office.Runner, "run", provider)
-    await office.run_manager(repo, "tender-1", "run-1", "Where are we?", "test-key")
+    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
+    await office.run_manager(repo, "tender-1", "run-1", "Where are we?")
 
 
 @pytest.mark.asyncio
@@ -606,14 +763,14 @@ async def test_summary_cannot_bypass_web_source_validation(monkeypatch):
     office = office_module()
     repo = MemoryRepository()
 
-    async def provider(agent, prompt, **kwargs):
-        return result_for(
+    async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
+        return api_result_for(
             office.OfficeOutput(summary="Price source: https://invented.example/price")
         )
 
-    monkeypatch.setattr(office.Runner, "run", provider)
+    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
     with pytest.raises(ValueError, match="URL|source|search"):
-        await office.run_manager(repo, "tender-1", "run-1", "Research", "test-key")
+        await office.run_manager(repo, "tender-1", "run-1", "Research")
     assert repo.replies == []
 
 
@@ -621,3 +778,66 @@ def test_empty_proposals_are_rejected_before_repository_writes():
     office = office_module()
     with pytest.raises(ValueError):
         office.OfficeOutput(summary="   ")
+
+
+def result_for(output, raw_responses=None):
+    return SimpleNamespace(
+        final_output=output,
+        interruptions=[],
+        raw_responses=raw_responses or [],
+        context_wrapper=SimpleNamespace(
+            usage=SimpleNamespace(
+                requests=1,
+                input_tokens=100,
+                output_tokens=50,
+                total_tokens=150,
+                input_tokens_details=SimpleNamespace(cached_tokens=10),
+                output_tokens_details=SimpleNamespace(reasoning_tokens=25),
+            )
+        ),
+    )
+
+
+async def call_tool(agent, name, context, arguments):
+    import json
+
+    from agents.tool_context import ToolContext
+
+    tool = next(tool for tool in agent.tools if tool.name == name)
+    encoded = json.dumps(arguments)
+    return await tool.on_invoke_tool(
+        ToolContext(context, tool_name=name, tool_call_id="call-1", tool_arguments=encoded), encoded
+    )
+
+
+def web_response(url="https://supplier.example/products/rebar"):
+    from agents.items import ModelResponse
+    from agents.usage import Usage
+    from openai.types.responses import ResponseOutputMessage
+
+    message = ResponseOutputMessage(
+        id="msg-web",
+        role="assistant",
+        status="completed",
+        type="message",
+        content=[
+            {
+                "type": "output_text",
+                "text": "Published rebar price.",
+                "annotations": [
+                    {
+                        "type": "url_citation",
+                        "url": url,
+                        "title": "Supplier price list",
+                        "start_index": 0,
+                        "end_index": 21,
+                    },
+                ],
+            }
+        ],
+    )
+    return ModelResponse(
+        output=[message],
+        usage=Usage(requests=1, input_tokens=100, output_tokens=50, total_tokens=150),
+        response_id="resp-web",
+    )

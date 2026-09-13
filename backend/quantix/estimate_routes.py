@@ -14,6 +14,8 @@ from .estimate_models import (
     QuantityRequest,
     RateApproval,
     RateProposalRecord,
+    SourceBoqProposal,
+    SourceRowExclusion,
 )
 from .estimates import EstimateService
 from .outputs import OutputService
@@ -30,6 +32,14 @@ def create_router(repo):
     @router.post("/tenders/{tender_id}/estimate/refresh", response_model=EstimateView)
     def refresh(tender_id: str):
         return estimates.refresh(tender_id)
+
+    @router.post("/tenders/{tender_id}/estimate/source-rows", response_model=EstimateItem)
+    def propose_source_row(tender_id: str, request: SourceBoqProposal):
+        return estimates.propose_source_row(tender_id, request.model_dump())
+
+    @router.post("/tenders/{tender_id}/estimate/source-rows/{item_id}/exclude", response_model=EstimateView)
+    def exclude_source_row(tender_id: str, item_id: str, request: SourceRowExclusion):
+        return estimates.exclude_source_row(tender_id, item_id, request.model_dump())
 
     @router.patch("/tenders/{tender_id}/estimate/items/{item_id}", response_model=EstimateItem)
     def update(tender_id: str, item_id: str, request: ItemUpdate):

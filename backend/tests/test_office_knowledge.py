@@ -1,10 +1,10 @@
 import json
 
 import pytest
-from agents.tool_context import ToolContext
+from office_test_support import invoke_tool
 
 from quantix.knowledge import KnowledgeService
-from quantix.office_tools import OfficeContext, source_tools
+from quantix.office_tools import OfficeContext
 from quantix.repository import Repository
 
 
@@ -18,16 +18,7 @@ def workspace(tmp_path):
 
 
 async def invoke(context, name, args):
-    tool = next(tool for tool in source_tools() if tool.name == name)
-    encoded = json.dumps(args)
-    return json.loads(
-        await tool.on_invoke_tool(
-            ToolContext(
-                context, tool_name=name, tool_call_id="knowledge-test", tool_arguments=encoded
-            ),
-            encoded,
-        )
-    )
+    return json.loads(await invoke_tool(context, name, args))
 
 
 @pytest.mark.asyncio
@@ -47,6 +38,8 @@ async def test_office_reads_approved_notes_without_treating_them_as_tender_evide
     assert result["notes"][0]["id"] == note["id"]
     assert result["current_tender_evidence"] is False
     assert context.seen_sources == set()
+    from quantix.office_tools import source_tools
+
     assert all(
         "approve" not in tool.name and "withdraw" not in tool.name for tool in source_tools()
     )

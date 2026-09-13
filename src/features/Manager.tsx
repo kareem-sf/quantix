@@ -1,19 +1,58 @@
-import { useCallback, useState } from "react";
-import { ClipboardList, File, MessageSquare, PanelRight } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import {
-  isActive,
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { FileText, ListChecks, Play, Sparkles, Square } from "lucide-react";
+import {
   tenderPath,
   useApi,
   useRefresh,
   useResource,
   type Schema,
 } from "../api";
-import { Empty, ErrorNotice, Loading, Modal, Status } from "../components/ui";
+import { BrandMark } from "../app/BrandMark";
+import { Empty, ErrorNotice, Loading } from "../components/common";
+import { AnimatedBorder } from "@/components/ui/animated-border";
+import { ArrowIcon } from "@/components/ui/animated-icons";
+import { linkUnderline } from "@/components/ui/animated-link";
+import { AnimatedNumber } from "@/components/ui/animated-number";
+import { Button } from "@/components/ui/button";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
+import { ProgressiveBlur } from "@/components/ui/progressive-blur";
+import { Typewriter } from "@/components/ui/typewriter";
+import { WorkingDots } from "@/components/ui/working-dots";
+import { cn } from "@/lib/utils";
 import { Composer } from "./Composer";
-import { Citations, type SourceSelection } from "./Sources";
-import { DecisionForm, PlanView, RunRow } from "./Work";
+import { ManagerMessage } from "./ManagerMessage";
+import { ModelPicker } from "./ModelPicker";
+import { PendingMessage } from "./PendingMessage";
+import { PlanReview } from "./PlanReview";
+import { RunRow } from "./RunRow";
+import { AnalysisStages } from "./AnalysisStages";
+import { ThinkingPicker } from "./ThinkingPicker";
+import { LiveRunStream } from "./LiveRunStream";
+import type { SourceSelection } from "./Sources";
+import { parseRouteContext } from "../navigation/routes";
+
+type MessagePage = Schema<"MessagePage">;
+
+const suggestions = [
+  "summarise the scope and the key risks",
+  "find BOQ items the drawings do not cover",
+  "draft clarification questions for the client",
+  "check what the submission must include",
+];
 
 export function Manager({
   overview,
@@ -22,6 +61,11 @@ export function Manager({
   onImport,
   onSettings,
   onSource,
+  onDocuments,
+  onReviewDocuments,
+  onRecord,
+  onRepair,
+  onCustomizeManager,
 }: {
   overview: Schema<"Overview">;
   artifacts: Schema<"Artifact">[];
@@ -29,357 +73,624 @@ export function Manager({
   onImport: () => void;
   onSettings: () => void;
   onSource: (source: SourceSelection) => void;
+  onDocuments?: () => void;
+  onReviewDocuments?: () => void | Promise<void>;
+  onRecord?: (view: string, recordId: string) => void;
+  onRepair?: (target: string) => void;
+  onCustomizeManager?: () => void;
 }) {
-  const tenderId = overview.tender.id,
-    api = useApi(),
-    refresh = useRefresh();
-  const messages = useResource<Schema<"Message">[]>(
-    `${tenderPath(tenderId)}/messages`,
+  const tenderId = overview.tender.id;
+  const api = useApi();
+  const refresh = useRefresh();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+  const cursorInitialized = useRef(false);
+  const historyAnchor = useRef<{ id: string; top: number } | null>(null);
+  const reviewInFlight = useRef(false);
+  const reviewAttempt = useRef<string | null>(null);
+  const policy = useResource<Schema<"TenderAIRecord">>(
+    `${tenderPath(tenderId)}/ai-policy`,
+  );
+  const messages = useResource<Schema<"Message">[] | MessagePage>(
+    `${tenderPath(tenderId)}/messages?limit=50`,
     true,
   );
   const runs = useResource<Schema<"Run">[]>(
     `${tenderPath(tenderId)}/runs`,
     true,
   );
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const closeDetails = useCallback(() => setDetailsOpen(false), []);
-  const latestRun = runs.data
-    ?.filter((run) => run.kind === "manager" || run.kind === "import")
+  const pendingQuery = useResource<Schema<"PendingInstruction"> | null>(
+    `${tenderPath(tenderId)}/pending-message`,
+    true,
+  );
+  const [history, setHistory] = useState<Schema<"Message">[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [historyError, setHistoryError] = useState<unknown>(null);
+  const [reviewPlanId, setReviewPlanId] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState<unknown>(null);
+  const [stopNotice, setStopNotice] = useState("");
+  const [reviewDocumentsError, setReviewDocumentsError] =
+    useState<unknown>(null);
+  const [reviewingDocuments, setReviewingDocuments] = useState(false);
+  const [aiPickerOpen, setAiPickerOpen] = useState(false);
+
+  useEffect(() => {
+    const incoming = Array.isArray(messages.data)
+      ? messages.data
+      : (messages.data?.items ?? []);
+    if (!messages.data) return;
+    setHistory((current) => mergeMessages(current, incoming));
+    if (!cursorInitialized.current) {
+      setNextCursor(
+        Array.isArray(messages.data)
+          ? null
+          : (messages.data.next_cursor ?? null),
+      );
+      cursorInitialized.current = true;
+    }
+  }, [messages.data]);
+
+  const activeRuns = overview.active_runs;
+  const runList = Array.isArray(runs.data) ? runs.data : [];
+  const attachedRunIds = new Set(
+    history
+      .filter((message) => message.role === "engineer" && message.run_id)
+      .map((message) => message.run_id!),
+  );
+  // Registering and analysing a package show their stages instead of a generic line.
+  const packageRun = activeRuns.find((run) =>
+    ["import", "analysis"].includes(run.kind),
+  );
+  const latestRun = runList
+    .filter((run) =>
+      ["manager", "conversation", "import", "analysis"].includes(run.kind),
+    )
     .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
-  const analyses = overview.findings.filter(
-    (finding) => finding.origin === "agent",
-  );
-  const processing = overview.findings.filter(
-    (finding) => finding.origin !== "agent",
-  );
-  const changes = () => {
-    requestAnimationFrame(() =>
-      document
-        .querySelector<HTMLTextAreaElement>(
-          '[aria-label="Message to Tender Manager"]',
-        )
-        ?.focus(),
-    );
+
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    const anchor = historyAnchor.current;
+    if (anchor) {
+      const element = Array.from(
+        scroll.querySelectorAll<HTMLElement>("[data-message-id]"),
+      ).find((node) => node.dataset.messageId === anchor.id);
+      if (element)
+        scroll.scrollTop += element.getBoundingClientRect().top - anchor.top;
+      historyAnchor.current = null;
+    } else if (atBottomRef.current) scroll.scrollTop = scroll.scrollHeight;
+    // Run state now renders after the history, so a run that starts, stops or
+    // fails changes the end of the conversation without adding a message.
+  }, [history, activeRuns, latestRun?.id, latestRun?.status]);
+
+  const pending =
+    pendingQuery.data && !Array.isArray(pendingQuery.data)
+      ? pendingQuery.data
+      : null;
+  const policyRecord =
+    policy.data && !Array.isArray(policy.data) ? policy.data : undefined;
+  const aiMissing = policyRecord ? policyRecord.manager === null : false;
+  const openTarget = (target: string) => {
+    if (onRepair) onRepair(target);
+    else window.location.hash = target;
   };
+
+  const loadEarlier = useCallback(async () => {
+    if (!nextCursor || loadingEarlier) return;
+    setLoadingEarlier(true);
+    atBottomRef.current = false;
+    setHistoryError(null);
+    try {
+      const page = await api.get<MessagePage>(
+        `${tenderPath(tenderId)}/messages?limit=50&cursor=${encodeURIComponent(nextCursor)}`,
+      );
+      // Anchor the message currently being read. Total-height deltas also
+      // include concurrent replies appended below and would shift the view.
+      const scroll = scrollRef.current;
+      const nodes = scroll
+        ? Array.from(scroll.querySelectorAll<HTMLElement>("[data-message-id]"))
+        : [];
+      const anchor =
+        nodes.find(
+          (node) =>
+            node.getBoundingClientRect().bottom >
+            (scroll?.getBoundingClientRect().top ?? 0),
+        ) ?? nodes[0];
+      if (anchor?.dataset.messageId)
+        historyAnchor.current = {
+          id: anchor.dataset.messageId,
+          top: anchor.getBoundingClientRect().top,
+        };
+      setHistory((current) => mergeMessages(page.items, current));
+      setNextCursor(page.next_cursor ?? null);
+    } catch (failure) {
+      setHistoryError(failure);
+    } finally {
+      setLoadingEarlier(false);
+    }
+  }, [api, loadingEarlier, nextCursor, tenderId]);
+
+  async function stopAllWork() {
+    if (stopping) return;
+    setStopping(true);
+    setStopError(null);
+    setStopNotice("");
+    try {
+      await api.post<Schema<"MutationReceipt">>(
+        `${tenderPath(tenderId)}/work/stop`,
+      );
+      await refresh();
+      setStopNotice(
+        "Stop requested. Review each run below for its final status.",
+      );
+    } catch (failure) {
+      setStopError(failure);
+    } finally {
+      setStopping(false);
+    }
+  }
+
+  async function reviewDocuments() {
+    if (reviewInFlight.current || pending) return;
+    reviewInFlight.current = true;
+    setReviewingDocuments(true);
+    setReviewDocumentsError(null);
+    try {
+      if (onReviewDocuments) await onReviewDocuments();
+      else
+        await api.post<Schema<"MessageSubmission">>(
+          `${tenderPath(tenderId)}/messages`,
+          {
+            content: "Review the tender documents and suggest the next steps.",
+            action: "review_documents",
+            idempotency_key:
+              (reviewAttempt.current ??= `review-documents-${tenderId}-${Date.now()}`),
+          } satisfies Schema<"MessageRequest">,
+        );
+      reviewAttempt.current = null;
+      await refresh();
+    } catch (failure) {
+      setReviewDocumentsError(failure);
+    } finally {
+      reviewInFlight.current = false;
+      setReviewingDocuments(false);
+    }
+  }
+
+  function openPlanReview(planId: string) {
+    if (onRecord) onRecord("plan-review", planId);
+    else setReviewPlanId(planId);
+  }
+
+  if (reviewPlanId)
+    return (
+      <PlanReview
+        tenderId={tenderId}
+        planId={reviewPlanId}
+        onBack={() => setReviewPlanId(null)}
+        onSource={onSource}
+      />
+    );
+
+  const conversationEmpty =
+    !messages.isPending &&
+    history.length === 0 &&
+    overview.artifact_count > 0 &&
+    activeRuns.length === 0 &&
+    !pending;
+
   return (
-    <div className="manager-layout">
-      <div className="manager-column">
-        <div className="manager-scroll">
-          <div className="manager-heading">
-            <span className="manager-mark">
-              <ClipboardList size={25} />
-            </span>
-            <div>
-              <h2>Tender Manager</h2>
-              <p className="muted">
-                {overview.artifact_count
-                  ? "Review the sources, agree the scope and direct the work."
-                  : "Start with the tender documents."}
-              </p>
-            </div>
-            <button
-              className="icon-button details-toggle"
-              onClick={() => setDetailsOpen(true)}
-              aria-label="Open project details"
-            >
-              <PanelRight size={20} />
-            </button>
-          </div>
-          {settings && !settings.provider_ready ? (
-            <div className="setup-note">
-              <p>
-                Configure the AI connection to work with the Tender Manager.
-                Document importing and source inspection remain available.
-              </p>
-              <button className="text-button" onClick={onSettings}>
-                Open settings
-              </button>
-            </div>
-          ) : null}
-          {overview.active_runs.map((run) => (
-            <RunRow key={run.id} run={run} compact />
-          ))}
-          {latestRun &&
-          ["failed", "cancelled", "interrupted"].includes(latestRun.status) ? (
-            <RunRow run={latestRun} compact />
-          ) : null}
-          <ErrorNotice error={messages.error || runs.error} />
-          {overview.artifact_count === 0 &&
-          overview.active_runs.length === 0 ? (
-            <Empty
-              title="Add the tender documents"
-              action={
-                <button className="button primary" onClick={onImport}>
-                  Import package
-                </button>
-              }
-            >
-              The manager will use the package to understand the project and
-              propose the work.
-            </Empty>
-          ) : null}
-          {messages.isPending ? <Loading>Loading conversation…</Loading> : null}
-          {messages.data?.map((message) => (
-            <article
-              className={`message message-${message.role}`}
-              key={message.id}
-            >
-              <div className="message-label">
-                {message.role === "engineer"
-                  ? "You"
-                  : message.role === "manager"
-                    ? "Tender Manager"
-                    : "Office record"}
-              </div>
-              <div className="markdown">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {message.content}
-                </ReactMarkdown>
-              </div>
-              <Citations
-                ids={message.source_ids}
-                tenderId={tenderId}
-                onOpen={onSource}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col">
+        {activeRuns.length || onCustomizeManager ? (
+          <header className="flex shrink-0 items-center justify-end gap-2 px-4 pt-3">
+            {onCustomizeManager ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onCustomizeManager}
+              >
+                <Sparkles data-icon="inline-start" />
+                Customize Manager
+              </Button>
+            ) : null}
+            {activeRuns.length ? (
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                disabled={stopping}
+                onClick={() => void stopAllWork()}
+              >
+                <Square data-icon="inline-start" />
+                {stopping ? "Stopping…" : "Stop all work"}
+              </Button>
+            ) : null}
+          </header>
+        ) : null}
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <ProgressiveBlur position="top" height="1.75rem" blurAmount="3px" />
+          <div
+            ref={scrollRef}
+            className="manager-scroll min-h-0 flex-1 overflow-y-auto p-0"
+            aria-label="Manager conversation"
+            onScroll={() => {
+              const element = scrollRef.current;
+              if (element)
+                atBottomRef.current =
+                  element.scrollHeight -
+                    element.scrollTop -
+                    element.clientHeight <
+                  70;
+            }}
+          >
+            <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6">
+              <ErrorNotice
+                error={
+                  messages.error ||
+                  pendingQuery.error ||
+                  runs.error ||
+                  historyError ||
+                  stopError ||
+                  reviewDocumentsError
+                }
               />
-            </article>
-          ))}
-          {analyses.length ? (
-            <section className="analysis-section">
-              <h2>Document analysis</h2>
-              {analyses.map((finding) => (
-                <FindingRow
-                  key={finding.id}
-                  finding={finding}
-                  tenderId={tenderId}
-                  onSource={onSource}
+              {stopNotice ? (
+                <p className="text-sm text-muted-foreground" role="status">
+                  {stopNotice}
+                </p>
+              ) : null}
+              {overview.artifact_count > 0 ? (
+                <ImportSummary
+                  artifactCount={overview.artifact_count}
+                  onDocuments={onDocuments}
+                  onReviewDocuments={() => void reviewDocuments()}
+                  onChooseAI={() => setAiPickerOpen(true)}
+                  ready={!!policyRecord?.manager}
+                  disabled={reviewingDocuments || !!pending}
+                  busy={activeRuns.length > 0}
                 />
+              ) : null}
+              {overview.artifact_count === 0 && activeRuns.length === 0 ? (
+                <Empty
+                  title="Add the tender documents"
+                  action={
+                    <Button onClick={onImport}>
+                      <FileText data-icon="inline-start" />
+                      Import package
+                    </Button>
+                  }
+                >
+                  The manager will use the package to understand the project and
+                  propose the work.
+                </Empty>
+              ) : null}
+              {conversationEmpty ? (
+                <div className="flex flex-col items-center gap-3 py-10 text-center">
+                  <BrandMark size={64} />
+                  <h2 className="text-xl font-semibold tracking-tight">
+                    What should we work on?
+                  </h2>
+                  <p className="max-w-md text-sm text-muted-foreground">
+                    Ask the Tender Manager to{" "}
+                    <Typewriter
+                      words={suggestions}
+                      className="text-foreground"
+                    />
+                  </p>
+                </div>
+              ) : null}
+              {nextCursor ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="self-center text-muted-foreground"
+                  disabled={loadingEarlier}
+                  onClick={() => void loadEarlier()}
+                >
+                  {loadingEarlier
+                    ? "Loading earlier messages…"
+                    : "Load earlier messages"}
+                </Button>
+              ) : null}
+              {messages.isPending && !history.length ? (
+                <Loading>Loading conversation…</Loading>
+              ) : null}
+              {history.map((message) => (
+                <Fragment key={message.id}>
+                  <ManagerMessage
+                    message={message}
+                    tenderId={tenderId}
+                    onSource={onSource}
+                    onArtifact={
+                      onRecord
+                        ? (target) => {
+                            const record = parseRouteContext(target);
+                            if (
+                              record.kind === "tender" &&
+                              record.tenderId === tenderId &&
+                              record.recordId &&
+                              record.view &&
+                              [
+                                "plan",
+                                "plan-review",
+                                "finding",
+                                "decisions",
+                                "output",
+                                "office-result",
+                                "staff-result",
+                                "work-product",
+                                "calculation",
+                              ].includes(record.view)
+                            )
+                              onRecord(record.view, record.recordId);
+                            else openTarget(target);
+                          }
+                        : undefined
+                    }
+                  />
+                  {message.role === "engineer" &&
+                  message.run_id &&
+                  history.find(
+                    (item) =>
+                      item.role === "engineer" &&
+                      item.run_id === message.run_id,
+                  )?.id === message.id ? (
+                    <LiveRunStream
+                      tenderId={tenderId}
+                      runId={message.run_id}
+                      startedAt={
+                        runList.find((run) => run.id === message.run_id)
+                          ?.created_at ?? message.created_at
+                      }
+                      status={
+                        runList.find((run) => run.id === message.run_id)?.status
+                      }
+                      onSource={onSource}
+                      onRunDetails={() =>
+                        onRecord
+                          ? onRecord("run", message.run_id!)
+                          : openTarget(
+                              `/tenders/${encodeURIComponent(tenderId)}/work?view=run&record=${encodeURIComponent(message.run_id!)}`,
+                            )
+                      }
+                    />
+                  ) : null}
+                </Fragment>
               ))}
-            </section>
-          ) : overview.artifact_count > 0 && !overview.plan ? (
-            <section className="analysis-section">
-              <h2>Document analysis</h2>
-              <p className="muted">
-                No findings have been recorded yet. Ask the manager to review
-                the documents and propose a plan.
-              </p>
-            </section>
-          ) : null}
-          {processing.length ? (
-            <details className="processing-findings">
-              <summary>
-                Document reading notes <span>{processing.length}</span>
-              </summary>
-              <p className="field-help">
-                These notes describe imported files and what could be read. The
-                manager's review is recorded separately.
-              </p>
-              {processing.map((finding) => (
-                <FindingRow
-                  key={finding.id}
-                  finding={finding}
-                  tenderId={tenderId}
-                  onSource={onSource}
+              {/* Work in progress is just the line below: the run card repeated
+                  the same thing as a status panel. Stopped work still shows its
+                  card, because that is the only place the reason appears, and it
+                  belongs at the end of the conversation where the engineer is
+                  reading rather than above the history where it scrolls away. */}
+              {packageRun ? (
+                <AnalysisStages run={packageRun} />
+              ) : activeRuns.length ? (
+                <div
+                  className="flex items-center gap-2.5 text-sm text-muted-foreground"
+                  aria-live="polite"
+                >
+                  <WorkingDots className="text-foreground/70" />
+                  <span>Tender Manager is working</span>
+                </div>
+              ) : null}
+              {activeRuns
+                .filter(
+                  (run) =>
+                    ["manager", "conversation"].includes(run.kind) &&
+                    !attachedRunIds.has(run.id),
+                )
+                .map((run) => (
+                  <LiveRunStream
+                    key={run.id}
+                    tenderId={tenderId}
+                    runId={run.id}
+                    status={run.status}
+                    startedAt={run.created_at}
+                    onSource={onSource}
+                    onRunDetails={() =>
+                      onRecord
+                        ? onRecord("run", run.id)
+                        : openTarget(
+                            `/tenders/${encodeURIComponent(tenderId)}/work?view=run&record=${encodeURIComponent(run.id)}`,
+                          )
+                    }
+                  />
+                ))}
+              {!activeRuns.length &&
+              latestRun &&
+              ["failed", "cancelled", "interrupted"].includes(
+                latestRun.status,
+              ) ? (
+                <RunRow run={latestRun} compact />
+              ) : null}
+              {overview.plan &&
+              !history.some((message) =>
+                message.result_links?.some(
+                  (link) =>
+                    link.kind === "plan" && link.id === overview.plan?.id,
+                ),
+              ) ? (
+                <PlanCard
+                  plan={overview.plan}
+                  onReview={() => openPlanReview(overview.plan!.id)}
                 />
-              ))}
-            </details>
-          ) : null}
-          {overview.plan ? (
-            <PlanView
-              plan={overview.plan}
-              tenderId={tenderId}
-              onChanges={changes}
-              onSource={onSource}
-            />
-          ) : null}
+              ) : null}
+              {pending ? (
+                <PendingMessage
+                  key={pending.id}
+                  tenderId={tenderId}
+                  pending={pending}
+                  onRepair={onRepair}
+                  onChanged={async () => {
+                    await pendingQuery.refetch();
+                    await refresh();
+                  }}
+                />
+              ) : null}
+            </div>
+          </div>
+          <ProgressiveBlur position="bottom" height="2rem" blurAmount="3px" />
         </div>
         <Composer
           tenderId={tenderId}
           onImport={onImport}
-          busy={overview.active_runs.some(
-            (run) => run.kind === "manager" && isActive(run.status),
-          )}
-          onSend={async (content) => {
-            await api.post<Schema<"Run">>(`${tenderPath(tenderId)}/messages`, {
-              content,
-            } satisfies Schema<"MessageRequest">);
+          blocked={aiMissing}
+          onBlocked={() => setAiPickerOpen(true)}
+          modelPicker={
+            <>
+              <ModelPicker
+                tenderId={tenderId}
+                policy={policyRecord}
+                policyPending={policy.isPending}
+                busy={activeRuns.length > 0}
+                open={aiPickerOpen}
+                onOpenChange={setAiPickerOpen}
+                onManageAccounts={onSettings}
+                onAdvanced={() =>
+                  openTarget(
+                    `/tenders/${encodeURIComponent(tenderId)}/work?view=ai`,
+                  )
+                }
+              />
+              <ThinkingPicker
+                tenderId={tenderId}
+                busy={activeRuns.length > 0}
+              />
+            </>
+          }
+          busy={activeRuns.length > 0}
+          hasPending={!!pending}
+          onSend={async (content, idempotencyKey) => {
+            const result = await api.post<Schema<"MessageSubmission">>(
+              `${tenderPath(tenderId)}/messages`,
+              {
+                content,
+                idempotency_key: idempotencyKey,
+              } satisfies Schema<"MessageRequest">,
+            );
             await refresh();
+            return result;
           }}
         />
       </div>
-      <ContextRail
-        overview={overview}
-        artifacts={artifacts}
-        onSource={onSource}
-      />
-      {detailsOpen ? (
-        <Modal title="Project details" onClose={closeDetails}>
-          <div className="project-details-modal">
-            <ContextRail
-              overview={overview}
-              artifacts={artifacts}
-              onSource={(selection) => {
-                closeDetails();
-                onSource(selection);
-              }}
-            />
-          </div>
-        </Modal>
-      ) : null}
     </div>
   );
 }
-function FindingRow({
-  finding,
-  tenderId,
-  onSource,
+
+function ImportSummary({
+  artifactCount,
+  onDocuments,
+  onReviewDocuments,
+  onChooseAI,
+  ready,
+  disabled,
+  busy,
 }: {
-  finding: Schema<"Finding">;
-  tenderId: string;
-  onSource: (source: SourceSelection) => void;
+  artifactCount: number;
+  onDocuments?: () => void;
+  onReviewDocuments: () => void;
+  onChooseAI: () => void;
+  ready: boolean;
+  disabled: boolean;
+  busy: boolean;
 }) {
-  const api = useApi(),
-    refresh = useRefresh();
-  const [decision, setDecision] = useState<
-    Schema<"DecisionRequest">["decision"] | null
-  >(null);
-  const close = useCallback(() => setDecision(null), []);
   return (
-    <article className="finding-row">
-      <div className="finding-heading">
-        <strong>{finding.title}</strong>
-        <Status value={finding.state} />
-      </div>
-      <p>{finding.detail}</p>
-      {finding.is_stale ? (
-        <p className="warning-text">
-          A source has changed. Review this finding against the current
-          revision.
-        </p>
-      ) : null}
-      <Citations
-        ids={finding.source_ids}
-        tenderId={tenderId}
-        onOpen={onSource}
-      />
-      <div className="finding-actions">
-        {finding.state === "proposed" ? (
-          <>
-            <button
-              className="text-button"
-              onClick={() => setDecision("accept")}
-            >
-              Accept
-            </button>
-            <button
-              className="text-button muted"
-              onClick={() => setDecision("reject")}
-            >
-              Reject
-            </button>
-          </>
-        ) : finding.state === "accepted" ? (
-          <button
-            className="text-button"
-            onClick={() => setDecision("resolve")}
+    <Item variant="outline" className="bg-card">
+      <ItemMedia variant="icon" className="size-9 rounded-lg bg-muted">
+        <FileText />
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle>Package imported</ItemTitle>
+        <ItemDescription>
+          <AnimatedNumber value={artifactCount} /> document
+          {artifactCount === 1 ? "" : "s"} registered.
+        </ItemDescription>
+        {onDocuments ? (
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            className={cn(
+              "group/arrow h-auto w-fit justify-start gap-1 px-0 text-muted-foreground hover:text-foreground",
+              linkUnderline,
+            )}
+            onClick={onDocuments}
           >
-            Mark resolved
-          </button>
+            Open document register
+            <ArrowIcon className="size-3.5" />
+          </Button>
         ) : null}
-      </div>
-      {decision ? (
-        <DecisionForm
-          title={`${decision === "accept" ? "Accept" : decision === "reject" ? "Reject" : "Resolve"} finding`}
-          action="Record decision"
-          description={finding.title}
-          onClose={close}
-          onSubmit={async (rationale) => {
-            await api.post(
-              `${tenderPath(tenderId)}/findings/${finding.id}/decision`,
-              { decision, rationale } satisfies Schema<"DecisionRequest">,
-            );
-            await refresh();
-            close();
-          }}
-        />
-      ) : null}
-    </article>
+      </ItemContent>
+      <ItemActions>
+        {ready ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={disabled}
+            onClick={onReviewDocuments}
+          >
+            {busy ? "Review documents when ready" : "Review documents"}
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="relative"
+            onClick={onChooseAI}
+          >
+            <Sparkles data-icon="inline-start" />
+            Choose AI
+            <AnimatedBorder radius={8} />
+          </Button>
+        )}
+      </ItemActions>
+    </Item>
   );
 }
-function ContextRail({
-  overview,
-  artifacts,
-  onSource,
+
+function PlanCard({
+  plan,
+  onReview,
 }: {
-  overview: Schema<"Overview">;
-  artifacts: Schema<"Artifact">[];
-  onSource: (source: SourceSelection) => void;
+  plan: Schema<"WorkPlan">;
+  onReview: () => void;
 }) {
-  const questions = overview.findings.filter(
-    (finding) =>
-      finding.kind === "question" &&
-      finding.state !== "resolved" &&
-      finding.state !== "rejected",
-  );
   return (
-    <aside className="context-rail" aria-label="Project details">
-      <section>
-        <h3>Project scope</h3>
-        <dl className="scope-values">
-          <dt>Areas in the register</dt>
-          <dd>
-            {overview.areas.length
-              ? overview.areas.join(", ")
-              : "Not identified"}
-          </dd>
-        </dl>
-      </section>
-      <section>
-        <h3>Document coverage</h3>
-        <dl className="coverage-values">
-          <dt>Registered</dt>
-          <dd>{overview.coverage.registered ?? 0}</dd>
-          <dt>Read</dt>
-          <dd>{overview.coverage.extracted ?? 0}</dd>
-          <dt>Needs attention</dt>
-          <dd>{overview.coverage.needs_attention ?? 0}</dd>
-          <dt>Unsupported</dt>
-          <dd>{overview.coverage.unsupported ?? 0}</dd>
-          <dt>Failed</dt>
-          <dd>{overview.coverage.failed ?? 0}</dd>
-        </dl>
-        <p className="field-help">
-          Read files still need analysis and an engineer's review. Findings and
-          decisions are recorded separately.
-        </p>
-        {artifacts
-          .filter((file) => file.is_current)
-          .slice(0, 4)
-          .map((file) => (
-            <button
-              key={file.id}
-              className="coverage-file"
-              onClick={() => onSource({ artifactId: file.id })}
-            >
-              <File size={27} />
-              <span>
-                <strong>{file.name}</strong>
-                <Status value={file.status} />
-              </span>
-            </button>
-          ))}
-      </section>
-      <section>
-        <h3>Open questions</h3>
-        {questions.length ? (
-          questions
-            .slice(0, 5)
-            .map((question) => <p key={question.id}>{question.title}</p>)
-        ) : (
-          <p className="muted">
-            <MessageSquare size={16} /> No open questions recorded.
-          </p>
-        )}
-      </section>
-    </aside>
+    <Item variant="outline" className="bg-card">
+      <ItemMedia variant="icon" className="size-9 rounded-lg bg-muted">
+        <ListChecks />
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle>
+          <h3 className="text-sm font-medium">{plan.title}</h3>
+        </ItemTitle>
+        <ItemDescription>
+          {plan.tasks.length} tasks ·{" "}
+          {plan.status === "proposed" ? "Ready for your review" : plan.status}
+        </ItemDescription>
+      </ItemContent>
+      <ItemActions>
+        <Button type="button" size="sm" onClick={onReview}>
+          <Play data-icon="inline-start" />
+          Review plan
+        </Button>
+      </ItemActions>
+    </Item>
+  );
+}
+
+function mergeMessages(...groups: Schema<"Message">[][]) {
+  const byId = new Map<string, Schema<"Message">>();
+  groups.flat().forEach((message) => byId.set(message.id, message));
+  return [...byId.values()].sort(
+    (a, b) =>
+      a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
   );
 }

@@ -3,7 +3,7 @@
   background: #fffcf5;
   padding: 18px 20px;
   margin: 28px 0;
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   line-height: 1.6;
 }
 .estimate-state.complete {
@@ -30,7 +30,7 @@
   flex: 1;
 }
 .estimate-totals h3 {
-  font-size: 17px;
+  font-size: var(--qx-text-section);
   margin-bottom: 15px;
 }
 .estimate-totals dl,
@@ -38,7 +38,7 @@
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 12px 25px;
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   line-height: 1.6;
 }
 .estimate-totals dt,
@@ -53,11 +53,11 @@
 }
 .estimate-search {
   max-width: 440px;
-  font-size: 14px;
+  font-size: var(--qx-text-body);
 }
 .estimate-table {
   min-width: 850px;
-  font-size: 13px;
+  font-size: var(--qx-text-body);
   table-layout: auto;
 }
 .estimate-table th {
@@ -76,7 +76,7 @@
   padding-left: 0;
 }
 .estimate-table .file-title {
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   line-height: 1.6;
 }
 .estimate-table .numeric {
@@ -86,27 +86,27 @@
 .estimate-table small {
   display: block;
   color: #697786;
-  font-size: 11px;
+  font-size: var(--qx-text-caption);
   margin-top: 5px;
 }
 .estimate-table .source-chip {
-  font-size: 11px;
+  font-size: var(--qx-text-caption);
 }
 .estimate-table .warning-text {
-  font-size: 11px;
+  font-size: var(--qx-text-caption);
   line-height: 1.5;
   margin-top: 8px;
 }
 .estimate-table td:last-child .text-button {
   display: flex;
-  font-size: 12px;
+  font-size: var(--qx-text-caption);
 }
 .estimate-editor {
   overflow-y: auto;
   padding: 24px 26px 42px;
 }
 .estimate-editor > h3 {
-  font-size: 18px;
+  font-size: var(--qx-text-title);
   line-height: 1.5;
 }
 .estimate-row-facts {
@@ -118,7 +118,7 @@
 .estimate-issues {
   padding-left: 20px;
   color: #94691d;
-  font-size: 13px;
+  font-size: var(--qx-text-body);
   line-height: 1.7;
 }
 .editor-section {
@@ -129,22 +129,22 @@
 .editor-section > summary {
   cursor: pointer;
   font-weight: 500;
-  font-size: 16px;
+  font-size: var(--qx-text-section);
 }
 .editor-section > .muted {
-  font-size: 13px;
+  font-size: var(--qx-text-body);
   margin-top: 12px;
 }
 .editor-section .button {
   margin-top: 12px;
 }
 .editor-section label {
-  font-size: 13px;
+  font-size: var(--qx-text-body);
 }
 .editor-section input,
 .editor-section textarea,
 .editor-section select {
-  font-size: 14px;
+  font-size: var(--qx-text-body);
 }
 .form-grid {
   display: grid;
@@ -177,10 +177,10 @@
   gap: 12px;
 }
 .outputs-section .button {
-  font-size: 13px;
+  font-size: var(--qx-text-body);
 }
 .output-empty {
-  font-size: 14px;
+  font-size: var(--qx-text-body);
   margin: 22px 0;
 }
 .selected-evidence {
@@ -194,7 +194,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  font-size: 12px;
+  font-size: var(--qx-text-caption);
   color: #56667a;
   background: #eff2f5;
   border-radius: 4px;
@@ -217,7 +217,7 @@
   padding: 12px;
   width: 100%;
   border-bottom: 1px solid #e5e9ed;
-  font-size: 12px;
+  font-size: var(--qx-text-caption);
 }
 .evidence-options > button:hover {
   background: #f2f7f6;
@@ -225,7 +225,7 @@
 .evidence-options p {
   margin-top: 7px;
   color: #697786;
-  font-size: 12px;
+  font-size: var(--qx-text-caption);
 }
 .quantity-proposal {
   margin-top: 18px;
@@ -233,7 +233,7 @@
   border-bottom: 1px solid #e5e9ed;
 }
 .quantity-proposal > p {
-  font-size: 13px;
+  font-size: var(--qx-text-body);
   white-space: pre-wrap;
   margin-top: 10px;
 }
@@ -248,10 +248,10 @@
     gap: 24px;
   }
   .estimate-state {
-    font-size: 13px;
+    font-size: var(--qx-text-body);
   }
   .estimate-row-facts {
-    font-size: 12px;
+    font-size: var(--qx-text-caption);
     gap: 10px 16px;
   }
   .estimate-row-facts dd {
@@ -264,7 +264,7 @@
   justify-content: flex-end;
   gap: 12px;
   margin-top: 20px;
-  font-size: 13px;
+  font-size: var(--qx-text-body);
   color: #697786;
 }
 .pagination > span {

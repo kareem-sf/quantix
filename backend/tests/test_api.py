@@ -25,6 +25,30 @@ def test_local_api_requires_session_auth(client):
     assert client.get("/api/health").status_code == 200
 
 
+def test_run_activity_routes_are_read_only_authenticated_and_tender_scoped(client):
+    from types import SimpleNamespace
+
+    from quantix.run_activity import ActivityRecorder
+    repo = client.app.state.repo
+    tender = repo.create_tender("Synthetic activity API")
+    other = repo.create_tender("Other synthetic activity API")
+    run = repo.create_run(tender["id"], "manager")
+    recorder = ActivityRecorder(SimpleNamespace(repo=repo, tender_id=tender["id"], run_id=run["id"]))
+    recorder.start("tool", "Reading synthetic quantities", {"inputs": {"source_id": "synthetic"}})
+    path = f"/api/tenders/{tender['id']}/runs/{run['id']}/activity"
+    before = repo.run_events(run["id"])
+    assert client.get(path, headers={"Authorization": ""}).status_code == 401
+    page = client.get(path)
+    assert page.status_code == 200
+    identifier = page.json()["items"][0]["event_id"]
+    assert client.get(f"{path}/{identifier}").json()["total_chars"] > 0
+    assert client.get(path.replace(tender["id"], other["id"])).status_code == 404
+    assert client.get(f"{path}/{identifier}?limit=64001").status_code == 422
+    assert client.get(path, params={"after": page.json()["cursor"]}).json()["items"] == []
+    assert repo.run_events(run["id"]) == before
+    assert repo.get_run(run["id"])["status"] == "queued"
+
+
 def test_latest_restore_notice_has_a_typed_read_route(client):
     response = client.get("/api/backups/latest")
     assert response.status_code == 200
@@ -117,18 +141,30 @@ def test_real_import_and_search_through_http(client, tmp_path):
 
 
 def test_settings_never_return_provider_secret(client, monkeypatch):
-    secrets = {}
-    monkeypatch.setattr(
-        "keyring.set_password", lambda service, account, value: secrets.update(value=value)
-    )
-    monkeypatch.setattr("keyring.get_password", lambda *_: secrets.get("value"))
-    response = client.patch(
+    secret = "sk-test-private-value"
+    monkeypatch.setattr("keyring.set_password", lambda *_: pytest.fail("Use synthetic session credentials"))
+    account = client.post("/api/ai/connections", json={
+        "name": "Synthetic OpenAI", "provider_id": "openai", "protocol": "openai_responses",
+        "credentials": {"api_key": secret}, "session_only": True,
+    })
+    assert account.status_code == 200
+    assert account.json()["credential_state"] == "session"
+    assert secret not in account.text
+    for endpoint in ("/api/ai/connections", "/api/settings", "/api/health", "/api/reset/preview"):
+        response = client.get(endpoint)
+        assert response.status_code == 200
+        assert secret not in response.text
+    # Office preferences no longer accept credential fields; even rejected
+    # write-only input must stay out of the public validation response.
+    rejected = client.patch(
         "/api/settings", json={"api_key": "sk-test-private-value", "default_currency": "EGP"}
     )
+    assert rejected.status_code == 422
+    assert secret not in rejected.text
+    response = client.patch("/api/settings", json={"default_currency": "EGP"})
     assert response.status_code == 200
-    assert response.json()["provider_ready"]
-    assert "sk-test-private-value" not in response.text
-    assert "sk-test-private-value" not in client.get("/api/settings").text
+    assert response.json()["default_currency"] == "EGP"
+    assert secret not in response.text
 
 
 def test_original_download_preserves_bytes_and_scopes_historic_sources(client):

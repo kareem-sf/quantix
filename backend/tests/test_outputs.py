@@ -75,8 +75,22 @@ def test_word_report_preserves_findings_states_and_sources(setup):
         "assumption",
         [source_id],
     )
+    run = repo.create_run(tid, "manager", "Review the Tender documents")
+    repo.update_run(run["id"], status="running")
     repo.add_message(
-        tid, "manager", "Concrete scope needs geotechnical clarification.", [source_id]
+        tid,
+        "manager",
+        "Concrete scope needs geotechnical clarification.",
+        [source_id],
+        run_id=run["id"],
+    )
+    repo.update_run(
+        run["id"],
+        status="completed",
+        result={
+            "summary": "Concrete scope needs geotechnical clarification.",
+            "source_ids": [source_id],
+        },
     )
     record = outputs.generate(tid, approval(kind="analysis_docx"))
     doc = Document(outputs.path(tid, record["id"]))

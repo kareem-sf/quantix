@@ -13,11 +13,12 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from .db import dump
 from .documents import extract_document
 from .repository import Repository
+from .storage import runtime_tmp_dir
 
 MAX_FILES = 10000
 MAX_PACKAGE_BYTES = 2 * 1024**3
 MAX_FILE_BYTES = 256 * 1024**2
-EXTRACTION_VERSION = "1"
+EXTRACTION_VERSION = "3"
 
 
 @dataclass
@@ -38,7 +39,25 @@ def _check_cancel(event: threading.Event):
 def _folder_files(root: Path, cancelled: threading.Event):
     files = []
     total = 0
-    for directory, dirs, names in os.walk(root, followlinks=False):
+
+    def unreadable(error: OSError):
+        location = Path(error.filename) if error.filename else root
+        if location == root:
+            raise ValueError(
+                "The selected folder could not be opened. Check its permissions and availability."
+            ) from error
+        # Record the folder itself: its files cannot be counted, so the import
+        # summary must not look complete.
+        files.append(
+            Candidate(
+                location.relative_to(root).as_posix(),
+                None,
+                0,
+                "This folder could not be opened, so its files were not imported. Check its permissions and import again.",
+            )
+        )
+
+    for directory, dirs, names in os.walk(root, onerror=unreadable, followlinks=False):
         _check_cancel(cancelled)
         base = Path(directory)
         kept = []
@@ -219,9 +238,23 @@ def _extract(repo, path, name, digest, cancelled):
             pass  # This is a reproducible derived index; rebuild a corrupt cache from the original.
     result = asdict(extract_document(path, name, cancelled.is_set))
     _check_cancel(cancelled)
-    partial = cache.with_suffix(".partial")
-    partial.write_text(dump(result), encoding="utf-8")
-    os.replace(partial, cache)
+    # Each writer uses its own temporary file, so concurrent imports of the same
+    # document into different Tenders cannot move or truncate each other's cache.
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=cache.parent, prefix=cache.stem + "-", suffix=".partial", delete=False
+    ) as handle:
+        handle.write(dump(result))
+        partial = Path(handle.name)
+    try:
+        os.replace(partial, cache)
+    except OSError:
+        # Windows refuses the move while another writer holds the destination.
+        # This cache is a reproducible derived index, so a concurrent writer
+        # publishing the same content first is success, not a failure.
+        if not cache.exists():
+            raise
+    finally:
+        partial.unlink(missing_ok=True)
     return result
 
 
@@ -236,7 +269,9 @@ def import_package(
     if not source.is_dir() and source.suffix.lower() != ".zip":
         raise ValueError("Choose a folder or a ZIP archive containing the Tender package.")
     repo.event(run_id, "import_started", "Reading the package file list.")
-    with tempfile.TemporaryDirectory(prefix="quantix-intake-") as temp_dir:
+    temporary_root = runtime_tmp_dir(repo.home)
+    temporary_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="quantix-intake-", dir=temporary_root) as temp_dir:
         candidates = (
             _folder_files(source, cancelled)
             if source.is_dir()

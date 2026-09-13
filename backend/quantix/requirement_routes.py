@@ -5,7 +5,12 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 
 from .estimate_models import EngineerDecision
-from .requirement_models import RequirementDecision, RequirementOutputLink, RequirementProposal, RequirementRecord
+from .requirement_models import (
+    RequirementDecision,
+    RequirementOutputLink,
+    RequirementProposal,
+    RequirementRecord,
+)
 from .tender_requirements import RequirementService
 
 

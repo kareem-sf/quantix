@@ -1,319 +1,120 @@
-import { Activity, useCallback, useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Menu, Plus, Settings as SettingsIcon, Upload, X } from "lucide-react";
+import { useState } from "react";
+import { HashRouter } from "react-router-dom";
+import { ApiContext } from "./api";
+import { useServiceConnection } from "./useServiceConnection";
+import { ErrorNotice } from "./components/common";
+import { ResetGate } from "./features/FactoryReset";
+import { ThemeProvider } from "./theme";
+import { AppShell } from "./app/AppShell";
+import { BootSplash } from "./app/splash/BootSplash";
 import {
-  ApiContext,
-  connect,
-  tenderPath,
-  useResource,
-  type Schema,
-} from "./api";
-import { Empty, ErrorNotice, Loading } from "./components/ui";
-import { Files } from "./features/Files";
-import { Manager } from "./features/Manager";
-import { Settings } from "./features/Settings";
-import { SourceDrawer, type SourceSelection } from "./features/Sources";
-import { ImportPackage, NewTender } from "./features/TenderDialogs";
-import { Work } from "./features/Work";
-import { Estimate } from "./features/Estimate";
-import { ProjectMap } from "./features/ProjectMap";
+  createSplashHolds,
+  SplashHoldContext,
+  useSplashHoldCount,
+} from "./app/splash/splash-hold";
+import { Button } from "@/components/ui/button";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
-type Tab = "Manager" | "Project map" | "Files" | "Work" | "Estimate";
+// Tests assert on the connected app directly; the splash has its own tests.
+const showSplash = import.meta.env.MODE !== "test";
+
 export default function App() {
-  const connection = useQuery({
-    queryKey: ["connection"],
-    queryFn: connect,
-    retry: 1,
-    staleTime: Infinity,
-  });
-  if (connection.isPending)
-    return (
-      <div className="connection-screen">
-        <div className="wordmark">Quantix</div>
-        <Loading>Connecting to your Tender Office…</Loading>
-      </div>
-    );
-  if (!connection.data)
-    return (
-      <div className="connection-screen">
-        <div className="wordmark">Quantix</div>
-        <h1>The local service is unavailable</h1>
-        <ErrorNotice error={connection.error} />
-        <button
-          className="button primary"
-          onClick={() => void connection.refetch()}
-        >
-          Try again
-        </button>
-      </div>
-    );
   return (
-    <ApiContext.Provider value={connection.data}>
-      <Office />
-    </ApiContext.Provider>
+    <ThemeProvider>
+      <TooltipProvider>
+        <ConnectedApp />
+      </TooltipProvider>
+    </ThemeProvider>
   );
 }
-function Office() {
-  const tenders = useResource<Schema<"Tender">[]>("/tenders");
-  const settings = useResource<Schema<"Settings">>("/settings");
-  const health = useResource<Schema<"Health">>("/health");
-  const [selectedId, setSelectedId] = useState<string | null>(null),
-    [settingsOpen, setSettingsOpen] = useState(false),
-    [newOpen, setNewOpen] = useState(false),
-    [navOpen, setNavOpen] = useState(false);
-  const tenderId = selectedId ?? tenders.data?.[0]?.id;
-  const closeNew = useCallback(() => setNewOpen(false), []);
+
+/**
+ * The service connection lives in component state rather than the query cache:
+ * an accepted factory reset clears every cached query, and recovery must stay
+ * mounted while that happens.
+ */
+function ConnectedApp() {
+  const { api, error, retry } = useServiceConnection();
+  const [holds] = useState(() => createSplashHolds(!showSplash));
+  const [splash, setSplash] = useState(showSplash);
+
   return (
-    <div className="app-shell">
-      <button
-        className="mobile-menu icon-button"
-        onClick={() => setNavOpen((value) => !value)}
-        aria-label="Toggle tender navigation"
-      >
-        <Menu size={22} />
-      </button>
-      <aside className={`sidebar ${navOpen ? "sidebar-open" : ""}`}>
-        <div className="sidebar-brand">
-          <div className="wordmark">Quantix</div>
-          <button
-            className="mobile-close icon-button"
-            aria-label="Close tender navigation"
-            onClick={() => setNavOpen(false)}
-          >
-            <X size={20} />
-          </button>
-        </div>
-        <button className="new-tender-button" onClick={() => setNewOpen(true)}>
-          <Plus size={23} />
-          New tender
-        </button>
-        <div className="sidebar-label">Tenders</div>
-        <nav className="tender-nav" aria-label="Tenders">
-          {tenders.data?.map((tender) => (
-            <button
-              key={tender.id}
-              className={
-                tender.id === tenderId && !settingsOpen ? "selected" : ""
-              }
-              aria-current={
-                tender.id === tenderId && !settingsOpen ? "page" : undefined
-              }
-              onClick={() => {
-                setSelectedId(tender.id);
-                setSettingsOpen(false);
-                setNavOpen(false);
-              }}
-              title={tender.name}
-            >
-              {tender.name}
-            </button>
-          ))}
-          {tenders.isPending ? (
-            <p className="sidebar-empty">Loading tenders…</p>
-          ) : tenders.data?.length === 0 ? (
-            <p className="sidebar-empty">No tenders yet</p>
-          ) : null}
-        </nav>
-        <div className="sidebar-bottom">
-          <button
-            className={`settings-button ${settingsOpen ? "selected" : ""}`}
-            aria-current={settingsOpen ? "page" : undefined}
-            onClick={() => {
-              setSettingsOpen(true);
-              setNavOpen(false);
-            }}
-          >
-            <SettingsIcon size={26} />
-            Settings
-          </button>
-          <p>Saved on this device</p>
-        </div>
-      </aside>
-      <main className="main-shell">
-        <ErrorNotice error={tenders.error || health.error} />
-        {tenderId ? (
-          <Activity mode={settingsOpen ? "hidden" : "visible"}>
-            <TenderWorkspace
-              key={tenderId}
-              tenderId={tenderId}
-              settings={settings.data}
-              capabilities={health.data?.capabilities ?? []}
-              onSettings={() => setSettingsOpen(true)}
-            />
-          </Activity>
-        ) : null}
-        {settingsOpen ? (
-          <Settings />
-        ) : tenderId ? null : tenders.isPending ? (
-          <Loading>Loading the Tender Office…</Loading>
-        ) : (
-          <div className="office-empty">
-            <Empty
-              title="Create your first tender"
-              action={
-                <button
-                  className="button primary"
-                  onClick={() => setNewOpen(true)}
-                >
-                  <Plus size={18} />
-                  New tender
-                </button>
-              }
-            >
-              Add the tender documents and work with the manager to prepare your
-              submission.
-            </Empty>
-          </div>
-        )}
-      </main>
-      {newOpen ? (
-        <NewTender
-          onClose={closeNew}
-          onCreated={(tender) => {
-            setSelectedId(tender.id);
-            setSettingsOpen(false);
-            closeNew();
-            setNavOpen(false);
+    <SplashHoldContext.Provider value={holds}>
+      {api ? (
+        <ApiContext.Provider value={api}>
+          <ResetGate>
+            <HashRouter>
+              <AppShell />
+            </HashRouter>
+          </ResetGate>
+        </ApiContext.Provider>
+      ) : !splash || error ? (
+        <ConnectionProblem error={error} onRetry={retry} />
+      ) : null}
+      {splash ? (
+        <SplashHost
+          connected={!!api}
+          failed={!!error}
+          onLift={holds.lift}
+          onDone={() => {
+            holds.lift();
+            setSplash(false);
           }}
+          holds={holds}
         />
       ) : null}
-    </div>
+    </SplashHoldContext.Provider>
   );
 }
-function TenderWorkspace({
-  tenderId,
-  settings,
-  capabilities,
-  onSettings,
+
+function SplashHost({
+  connected,
+  failed,
+  holds,
+  ...props
 }: {
-  tenderId: string;
-  settings?: Schema<"Settings">;
-  capabilities: string[];
-  onSettings: () => void;
+  connected: boolean;
+  failed: boolean;
+  holds: ReturnType<typeof createSplashHolds>;
+  onLift: () => void;
+  onDone: () => void;
 }) {
-  const overview = useResource<Schema<"Overview">>(tenderPath(tenderId), true);
-  const artifacts = useResource<Schema<"Artifact">[]>(
-    `${tenderPath(tenderId)}/artifacts`,
-    (overview.data?.active_runs.length ?? 0) > 0,
-  );
-  const documentState = JSON.stringify([
-    overview.data?.coverage,
-    overview.data?.tender.revision,
-    overview.data?.active_runs.length,
-  ]);
-  useEffect(() => {
-    void artifacts.refetch();
-  }, [documentState, artifacts.refetch]);
-  const [tab, setTab] = useState<Tab>("Manager"),
-    [importOpen, setImportOpen] = useState(false),
-    [source, setSource] = useState<SourceSelection | null>(null);
-  const closeImport = useCallback(() => setImportOpen(false), []),
-    closeSource = useCallback(() => setSource(null), []);
-  const openImport = () => setImportOpen(true);
-  if (overview.isPending) return <Loading>Loading tender…</Loading>;
-  if (!overview.data) return <ErrorNotice error={overview.error} />;
+  const pending = useSplashHoldCount(holds);
+  // A startup failure lifts the splash onto the connection problem screen.
   return (
-    <>
-      <header className="tender-header">
-        <div className="project-heading">
+    <BootSplash ready={(connected && pending === 0) || failed} {...props} />
+  );
+}
+
+/** Shown if the service drops after the splash has already lifted, and in tests. */
+function ConnectionProblem({
+  error,
+  onRetry,
+}: {
+  error: unknown;
+  onRetry: () => void;
+}) {
+  return (
+    <main className="flex min-h-svh flex-col justify-center gap-4 bg-background px-[max(2rem,10vw)] py-12 text-foreground">
+      {error ? (
+        <div className="flex max-w-xl flex-col gap-4">
+          <h1 className="text-lg font-semibold tracking-tight">
+            The local service is unavailable
+          </h1>
+          <ErrorNotice error={error} />
+          <p role="status" className="text-sm text-muted-foreground">
+            Quantix will reconnect automatically when the local service is
+            ready.
+          </p>
           <div>
-            <h1>{overview.data.tender.name}</h1>
-            <p>Tender preparation</p>
+            <Button onClick={onRetry}>Try again</Button>
           </div>
-          <button className="button" onClick={openImport}>
-            <Upload size={21} />
-            Add files
-          </button>
         </div>
-        <nav className="tabs" aria-label="Tender sections">
-          {(
-            [
-              "Manager",
-              ...(capabilities.includes("project_map") ? ["Project map"] : []),
-              "Files",
-              "Work",
-              ...(capabilities.includes("estimates") ? ["Estimate"] : []),
-            ] as Tab[]
-          ).map((item) => (
-            <button
-              key={item}
-              className={tab === item ? "active" : ""}
-              aria-current={tab === item ? "page" : undefined}
-              onClick={() => setTab(item)}
-            >
-              {item}
-            </button>
-          ))}
-        </nav>
-      </header>
-      <div className="workspace-body">
-        <ErrorNotice error={overview.error || artifacts.error} />
-        <Activity mode={tab === "Manager" ? "visible" : "hidden"}>
-          <Manager
-            overview={overview.data}
-            artifacts={artifacts.data ?? []}
-            settings={settings}
-            onImport={openImport}
-            onSettings={onSettings}
-            onSource={setSource}
-          />
-        </Activity>
-        {tab === "Project map" && capabilities.includes("project_map") ? (
-          <ProjectMap
-            tenderId={tenderId}
-            artifacts={artifacts.data ?? []}
-            onSource={setSource}
-          />
-        ) : tab === "Files" ? (
-          artifacts.isPending ? (
-            <Loading>Loading document register…</Loading>
-          ) : (
-            <Files
-              tenderId={tenderId}
-              artifacts={artifacts.data ?? []}
-              onImport={openImport}
-              onSource={setSource}
-              meaningAvailable={capabilities.includes("meaning_search")}
-              activeRuns={overview.data.active_runs}
-              onWork={() => setTab("Work")}
-            />
-          )
-        ) : tab === "Work" ? (
-          <Work
-            tenderId={tenderId}
-            onChanges={() => {
-              setTab("Manager");
-              requestAnimationFrame(() =>
-                document
-                  .querySelector<HTMLTextAreaElement>(
-                    '[aria-label="Message to Tender Manager"]',
-                  )
-                  ?.focus(),
-              );
-            }}
-            onSource={setSource}
-          />
-        ) : tab === "Estimate" && capabilities.includes("estimates") ? (
-          <Estimate
-            tenderId={tenderId}
-            defaultCurrency={settings?.default_currency ?? ""}
-            outputsAvailable={capabilities.includes("outputs")}
-            onSource={setSource}
-          />
-        ) : null}
-      </div>
-      {importOpen ? (
-        <ImportPackage tenderId={tenderId} onClose={closeImport} />
-      ) : null}
-      {source ? (
-        <SourceDrawer
-          key={"sourceId" in source ? source.sourceId : `${source.artifactId}:${source.page ?? 1}`}
-          tenderId={tenderId}
-          selection={source}
-          artifacts={artifacts.data ?? []}
-          onClose={closeSource}
-        />
-      ) : null}
-    </>
+      ) : (
+        <p role="status" className="text-sm text-muted-foreground">
+          Connecting to your Tender Office…
+        </p>
+      )}
+    </main>
   );
 }
