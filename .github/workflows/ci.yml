@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  interface:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run check:ui
+      - name: Formatting
+        run: npx prettier --check src scripts "*.json" "*.ts"
+      - name: Interface tests
+        run: npm run test:ui
+
+  service:
+    # The dependency lock is resolved for Windows, the primary desktop platform.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: |
+          python -m venv backend/.venv
+          backend/.venv/Scripts/python.exe -m pip install -c backend/requirements-dev.lock.txt -e "./backend[dev]"
+      - name: Lint
+        run: backend/.venv/Scripts/python.exe -m ruff check backend
+      - name: Formatting
+        run: backend/.venv/Scripts/python.exe -m ruff format --check backend
+      - name: Service tests
+        run: backend/.venv/Scripts/python.exe -m pytest backend/tests -q -n auto
