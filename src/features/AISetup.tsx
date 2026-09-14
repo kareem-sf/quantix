@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronRight, Sparkles } from "lucide-react";
 import { useApi, useRefresh, useResource, type Schema } from "../api";
 import { ErrorNotice, Loading, Modal } from "../components/common";
-import { ConnectionForm, ConnectionModels, withoutAutomaticFallback } from "./AIAdvancedConnections";
+import { ConnectionForm, ConnectionModels } from "./AIAdvancedConnections";
 import { ExternalLink, webLink } from "../components/ExternalLink";
 import { prepareSignInBrowser } from "../browser";
 import { Button } from "@/components/ui/button";
@@ -36,9 +36,7 @@ const setupAction = (value: ActionInput): Action => ({ accept_unknown_cost: fals
 export function billingDescription(billing: Schema<"ConnectionRecord">["billing"]) {
   return billing === "subscription"
     ? "Subscription account"
-    : billing === "local"
-      ? "Uses your model server"
-      : billing === "metered"
+    : billing === "metered"
         ? "Paid by API usage"
         : "Cost needs review";
 }
@@ -119,9 +117,7 @@ export function dataDestination(connection: Schema<"ConnectionRecord">) {
   } catch {
     /* Keep the connection's safe display fields when an older record is malformed. */
   }
-  const local =
-    connection.billing === "local" &&
-    ["localhost", "127.0.0.1", "[::1]"].includes(host);
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(host);
   const upstream = Array.isArray(connection.settings.upstream_providers)
     ? connection.settings.upstream_providers.filter(
         (item): item is string => typeof item === "string",
@@ -135,15 +131,8 @@ export function dataDestination(connection: Schema<"ConnectionRecord">) {
         : "";
   const providerNames: Record<string, string> = {
     codex: "OpenAI through your ChatGPT account",
-    copilot: "GitHub Copilot",
-    gemini_cli: "Google Gemini",
     grok_build: "xAI Grok through your Grok account",
-    claude_agent: "Anthropic Claude",
-    claude_code: "Anthropic Claude",
     google: "Google Gemini",
-    google_vertex: "Google Cloud / Vertex AI",
-    bedrock: "Amazon Bedrock",
-    cohere: "Cohere",
   };
   const project =
     typeof connection.settings.project === "string" ? connection.settings.project : "";
@@ -774,7 +763,7 @@ function DirectKeyForm({ account, disabled, onSaved }: { account: AccountView; d
         name: connection.name, provider_id: connection.provider_id,
         protocol: connection.protocol, auth_type: "api_key", billing: connection.billing,
         enabled: connection.enabled, base_url: connection.base_url,
-        environment_key: null, settings: withoutAutomaticFallback(connection.provider_id, connection.settings),
+        environment_key: null, settings: connection.settings,
         allow_insecure_http: connection.allow_insecure_http, session_only: sessionOnly,
         credentials: { api_key: key.trim() },
       };

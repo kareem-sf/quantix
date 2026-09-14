@@ -26,7 +26,7 @@ def _connection(provider, *, protocol=None, base_url=None):
         "protocol": protocol or protocols[provider],
         "base_url": base_url or (None if provider == "google" else "https://api.example.test/v1"),
         "auth_type": "api_key",
-        "billing": "local",
+        "billing": "metered",
         "settings": {},
         "credentials": {"api_key": "test-key"},
         "session_only": True,
@@ -72,24 +72,21 @@ def test_unknown_price_meter_requires_explicit_consent_and_keeps_cost_null(tmp_p
     assert accepted.summary("passed", "checked")["estimated_cost_usd"] is None
 
 
-def test_retired_profile_is_readable_but_cannot_be_ready_or_rechecked(tmp_path):
+def test_saved_account_for_a_removed_provider_is_skipped_and_cannot_be_created(tmp_path):
+    import json
+
     repo = Repository(tmp_path)
     service = AIConnectionService(repo)
-    retired = service.create({
-        "name": "Old Copilot",
-        "provider_id": "copilot",
-        "protocol": "copilot",
-        "auth_type": "client_login",
-        "billing": "subscription",
-        "settings": {},
-    })
-    setup = AISetupService(repo, direct=object())
+    kept = service.create(_connection("openai"))
+    legacy = {"name": "Old Copilot", "provider_id": "copilot", "protocol": "copilot",
+              "auth_type": "client_login", "billing": "subscription", "settings": {}}
+    with repo.db.connect(write=True) as conn:
+        conn.execute("INSERT INTO ai_connections VALUES(?,?,?,?)",
+                     ("legacy-copilot", json.dumps(legacy), None, "none"))
 
-    card = setup.get(retired["id"])
-    assert card["supported"] is False
-    assert card["stage"] == "attention"
-    with pytest.raises(ValueError, match="retired"):
-        asyncio.run(setup.action(retired["id"], {"action": "refresh"}))
+    assert [row["id"] for row in service.list()] == [kept["id"]]
+    with pytest.raises(ValueError):
+        service.create(legacy)
 
 
 def test_failed_direct_check_keeps_a_bounded_retry_available(tmp_path, monkeypatch):

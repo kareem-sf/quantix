@@ -58,7 +58,7 @@ class PlanReviewRoute(AIModel):
     account_name: str
     provider: str
     data_destination: str
-    billing: Literal["metered", "subscription", "unknown", "local"]
+    billing: Literal["metered", "subscription", "unknown"]
     provider_managed_extras: bool = False
     spending_detail: str
 

@@ -1045,9 +1045,7 @@ function billingLabel(billing: Schema<"DelegationRouteOption">["billing"]) {
     ? "Metered API"
     : billing === "subscription"
       ? "Subscription"
-      : billing === "local"
-        ? "Local runtime"
-        : "Unknown billing";
+      : "Unknown billing";
 }
 
 function toolLabel(id: string) {

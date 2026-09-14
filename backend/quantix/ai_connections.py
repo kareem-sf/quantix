@@ -8,7 +8,6 @@ import json
 import os
 import threading
 from contextlib import contextmanager
-from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 import keyring
@@ -43,7 +42,7 @@ CREATE TABLE IF NOT EXISTS ai_connection_models (
 );
 CREATE TABLE IF NOT EXISTS ai_connection_metadata (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
 """
-_RUNTIME_PROTOCOLS = {"codex", "copilot", "gemini_cli", "grok_build", "claude_agent", "claude_code"}
+_RUNTIME_PROTOCOLS = {"codex", "grok_build"}
 _DIRECT_PROTOCOLS = {
     "openai": {"openai_responses", "openai_chat"},
     "anthropic": {"anthropic"},
@@ -51,11 +50,7 @@ _DIRECT_PROTOCOLS = {
     "xai": {"openai_responses", "openai_chat"},
     "custom": {"openai_chat", "openai_responses"},
 }
-_SECRET_NAMES = {"api_key", "aws_access_key_id", "aws_secret_access_key", "aws_session_token",
-                 "service_account_json", "client_secret"}
-_SETTING_LIMITS = {"region": 100, "project": 300, "location": 100, "aws_profile": 150,
-                   "billing_product": 80, "tenant_id": 150, "client_id": 150,
-                   "executable_path": 2000, "node_path": 2000, "terminal_path": 2000}
+_SECRET_NAMES = {"api_key"}
 
 
 def validate_base_url(value: str | None, *, allow_insecure_http=False) -> str | None:
@@ -85,32 +80,14 @@ def validate_base_url(value: str | None, *, allow_insecure_http=False) -> str | 
 
 def _validate_settings(values: dict, preset: dict) -> dict:
     allowed = set(preset["settings_fields"])
-    if preset["id"] == "azure":
-        allowed.update({"tenant_id", "client_id"})
     unknown = set(values) - allowed
     if unknown:
         raise ValueError("This provider has unsupported connection settings. Credentials belong in the credential fields.")
     result = {}
     for name, value in values.items():
-        if name in _SETTING_LIMITS:
-            if not isinstance(value, str) or not value.strip() or len(value) > _SETTING_LIMITS[name]:
-                raise ValueError(f"Enter a valid {name.replace('_', ' ')}.")
-            value = value.strip()
-            if any(ord(c) < 32 for c in value):
-                raise ValueError("Connection settings cannot contain control characters.")
-            if name in {"executable_path", "node_path", "terminal_path"} and not Path(value).is_absolute():
-                raise ValueError("Choose an absolute executable path.")
-        elif name in {"allow_fallbacks", "zdr", "allow_provider_managed_extras"}:
+        if name == "allow_provider_managed_extras":
             if type(value) is not bool:
                 raise ValueError(f"{name.replace('_', ' ')} must be true or false.")
-        elif name == "data_collection":
-            if value not in {"allow", "deny"}:
-                raise ValueError("Choose allow or deny for upstream data collection.")
-        elif name == "upstream_providers":
-            if (not isinstance(value, list) or len(value) > 30
-                    or any(not isinstance(p, str) or not p.strip() or len(p) > 150 for p in value)):
-                raise ValueError("Enter up to 30 upstream provider identifiers.")
-            value = list(dict.fromkeys(p.strip() for p in value))
         elif name in {"runtime_timeout_seconds", "max_turns"}:
             maximum = 1800 if name == "runtime_timeout_seconds" else 32
             if type(value) is not int or not 1 <= value <= maximum:
@@ -118,11 +95,6 @@ def _validate_settings(values: dict, preset: dict) -> dict:
         result[name] = value
     if preset["id"] == "grok_build":
         result.setdefault("allow_provider_managed_extras", False)
-    if preset["id"] == "openrouter":
-        result.setdefault("upstream_providers", [])
-        result.setdefault("allow_fallbacks", False)
-        result.setdefault("data_collection", "deny")
-        result.setdefault("zdr", False)
     return result
 
 
@@ -135,7 +107,7 @@ def _plain_credentials(values: dict | None) -> dict[str, str]:
     for name, value in values.items():
         if isinstance(value, SecretStr):
             value = value.get_secret_value()
-        if not isinstance(value, str) or len(value) > (30000 if name == "service_account_json" else 4000):
+        if not isinstance(value, str) or len(value) > 4000:
             raise ValueError("A credential is invalid or too long.")
         if value.strip():
             result[name] = value.strip()
@@ -243,9 +215,7 @@ class AIConnectionService:
     def _public(self, row):
         data = json.loads(row["data_json"])
         auth, mode = data["auth_type"], row["credential_mode"]
-        if auth == "none":
-            state = "not_required"
-        elif auth == "client_login":
+        if auth == "client_login":
             state = "runtime"
         elif auth == "environment":
             state = "environment" if os.environ.get(data["environment_key"] or "", "").strip() else "missing"
@@ -253,8 +223,6 @@ class AIConnectionService:
             state = "session" if self._state.sessions.get(row["id"]) else "missing"
         elif row["credential_ref"]:
             state = "stored"
-        elif auth in {"aws_identity", "google_identity", "azure_identity"}:
-            state = "environment"  # Identity is configured; no login or availability is asserted.
         else:
             state = "missing"
         data["credential_state"] = state
@@ -263,7 +231,10 @@ class AIConnectionService:
     def list(self) -> list[dict]:
         with self._state.lock, self.repo.db.connect() as conn:
             rows = conn.execute("SELECT * FROM ai_connections ORDER BY id").fetchall()
-            return sorted((self._public(dict(row)) for row in rows), key=lambda row: row["name"].casefold())
+            # Accounts saved for providers Quantix no longer offers cannot be loaded.
+            supported = [dict(row) for row in rows
+                         if is_supported_profile(json.loads(row["data_json"]))]
+            return sorted((self._public(row) for row in supported), key=lambda row: row["name"].casefold())
 
     def get(self, identifier) -> dict:
         with self._state.lock:
@@ -285,7 +256,7 @@ class AIConnectionService:
             raise ValueError("Enter the environment variable containing this connection's API key.")
         if values.auth_type != "environment" and values.environment_key:
             raise ValueError("Environment key applies only to environment authentication.")
-        if values.auth_type in {"none", "client_login", "environment"} and _plain_credentials(values.credentials):
+        if values.auth_type in {"client_login", "environment"} and _plain_credentials(values.credentials):
             raise ValueError("This authentication method does not accept stored API credentials.")
         url = values.base_url or default_base_url(values.provider_id, values.protocol)
         values.base_url = validate_base_url(url, allow_insecure_http=values.allow_insecure_http)
@@ -296,10 +267,6 @@ class AIConnectionService:
             raise ValueError("Enter the provider's endpoint for the selected protocol.")
         if values.provider_id == "custom" and not values.base_url:
             raise ValueError("Enter the custom provider endpoint.")
-        if values.auth_type == "aws_identity" and values.protocol != "bedrock":
-            raise ValueError("AWS identity requires the native Bedrock protocol. Compatible endpoints use a bearer key.")
-        if values.protocol == "bedrock" and values.auth_type != "aws_identity":
-            raise ValueError("Native Bedrock uses AWS identity. Use a compatible endpoint for Bedrock bearer API keys.")
         return values, preset
 
     def _assert_idle(self, identifier):

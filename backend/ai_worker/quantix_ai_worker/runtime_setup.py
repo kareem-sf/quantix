@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from .common import RuntimeUnavailable, explicit_executable
+from .common import RuntimeUnavailable
 
 
 def component_root():
@@ -12,10 +12,3 @@ def component_root():
         raise RuntimeUnavailable("The prepared AI component directory is unavailable. Prepare this connection again.")
     return Path(value)
 
-
-def node_executable(home, connection):
-    explicit = explicit_executable(connection, "node_path")
-    if explicit:
-        return explicit
-    path = component_root() / "node" / ("node.exe" if os.name == "nt" else "bin/node")
-    return path if path.is_file() else None

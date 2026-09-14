@@ -629,7 +629,6 @@ function spendingLabel(review: Schema<"PlanReview">) {
     labels.push("Metered routes · Tender budget applies");
   if (billings.has("unknown"))
     labels.push("Unknown pricing · Review allowance");
-  if (billings.has("local")) labels.push("Local runtime");
   return labels.join("; ") || "Review required";
 }
 

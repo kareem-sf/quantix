@@ -29,7 +29,7 @@ def setup_services():
         group = groups.setdefault(group_id, {"id": group_id, "title": title, "detail": detail,
                      "featured": group_id in {"openai", "anthropic", "google", "xai"}, "methods": []})
         label, method_detail = _METHODS.get(identifier, ("Use my access key", "Uses your account with this provider. Separately billed usage needs a Tender allowance."))
-        needs_details = identifier in {"custom", "alibaba", "azure", "bedrock", "google_vertex", "openrouter"}
+        needs_details = identifier == "custom"
         group["methods"].append(SetupMethod(id=identifier, title=label, detail=method_detail,
             provider_id=identifier, requires_key=preset["auth_methods"][0] == "api_key",
             requires_details=needs_details, billing=preset["billing"], access_kind="api_key", available=True,

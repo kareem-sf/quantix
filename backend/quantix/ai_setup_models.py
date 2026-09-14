@@ -14,7 +14,7 @@ class SetupMethod(AIModel):
     provider_id: str
     requires_key: bool
     requires_details: bool = False
-    billing: Literal["metered", "subscription", "local", "unknown"]
+    billing: Literal["metered", "subscription", "unknown"]
     access_kind: Literal["api_key", "subscription"] = "api_key"
     available: bool = True
     unavailable_reason: str | None = None

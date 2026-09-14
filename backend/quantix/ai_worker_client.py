@@ -245,28 +245,6 @@ class AIWorkerClient:
         for key in ("DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "XAUTHORITY", "USER", "LOGNAME"):
             if os.environ.get(key):
                 env[key] = os.environ[key]
-        identity = connection.get("auth_type")
-        names = {
-            "azure_identity": ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_CLIENT_CERTIFICATE_PATH", "AZURE_CLIENT_CERTIFICATE_PASSWORD", "AZURE_AUTHORITY_HOST", "AZURE_FEDERATED_TOKEN_FILE"),
-            "aws_identity": ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN", "AWS_ROLE_SESSION_NAME", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_AUTHORIZATION_TOKEN", "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"),
-            "google_identity": ("GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_QUOTA_PROJECT"),
-        }.get(identity, ())
-        for key in names:
-            if os.environ.get(key):
-                env[key] = os.environ[key]
-        # Cloud SDKs read these documented credential locations themselves. The
-        # worker receives a path, not credentials extracted by Quantix.
-        if identity == "aws_identity":
-            original_home = Path.home()
-            for key, filename in (("AWS_CONFIG_FILE", "config"), ("AWS_SHARED_CREDENTIALS_FILE", "credentials")):
-                path = original_home / ".aws" / filename
-                if not env.get(key) and path.is_file():
-                    env[key] = str(path)
-        elif identity == "google_identity" and not env.get("GOOGLE_APPLICATION_CREDENTIALS"):
-            original_config = Path(os.environ.get("APPDATA", str(Path.home() / ".config")))
-            path = original_config / "gcloud" / "application_default_credentials.json"
-            if path.is_file():
-                env["GOOGLE_APPLICATION_CREDENTIALS"] = str(path)
         # stdio_client supplies a constrained default environment and merges
         # this mapping over it. Do not pass the deliberately blanked values
         # from child_environment: SDKs that merge their own config with
@@ -515,7 +493,7 @@ class AIWorkerClient:
         elif connection["protocol"] == "codex" and subscription_check:
             requests = CODEX_CHECK_MAX_TURNS
         else:
-            requests = 3 if connection["protocol"] in {"copilot", "claude_agent", "gemini_cli"} else 2
+            requests = 2
         bounded["_execution_limits"] = {"max_requests": requests, "max_output_tokens": 1024}
         if subscription_check:
             bounded["_execution_limits"]["subscription_check"] = True

@@ -114,11 +114,11 @@ def child_environment(home: Path) -> dict[str, str]:
     allowed = {
         "SYSTEMROOT", "WINDIR", "COMSPEC", "PATH", "PATHEXT", "SYSTEMDRIVE", "PROGRAMDATA",
         "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "LANG", "LC_ALL",
-        "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "QUANTIX_AI_COMPONENT_ROOT", "QUANTIX_NODE_BINARY", "COPILOT_SKIP_CLI_DOWNLOAD", "QUANTIX_COMPONENT_MANAGED",
+        "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "QUANTIX_AI_COMPONENT_ROOT", "QUANTIX_COMPONENT_MANAGED",
     }
     env = {key: value if key.upper() in allowed else "" for key, value in os.environ.items()}
     for directory in (home, home / "tmp", home / "config", home / "data", home / "cache",
-                      home / "codex", home / "copilot", home / "claude"):
+                      home / "codex"):
         directory.mkdir(parents=True, exist_ok=True)
     env.update({
         "HOME": str(home), "USERPROFILE": str(home),
@@ -127,28 +127,11 @@ def child_environment(home: Path) -> dict[str, str]:
         "XDG_CACHE_HOME": str(home / "cache"),
         "TEMP": str(home / "tmp"), "TMP": str(home / "tmp"),
         "CODEX_HOME": str(home / "codex"),
-        "COPILOT_HOME": str(home / "copilot"),
-        "COPILOT_CACHE_HOME": str(home / "cache" / "copilot"),
-        "COPILOT_AUTO_UPDATE": "false",
-        "CLAUDE_CONFIG_DIR": str(home / "claude"),
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "DISABLE_TELEMETRY": "1", "DO_NOT_TRACK": "1",
         "OTEL_SDK_DISABLED": "true",
         "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
     })
     return env
-
-
-def explicit_executable(connection: dict, key: str = "executable_path") -> Path | None:
-    raw = connection.get("settings", {}).get(key)
-    if not raw:
-        return None
-    path = Path(raw)
-    if not path.is_absolute() or not path.is_file():
-        raise RuntimeUnavailable("Choose an existing absolute path to the official client executable.")
-    if os.name == "nt" and path.suffix.lower() in {".cmd", ".bat", ".ps1"}:
-        raise RuntimeUnavailable("Choose the native executable or the official JavaScript entry point, not a shell script.")
-    return path
 
 
 def execution_limits(connection: dict, route: dict) -> tuple[int, int, int]:
@@ -192,21 +175,3 @@ def runtime_usage(connection: dict, route: dict, **values) -> dict:
         "usage_complete": False, "runtime": connection["protocol"],
         **values,
     }
-
-
-async def stop_process(process):
-    if process is None or process.returncode is not None:
-        return
-    try:
-        process.terminate()
-    except ProcessLookupError:
-        await process.wait()
-        return
-    try:
-        await asyncio.wait_for(process.wait(), 5)
-    except TimeoutError:
-        try:
-            process.kill()
-        except ProcessLookupError:
-            pass
-        await process.wait()

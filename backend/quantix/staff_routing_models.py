@@ -66,7 +66,7 @@ class DelegationRouteOption(RoutingModel):
     account_name: str = Field(min_length=1, max_length=150)
     provider: str = Field(min_length=1, max_length=100)
     data_destination: str = Field(min_length=1, max_length=2000)
-    billing: Literal["metered", "subscription", "unknown", "local"]
+    billing: Literal["metered", "subscription", "unknown"]
     provider_managed_extras: bool = False
     readiness: Literal["ready", "missing", "unknown"] = "ready"
 

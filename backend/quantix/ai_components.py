@@ -119,16 +119,7 @@ class AIComponentService:
         self.root = ai_components_dir(repo.home).resolve()
 
     def component_id(self, connection: dict) -> str:
-        protocol = connection.get("protocol")
-        if protocol in {"openai_chat", "openai_responses"}:
-            return "api-openai-azure" if connection.get("auth_type") == "azure_identity" else "api-openai"
-        if protocol == "anthropic" and connection.get("auth_type") == "azure_identity":
-            return "api-anthropic-azure"
-        component = {"anthropic": "api-anthropic", "google": "api-google",
-                     "bedrock": "api-bedrock", "mistral": "api-mistral", "cohere": "api-cohere",
-                     "codex": "client-codex", "copilot": "client-copilot",
-                     "claude_agent": "client-claude", "claude_code": "client-claude",
-                     "gemini_cli": "client-gemini", "grok_build": "client-grok"}.get(protocol)
+        component = {"codex": "client-codex", "grok_build": "client-grok"}.get(connection.get("protocol"))
         if component is None:
             raise ComponentUnavailable("This AI connection has no supported software component.")
         return component
@@ -359,50 +350,6 @@ class AIComponentService:
                 await self._run([base["uv"][1], "--no-config", "pip", "sync", "requirements.txt", "--python", python,
                     "--require-hashes", "--only-binary", ":all:",
                     "--index-url", "https://pypi.org/simple"], cwd=candidate, env=env)
-                if definition.get("npm"):
-                    await report(65, "Preparing the official client and its private Node runtime.")
-                    node_asset = manifest["platforms"][target]["node"]
-                    expanded = candidate / "node-download"
-                    await self._archive(node_asset, expanded, cancelled)
-                    inside(expanded, node_asset["root"]).rename(candidate / "node")
-                    self._remove_directory(expanded)
-                    node = inside(candidate / "node", node_asset["executable"])
-                    npm = candidate / "node" / ("node_modules/npm/bin/npm-cli.js" if os.name == "nt" else "lib/node_modules/npm/bin/npm-cli.js")
-                    if not node.is_file() or not npm.is_file():
-                        raise ComponentUnavailable("The official Node archive is missing its client installer.")
-                    package = definition["npm"]
-                    client = candidate / package["directory"]
-                    client.mkdir()
-                    shutil.copy2(manifest_file(package, "lock", "lock_sha256"), client / "package-lock.json")
-                    shutil.copy2(manifest_file(package, "package", "package_sha256"), client / "package.json")
-                    env["PATH"] = str(node.parent) + os.pathsep + env["PATH"]
-                    env["npm_config_cache"] = str(self.root / "cache" / "npm")
-                    env["npm_config_update_notifier"] = "false"
-                    user_config = self.root / "installer-home" / "user.npmrc"
-                    global_config = self.root / "installer-home" / "global.npmrc"
-                    user_config.write_text("", encoding="utf-8")
-                    global_config.write_text("", encoding="utf-8")
-                    npm_command = [node, npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund", "--no-bin-links",
-                                   "--userconfig", user_config, "--globalconfig", global_config,
-                                   "--registry", "https://registry.npmjs.org/"]
-                    if package.get("omit_optional"):
-                        npm_command.append("--omit=optional")
-                    await self._run(npm_command, cwd=client, env=env)
-                if identifier == "client-copilot":
-                    await report(80, "Downloading the pinned Copilot analysis runtime.")
-                    asset = manifest["platforms"][target]["copilot"]
-                    expanded = candidate / "copilot-download"
-                    await self._archive(asset, expanded, cancelled)
-                    package_root = inside(expanded, asset["root"])
-                    destination = candidate / "runtime" / manifest["copilot_version"] / "prebuilds" / asset["platform"]
-                    # The SDK's hostless layout puts retained package assets
-                    # beside runtime.node and the native wrapper. Materialize
-                    # the complete reviewed platform package there, with no
-                    # provider downloader and no mutable account cache involved.
-                    shutil.copytree(package_root, destination, ignore=shutil.ignore_patterns("prebuilds"))
-                    shutil.copytree(package_root / "prebuilds" / asset["platform"], destination, dirs_exist_ok=True)
-                    (destination / ".hostless-runtime-assets-v2").write_text("1\n", encoding="ascii")
-                    self._remove_directory(expanded)
                 native_client = None
                 if identifier == "client-grok":
                     await report(75, "Downloading the official Grok client for this computer.")
@@ -480,13 +427,6 @@ class AIComponentService:
         required = [python, directory / "worker" / "worker_entry.py"]
         site = directory / "venv" / ("Lib/site-packages" if os.name == "nt" else "lib/python3.12/site-packages")
         required += [site / package / "__init__.py" for package in ("mcp", "pydantic", "pydantic_core", "httpx2", "jsonschema")]
-        if identifier.startswith("api-"):
-            required += [site / "pydantic_ai" / "__init__.py", site / "pydantic_graph" / "__init__.py"]
-            package = {"api-openai": "openai", "api-openai-azure": "openai", "api-anthropic": "anthropic",
-                       "api-anthropic-azure": "anthropic", "api-google": "google/genai", "api-bedrock": "boto3", "api-mistral": "mistralai/client", "api-cohere": "cohere"}[identifier]
-            required.append(site / package / "__init__.py")
-            if identifier in {"api-openai-azure", "api-anthropic-azure"}:
-                required.append(site / "azure/identity/__init__.py")
         if identifier == "client-codex":
             required += [site / "openai_codex" / "__init__.py"]
             # The publisher wheel owns the platform-specific binary location.
@@ -494,16 +434,6 @@ class AIComponentService:
             if not any(path.is_file() for path in binaries):
                 raise ComponentUnavailable("The selected Codex wheel is missing its original client binary.")
             required += [path for path in binaries if path.is_file()]
-        elif identifier == "client-claude":
-            required += [site / "claude_agent_sdk" / "__init__.py", site / "claude_agent_sdk" / "_bundled" / ("claude.exe" if os.name == "nt" else "claude")]
-        elif identifier == "client-copilot":
-            pair = directory / "runtime" / manifest["copilot_version"] / "prebuilds" / manifest["platforms"][target]["copilot"]["platform"]
-            native_package = directory / "account-client" / "node_modules" / "@github" / f"copilot-{manifest['platforms'][target]['copilot']['platform']}"
-            required += [site / "copilot" / "__init__.py", pair / ("copilot-runtime.exe" if os.name == "nt" else "copilot-runtime"), pair / "runtime.node", pair / ".hostless-runtime-assets-v2",
-                         native_package / ("copilot.exe" if os.name == "nt" else "copilot"),
-                         directory / "account-client" / "node_modules" / "@github" / "copilot" / "npm-loader.js"]
-        elif identifier == "client-gemini":
-            required += [directory / "client" / "node_modules" / "@google" / "gemini-cli" / "bundle" / "gemini.js"]
         elif identifier == "client-grok":
             native = manifest["components"][identifier]["native"]
             client = inside(directory, native["directory"])
@@ -511,8 +441,6 @@ class AIComponentService:
                          client / "package.json", client / "THIRD_PARTY_NOTICES.md"]
         if not all(path.is_file() and path.stat().st_size for path in required):
             raise ComponentUnavailable("The selected AI software is missing a required installed file. Repair its software.")
-        if identifier in {"client-copilot", "client-gemini"}:
-            required.append(directory / "node" / ("node.exe" if os.name == "nt" else "bin/node"))
         return [path.relative_to(directory).as_posix() for path in required]
 
     def worker_command(self, connection) -> list[str]:
@@ -543,11 +471,7 @@ class AIComponentService:
         directory = Path(command[-1]).parent.parent
         if not directory.is_relative_to(self._directory(self.component_id(connection)) / "versions"):
             raise ComponentUnavailable("The AI worker command does not belong to this connection's selected software.")
-        values = {"QUANTIX_AI_COMPONENT_ROOT": str(directory), "QUANTIX_COMPONENT_MANAGED": "1",
-                  "COPILOT_SKIP_CLI_DOWNLOAD": "1", "COPILOT_AUTO_UPDATE": "false"}
-        node = directory / "node" / ("node.exe" if os.name == "nt" else "bin/node")
-        if node.is_file():
-            values["QUANTIX_NODE_BINARY"] = str(node)
+        values = {"QUANTIX_AI_COMPONENT_ROOT": str(directory), "QUANTIX_COMPONENT_MANAGED": "1"}
         if self.component_id(connection) == "client-grok":
             native = _read_json(directory / "receipt.json").get("native_client", {})
             executable = native.get("executable")

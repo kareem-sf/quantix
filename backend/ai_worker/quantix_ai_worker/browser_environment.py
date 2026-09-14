@@ -12,7 +12,7 @@ from .common import RuntimeUnavailable
 
 _PROFILE_KEYS = {"HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
                  "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"}
-_ACCOUNT_KEYS = {"GROK_HOME", "GEMINI_CLI_HOME", "COPILOT_HOME"}
+_ACCOUNT_KEYS = {"GROK_HOME"}
 
 
 def sign_in_browser_environment(environment, *, account_key, account_home):

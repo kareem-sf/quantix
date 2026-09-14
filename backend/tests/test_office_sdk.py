@@ -2,12 +2,8 @@
 
 import asyncio
 import json
-import sys
 from contextlib import asynccontextmanager
-from pathlib import Path
-from types import SimpleNamespace
 
-import mcp.types as mcp_types
 import pytest
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
@@ -239,91 +235,3 @@ async def test_real_sdk_specialist_tool_loop_preserves_usage_and_proposed_record
     assert [finding["title"] for finding in repo.list_findings(tender_id)] == ["Manager consolidation"]
     assert len(StaffStore(repo).list_staff(tender_id)) == 1
     await jobs.close()
-
-
-@pytest.mark.asyncio
-async def test_worker_dispatches_supported_execute_operation_without_provider(tmp_path, monkeypatch):
-    """The child runtime uses the worker's advertised execute operation."""
-
-    sys.path.insert(0, str(Path(__file__).parents[1] / "ai_worker"))
-    from quantix_ai_worker import execution as worker_execution
-    from quantix_ai_worker import remote as worker_remote
-    from quantix_ai_worker.server import Worker
-
-    from quantix.ai_worker_client import AIWorkerClient
-
-    repo = SimpleNamespace(
-        home=tmp_path,
-        get_run=lambda run_id: {"id": run_id, "status": "running"},
-    )
-    host = AIWorkerClient(repo)
-    account = {
-        "id": "synthetic-worker",
-        "provider_id": "codex",
-        "protocol": "custom",
-        "billing": "metered",
-        "auth_type": "api_key",
-    }
-    account_home = tmp_path / "ai-runtimes" / account["id"]
-    worker = Worker.__new__(Worker)
-    worker.connection = account
-    worker.account_home = account_home
-    worker.accounts = None
-    captured = {}
-
-    async def fake_execute(route, connection, credentials, context, instruction, output_schema):
-        captured.update(
-            route=route,
-            connection=connection,
-            credentials=credentials,
-            instruction=instruction,
-            output_schema=output_schema,
-        )
-        return {
-            "output": {"summary": "Synthetic worker response."},
-            "usage": {"requests": 1, "input_tokens": 2, "output_tokens": 3, "usage_complete": True},
-            "web_sources": [],
-        }
-
-    @asynccontextmanager
-    async def execution_context(_payload):
-        yield SimpleNamespace()
-
-    monkeypatch.setattr(worker_execution, "execute_api", fake_execute)
-    monkeypatch.setattr(worker_remote, "execution_context", execution_context)
-
-    class InProcessWorkerSession:
-        async def call_tool(self, operation, arguments):
-            result = await worker.operation(operation, arguments)
-            return mcp_types.CallToolResult(
-                content=[], structuredContent={"ok": True, "result": result}
-            )
-
-    @asynccontextmanager
-    async def session(_connection):
-        yield InProcessWorkerSession()
-
-    monkeypatch.setattr(host, "_session", session)
-    context = SimpleNamespace(repo=repo, run_id="run-worker")
-    route = {
-        "connection_id": account["id"],
-        "model_id": "synthetic-model",
-        "max_output_tokens": 128,
-        "web_search": False,
-        "max_search_calls": 0,
-    }
-    result = await host.execute(
-        route,
-        {**account, "_execution_limits": {"max_requests": 2}, "_model": {}},
-        {"api_key": "synthetic-key"},
-        context,
-        "Synthetic execute instruction",
-        office.OfficeOutput,
-    )
-
-    assert result["output"].summary == "Synthetic worker response."
-    assert captured["connection"]["_operation"] == "execute"
-    assert captured["route"] == route
-    assert captured["credentials"] == {"api_key": "synthetic-key"}
-    assert captured["instruction"] == "Synthetic execute instruction"
-    assert captured["output_schema"]["additionalProperties"] is False

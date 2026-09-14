@@ -3346,7 +3346,7 @@ export interface components {
              * Billing
              * @enum {string}
              */
-            billing: "metered" | "subscription" | "local" | "unknown";
+            billing: "metered" | "subscription" | "unknown";
             /** Status */
             status: string;
             /** Requests */
@@ -3969,7 +3969,7 @@ export interface components {
              * Protocol
              * @enum {string}
              */
-            protocol: "openai_responses" | "openai_chat" | "anthropic" | "google" | "bedrock" | "mistral" | "cohere" | "codex" | "copilot" | "gemini_cli" | "grok_build" | "claude_agent" | "claude_code";
+            protocol: "openai_responses" | "openai_chat" | "anthropic" | "google" | "codex" | "grok_build";
             /** Base Url */
             base_url?: string | null;
             /**
@@ -3977,13 +3977,13 @@ export interface components {
              * @default api_key
              * @enum {string}
              */
-            auth_type: "api_key" | "environment" | "azure_identity" | "aws_identity" | "google_identity" | "client_login" | "none";
+            auth_type: "api_key" | "environment" | "client_login";
             /**
              * Billing
              * @default metered
              * @enum {string}
              */
-            billing: "metered" | "subscription" | "local" | "unknown";
+            billing: "metered" | "subscription" | "unknown";
             /**
              * Enabled
              * @default true
@@ -4022,19 +4022,19 @@ export interface components {
              * Protocol
              * @enum {string}
              */
-            protocol: "openai_responses" | "openai_chat" | "anthropic" | "google" | "bedrock" | "mistral" | "cohere" | "codex" | "copilot" | "gemini_cli" | "grok_build" | "claude_agent" | "claude_code";
+            protocol: "openai_responses" | "openai_chat" | "anthropic" | "google" | "codex" | "grok_build";
             /** Base Url */
             base_url: string | null;
             /**
              * Auth Type
              * @enum {string}
              */
-            auth_type: "api_key" | "environment" | "azure_identity" | "aws_identity" | "google_identity" | "client_login" | "none";
+            auth_type: "api_key" | "environment" | "client_login";
             /**
              * Billing
              * @enum {string}
              */
-            billing: "metered" | "subscription" | "local" | "unknown";
+            billing: "metered" | "subscription" | "unknown";
             /** Enabled */
             enabled: boolean;
             /** Environment Key */
@@ -4391,7 +4391,7 @@ export interface components {
              * Billing
              * @enum {string}
              */
-            billing: "metered" | "subscription" | "unknown" | "local";
+            billing: "metered" | "subscription" | "unknown";
             /**
              * Provider Managed Extras
              * @default false
@@ -6680,7 +6680,7 @@ export interface components {
              * Billing
              * @enum {string}
              */
-            billing: "metered" | "subscription" | "unknown" | "local";
+            billing: "metered" | "subscription" | "unknown";
             /**
              * Provider Managed Extras
              * @default false
@@ -6901,21 +6901,21 @@ export interface components {
              */
             kind: "api" | "runtime";
             /** Protocols */
-            protocols: ("openai_responses" | "openai_chat" | "anthropic" | "google" | "bedrock" | "mistral" | "cohere" | "codex" | "copilot" | "gemini_cli" | "grok_build" | "claude_agent" | "claude_code")[];
+            protocols: ("openai_responses" | "openai_chat" | "anthropic" | "google" | "codex" | "grok_build")[];
             /**
              * Default Protocol
              * @enum {string}
              */
-            default_protocol: "openai_responses" | "openai_chat" | "anthropic" | "google" | "bedrock" | "mistral" | "cohere" | "codex" | "copilot" | "gemini_cli" | "grok_build" | "claude_agent" | "claude_code";
+            default_protocol: "openai_responses" | "openai_chat" | "anthropic" | "google" | "codex" | "grok_build";
             /** Base Url */
             base_url?: string | null;
             /** Auth Methods */
-            auth_methods: ("api_key" | "environment" | "azure_identity" | "aws_identity" | "google_identity" | "client_login" | "none")[];
+            auth_methods: ("api_key" | "environment" | "client_login")[];
             /**
              * Billing
              * @enum {string}
              */
-            billing: "metered" | "subscription" | "local" | "unknown";
+            billing: "metered" | "subscription" | "unknown";
             /** Docs Url */
             docs_url: string;
             /** Notes */
@@ -8685,7 +8685,7 @@ export interface components {
              * Billing
              * @enum {string}
              */
-            billing: "metered" | "subscription" | "local" | "unknown";
+            billing: "metered" | "subscription" | "unknown";
             /**
              * Access Kind
              * @default api_key

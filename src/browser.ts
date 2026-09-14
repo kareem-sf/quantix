@@ -5,8 +5,6 @@ import type { Schema } from "./api";
 // desktop browser first, outside the AI process owner's cleanup boundary.
 const signInPages: Partial<Record<Schema<"ConnectionRecord">["protocol"], string>> = {
   grok_build: "https://grok.com/",
-  gemini_cli: "https://accounts.google.com/",
-  copilot: "https://github.com/login/device",
 };
 
 export async function prepareSignInBrowser(protocol: Schema<"ConnectionRecord">["protocol"]) {

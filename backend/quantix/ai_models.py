@@ -6,9 +6,9 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_serializer, 
 
 from .ai_generation_models import GenerationSettings
 
-Protocol = Literal["openai_responses", "openai_chat", "anthropic", "google", "bedrock", "mistral", "cohere", "codex", "copilot", "gemini_cli", "grok_build", "claude_agent", "claude_code"]
-Authentication = Literal["api_key", "environment", "azure_identity", "aws_identity", "google_identity", "client_login", "none"]
-Billing = Literal["metered", "subscription", "local", "unknown"]
+Protocol = Literal["openai_responses", "openai_chat", "anthropic", "google", "codex", "grok_build"]
+Authentication = Literal["api_key", "environment", "client_login"]
+Billing = Literal["metered", "subscription", "unknown"]
 
 
 class AIModel(BaseModel):

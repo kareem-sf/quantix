@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import re
-import sys
 from pathlib import Path
 
 import mcp.types as types
@@ -21,7 +20,7 @@ except ImportError:  # Source-only diagnostics probes before component preparati
     from quantix.diagnostics import initialize as initialize_diagnostics
 
 
-RUNTIMES = {"codex", "copilot", "claude_agent", "claude_code", "gemini_cli", "grok_build"}
+RUNTIMES = {"codex", "grok_build"}
 
 
 def _nested_known_failure(error):
@@ -75,25 +74,20 @@ class Worker:
             if (not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", identifier)
                     or not home.is_absolute() or home.name != identifier or home.parent.name != "ai-runtimes"):
                 raise RuntimeUnavailable("The worker received an invalid private account directory.")
+            if connection.get("protocol") not in RUNTIMES:
+                raise RuntimeUnavailable("This worker supports only the Codex and Grok subscription clients.")
+            from .accounts import AccountService
+
             self.connection = connection
             self.account_home = home
-            if connection["protocol"] in RUNTIMES:
-                from .accounts import AccountService
-                self.accounts = AccountService(connection, home)
+            self.accounts = AccountService(connection, home)
             return {"initialized": True, "protocol": connection["protocol"]}
         if self.connection is None:
             raise RuntimeUnavailable("Initialize this worker's connection before starting an operation.")
         if name == "catalog":
-            if self.accounts:
-                from .runtime_catalog import discover_runtime_models
-                return await discover_runtime_models(self.account_home, self.connection, arguments["credentials"])
-            from .catalog import discover_models
-            return await discover_models(self.connection, arguments["credentials"])
+            from .runtime_catalog import discover_runtime_models
+            return await discover_runtime_models(self.account_home, self.connection, arguments["credentials"])
         if name in {"runtime_status", "login", "login_device", "logout"}:
-            if self.accounts is None:
-                return {"connection_id": self.connection["id"], "installed": True, "state": "installed",
-                        "detail": "The model API component is prepared. Account and model access have not been checked.",
-                        "login_url": None, "user_code": None, "docs_url": None}
             method = self.accounts.status if name == "runtime_status" else getattr(self.accounts, name)
             return await method()
         if name == "billing":
@@ -102,7 +96,7 @@ class Worker:
             from .grok_auth import subscription_usage
             return await subscription_usage(self.account_home, self.connection)
         if name in {"execute", "check", "conversation"}:
-            from .execution import execute_api, execute_runtime
+            from .execution import execute_runtime
             from .remote import execution_context
 
             execution = arguments["execution"]
@@ -117,14 +111,13 @@ class Worker:
             if self.connection["protocol"] == "grok_build":
                 connection["_grok_check_maximum_cost_usd"] = execution.get("grok_check_maximum_cost_usd")
             # Keep this worker boundary aligned with the core Grok check contract.
-            check_requests = GROK_CHECK_MAX_ROUNDS if self.connection["protocol"] == "grok_build" else (3 if self.accounts else 2)
+            check_requests = GROK_CHECK_MAX_ROUNDS if self.connection["protocol"] == "grok_build" else 3
             if name == "check" and (execution["limits"].get("max_requests", 0) > check_requests
                                      or execution["route"].get("max_output_tokens", 0) > 1024
                                      or execution["route"].get("web_search")):
                 raise RuntimeUnavailable("The connection check exceeds its small approved request limits.")
-            execute = execute_runtime if self.accounts else execute_api
             async with execution_context(execution) as context:
-                return await execute(execution["route"], connection, arguments["credentials"], context,
+                return await execute_runtime(execution["route"], connection, arguments["credentials"], context,
                                      execution["instruction"], execution["output_schema"])
         raise RuntimeUnavailable("This worker operation is unsupported.")
 
@@ -160,13 +153,6 @@ class Worker:
                 kind, message = "interrupted", "The AI operation ended before completion. No result was published."
             elif isinstance(error, (RuntimeConnectionFailure, ConnectionError, TimeoutError)):
                 kind, message = "connection", "The selected provider connection was interrupted or unavailable."
-            else:
-                # Pydantic AI is absent from native-only components; do not load
-                # it just to classify an original-client error.
-                exceptions = sys.modules.get("pydantic_ai.exceptions")
-                model_error = getattr(exceptions, "ModelAPIError", None)
-                if model_error and isinstance(error, model_error):
-                    kind, message = "connection", "The selected model API could not complete the request."
             self.diagnostics.record_exception(
                 "worker_operation_failed", error, phase=params.name, operation_id=operation_id,
                 protocol=(self.connection or {}).get("protocol"),
