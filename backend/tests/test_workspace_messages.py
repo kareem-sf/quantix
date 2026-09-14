@@ -4,18 +4,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from quantix.api import create_app
-from quantix.conversation import ConversationOutput, PreparedConversationResult
 from quantix.jobs import JobManager
 from quantix.office_types import OfficeOutput, PreparedOfficeResult
 from quantix.pending import PendingInstructionService
 from quantix.repository import Repository
-
-
-def test_conversation_output_cannot_carry_engineering_records():
-    with pytest.raises(ValueError):
-        ConversationOutput.model_validate(
-            {"kind": "conversation", "reply": "Hello", "next_action": "Review documents", "findings": []}
-        )
 
 
 def test_pending_instruction_has_one_editable_record_and_idempotency_conflict(tmp_path):
@@ -40,13 +32,6 @@ def test_pending_instruction_has_one_editable_record_and_idempotency_conflict(tm
     assert edited["content"] == "Review the drawings"
     assert edited["action"] == "review_documents"
     assert service.get(tender["id"])["id"] == first["id"]
-
-
-def test_only_typed_review_action_bypasses_first_conversation_pass():
-    from quantix.conversation import request_kind
-
-    assert request_kind("Please review the documents") == "conversation"
-    assert request_kind("Please review the documents", action="review_documents") == "manager"
 
 
 def test_message_history_page_links_only_persisted_source_relationships(tmp_path):
@@ -142,89 +127,44 @@ def test_http_busy_message_is_one_editable_pending_instruction(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_no_tools_conversation_result_publishes_only_dialogue(tmp_path, monkeypatch):
+async def test_a_message_runs_the_manager_directly_and_publishes_its_answer(tmp_path, monkeypatch):
     repo = Repository(tmp_path)
-    tender = repo.create_tender("Conversation")
-    run = repo.create_run(tender["id"], "conversation", "hello")
+    tender = repo.create_tender("Direct")
+    run = repo.create_run(tender["id"], "manager", "hello")
     jobs = JobManager(repo, object())
 
-    async def conversation(*_args):
-        return PreparedConversationResult(
-            tender_id=tender["id"],
-            run_id=run["id"],
-            output=ConversationOutput(
-                kind="conversation", reply="Hello.", next_action="Add tender documents."
-            ),
-            usage={"requests": 1},
-        )
-
-    monkeypatch.setattr("quantix.conversation.run_conversation", conversation)
-    jobs._schedule(run)
-    await asyncio.gather(*list(jobs.tasks.values()))
-    saved_run = repo.get_run(run["id"])
-    assert saved_run["status"] == "completed", (saved_run["error"], repo.run_events(run["id"]))
-    assert [item["role"] for item in repo.messages(tender["id"])] == ["manager"]
-    assert repo.list_findings(tender["id"]) == []
-    assert repo.list_plans(tender["id"]) == []
-    await jobs.close()
-
-
-@pytest.mark.asyncio
-async def test_routing_engineering_result_starts_source_grounded_pass_after_commit(tmp_path, monkeypatch):
-    repo = Repository(tmp_path)
-    tender = repo.create_tender("Routed")
-    run = repo.create_run(tender["id"], "conversation", "check the concrete")
-    jobs = JobManager(repo, object())
-    async def conversation(*_args):
-        return PreparedConversationResult(
-            tender_id=tender["id"],
-            run_id=run["id"],
-            output=ConversationOutput(kind="engineering"),
-            usage={"requests": 1},
-        )
-
-    async def engineering(*_args):
+    async def manager(*_args):
         return PreparedOfficeResult(
             tender_id=tender["id"],
             run_id=run["id"],
-            output=OfficeOutput(summary="Engineering review"),
+            output=OfficeOutput(summary="Hello. Add the tender documents to start."),
             usage={"requests": 1},
             source_ids_read=(),
             web_sources=(),
         )
 
-    monkeypatch.setattr("quantix.conversation.run_conversation", conversation)
-    monkeypatch.setattr("quantix.office.run_manager", engineering)
+    monkeypatch.setattr("quantix.office.run_manager", manager)
     jobs._schedule(run)
     await asyncio.gather(*list(jobs.tasks.values()))
     saved = repo.get_run(run["id"])
     assert saved["status"] == "completed", (saved["error"], repo.run_events(run["id"]))
-    assert len(repo.list_runs(tender["id"])) == 1
-    assert repo.messages(tender["id"])[-1]["role"] == "manager"
+    assert [item["content"] for item in repo.messages(tender["id"])] == ["Hello. Add the tender documents to start."]
+    assert repo.list_findings(tender["id"]) == [] and repo.list_plans(tender["id"]) == []
     await jobs.close()
 
 
 @pytest.mark.asyncio
-async def test_routed_engineering_failure_holds_waiting_draft_on_same_run(tmp_path, monkeypatch):
+async def test_manager_failure_holds_waiting_draft_on_same_run(tmp_path, monkeypatch):
     repo = Repository(tmp_path)
-    tender = repo.create_tender("Routed failure")
-    run = repo.create_run(tender["id"], "conversation", "check the concrete")
+    tender = repo.create_tender("Manager failure")
+    run = repo.create_run(tender["id"], "manager", "check the concrete")
     jobs = JobManager(repo, object())
     pending = jobs.pending.upsert(tender["id"], "hello later", "req-later", [run["id"]])
 
-    async def conversation(*_args):
-        return PreparedConversationResult(
-            tender_id=tender["id"],
-            run_id=run["id"],
-            output=ConversationOutput(kind="engineering"),
-            usage={"requests": 1},
-        )
-
-    async def failed_engineering(*_args):
+    async def failed_manager(*_args):
         raise ValueError("The selected model failed before publication.")
 
-    monkeypatch.setattr("quantix.conversation.run_conversation", conversation)
-    monkeypatch.setattr("quantix.office.run_manager", failed_engineering)
+    monkeypatch.setattr("quantix.office.run_manager", failed_manager)
     jobs._schedule(run)
     await asyncio.gather(*list(jobs.tasks.values()))
     assert repo.get_run(run["id"])["status"] == "failed"
@@ -237,75 +177,10 @@ async def test_routed_engineering_failure_holds_waiting_draft_on_same_run(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_stop_after_classifier_prevents_engineering_second_pass(tmp_path, monkeypatch):
-    repo = Repository(tmp_path)
-    tender = repo.create_tender("Stopped routing")
-    run = repo.create_run(tender["id"], "conversation", "check the concrete")
-    jobs = JobManager(repo, object())
-    called = []
-
-    async def conversation(*_args):
-        jobs.cancelled[run["id"]].set()
-        return PreparedConversationResult(
-            tender_id=tender["id"],
-            run_id=run["id"],
-            output=ConversationOutput(kind="engineering"),
-            usage={"requests": 1},
-        )
-
-    async def engineering(*_args):
-        called.append(True)
-        return None
-
-    monkeypatch.setattr("quantix.conversation.run_conversation", conversation)
-    monkeypatch.setattr("quantix.office.run_manager", engineering)
-    jobs._schedule(run)
-    await asyncio.gather(*list(jobs.tasks.values()))
-    assert called == []
-    assert repo.get_run(run["id"])["status"] == "cancelled"
-    await jobs.close()
-
-
-@pytest.mark.asyncio
-async def test_conversation_dispatch_passes_empty_tool_catalog_and_separate_prompt(monkeypatch):
-    captured = {}
-
-    class FakeDirect:
-        def __init__(self, _repo):
-            pass
-
-        async def execute(self, *args, **kwargs):
-            captured["instruction"] = args[4]
-            captured.update(kwargs)
-            return {"output": ConversationOutput(kind="conversation", reply="Hi", next_action="Add files"), "usage": {}}
-
-    monkeypatch.setattr("quantix.ai_direct.DirectAPIService", FakeDirect)
-    monkeypatch.setattr("quantix.ai_direct.supports_direct", lambda _connection: True)
-    from quantix.ai_execution import execute_api
-
-    context = type("Context", (), {"repo": object()})()
-    result = await execute_api(
-        {"model_id": "synthetic", "max_output_tokens": 100},
-        {"provider_id": "openai", "protocol": "openai_chat", "auth_type": "api_key"},
-        {},
-        context,
-        "Say hello",
-        ConversationOutput,
-        definitions=[],
-        operation="conversation",
-        system_instructions="",
-    )
-    assert result["output"].kind == "conversation"
-    assert captured["instruction"] == "Say hello"
-    assert captured["definitions"] == []
-    assert captured["operation_name"] == "conversation"
-
-
-@pytest.mark.asyncio
 async def test_stop_or_failed_wait_holds_pending_until_explicit_confirmation(tmp_path):
     repo = Repository(tmp_path)
     tender = repo.create_tender("Queue")
-    run = repo.create_run(tender["id"], "task")
+    run = repo.create_run(tender["id"], "manager")
     service = PendingInstructionService(repo)
     pending = service.upsert(tender["id"], "Review", "request-1", [run["id"]])
     service.on_run_finished(run["id"], "failed")
@@ -320,8 +195,8 @@ async def test_stop_or_failed_wait_holds_pending_until_explicit_confirmation(tmp
 def test_earlier_failed_run_keeps_pending_held_after_later_run_succeeds(tmp_path):
     repo = Repository(tmp_path)
     tender = repo.create_tender("Batch")
-    first = repo.create_run(tender["id"], "task")
-    second = repo.create_run(tender["id"], "task")
+    first = repo.create_run(tender["id"], "manager")
+    second = repo.create_run(tender["id"], "manager")
     service = PendingInstructionService(repo)
     service.upsert(tender["id"], "Review", "request-1", [first["id"], second["id"]])
     repo.update_run(second["id"], status="running")
@@ -348,10 +223,10 @@ def test_startup_holds_every_pending_instruction_for_explicit_review(tmp_path):
 def test_intervening_work_failure_holds_pending_after_original_wait_succeeds(tmp_path, status):
     repo = Repository(tmp_path)
     tender = repo.create_tender("Intervening work")
-    original = repo.create_run(tender["id"], "task")
+    original = repo.create_run(tender["id"], "manager")
     service = PendingInstructionService(repo)
     service.upsert(tender["id"], "Review", "request-1", [original["id"]])
-    later = repo.create_run(tender["id"], "task")
+    later = repo.create_run(tender["id"], "manager")
     repo.update_run(later["id"], status=status)
     service.on_run_finished(later["id"], status)
     repo.update_run(original["id"], status="completed")

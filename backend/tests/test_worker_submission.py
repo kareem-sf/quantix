@@ -1,4 +1,4 @@
-"""The original-client conversation boundary exposes only structured submission."""
+"""The original-client boundary accepts only structured results, or a summary-only Manager reply."""
 
 import sys
 from contextlib import asynccontextmanager
@@ -10,31 +10,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "ai_worker"))
 
-from quantix_ai_worker.server import Worker
 
 from quantix.ai_runtime_mcp import SUBMIT_TOOL, RuntimeToolBridge
-from quantix.conversation import ConversationOutput
+from quantix.office_types import ManagerAnswer
+from quantix.team_models import StaffOutput
 
 
 @pytest.mark.asyncio
-async def test_worker_declares_conversation_with_the_execution_schema():
-    declared = await Worker.list_tools(Worker.__new__(Worker), None, None)
-    tools = {item.name: item for item in declared.tools}
-    assert tools["conversation"].input_schema == tools["execute"].input_schema
-
-
-@pytest.mark.asyncio
-async def test_no_tools_submit_description_does_not_request_source_reading():
-    bridge = RuntimeToolBridge(None, ConversationOutput, definitions=[])
-    listed = await bridge._list_tools(None, None)
-    assert [tool.name for tool in listed.tools] == [SUBMIT_TOOL]
-    assert "after reading" not in listed.tools[0].description
-    assert "structured" in listed.tools[0].description
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["conversation", "execute"])
-async def test_codex_turn_scopes_instruction_to_the_requested_operation(tmp_path, monkeypatch, operation):
+async def test_codex_turn_points_the_model_at_the_request(tmp_path, monkeypatch):
     import openai_codex
     from quantix_ai_worker import codex
 
@@ -76,21 +59,16 @@ async def test_codex_turn_scopes_instruction_to_the_requested_operation(tmp_path
     with pytest.raises(TurnObserved):
         await codex.execute_codex(
             {"model_id": "synthetic-model", "web_search": False, "max_output_tokens": 1024},
-            {"protocol": "codex", "billing": "subscription", "auth_type": "client_login", "_operation": operation},
+            {"protocol": "codex", "billing": "subscription", "auth_type": "client_login", "_operation": "execute"},
             {}, context, "Supplied instruction", {},
         )
     assert SUBMIT_TOOL in observed["base"]
     assert "Do not run commands" in observed["base"]
-    if operation == "conversation":
-        assert "Read Tender evidence only" not in observed["base"]
-        assert "engineering instruction" not in observed["turn"]
-        # The turn must point the model at the engineer, not at the machinery,
-        # or a greeting comes back as a report about the turn itself.
-        assert "Answer the engineer's most recent message" in observed["turn"]
-        assert "do not describe this process" in observed["turn"]
-    else:
-        assert "Read Tender evidence only" in observed["base"]
-        assert "engineering instruction" in observed["turn"]
+    assert "Read Tender evidence only" in observed["base"]
+    # The turn must point the model at the request, not at the machinery,
+    # or a greeting comes back as a report about the turn itself.
+    assert "Carry out the request" in observed["turn"]
+    assert "do not describe this process" in observed["turn"]
 
 
 
@@ -163,22 +141,21 @@ def test_codex_reads_the_closing_message_from_the_completed_turn():
     assert codex.final_message(SimpleNamespace(items=None)) == ""
 
 
-def test_a_spoken_conversation_reply_is_accepted_when_nothing_was_submitted():
-    bridge = RuntimeToolBridge(None, ConversationOutput, definitions=[], operation="conversation")
+def test_a_spoken_manager_reply_is_accepted_as_a_summary_only_answer():
+    bridge = RuntimeToolBridge(None, ManagerAnswer, definitions=[])
     output = bridge.result("Hello. Ask me for a scope summary whenever you are ready.")
-    assert output.kind == "conversation"
-    assert output.reply.startswith("Hello.")
+    assert output.summary.startswith("Hello.")
+    assert output.source_ids == [] and output.findings == []
 
 
-def test_spoken_text_never_completes_a_run_that_can_publish_records():
-    for operation in ("execute", "check"):
-        bridge = RuntimeToolBridge(None, ConversationOutput, definitions=[], operation=operation)
-        with pytest.raises(ValueError, match="without submitting"):
-            bridge.result("Here is my answer in prose.")
+def test_spoken_text_never_completes_a_staff_result():
+    bridge = RuntimeToolBridge(None, StaffOutput, definitions=[])
+    with pytest.raises(ValueError, match="without submitting"):
+        bridge.result("Here is my answer in prose.")
 
 
-def test_a_conversation_with_no_answer_at_all_still_reports_the_missing_proposal():
-    bridge = RuntimeToolBridge(None, ConversationOutput, definitions=[], operation="conversation")
+def test_a_manager_turn_with_no_answer_at_all_still_reports_the_missing_result():
+    bridge = RuntimeToolBridge(None, ManagerAnswer, definitions=[])
     for spoken in (None, "", "   "):
         with pytest.raises(ValueError, match="without submitting"):
             bridge.result(spoken)

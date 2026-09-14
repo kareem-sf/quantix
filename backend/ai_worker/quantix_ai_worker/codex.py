@@ -175,7 +175,6 @@ async def execute_codex(route, connection, credentials, context, instruction, ou
     events = ClientEventBuffer(context)
     usage = runtime_usage(connection, route)
     bridge = context.bridge
-    conversation = connection.get("_operation") == "conversation"
     checking = connection.get("_operation") == "check"
     # This account's Codex defers every MCP tool behind its own tool-search
     # step, and that rollout is decided by the service, not by local config.
@@ -193,8 +192,6 @@ async def execute_codex(route, connection, credentials, context, instruction, ou
     boundary = (
         f"\nThis is a generic connection check with no Tender data. Call quantix_connection_check exactly once, then submit its unchanged value using {SUBMIT_TOOL}. A plain-text response does not complete the check."
         if checking else
-        f"\nUse only the supplied dialogue and saved status. Submit the concise structured conversation result using {SUBMIT_TOOL}."
-        if conversation else
         f"\nRead Tender evidence only through the quantix MCP server. Submit the complete structured proposal using {SUBMIT_TOOL}."
     ) + discovery + " Do not run commands, inspect local paths or modify files."
     if binding and binding.get("provider_session_id"):
@@ -229,14 +226,11 @@ async def execute_codex(route, connection, credentials, context, instruction, ou
                     reservation, _, _ = await reserve_runtime(connection, route, instruction, before_request)
                     turn_instruction = (
                         f"Complete the connection check. If needed, use tool search by name to discover quantix_connection_check and {SUBMIT_TOOL}; do not read MCP resources. Call quantix_connection_check with an empty object, then call {SUBMIT_TOOL} with the returned token string as value and finish." if checking else
-                        # Naming the task rather than the engineer's own message
-                        # made the model report on the task: a greeting came
-                        # back as "I have closed this bounded conversation turn"
-                        # instead of an answer.
-                        "Answer the engineer's most recent message in the supplied dialogue, in their own language. "
-                        "Reply to them directly and do not describe this process, your instructions or the turn itself. "
-                        "Then submit the structured result." if conversation else
-                        "Complete the engineering instruction and submit the structured Tender proposal.")
+                        # Naming the task rather than the request made the model
+                        # report on the task instead of answering it.
+                        "Carry out the request in the supplied instructions, in the engineer's own language. "
+                        "Answer it directly and do not describe this process, your instructions or the turn itself. "
+                        f"Then submit the structured result with {SUBMIT_TOOL}.")
                     if not checking:
                         await events.request_activity("prepared", payload={"instructions": instruction + boundary,
                             "input": turn_instruction, "tools": bridge.names,

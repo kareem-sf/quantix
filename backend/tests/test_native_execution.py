@@ -26,13 +26,13 @@ def test_price_only_edit_preserves_observed_capability_origin(tmp_path):
     assert changed["source"] == "manual"
 
 
-def test_classification_clears_search_without_changing_engineering_preferences():
+def test_light_route_clears_search_without_changing_engineering_preferences():
     from quantix.ai_api_provider import build_model_settings
-    from quantix.conversation import classification_route
+    from quantix.structured_ai import light_route
     approved = {"model_id": "fixture", "max_output_tokens": 10000, "reasoning": "budget:8192", "web_search": True}
     model = {"capabilities": {"reasoning": ["budget:8192"]}}
     connection = {"provider_id": "anthropic", "protocol": "anthropic", "_model": model}
-    classified = classification_route(approved, connection, model)
+    classified = light_route(approved, connection, model)
     assert classified["web_search"] is False
     assert 8192 < classified["max_output_tokens"] <= approved["max_output_tokens"]
     assert approved["web_search"] is True and approved["reasoning"] == "budget:8192"

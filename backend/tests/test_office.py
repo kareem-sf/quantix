@@ -265,7 +265,7 @@ def test_derived_measurement_source_keeps_its_proposal_origin_and_status():
 async def call_api_tool(options, name, context, arguments):
     from quantix.office_tools import source_tools
 
-    definitions = source_tools() + ([options["consult"]] if options.get("consult") else [])
+    definitions = options.get("definitions") or source_tools()
     definition = next(item for item in definitions if item.name == name)
     return await definition.invoke(context, arguments)
 
@@ -277,32 +277,28 @@ async def test_manager_prepares_source_bound_proposals_without_publishing(monkey
 
     async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
         await call_api_tool(kwargs, "search_sources", context, {"query": "concrete", "limit": 5})
+        await call_api_tool(kwargs, "propose", context, {"kind": "plan", "items": [{
+            "title": "Concrete package review",
+            "tasks": [{
+                "title": "Check concrete scope",
+                "description": "Review concrete clauses and BOQ.",
+                "role": "Concrete specification reviewer",
+                "source_ids": ["source-1"],
+            }],
+        }]})
         return api_result_for(
-            office.OfficeOutput.model_validate(
-                {
-                    "summary": "The concrete specification requires review.",
-                    "source_ids": ["source-1"],
-                    "findings": [
-                        {
-                            "title": "Concrete grade",
-                            "detail": "Specified strength is 35 MPa.",
-                            "kind": "requirement",
-                            "source_ids": ["source-1"],
-                        }
-                    ],
-                    "plan": {
-                        "title": "Concrete package review",
-                        "tasks": [
-                            {
-                                "title": "Check concrete scope",
-                                "description": "Review concrete clauses and BOQ.",
-                                "role": "Concrete specification reviewer",
-                                "source_ids": ["source-1"],
-                            }
-                        ],
-                    },
-                }
-            )
+            {
+                "summary": "The concrete specification requires review.",
+                "source_ids": ["source-1"],
+                "findings": [
+                    {
+                        "title": "Concrete grade",
+                        "detail": "Specified strength is 35 MPa.",
+                        "kind": "requirement",
+                        "source_ids": ["source-1"],
+                    }
+                ],
+            }
         )
 
     monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
@@ -416,20 +412,11 @@ async def test_research_retains_provider_citations_and_unapproved_price_basis(mo
     url = "https://supplier.example/products/rebar"
 
     async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
+        await call_api_tool(kwargs, "propose", context, {"kind": "web_findings", "items": [
+            {"title": "Rebar market reference", "detail": "Published supplier listing.", "urls": [url]}]})
+        await call_api_tool(kwargs, "propose", context, {"kind": "price_proposals", "items": [price_proposal()]})
         return api_result_for(
-            office.OfficeOutput.model_validate(
-                {
-                    "summary": "A published rebar price is available; commercial terms need confirmation.",
-                    "web_findings": [
-                        {
-                            "title": "Rebar market reference",
-                            "detail": "Published supplier listing.",
-                            "urls": [url],
-                        }
-                    ],
-                    "price_proposals": [price_proposal()],
-                }
-            ),
+            {"summary": "A published rebar price is available; commercial terms need confirmation."},
             [web_source()],
         )
 
@@ -449,15 +436,9 @@ async def test_fabricated_web_price_source_rejects_output_before_writes(monkeypa
     repo = MemoryRepository()
 
     async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
-        return api_result_for(
-            office.OfficeOutput.model_validate(
-                {
-                    "summary": "A price was found.",
-                    "price_proposals": [price_proposal("https://invented.example/price")],
-                }
-            ),
-            [web_source()],
-        )
+        await call_api_tool(kwargs, "propose", context, {
+            "kind": "price_proposals", "items": [price_proposal("https://invented.example/price")]})
+        return api_result_for({"summary": "A price was found."}, [web_source()])
 
     monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
     with pytest.raises(ValueError, match="URL|source|search"):
@@ -550,7 +531,7 @@ async def test_existing_engineer_decisions_and_plan_survive_manager_context(monk
 
     async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
         context = json.loads(prompt)
-        assert context["existing_findings"][0]["state"] == "accepted"
+        assert context["recent_findings"][0]["state"] == "accepted"
         assert context["plan"]["status"] == "approved"
         assert context["plan"]["tasks"][0]["title"] == "Check delivery"
         return api_result_for(office.OfficeOutput(summary="The approved work remains visible."))

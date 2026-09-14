@@ -32,9 +32,7 @@ _TOOL_ACTIVITY = {
     "view_document_page": "Reviewing drawing page.",
     "search_sources": "Reading Tender sources.",
     "read_source": "Reading Tender sources.",
-    "read_document": "Reading Tender sources.",
     "list_documents": "Reading Tender sources.",
-    "search_semantic_sources": "Searching Tender sources.",
     "read_package_map": "Reading the tender package map.",
     "read_whole_document": "Reading a tender document in full.",
     "inspect_tender_records": "Reviewing Tender records.",
@@ -143,8 +141,6 @@ class RuntimeToolBridge:
                 "Call quantix_connection_check with an empty argument object, then submit its token string using quantix_submit_result. These are tools, not resources. No Tender data or MCP resources are available."
                 if self.connection_check
                 else "Read this Tender only. All findings and commercial values remain proposals for engineer review."
-                if self.tools
-                else "Use only the supplied conversation and saved status. Return the structured result."
             ),
             on_list_tools=self._list_tools,
             on_call_tool=self._call_tool,
@@ -175,9 +171,7 @@ class RuntimeToolBridge:
                 description=(
                     "Submit the unchanged connection-check value as the structured result. "
                     if self.connection_check
-                    else "Submit the complete structured work proposal after reading its evidence. "
-                    if self.tools
-                    else "Submit the concise structured conversation result. "
+                    else "Submit your complete structured answer after reading its evidence. "
                 )
                 + "This saves no domain decisions and does not approve anything.",
                 inputSchema=self.output_type.model_json_schema(),
@@ -311,23 +305,18 @@ class RuntimeToolBridge:
         return None
 
     def _text_result(self, text):
-        """Accept the client's own closing message for the no-tools chat pass.
+        """Accept the client's closing prose as a summary-only answer.
 
         A local client often answers a greeting as ordinary prose instead of
-        calling the submit tool, and losing that answer is what makes the
-        Manager look silent.  Only a conversation bridge, which exposes no
-        source tools at all, may finish this way, and only as a conversation
-        reply: plain text can never classify a request as engineering work or
-        publish a record of any kind.
+        calling the submit tool, and losing that answer makes the Manager look
+        silent. Prose carries no citations or records, and the run's own checks
+        still apply to it.
         """
 
-        if self.operation != "conversation" or self.tools or not isinstance(text, str):
-            return None
-        reply = text.strip()
-        if not reply:
+        if self.connection_check or not isinstance(text, str) or not text.strip():
             return None
         try:
-            return self.output_type.model_validate({"kind": "conversation", "reply": reply[:6000]})
+            return self.output_type.model_validate({"summary": text.strip()[:18000]})
         except ValueError:
             return None
 

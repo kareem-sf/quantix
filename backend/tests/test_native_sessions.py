@@ -18,7 +18,7 @@ def workspace(tmp_path):
 
 
 def context(repo, tender):
-    run = repo.create_run(tender["id"], "conversation")
+    run = repo.create_run(tender["id"], "manager")
     ManagerRunProfiles(repo).capture(tender["id"], run["id"])
     return SimpleNamespace(repo=repo, tender_id=tender["id"], run_id=run["id"], approved_scope=None)
 

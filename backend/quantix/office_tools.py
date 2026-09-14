@@ -39,7 +39,6 @@ _MAX_REDACTED_SOURCE_CHARS = 48000
 # Every tool result is sent back to the model on each later step of the run,
 # so reads return a focused slice and the model asks for more when needed.
 SEARCH_EXCERPT_CHARS = 700
-DOCUMENT_PASSAGE_CHARS = 3000
 READ_SOURCE_CHARS = 4000
 READ_SOURCE_MAX_CHARS = 12000
 # One page of whole-document reading; the Manager follows next_offset for the rest.
@@ -105,7 +104,6 @@ class OfficeContext:
     seen_sources: set[str] = field(default_factory=set)
     # Exact text ranges already returned to the model in this run.
     returned_reads: set[tuple[str, int, int]] = field(default_factory=set)
-    specialist_calls: int = 0
     approved_scope: dict | None = None
     item_bases: dict[str, str] = field(default_factory=dict)
     trusted_recipients: set[str] = field(default_factory=set)
@@ -114,9 +112,8 @@ class OfficeContext:
     standing_preferences: str = ""
     actor_id: str | None = None
     assignment_id: str | None = None
-    notes: list[dict] = field(default_factory=list)
-    history: list[dict] = field(default_factory=list)
-    research_state: dict = field(default_factory=dict)
+    # Records staged with the propose tool, published when the run finishes.
+    proposals: dict = field(default_factory=dict)
 
     @property
     def is_staff(self) -> bool:
@@ -238,12 +235,6 @@ class OfficeContext:
         if any(str(row[3] or "").strip() for row in draft.evidence_rows):
             self.repo.notify_retrieval_generation(self.tender_id)
 
-    def require_tool(self, tool_id: str) -> None:
-        """Every tool offered to a turn may be used; the offered list is the boundary."""
-
-    def ensure_scope_current(self) -> None:
-        """Manager and staff both work on the whole current tender."""
-
     def ensure_artifact_allowed(self, artifact_id: str, *, check_identity: bool = True) -> dict:
         if not isinstance(artifact_id, str) or not artifact_id:
             raise ValueError("Choose a source artifact from this Tender.")
@@ -259,9 +250,6 @@ class OfficeContext:
 
     def ensure_evidence_allowed(self, evidence_id: str, *, tool_id: str | None = "read_source") -> dict:
         return self.repo.get_evidence(self.tender_id, evidence_id)
-
-    def record_visual_receipt(self, evidence: dict, artifact: dict, page: int, region: list[float]) -> None:
-        """Visual reads are recorded through the tool's activity record."""
 
     def source(
         self,
@@ -428,7 +416,7 @@ def _check_search_progress(context: "OfficeContext", passages: list[dict]) -> No
         state["_fruitless_searches"] = 0
         raise ToolArgumentError(
             f"The last {FRUITLESS_SEARCH_LIMIT} searches found nothing new. Stop searching with similar "
-            "terms: read a specific document with read_document, check inspect_extraction_coverage for "
+            "terms: read a specific document with read_whole_document, check inspect_extraction_coverage for "
             "pages without readable text, or report what is still missing."
         )
 
@@ -459,13 +447,12 @@ def _brief(source: dict) -> dict:
 
 
 def resolve_document_id(context: "OfficeContext", value: str) -> str:
-    """Accept a document ID, or an exact file name or path, for the Manager.
+    """Accept a document ID, or an exact file name or path.
 
-    An unknown document is a correctable argument mistake rather than the end of
-    the run. Staff scope checks are left to ensure_artifact_allowed unchanged.
+    An unknown document is a correctable argument mistake rather than the end of the run.
     """
 
-    if context.is_staff or not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not value.strip():
         return value
     artifacts = context.repo.list_artifacts(context.tender_id)
     if any(artifact["id"] == value for artifact in artifacts):
@@ -495,14 +482,8 @@ def _is_passage(context: "OfficeContext", value: str) -> bool:
 
 
 def _require_passage_id(context: "OfficeContext", source_id: str) -> None:
-    """A wrong kind of ID is a correctable argument mistake, not the end of the run.
+    """A wrong kind of ID is a correctable argument mistake, not the end of the run."""
 
-    Staff keep their scope refusals unchanged; the Manager gets a way forward
-    when it passes a document ID, or an ID that is not a passage at all.
-    """
-
-    if context.is_staff:
-        return
     try:
         context.repo.get_evidence(context.tender_id, source_id)
         return
@@ -516,7 +497,7 @@ def _require_passage_id(context: "OfficeContext", source_id: str) -> None:
         )
     raise ToolArgumentError(
         "No passage with this ID exists in this Tender. Use a passage id returned by "
-        "search_sources, read_document or read_whole_document in this run."
+        "search_sources or read_whole_document in this run."
     )
 
 
@@ -527,8 +508,6 @@ def _passage(
 
     key = (evidence_id, offset, limit)
     if context.was_returned(key):
-        context.require_tool(tool_id)
-        context.ensure_scope_current()
         context.ensure_evidence_allowed(evidence_id, tool_id=tool_id)
         return {"id": evidence_id, "text_offset": offset, "already_returned": True}
     passage = _brief(context.source(evidence_id, offset, limit, tool_id=tool_id))
@@ -548,7 +527,6 @@ def source_tools(context: OfficeContext | None = None) -> list:
         height: float,
     ) -> list:
         """Inspect a PDF page or zoomed region. Coordinates are top-left fractions; use 0,0,1,1 for the whole page. Cite the returned source ID."""
-        ctx.context.require_tool("view_document_page")
         from .visual_sources import visual_source
 
         return await visual_source(ctx.context, artifact_id, page, [x, y, width, height])
@@ -558,8 +536,6 @@ def source_tools(context: OfficeContext | None = None) -> list:
         ctx: ToolContext[OfficeContext], query: str, limit: int = 8, exact: bool = False
     ) -> str:
         """Search this Tender's evidence by meaning (any wording, Arabic or English) fused with exact word matches. Returns a short excerpt of each passage with its evidence ID, how it was found (meaning, words or both) and weak_match when only a loose meaning match exists: a weak match is a place to look, not proof the answer exists. Set exact=true for identifiers, clause numbers, grades and quantities. Use read_source for more of a passage."""
-        ctx.context.require_tool("search_sources")
-        ctx.context.ensure_scope_current()
         if not query.strip() or len(query) > 1000:
             raise ToolArgumentError("Use a search query under 1000 characters.")
         # An oversized request is served at the maximum, not refused.
@@ -591,7 +567,6 @@ def source_tools(context: OfficeContext | None = None) -> list:
                 ctx.context.set_semantic_service(SemanticService(ctx.context.repo))
             except Exception:  # noqa: BLE001 - keyword search still answers
                 pass
-        artifact_ids = None
         response = retrieve(
             ctx.context.repo,
             ctx.context.tender_id,
@@ -599,7 +574,6 @@ def source_tools(context: OfficeContext | None = None) -> list:
             mode="words" if exact else "auto",
             limit=limit,
             semantic=ctx.context.semantic_service,
-            artifact_ids=artifact_ids,
         )
         hits = []
         for item in response.hits:
@@ -611,27 +585,12 @@ def source_tools(context: OfficeContext | None = None) -> list:
                     "heading": item.spans[0].heading,
                 }
             hits.append(row)
-        if ctx.context.is_staff:
-            sources = [excerpt(hit) for hit in hits]
-            _check_search_progress(ctx.context, sources)
-            result = {
-                "sources": sources,
-                "partial_results": False,
-                "scope_filter_applied": True,
-                "limitation": None,
-            }
-        else:
-            result = [excerpt(hit) for hit in hits]
-            _check_search_progress(ctx.context, result)
+        result = [excerpt(hit) for hit in hits]
+        _check_search_progress(ctx.context, result)
         ctx.context.emit_event(
             "sources_read",
             "Tender evidence searched.",
-            {
-                "source_ids": [
-                    source["id"]
-                    for source in (result if isinstance(result, list) else result["sources"])
-                ]
-            },
+            {"source_ids": [source["id"] for source in result]},
         )
         return json.dumps(result, ensure_ascii=False)
 
@@ -644,7 +603,6 @@ def source_tools(context: OfficeContext | None = None) -> list:
         reread: bool = False,
     ) -> str:
         """Read an indexed Tender source at a character offset. Follow next_offset to inspect the rest. A range already returned in this run is not sent again; pass reread=true only if you can no longer see it."""
-        ctx.context.require_tool("read_source")
         _require_passage_id(ctx.context, source_id)
         if reread:
             # One re-send per passage per run covers text a client compacted away;
@@ -666,39 +624,10 @@ def source_tools(context: OfficeContext | None = None) -> list:
         return json.dumps(source, ensure_ascii=False)
 
     @scoped_tool
-    async def read_document(
-        ctx: ToolContext[OfficeContext], artifact_id: str, offset: int = 0, limit: int = 3
-    ) -> str:
-        """Read a few passages of one Tender document in order, each cut to its opening text. Prefer search_sources to find the passages you need; use offset to continue and read_source for the rest of a passage."""
-        ctx.context.require_tool("read_document")
-        ctx.context.ensure_scope_current()
-        artifact_id = resolve_document_id(ctx.context, artifact_id)
-        if offset < 0 or not 1 <= limit <= 5:
-            raise ToolArgumentError("Use a nonnegative offset and a limit from 1 to 5.")
-        ctx.context.ensure_artifact_allowed(artifact_id)
-        rows = ctx.context.repo.artifact_evidence(
-            ctx.context.tender_id, artifact_id, offset=offset, limit=limit
-        )
-        passages = [
-            _passage(ctx.context, row["id"], 0, DOCUMENT_PASSAGE_CHARS, "read_document")
-            for row in rows
-        ]
-        return json.dumps(passages, ensure_ascii=False)
-
-    @scoped_tool
     async def read_package_map(ctx: ToolContext[OfficeContext]) -> str:
         """Read the package map made when the tender package was analysed: project identity, what the package contains, gaps, pages needing a second reading, and for each document its type, title, brief, where key content is and related documents. Use it first to decide which documents answer a request. It is orientation, not citable evidence."""
-        ctx.context.require_tool("read_package_map")
-        ctx.context.ensure_scope_current()
         from .package_analysis import DOCUMENT_TYPE_LABELS, package_map
 
-        if ctx.context.is_staff:
-            return json.dumps(
-                {
-                    "available": False,
-                    "detail": "The package map combines whole-Tender sources. Use list_documents and search_sources within your reviewed sources.",
-                }
-            )
         saved = package_map(ctx.context.repo, ctx.context.tender_id)
         if saved is None:
             return json.dumps(
@@ -740,8 +669,6 @@ def source_tools(context: OfficeContext | None = None) -> list:
         ctx: ToolContext[OfficeContext], artifact_id: str, offset: int = 0
     ) -> str:
         """Read one Tender document in full, in order, one page of about 12,000 characters at a time. Use it only when the request needs the whole document: listing every item, summarising or comparing a complete document, or when search keeps missing. Follow next_offset to continue. Everything returned counts as read and can be cited."""
-        ctx.context.require_tool("read_whole_document")
-        ctx.context.ensure_scope_current()
         artifact_id = resolve_document_id(ctx.context, artifact_id)
         if offset < 0:
             raise ToolArgumentError("Use a nonnegative offset.")
@@ -791,8 +718,6 @@ def source_tools(context: OfficeContext | None = None) -> list:
     @scoped_tool
     async def list_documents(ctx: ToolContext[OfficeContext]) -> str:
         """List registered Tender documents and their extraction status, without claiming analysis."""
-        ctx.context.require_tool("list_documents")
-        ctx.context.ensure_scope_current()
         artifacts = ctx.context.repo.list_artifacts(ctx.context.tender_id)
         return json.dumps(
             {
@@ -820,7 +745,6 @@ def source_tools(context: OfficeContext | None = None) -> list:
     definitions = [
         search_sources,
         read_source,
-        read_document,
         list_documents,
         read_package_map,
         read_whole_document,

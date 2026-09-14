@@ -215,7 +215,7 @@ def accumulate_boundary(usage, event):
     usage["usage_complete"] = False
 
 
-def headless_command(binary, route, requests, profile, prompt, *, no_tools=False, resume_session_id=None):
+def headless_command(binary, route, requests, profile, prompt, *, resume_session_id=None):
     """Build the pinned Grok top-level headless invocation.
 
     Headless runs use the top-level options, where the profile path is supplied
@@ -224,9 +224,7 @@ def headless_command(binary, route, requests, profile, prompt, *, no_tools=False
     """
     command = [*binary, "--no-leader", "--no-auto-update", "--model", route["model_id"],
                "--output-format", "streaming-json", "--max-turns", str(requests)]
-    if not no_tools:
-        command.extend(["--tools", "search_tool,use_tool"])
-    command.extend(["--disallowed-tools", "Agent", "--allow", "MCPTool(quantix__*)",
+    command.extend(["--tools", "search_tool,use_tool", "--disallowed-tools", "Agent", "--allow", "MCPTool(quantix__*)",
                     "--agent", str(profile), "--prompt-file", str(prompt)])
     if route.get("reasoning"):
         command.extend(["--reasoning-effort", route["reasoning"]])
@@ -299,11 +297,7 @@ async def execute_grok(route, connection, credentials, context, instruction, out
             # A strict profile and CLI allowlist compose. Meta-tools may only
             # reach the one configured Quantix server; no shell is exposed.
             builtin_tools = ["search_tool", "use_tool"]
-            profile_description = (
-                "Classify a bounded Tender conversation without inspecting documents."
-                if operation == "conversation"
-                else "Inspect scoped Tender evidence and submit an engineering proposal."
-            )
+            profile_description = "Inspect Tender evidence and submit a structured result."
             profile_content = ("---\nname: quantix-tender\ndescription: " + profile_description + "\n"
                           f"tools: {builtin_tools}\ndisallowedTools: [Agent]\n"
                           f"maxTurns: {requests}\n---\n"
@@ -316,7 +310,6 @@ async def execute_grok(route, connection, credentials, context, instruction, out
                 configure(home, model=route["model_id"], output_limit=output_limit, bridge=bridge)
                 command = headless_command(
                     grok_command(connection), route, requests, profile, prompt,
-                    no_tools=operation == "conversation",
                     resume_session_id=binding.get("provider_session_id") if binding else None,
                 )
                 reservation, _, _ = await reserve_runtime(connection, route, instruction, before_request)

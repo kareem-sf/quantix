@@ -174,7 +174,7 @@ async def test_native_control_records_canonical_catalogue_and_public_sections(tm
     prepared = captured[0][1]
     assert prepared["instructions"] == "Exact supplied content"
     assert prepared["quantix_tool_catalogue"][0]["inputSchema"]["properties"]["summary"]["type"] == "string"
-    assert "supplied conversation" in prepared["quantix_tool_instructions"]
+    assert "Read this Tender only" in prepared["quantix_tool_instructions"]
     summary = next((meta, payload) for meta, payload in captured if meta["category"] == "reasoning_summary")
     assert summary[0]["parent_operation_id"] == context._activity_parent_operation
     assert summary[1]["text"] == "complete " * 2000

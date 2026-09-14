@@ -49,9 +49,7 @@ class NativeExecutionService:
             runtime = connection.get("_checked_component_version")
             if not runtime:
                 raise ValueError("Check this exact original-client software and model before creating a managed session.")
-            artifacts = []
-            if operation != "conversation":
-                artifacts = [{key: artifact[key] for key in ("id", "version", "content_hash")} for artifact in self.repo.list_artifacts(context.tender_id)]
+            artifacts = [{key: artifact[key] for key in ("id", "version", "content_hash")} for artifact in self.repo.list_artifacts(context.tender_id)]
             scope = _fingerprint({"artifacts": artifacts, "approved_scope": getattr(context, "approved_scope", None),
                                   "tools": list(tools), "operation": operation})
             observed_model = connection.get("_model") or {}

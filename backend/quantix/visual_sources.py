@@ -81,8 +81,6 @@ async def visual_source(context, artifact_id, page, region):
 
 async def _visual_source(context, artifact_id, page, region):
     repo, tender_id = context.repo, context.tender_id
-    context.require_tool("view_document_page")
-    context.ensure_scope_current()
     from .office_tools import resolve_document_id
 
     artifact_id = resolve_document_id(context, artifact_id)

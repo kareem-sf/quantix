@@ -192,8 +192,6 @@ class DraftStreamEvents:
         fields = output_type.model_fields
         if "summary" in fields:
             self.paths = [("summary",), ("question",)] if "question" in fields else [("summary",)]
-        elif "reply" in fields:
-            self.paths = [("reply",)]
         else:
             self.paths = []
         self.total_chars = 0

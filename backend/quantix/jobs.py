@@ -3,12 +3,10 @@
 import asyncio
 import re
 import threading
-from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
 from .ai_connections import AIConnectionService
-from .conversation import PreparedConversationResult, request_kind
 from .diagnostics import record, record_exception
 from .intake import import_package
 from .manager_runtime import ManagerRunProfiles
@@ -70,7 +68,7 @@ class JobManager:
                 "This Tender already has work in progress. Stop that work before changing its instructions."
             )
         run = self.repo.create_run(tender_id, kind, instruction)
-        if kind in {"manager", "conversation", "identify", "analysis"}:
+        if kind in {"manager", "identify", "analysis"}:
             self.manager_profiles.capture(tender_id, run["id"])
         if task_id:
             self.repo.event(
@@ -323,11 +321,10 @@ class JobManager:
                     action=action,
                 )
                 return self._pending_result(pending)
-            kind = request_kind(instruction, action=action)
             if policy.get(tender_id)["manager"] is None:
                 raise ValueError("Open Settings and choose a Tender Manager connection before sending this instruction.")
             self._preflight_route(tender_id, policy)
-            run = self._queue(tender_id, kind, instruction)
+            run = self._queue(tender_id, "manager", instruction)
             self.repo.add_message(tender_id, "engineer", instruction, run_id=run["id"])
             self.pending.remember_idempotency(
                 tender_id,
@@ -361,8 +358,7 @@ class JobManager:
                 tender_id, pending_id=pending_id, expected_revision=expected_revision
             )
             instruction = consumed["content"]
-            kind = request_kind(instruction, action=consumed.get("action"))
-            run = self._queue(tender_id, kind, instruction)
+            run = self._queue(tender_id, "manager", instruction)
             self.repo.add_message(tender_id, "engineer", instruction, run_id=run["id"])
             self.pending.remember_idempotency(
                 tender_id,
@@ -480,7 +476,6 @@ class JobManager:
                     raise InterruptedError("Work stopped before it started.")
                 initial_detail = {
                     "manager": "The Tender Manager is reviewing the package.",
-                    "conversation": "The Tender Manager is working on your message.",
                     "identify": "Identifying the project from its documents.",
                     "analysis": "Analyzing tender package.",
                 }.get(run["kind"], "Work is starting.")
@@ -529,57 +524,6 @@ class JobManager:
                     prepared = await asyncio.wait_for(
                         run_identification(self.repo, tender_id, identifier), timeout=5 * 60
                     )
-                elif run["kind"] == "conversation":
-                    from .conversation import run_conversation
-
-                    routing_operation = monitor.start("routing", "Checking what this instruction needs.")
-                    prepared = await asyncio.wait_for(
-                        run_conversation(self.repo, tender_id, identifier, run["instruction"]),
-                        timeout=15 * 60,
-                    )
-                    monitor.record(routing_operation, "routing", "completed", "Instruction routing finished.",
-                                   {"route": prepared.output.kind})
-                    if cancelled.is_set():
-                        raise InterruptedError("Work stopped before engineering review started.")
-                    if prepared.output.kind == "engineering":
-                        # Keep the bounded classifier and source-grounded
-                        # work in one durable run and one budget scope.  The
-                        # first pass has no tools; only this branch may enter
-                        # Office execution after the classifier commits no
-                        # records of its own.
-                        from .office import run_manager
-
-                        monitor.record(execution_operation, "run", "observed", "Starting source-based engineering work.")
-                        routing_usage = prepared.usage
-                        office = await asyncio.wait_for(
-                            run_manager(self.repo, tender_id, identifier, run["instruction"]),
-                            timeout=MANAGER_RUN_SECONDS,
-                        )
-                        office_usage = office.usage
-                        usage = dict(office_usage)
-                        for counter in (
-                            "requests",
-                            "input_tokens",
-                            "output_tokens",
-                            "cached_input_tokens",
-                            "reasoning_tokens",
-                            "web_search_calls",
-                        ):
-                            usage[counter] = (routing_usage.get(counter, 0) or 0) + (
-                                office_usage.get(counter, 0) or 0
-                            )
-                        usage["total_tokens"] = usage.get("input_tokens", 0) + usage.get(
-                            "output_tokens", 0
-                        )
-                        usage["usage_complete"] = bool(
-                            routing_usage.get("usage_complete", True)
-                            and office_usage.get("usage_complete", True)
-                        )
-                        usage["request_details"] = [
-                            *routing_usage.get("request_details", []),
-                            *office_usage.get("request_details", []),
-                        ]
-                        prepared = replace(office, usage=usage)
                 else:
                     from .office import run_manager
 
@@ -606,28 +550,6 @@ class JobManager:
                         if prepared.run_id != identifier or prepared.tender_id != tender_id:
                             raise ValueError("The worker returned an invalid project identification.")
                         result = apply_identity(self.repo, prepared)
-                    elif isinstance(prepared, PreparedConversationResult):
-                        if not isinstance(prepared, PreparedConversationResult) or (
-                            prepared.run_id != identifier or prepared.tender_id != tender_id
-                        ):
-                            raise ValueError("The worker returned an invalid prepared conversation result.")
-                        result = {
-                            "kind": prepared.output.kind,
-                            "reply": prepared.output.reply,
-                            "next_action": prepared.output.next_action,
-                            "usage": prepared.usage,
-                        }
-                        if prepared.output.kind == "conversation":
-                            reply = prepared.output.reply.strip()
-                            next_action = prepared.output.next_action.strip()
-                            if next_action and next_action not in reply:
-                                reply += "\n\n" + next_action
-                            self.repo.add_message(
-                                tender_id,
-                                "manager",
-                                reply,
-                                run_id=identifier,
-                            )
                     elif isinstance(prepared, PreparedOfficeResult):
                         from .office import publish_prepared
 
@@ -686,7 +608,7 @@ class JobManager:
 
             persist_recording_failure(self.repo, identifier)
             message = (
-                "The task exceeded its 15-minute execution limit. Refine the scope and resume."
+                "The work exceeded its time limit. Review the saved progress, narrow the request and resume."
                 if isinstance(error, TimeoutError)
                 else safe_error(error)
             )
@@ -803,7 +725,7 @@ class JobManager:
             policy = AIPolicyService(self.repo)
             with policy.connections.authority_guard(), self.repo.atomic():
                 self._preflight_route(run["tender_id"], policy)
-                retry = self._queue(run["tender_id"], run["kind"], run["instruction"])
+                retry = self._queue(run["tender_id"], "manager", run["instruction"])
                 selected_task = next((event["data"] for event in self.repo.run_events(run_id) if event["kind"] == "requested_task"), None)
                 if selected_task:
                     self.repo.event(retry["id"], "requested_task", "Continuing the engineer's selected task after Resume.", selected_task)

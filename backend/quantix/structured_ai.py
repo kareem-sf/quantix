@@ -20,6 +20,32 @@ Output = TypeVar("Output", bound=BaseModel)
 USAGE_COUNTERS = ("requests", "input_tokens", "output_tokens", "cached_input_tokens", "reasoning_tokens")
 
 
+def light_route(approved_route, connection, model):
+    """The approved route at the model's lightest thinking level, without hosted search."""
+    from .ai_thinking import light_level
+
+    approved_limit = approved_route["max_output_tokens"]
+    route = {**approved_route, "web_search": False, "max_search_calls": 0}
+    recorded = (model.get("capabilities") or {}).get("reasoning") or []
+    candidate = light_level(connection, model)
+    effort = route.get("reasoning")
+    # Explicit token budgets stay unless the model reports a lighter named setting.
+    fixed_budget = isinstance(effort, str) and effort.startswith("budget:")
+    if effort not in {"none", "disabled"} and candidate is not None and (
+        not fixed_budget or candidate in recorded
+    ):
+        route["reasoning"] = candidate
+    effort = route.get("reasoning")
+    if isinstance(effort, str) and effort.startswith("budget:"):
+        try:
+            budget = int(effort.split(":", 1)[1])
+        except ValueError:
+            raise ValueError("Review the approved thinking-token budget before this analysis.") from None
+        if not 1 <= budget < approved_limit:
+            raise ValueError("The approved thinking budget must remain below its approved output limit.")
+    return route
+
+
 async def ask_structured(
     repo: "Repository", tender_id: str, run_id: str, prompt: str, output_type: type[Output], *,
     operation: str,
@@ -28,7 +54,6 @@ async def ask_structured(
     from .ai_execution import execute_api
     from .ai_policy import AIPolicyService, BudgetMeter
     from .ai_readiness import require_ready
-    from .conversation import classification_route
 
     if repo.get_run(run_id)["tender_id"] != tender_id:
         raise ValueError("The run does not belong to this Tender.")
@@ -40,9 +65,9 @@ async def ask_structured(
         policy.routes_for(tender_id)
         model = next((m for m in connections.models(connection["id"]) if m["model_id"] == route["model_id"]), {})
         approved_output = route["max_output_tokens"]
-        # The lightest thinking level, but not the routing pass's short reply cap:
-        # a batch of document briefs needs the Tender's full approved output limit.
-        route = classification_route(route, connection, model) | {"max_output_tokens": approved_output}
+        # The lightest thinking level with the Tender's full approved output limit:
+        # a batch of document briefs needs all of it.
+        route = light_route(route, connection, model) | {"max_output_tokens": approved_output}
         checked_component = require_ready(repo, connection, route["model_id"])
         meter = BudgetMeter(policy, tender_id, run_id, route)
         before_request = meter.before_request

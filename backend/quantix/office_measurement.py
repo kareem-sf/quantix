@@ -24,7 +24,6 @@ def _clean(value):
 def validate_agent_measurement(context, values):
     """Root calls this before accepting/publishing an agent drawing proposal."""
     proposal = AgentMeasurementProposal.model_validate(values)
-    context.ensure_scope_current()
     context.ensure_artifact_allowed(proposal.artifact_id)
     context.validate_sources(proposal.source_ids)
     viewed_regions = []
@@ -103,7 +102,6 @@ def measurement_tools():
         source_ids: list[str],
     ) -> str:
         """Calculate a proposed length, area or count after viewing the drawing regions and reading supporting dimension sources. Points are top-left page fractions. Count requires null calibration. This neither saves nor approves a measurement."""
-        ctx.context.require_tool("calculate_drawing_measurement")
         result = await calculate_agent_measurement(ctx.context, {
             "artifact_id": artifact_id, "page": page, "mode": mode, "points": points,
             "calibration_points": calibration_points, "calibration_metres": calibration_metres,

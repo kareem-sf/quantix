@@ -59,9 +59,9 @@ class RemoteBridge:
     async def result(self, text=None):
         """Fetch the validated proposal, offering the client's closing message.
 
-        The text is only ever used when the run is the bounded conversation
-        pass and no structured proposal was submitted; the control service
-        decides, never the client.
+        The text is only used when no structured result was submitted and the
+        output type accepts a summary-only answer; the control service decides,
+        never the client.
         """
 
         spoken = text.strip() if isinstance(text, str) else ""

@@ -60,7 +60,6 @@ def test_prepared_validation_checks_sources_without_publishing(tmp_path, monkeyp
 
 
 def test_custom_manager_prompt_redacts_private_text_without_losing_profile_structure(tmp_path, monkeypatch):
-    from quantix.conversation import _prompt as conversation_prompt
     from quantix.manager_runtime import prompt_profile
     from quantix.office import _prompt as engineering_prompt
     from quantix.office_tools import OfficeContext
@@ -74,14 +73,11 @@ def test_custom_manager_prompt_redacts_private_text_without_losing_profile_struc
     run = repo.create_run(tender["id"], "manager", "Synthetic profile")
     context = OfficeContext(repo, tender["id"], run["id"])
     public_profile = prompt_profile(profile)
-    encoded = engineering_prompt(context, "Review", public_profile)
-    conversation = conversation_prompt(repo, tender["id"], "Review", public_profile)
-    for payload in (json.loads(encoded), json.loads(conversation.split("\n\n", 1)[1])):
-        professional = payload["manager_profile"]
-        assert 'explain "why" clearly.' in professional["persona"]
-        assert "[local path]" in professional["persona"]
-        assert professional["personality"]["traits"] == ["Patient", "Arabic: مراجع دقيق", "[credential]"]
-        assert set(professional["personality"]) == set(public_profile["personality"])
+    professional = json.loads(engineering_prompt(context, "Review", public_profile))["manager_profile"]
+    assert 'explain "why" clearly.' in professional["persona"]
+    assert "[local path]" in professional["persona"]
+    assert professional["personality"]["traits"] == ["Patient", "Arabic: مراجع دقيق", "[credential]"]
+    assert set(professional["personality"]) == set(public_profile["personality"])
     assert profile.personality.traits[-1] == "sk-synthetic-private-token123"
 
 
@@ -121,7 +117,7 @@ def test_actual_api_keeps_one_customizable_manager_and_no_staff(tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_conversation_and_engineering_use_the_admitted_manager_version(tmp_path, monkeypatch):
+async def test_a_manager_run_uses_the_version_admitted_with_it(tmp_path, monkeypatch):
     repo, tender, *_ = configured_office(tmp_path, monkeypatch)
     profiles = ManagerProfileService(repo)
     initial = profiles.get()
@@ -130,12 +126,10 @@ async def test_conversation_and_engineering_use_the_admitted_manager_version(tmp
     prompts = []
 
     async def provider(route, connection, credentials, context, prompt, output_type, **options):
-        payload = json.loads(prompt.split("\n\n", 1)[-1])
+        payload = json.loads(prompt)
         prompts.append(payload)
         assert payload["manager_profile"]["display_name"] == before.display_name
-        if options.get("operation") == "conversation":
-            profiles.update(editable(profiles.get(), display_name="Changed during current work"))
-            return api_result_for({"kind": "engineering", "reply": "", "next_action": "Review sources."})
+        profiles.update(editable(profiles.get(), display_name="Changed during current work"))
         return api_result_for(OfficeOutput(summary="Synthetic review saved."))
 
     monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
@@ -143,7 +137,7 @@ async def test_conversation_and_engineering_use_the_admitted_manager_version(tmp
     await asyncio.gather(*list(jobs.tasks.values()))
     run = repo.get_run(submitted["run"]["id"])
     assert run["status"] == "completed"
-    assert len(prompts) == 2
+    assert len(prompts) == 1
     assert profiles.get().display_name == "Changed during current work"
     from quantix.manager_runtime import ManagerRunProfiles
     assert ManagerRunProfiles(repo).get(tender["id"], run["id"]).version == before.version

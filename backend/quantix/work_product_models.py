@@ -49,7 +49,6 @@ class WorkProductVersion(OfficeModel):
     status: str
     dependency_state: Literal["current", "needs_review"] = "current"
     review_reasons: list[str] = Field(default_factory=list)
-    public_citation_refs: list[str] = Field(default_factory=list)
     sha256: IdentifierText
     executed_scripts: int = 0
     created_at: str
@@ -70,7 +69,6 @@ class WorkProductVersionSummary(OfficeModel):
     review_reasons: list[str] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)
     method_refs: list[str] = Field(default_factory=list)
-    public_citation_refs: list[str] = Field(default_factory=list)
     sha256: IdentifierText
     row_count: int = Field(ge=0)
     created_at: str

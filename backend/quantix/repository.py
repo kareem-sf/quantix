@@ -934,16 +934,7 @@ class Repository:
 
     def create_run(self, tender_id, kind, instruction=""):
         self.get_tender(tender_id)
-        if kind not in {
-            "import",
-            "manager",
-            "conversation",
-            "task",
-            "research",
-            "index",
-            "identify",
-            "analysis",
-        }:
+        if kind not in {"import", "manager", "index", "identify", "analysis"}:
             raise ValueError("Unknown work type.")
         identifier, stamp = new_id(), now()
         with self.db.connect(write=True) as conn:

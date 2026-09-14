@@ -259,31 +259,6 @@ async def test_staff_cannot_use_the_manager_brief_tool(manager_run):
     assert WorkBriefService(repo).current(tender["id"]) is None
 
 
-@pytest.mark.asyncio
-async def test_conversation_routing_sees_progress_headlines_only(manager_run):
-    from quantix.conversation import _prompt
-
-    repo, tender, evidence, _ = manager_run
-    WorkBriefService(repo).save(
-        tender["id"],
-        "run-synthetic",
-        "manager-synthetic",
-        _draft(
-            settled=[BriefPoint(text="Supplier A delivers in 5 days.", source_ids=[evidence["id"]])]
-        ),
-        expected_version=0,
-        inspected_source_ids={evidence["id"]},
-        idempotency_key="headline",
-    )
-    prompt = _prompt(repo, tender["id"], "Where are we?")
-    payload = json.loads(prompt[prompt.index("{") :])
-    headlines = payload["saved_status"]["manager_work_brief"]
-    assert headlines["next_step"] == "Read supplier B's delivery terms."
-    assert headlines["open_questions"][0]["owner"] == "engineer"
-    assert "settled" not in headlines
-    assert evidence["id"] not in prompt
-
-
 def test_brief_route_returns_the_current_brief(tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient

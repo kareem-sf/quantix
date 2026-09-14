@@ -17,9 +17,7 @@ export type RunReasoningPart =
 /** What each Tender tool does, in the engineer's terms. */
 const TOOL_TITLES: Record<string, string> = {
   search_sources: "Searching tender evidence",
-  search_semantic_sources: "Searching tender evidence",
   read_source: "Reading source passages",
-  read_document: "Reading a tender document",
   read_whole_document: "Reading a tender document in full",
   read_package_map: "Reviewing the tender package map",
   list_documents: "Reviewing the document register",
@@ -44,6 +42,8 @@ const TOOL_TITLES: Record<string, string> = {
   read_work_product: "Reading a working draft",
   list_work_products: "Checking saved working drafts",
   save_work_brief: "Updating the work plan",
+  propose: "Preparing records for your review",
+  proposal_format: "Checking what a record needs",
   list_team: "Checking the team",
   hire_staff: "Hiring a staff member",
   assign_work: "Assigning work",

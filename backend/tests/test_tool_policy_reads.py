@@ -206,7 +206,6 @@ def test_rejected_staff_result_does_not_commit_seen_source(tmp_path):
 
     @scoped_tool
     async def read_source(ctx: ToolContext[OfficeContext], source_id: str) -> str:
-        ctx.context.require_tool("read_source")
         ctx.context.source(source_id)
         return "x" * (1024 * 1024 + 1)
 

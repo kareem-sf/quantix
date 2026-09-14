@@ -26,11 +26,10 @@ def api_result_for(output, web_sources=None, usage=None):
 
 
 def _definitions(options):
-    definitions = source_tools()
-    consult = options.get("consult") if options else None
-    if consult is not None:
-        definitions.append(consult)
-    return definitions
+    """The tools a real turn offered, or the source and proposal tools outside a turn."""
+    from quantix.proposal_tools import proposal_tools
+
+    return options.get("definitions") or [*source_tools(), *proposal_tools()]
 
 
 async def invoke_tool(context, name, arguments, *, options=None):

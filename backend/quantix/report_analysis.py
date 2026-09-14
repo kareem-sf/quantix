@@ -13,7 +13,7 @@ MISSING_ANALYSIS_REVIEW_LIMITATION = (
 
 
 def select_report_analysis(repo, tender_id):
-    """Return the latest Manager message published by a completed engineering run."""
+    """Return the latest source-cited Manager answer from a completed run; replies without sources are not analysis."""
 
     repo.get_tender(tender_id)
     with repo.db.connect() as conn:
@@ -28,6 +28,7 @@ def select_report_analysis(repo, tender_id):
               AND r.status='completed'
               AND json_type(r.result_json, '$.summary')='text'
               AND trim(json_extract(r.result_json, '$.summary'))<>''
+              AND json_array_length(r.result_json, '$.source_ids')>0
             ORDER BY m.rowid DESC
             LIMIT 1
             """,

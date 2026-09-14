@@ -93,7 +93,7 @@ class WorkProductService:
         from .capability_models import validate_result_value
 
         validate_result_value(draft.model_dump(mode="json"))
-        if any(item.startswith(("http://", "https://", "public_citation:")) for item in draft.source_refs):
+        if any(item.startswith(("http://", "https://")) for item in draft.source_refs):
             raise ValueError("Cite Tender evidence IDs here. Web sources belong in the answer's web findings.")
         for source_id in draft.source_refs:
             self.repo.get_evidence(ctx.tender_id, source_id)
@@ -307,9 +307,6 @@ class WorkProductService:
             status=row["status"],
             dependency_state=dependency.state,
             review_reasons=dependency.review_reasons,
-            public_citation_refs=[
-                item for item in source_refs if item.startswith("public_citation:")
-            ],
             sha256=row["sha256"],
             executed_scripts=0,
             created_at=row["created_at"],
@@ -333,9 +330,6 @@ class WorkProductService:
             review_reasons=dependency.review_reasons,
             source_refs=source_refs,
             method_refs=json.loads(row["method_refs_json"]),
-            public_citation_refs=[
-                item for item in source_refs if item.startswith("public_citation:")
-            ],
             sha256=row["sha256"],
             row_count=row["row_count"],
             created_at=row["created_at"],

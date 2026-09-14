@@ -147,8 +147,6 @@ def evidence_tools():
     ) -> str:
         """Check what document processing actually covered: per document, its status, pages processed, pages with no readable text, OCR pages and warnings. By default lists only documents with exceptions. Use it before claiming a package was fully read."""
         office = ctx.context
-        office.require_tool("inspect_extraction_coverage")
-        office.ensure_scope_current()
         if offset < 0 or not 1 <= limit <= 50:
             raise ToolArgumentError("Choose a non-negative offset and a limit of 1–50.")
         artifacts = office.repo.list_artifacts(office.tender_id)
@@ -173,7 +171,6 @@ def evidence_tools():
                 "totals": totals,
                 "documents": page,
                 "next_offset": offset + limit if offset + limit < len(listed) else None,
-                "scope_filter_applied": office.is_staff,
                 "limitation": _COVERAGE_NOTE,
             },
             ensure_ascii=False,
@@ -189,8 +186,6 @@ def evidence_tools():
     ) -> str:
         """Compare a revised document's text with an earlier version of the same file (the one before it by default): changed, added and removed pages or sheet ranges with short change excerpts and the current evidence IDs to read."""
         office = ctx.context
-        office.require_tool("compare_source_versions")
-        office.ensure_scope_current()
         if offset < 0 or not 1 <= limit <= 30:
             raise ToolArgumentError("Choose a non-negative offset and a limit of 1–30.")
         current = office.ensure_artifact_allowed(artifact_id)
@@ -272,12 +267,6 @@ def evidence_tools():
     async def trace_change_impact(ctx: ToolContext[OfficeContext], artifact_id: str) -> str:
         """List saved work that still rests on earlier versions of a revised document: findings, tasks, BOQ rows, quantity and rate proposals, measurements, submission requirements, project map items, generated documents, working notes, work products and the working brief. It changes nothing."""
         office = ctx.context
-        office.require_tool("trace_change_impact")
-        office.ensure_scope_current()
-        if office.is_staff:
-            raise ValueError(
-                "Revision impact covers the whole Tender and is available to the Tender Manager."
-            )
         current = office.ensure_artifact_allowed(artifact_id)
         tender_id = office.tender_id
         with office.repo.db.connect() as conn:

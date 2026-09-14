@@ -6190,8 +6190,6 @@ export interface components {
             dependency_state: "current" | "needs_review";
             /** Review Reasons */
             review_reasons?: string[];
-            /** Public Citation Refs */
-            public_citation_refs?: string[];
             /** Sha256 */
             sha256: string;
             /**
@@ -6238,8 +6236,6 @@ export interface components {
             source_refs?: string[];
             /** Method Refs */
             method_refs?: string[];
-            /** Public Citation Refs */
-            public_citation_refs?: string[];
             /** Sha256 */
             sha256: string;
             /** Row Count */

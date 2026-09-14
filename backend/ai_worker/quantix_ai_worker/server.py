@@ -55,7 +55,6 @@ class Worker:
             "catalog": {"credentials": {"type": "object"}},
             "runtime_status": {}, "login": {}, "login_device": {}, "logout": {}, "billing": {},
             "execute": {"credentials": {"type": "object"}, "execution": {"type": "object"}},
-            "conversation": {"credentials": {"type": "object"}, "execution": {"type": "object"}},
             "check": {"credentials": {"type": "object"}, "execution": {"type": "object"}},
         }
         return types.ListToolsResult(tools=[types.Tool(
@@ -95,7 +94,7 @@ class Worker:
                 raise RuntimeUnavailable("This connection does not expose subscription usage through its original client.")
             from .grok_auth import subscription_usage
             return await subscription_usage(self.account_home, self.connection)
-        if name in {"execute", "check", "conversation"}:
+        if name in {"execute", "check"}:
             from .execution import execute_runtime
             from .remote import execution_context
 

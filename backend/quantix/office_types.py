@@ -58,16 +58,17 @@ class PriceProposal(Proposal):
     urls: list[str] = Field(min_length=1, max_length=10)
 
 
-class SpecialistRequest(Proposal):
-    role: str = Field(min_length=1, max_length=120)
-    brief: str = Field(min_length=1, max_length=4000)
-    source_ids: list[str] = Field(max_length=30)
+class ManagerAnswer(Proposal):
+    """What the Tender Manager returns at the end of a turn; records to review come from propose."""
 
-
-class OfficeOutput(Proposal):
     summary: str = Field(min_length=1, max_length=18000)
     source_ids: list[str] = Field(default_factory=list, max_length=100)
     findings: list[FindingProposal] = Field(default_factory=list, max_length=30)
+
+
+class OfficeProposals(Proposal):
+    """Records the Manager stages with the propose tool during a run."""
+
     plan: PlanProposal | None = None
     web_findings: list[WebFinding] = Field(default_factory=list, max_length=20)
     price_proposals: list[PriceProposal] = Field(default_factory=list, max_length=20)
@@ -80,6 +81,10 @@ class OfficeOutput(Proposal):
     draft_documents: list[DraftDocumentProposal] = Field(default_factory=list, max_length=8)
     quantity_proposals: list[AgentQuantityProposal] = Field(default_factory=list, max_length=30)
     boq_item_proposals: list[SourceBoqProposal] = Field(default_factory=list, max_length=50)
+
+
+class OfficeOutput(ManagerAnswer, OfficeProposals):
+    """A run's complete result: the Manager's answer with every staged proposal."""
 
 
 @dataclass(frozen=True)

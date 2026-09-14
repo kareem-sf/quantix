@@ -12,7 +12,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolReturnPart
-from test_catalog_authority import configured_office
 from test_tender_ai_setup import _account, _choose, _Setup
 
 from quantix.ai_api_engine import HISTORY_TOOL_CHARS, TRIMMED_NOTE, trim_tool_history
@@ -107,33 +106,12 @@ def test_thinking_cannot_change_while_work_runs(tmp_path):
         )
 
 
-@pytest.mark.asyncio
-async def test_routing_a_message_uses_the_lightest_thinking(tmp_path, monkeypatch):
-    from quantix.conversation import run_conversation
-
-    repo, tender, *_ = configured_office(tmp_path, monkeypatch, reasoning="high")
-    run = repo.create_run(tender["id"], "conversation", "Hello")
-    monkeypatch.setattr("quantix.ai_thinking.thinking_levels", lambda *_: ["low", "high"])
-    seen = {}
-
-    async def provider(route, *args, **kwargs):
-        seen["reasoning"] = route["reasoning"]
-        raise asyncio.CancelledError
-
-    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
-    with pytest.raises(asyncio.CancelledError):
-        await run_conversation(repo, tender["id"], run["id"], "Hello")
-    assert seen["reasoning"] == "low"
-    assert AIPolicyService(repo).get(tender["id"])["manager"]["reasoning"] == "high"
-
-
 @pytest.mark.parametrize("reasoning", ["high", "none", "disabled"])
-def test_classifier_uses_shared_documented_levels_without_raising_approved_cap(reasoning):
-    from quantix.conversation import classification_route
+def test_light_route_uses_shared_documented_levels_without_raising_approved_cap(reasoning):
+    from quantix.structured_ai import light_route
 
     approved = {"reasoning": reasoning, "max_output_tokens": 1024, "web_search": True}
-    result = classification_route(approved, _direct("openai", "openai_responses"),
-                                  {"capabilities": {}})
+    result = light_route(approved, _direct("openai", "openai_responses"), {"capabilities": {}})
     assert result["reasoning"] == ("low" if reasoning == "high" else reasoning)
     assert result["max_output_tokens"] == 1024
     assert result["web_search"] is False
@@ -256,7 +234,7 @@ def test_search_returns_an_excerpt_around_the_match_not_the_whole_passage(tmp_pa
 
 
 def test_text_already_returned_in_the_run_is_not_sent_again(tmp_path):
-    _repo, context, artifact, evidence = _reading_workspace(tmp_path, "Concrete strength 30 MPa. " * 500)
+    _repo, context, _artifact, evidence = _reading_workspace(tmp_path, "Concrete strength 30 MPa. " * 500)
 
     first = _call(context, "read_source", {"source_id": evidence["id"]}, "read-1")
     assert len(first["text"]) == 4000
@@ -266,10 +244,6 @@ def test_text_already_returned_in_the_run_is_not_sent_again(tmp_path):
 
     again = _call(context, "read_source", {"source_id": evidence["id"], "reread": True}, "read-3")
     assert again["text"] == first["text"]
-
-    pages = _call(context, "read_document", {"artifact_id": artifact["id"]}, "document-1")
-    assert len(pages[0]["text"]) == 3000
-    assert pages[0]["next_offset"] == 3000
 
 
 def test_codex_usage_keeps_its_own_token_counts():

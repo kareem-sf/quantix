@@ -10,7 +10,7 @@ from quantix.repository import Repository
 def workspace(tmp_path):
     repo = Repository(tmp_path)
     tender = repo.create_tender("Synthetic streaming Tender")
-    run = repo.create_run(tender["id"], "conversation", "Read the synthetic BOQ")
+    run = repo.create_run(tender["id"], "manager", "Read the synthetic BOQ")
     return repo, tender, run
 
 

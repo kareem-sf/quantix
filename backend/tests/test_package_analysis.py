@@ -152,27 +152,25 @@ async def test_brief_cache_is_bound_to_tender_and_complete_source_context(tmp_pa
     assert stub.calls == ["package_briefs", "package_map"]
 
 
-async def test_scoped_staff_cannot_read_package_context_outside_its_sources(tmp_path, monkeypatch):
+async def test_staff_read_the_same_package_map_as_the_manager(tmp_path, monkeypatch):
     import json
-    from types import SimpleNamespace
 
     from quantix.ai_tools import ToolContext
-    from quantix.office_tools import source_tools
+    from quantix.office_tools import OfficeContext, source_tools
 
     repo, tender = _tender(tmp_path)
     artifact = repo.list_artifacts(tender["id"])[0]
-    private_map = {"current": True, "identity": {"client": "Private employer"},
-        "overview": "Restricted project details", "gaps": ["Restricted document"],
-        "readability": {"attention": ["Private/contract.pdf"]},
-        "documents": [{"document_id": artifact["id"], "brief": "Restricted multi-document context",
-                       "related_document_ids": ["private-id"]}]}
-    monkeypatch.setattr(package_analysis, "package_map", lambda *_: private_map)
-    context = SimpleNamespace(repo=repo, tender_id=tender["id"], is_staff=True,
-        reviewed_artifacts={artifact["id"]: {}}, require_tool=lambda *_: None, ensure_scope_current=lambda: None)
+    saved_map = {"current": True, "identity": {"client": "Synthetic employer"}, "overview": "Two-storey school",
+                 "gaps": [], "readability": {}, "documents": [{"document_id": artifact["id"], "brief": "Specification"}]}
+    monkeypatch.setattr(package_analysis, "package_map", lambda *_: saved_map)
+    run = repo.create_run(tender["id"], "manager", "Review")
     definition = next(tool for tool in source_tools() if tool.name == "read_package_map")
-    response = await definition.function.__wrapped__(ToolContext(context))
-    assert json.loads(response)["available"] is False
-    assert not any(value in response for value in ("Private", "Restricted", "private-id"))
+    manager = OfficeContext(repo, tender["id"], run["id"])
+    staff = OfficeContext(repo, tender["id"], run["id"], actor_id="staff-1", assignment_id="assignment-1")
+    for context in (manager, staff):
+        response = json.loads(await definition.function.__wrapped__(ToolContext(context)))
+        assert response["available"] is True
+        assert response["overview"] == "Two-storey school"
 
 
 def test_overlong_orientation_text_is_trimmed_not_rejected():
