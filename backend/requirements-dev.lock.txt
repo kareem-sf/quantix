@@ -60,7 +60,7 @@ Pint==0.26.1
 flexcache==0.3
 flexparser==0.4
 pydantic-graph==2.42.0
-pydantic-core==2.49.0
+pydantic-core==2.46.5
 pygments==2.21.0
 pyjwt==2.14.0
 pypdfium2==5.13.0
