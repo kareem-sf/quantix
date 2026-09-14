@@ -476,7 +476,7 @@ async def test_staff_stream_keeps_trusted_assignment_identity(tmp_path):
     from pydantic_ai.messages import FinalResultEvent, PartStartEvent, TextPart
 
     from quantix.ai_api_engine import DraftStreamEvents
-    from quantix.staff_runtime_models import StaffProviderOutput
+    from quantix.team_models import StaffOutput
 
     repo = Repository(tmp_path)
     tender = repo.create_tender("Synthetic staff stream")
@@ -492,11 +492,11 @@ async def test_staff_stream_keeps_trusted_assignment_identity(tmp_path):
     async def events():
         yield PartStartEvent(
             index=0,
-            part=TextPart('{"result":{"kind":"question","question":"Which revision applies?"}}'),
+            part=TextPart('{"kind":"question","question":"Which revision applies?"}'),
         )
         yield FinalResultEvent(tool_name=None, tool_call_id=None)
 
-    await DraftStreamEvents(context, CONNECTION, StaffProviderOutput).handle(None, events())
+    await DraftStreamEvents(context, CONNECTION, StaffOutput).handle(None, events())
     saved = repo.run_events(run["id"])
     assert saved[0]["data"] == {
         "text": "Which revision applies?",

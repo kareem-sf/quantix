@@ -21,11 +21,9 @@ import { Citations, type SourceSelection } from "./Sources";
 import { AIUsage } from "./AIUsage";
 import { TenderAI } from "./TenderAI";
 import { PlanReview } from "./PlanReview";
-import { ReviewRoom } from "./office/ReviewRoom";
 import { WorkDecisions } from "./WorkDecisions";
 import { ProjectMap } from "./ProjectMap";
 import { TenderBrief } from "./TenderBrief";
-import { Watchers } from "./Watchers";
 import { draftStorageKey, useFormDraft, type DraftScope } from "./useFormDraft";
 
 export function PlanView({
@@ -50,14 +48,12 @@ export function PlanView({
   }
   if (reviewing)
     return (
-      <div className="legacy-screen">
-        <PlanReview
-          tenderId={tenderId}
-          planId={plan.id}
-          onBack={() => setReviewing(false)}
-          onSource={onSource}
-        />
-      </div>
+      <PlanReview
+        tenderId={tenderId}
+        planId={plan.id}
+        onBack={() => setReviewing(false)}
+        onSource={onSource}
+      />
     );
   return (
     <section
@@ -423,17 +419,6 @@ export function Work({
           }
         />
       ) : null}
-      {active === "decisions" ? (
-        <div className="legacy-screen">
-          <ReviewRoom
-            tenderId={tenderId}
-            onDecide={() => {
-              setSection("decisions");
-              onView?.("decisions");
-            }}
-          />
-        </div>
-      ) : null}
       {active === "ai" ? (
         <section
           className="legacy-screen flex flex-col gap-4 rounded-xl border bg-card p-4"
@@ -457,7 +442,7 @@ export function Work({
         <summary className="flex cursor-pointer flex-col">
           <strong className="text-sm font-medium">More options</strong>
           <span className="text-xs text-muted-foreground">
-            Tender brief, scope map and watchers
+            Tender brief and scope map
           </span>
         </summary>
         {aiUsageOpen ? (
@@ -470,7 +455,6 @@ export function Work({
               artifacts={artifacts.data ?? []}
               onSource={onSource}
             />
-            <Watchers tenderId={tenderId} />
           </div>
         ) : null}
       </details>

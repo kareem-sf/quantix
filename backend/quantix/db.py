@@ -31,7 +31,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS tenders (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'intake',
  revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
- name_source TEXT NOT NULL DEFAULT 'engineer'
+ name_source TEXT NOT NULL DEFAULT 'engineer',
+ retrieval_generation INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS artifacts (
  id TEXT PRIMARY KEY, tender_id TEXT NOT NULL REFERENCES tenders(id),
@@ -39,13 +40,16 @@ CREATE TABLE IF NOT EXISTS artifacts (
  content_hash TEXT NOT NULL, size INTEGER NOT NULL, kind TEXT NOT NULL,
  status TEXT NOT NULL, area TEXT NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}',
  warnings_json TEXT NOT NULL DEFAULT '[]', is_current INTEGER NOT NULL DEFAULT 1,
+ active_extraction_id TEXT,
  created_at TEXT NOT NULL, UNIQUE(tender_id, relative_path, version)
 );
 CREATE INDEX IF NOT EXISTS artifacts_tender ON artifacts(tender_id,is_current);
 CREATE TABLE IF NOT EXISTS evidence (
  id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL REFERENCES artifacts(id), locator TEXT NOT NULL,
  text TEXT NOT NULL, page INTEGER, sheet TEXT, cell_range TEXT, kind TEXT NOT NULL,
- metadata_json TEXT NOT NULL DEFAULT '{}'
+ metadata_json TEXT NOT NULL DEFAULT '{}',
+ extraction_id TEXT,
+ is_current INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS evidence_artifact ON evidence(artifact_id);
 CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(evidence_id UNINDEXED, text, tokenize='unicode61 remove_diacritics 2');
@@ -110,7 +114,9 @@ CREATE TRIGGER IF NOT EXISTS decisions_immutable_delete BEFORE DELETE ON decisio
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value_json TEXT NOT NULL);
 """
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
+
+
 # Forward migrations keyed by the user_version they produce. Version 1 is the
 # initial SCHEMA applied from an empty database. Callables receive an open
 # connection already inside an immediate transaction.
@@ -128,9 +134,29 @@ def _tender_name_source_migration(conn):
         conn.execute("ALTER TABLE tenders ADD COLUMN name_source TEXT NOT NULL DEFAULT 'engineer'")
 
 
+def _extraction_publication_migration(conn):
+    tender_cols = {row[1] for row in conn.execute("PRAGMA table_info(tenders)")}
+    if "retrieval_generation" not in tender_cols:
+        conn.execute(
+            "ALTER TABLE tenders ADD COLUMN retrieval_generation INTEGER NOT NULL DEFAULT 0"
+        )
+    artifact_cols = {row[1] for row in conn.execute("PRAGMA table_info(artifacts)")}
+    if "active_extraction_id" not in artifact_cols:
+        conn.execute("ALTER TABLE artifacts ADD COLUMN active_extraction_id TEXT")
+    evidence_cols = {row[1] for row in conn.execute("PRAGMA table_info(evidence)")}
+    if "extraction_id" not in evidence_cols:
+        conn.execute("ALTER TABLE evidence ADD COLUMN extraction_id TEXT")
+    if "is_current" not in evidence_cols:
+        conn.execute("ALTER TABLE evidence ADD COLUMN is_current INTEGER NOT NULL DEFAULT 1")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS evidence_artifact_current ON evidence(artifact_id,is_current)"
+    )
+
+
 FORWARD_MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     2: _source_boq_migration,
     3: _tender_name_source_migration,
+    4: _extraction_publication_migration,
 }
 
 
@@ -227,8 +253,15 @@ class Database:
                 version = conn.execute("PRAGMA user_version").fetchone()[0]
                 known = {0, 1, CURRENT_SCHEMA_VERSION, *FORWARD_MIGRATIONS}
                 if version not in known:
-                    raise ValueError("This workspace was created by an unsupported version of Quantix.")
+                    raise ValueError(
+                        "This workspace was created by an unsupported version of Quantix."
+                    )
                 conn.executescript(SCHEMA)
+                evidence_cols = {row[1] for row in conn.execute("PRAGMA table_info(evidence)")}
+                if "is_current" in evidence_cols:
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS evidence_artifact_current ON evidence(artifact_id,is_current)"
+                    )
                 if version == 0:
                     conn.execute(f"PRAGMA user_version={CURRENT_SCHEMA_VERSION}")
             apply_forward_migrations(self.path)

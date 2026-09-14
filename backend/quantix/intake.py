@@ -241,7 +241,12 @@ def _extract(repo, path, name, digest, cancelled):
     # Each writer uses its own temporary file, so concurrent imports of the same
     # document into different Tenders cannot move or truncate each other's cache.
     with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=cache.parent, prefix=cache.stem + "-", suffix=".partial", delete=False
+        "w",
+        encoding="utf-8",
+        dir=cache.parent,
+        prefix=cache.stem + "-",
+        suffix=".partial",
+        delete=False,
     ) as handle:
         handle.write(dump(result))
         partial = Path(handle.name)

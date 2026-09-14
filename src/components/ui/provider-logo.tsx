@@ -33,7 +33,11 @@ export function hasProviderMark(providerId: string) {
   return providerId in marks;
 }
 
-export function ProviderLogo({ providerId, name, className }: ProviderLogoProps) {
+export function ProviderLogo({
+  providerId,
+  name,
+  className,
+}: ProviderLogoProps) {
   // React's generated id contains characters that are not valid in an SVG
   // url(#…) reference, which left gradient-filled marks invisible.
   const id = `quantix-mark-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
@@ -73,7 +77,14 @@ function GeminiMark({ id }: { id: string }) {
   return (
     <>
       <defs>
-        <linearGradient id={id} x1="2" y1="21" x2="21" y2="3" gradientUnits="userSpaceOnUse">
+        <linearGradient
+          id={id}
+          x1="2"
+          y1="21"
+          x2="21"
+          y2="3"
+          gradientUnits="userSpaceOnUse"
+        >
           <stop offset="0%" stopColor="#4285F4" />
           <stop offset="45%" stopColor="#9B72CB" />
           <stop offset="100%" stopColor="#D96570" />

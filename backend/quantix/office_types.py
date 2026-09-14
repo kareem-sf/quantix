@@ -6,14 +6,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .ai_models import AIRoute
 from .correspondence_models import DraftInput
 from .estimate_models import DraftDocumentProposal, SourceBoqProposal, UnitRateProposalInput
 from .map_models import NodeInput
-from .measurement_models import AgentMeasurementProposal
 from .quantity_models import AgentQuantityProposal
 from .requirement_models import RequirementProposal
 from .submission_models import ConstructionProgramme
+from .takeoff_models import TakeoffLineProposal
 
 
 class Proposal(BaseModel):
@@ -32,7 +31,6 @@ class TaskProposal(Proposal):
     description: str = Field(min_length=1, max_length=4000)
     role: str = Field(min_length=1, max_length=100)
     source_ids: list[str] = Field(default_factory=list, max_length=50)
-    ai_route: AIRoute | None = None
 
 
 class PlanProposal(Proposal):
@@ -60,16 +58,17 @@ class PriceProposal(Proposal):
     urls: list[str] = Field(min_length=1, max_length=10)
 
 
-class SpecialistRequest(Proposal):
-    role: str = Field(min_length=1, max_length=120)
-    brief: str = Field(min_length=1, max_length=4000)
-    source_ids: list[str] = Field(max_length=30)
+class ManagerAnswer(Proposal):
+    """What the Tender Manager returns at the end of a turn; records to review come from propose."""
 
-
-class OfficeOutput(Proposal):
     summary: str = Field(min_length=1, max_length=18000)
     source_ids: list[str] = Field(default_factory=list, max_length=100)
     findings: list[FindingProposal] = Field(default_factory=list, max_length=30)
+
+
+class OfficeProposals(Proposal):
+    """Records the Manager stages with the propose tool during a run."""
+
     plan: PlanProposal | None = None
     web_findings: list[WebFinding] = Field(default_factory=list, max_length=20)
     price_proposals: list[PriceProposal] = Field(default_factory=list, max_length=20)
@@ -78,10 +77,14 @@ class OfficeOutput(Proposal):
     project_map_nodes: list[NodeInput] = Field(default_factory=list, max_length=30)
     submission_requirements: list[RequirementProposal] = Field(default_factory=list, max_length=30)
     programme_proposal: ConstructionProgramme | None = None
-    drawing_measurements: list[AgentMeasurementProposal] = Field(default_factory=list, max_length=30)
+    takeoff: list[TakeoffLineProposal] = Field(default_factory=list, max_length=200)
     draft_documents: list[DraftDocumentProposal] = Field(default_factory=list, max_length=8)
     quantity_proposals: list[AgentQuantityProposal] = Field(default_factory=list, max_length=30)
     boq_item_proposals: list[SourceBoqProposal] = Field(default_factory=list, max_length=50)
+
+
+class OfficeOutput(ManagerAnswer, OfficeProposals):
+    """A run's complete result: the Manager's answer with every staged proposal."""
 
 
 @dataclass(frozen=True)
@@ -99,6 +102,3 @@ class PreparedOfficeResult:
     source_recipients: tuple[tuple[str, tuple[str, ...]], ...] = ()
     approved_plan_id: str | None = None
     actor_id: str | None = None
-    staff_version: int | None = None
-    assignment_id: str | None = None
-    route_binding_id: str | None = None

@@ -105,7 +105,10 @@ def trim_tool_history(messages: list, context=None) -> list:
         and isinstance(part.content, str)
         and not part.content.startswith(TRIMMED_NOTE)
     ]
-    if sum(len(messages[index].parts[position].content) for index, position in returns) <= HISTORY_TOOL_CHARS:
+    if (
+        sum(len(messages[index].parts[position].content) for index, position in returns)
+        <= HISTORY_TOOL_CHARS
+    ):
         return messages
     recent = set(sorted({index for index, _ in returns})[-HISTORY_KEEP_RECENT_STEPS:])
     replaced: dict[int, list] = {}
@@ -142,9 +145,6 @@ def response_usage(response) -> dict:
     input_tokens = int(input_tokens or 0)
     output_tokens = int(output_tokens or 0)
     parts = getattr(response, "parts", ()) or ()
-    code_calls = [part for part in parts if getattr(part, "part_kind", "") == "builtin-tool-call" and getattr(part, "tool_name", "") == "code_execution"]
-    container_ids = [getattr(part, "args", {}).get("container_id") for part in code_calls if isinstance(getattr(part, "args", None), dict)]
-    code_ids_known = len(container_ids) == len(code_calls) and all(isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,200}", value) for value in container_ids)
     return {
         "requests": 1,
         "input_tokens": input_tokens,
@@ -154,8 +154,6 @@ def response_usage(response) -> dict:
         "cached_input_tokens": getattr(usage, "cache_read_tokens", None),
         "reasoning_tokens": int(details.get("reasoning_tokens", 0) or 0),
         "actual_model": getattr(response, "model_name", None),
-        "code_execution_calls": len(code_calls),
-        "code_execution_container_ids": list(dict.fromkeys(container_ids)) if code_ids_known else None,
         "web_search_calls": sum(
             getattr(part, "part_kind", "") == "builtin-tool-call"
             and "search" in getattr(part, "tool_name", "")
@@ -179,7 +177,11 @@ def public_summary(part, connection, model_id=""):
         # xAI documents reasoning_text.delta as summarized content for this
         # exact model. The OpenAI adapter stores it separately from summaries.
         raw = (getattr(part, "provider_details", None) or {}).get("raw_content")
-        if not part.content and isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+        if (
+            not part.content
+            and isinstance(raw, list)
+            and all(isinstance(item, str) for item in raw)
+        ):
             return "\n".join(raw)
     return part.content
 
@@ -196,11 +198,7 @@ class DraftStreamEvents:
         self.connection = connection
         fields = output_type.model_fields
         if "summary" in fields:
-            self.paths = [("summary",)]
-        elif "reply" in fields:
-            self.paths = [("reply",)]
-        elif "result" in fields:
-            self.paths = [("result", "output", "summary"), ("result", "question")]
+            self.paths = [("summary",), ("question",)] if "question" in fields else [("summary",)]
         else:
             self.paths = []
         self.total_chars = 0
@@ -218,26 +216,55 @@ class DraftStreamEvents:
         # provider chunk cannot add visible activity after its run is stopped.
         with self.context.repo.atomic():
             _check_active(self.context)
-            identity = {name: getattr(self.context, name) for name in ("assignment_id", "actor_id")
-                        if isinstance(getattr(self.context, name, None), str) and getattr(self.context, name)}
+            identity = {
+                name: getattr(self.context, name)
+                for name in ("assignment_id", "actor_id")
+                if isinstance(getattr(self.context, name, None), str)
+                and getattr(self.context, name)
+            }
             values = {"text": text, **identity, **({"reset": True} if reset else {})}
             if self.request_id:
-                values.update(request_id=self.request_id, section_id=str(section_id), activity_operation_id=self.request_id)
+                values.update(
+                    request_id=self.request_id,
+                    section_id=str(section_id),
+                    activity_operation_id=self.request_id,
+                )
             from .activity_privacy import sanitize
+
             values, _, _ = sanitize(values, getattr(self.context, "_activity_secrets", ()))
-            self.context.repo.event(self.context.run_id, kind, "AI response draft" if kind == "assistant_text_delta"
-                                    else "AI reasoning summary", values)
+            self.context.repo.event(
+                self.context.run_id,
+                kind,
+                "AI response draft" if kind == "assistant_text_delta" else "AI reasoning summary",
+                values,
+            )
             if self.request_id:
                 category = "draft" if kind == "assistant_text_delta" else "reasoning_summary"
                 key = (category, section_id)
                 operation = self.sections.get(key)
-                payload = {"text": values["text"], "section_id": str(section_id), "request_id": self.request_id, "delta": not complete}
+                payload = {
+                    "text": values["text"],
+                    "section_id": str(section_id),
+                    "request_id": self.request_id,
+                    "delta": not complete,
+                }
                 if operation is None:
-                    operation = self.recorder.start(category, "AI response draft" if category == "draft" else "AI reasoning summary",
-                        payload, parent_operation_id=self.request_id, phase="completed" if complete else "started")
+                    operation = self.recorder.start(
+                        category,
+                        "AI response draft" if category == "draft" else "AI reasoning summary",
+                        payload,
+                        parent_operation_id=self.request_id,
+                        phase="completed" if complete else "started",
+                    )
                     self.sections[key] = operation
                 else:
-                    self.recorder.record(operation, category, "completed" if complete else "delta", "AI response draft" if category == "draft" else "AI reasoning summary", payload)
+                    self.recorder.record(
+                        operation,
+                        category,
+                        "completed" if complete else "delta",
+                        "AI response draft" if category == "draft" else "AI reasoning summary",
+                        payload,
+                    )
         self.total_chars += len(text)
         self.saved_events += 1
 
@@ -245,7 +272,13 @@ class DraftStreamEvents:
         from pydantic_ai.messages import TextPart, ToolCallPart
         from pydantic_core import from_json
 
-        raw = part.args if isinstance(part, ToolCallPart) else part.content if isinstance(part, TextPart) else None
+        raw = (
+            part.args
+            if isinstance(part, ToolCallPart)
+            else part.content
+            if isinstance(part, TextPart)
+            else None
+        )
         if isinstance(raw, str):
             try:
                 raw = from_json(raw, allow_partial="trailing-strings")
@@ -289,8 +322,12 @@ class DraftStreamEvents:
         def flush():
             nonlocal pending, request_has_text, last_flush, reset_pending
             while pending:
-                self._save("assistant_text_delta", pending[:2048],
-                           reset=reset_pending or (self.ever_text and not request_has_text), section_id=output_index)
+                self._save(
+                    "assistant_text_delta",
+                    pending[:2048],
+                    reset=reset_pending or (self.ever_text and not request_has_text),
+                    section_id=output_index,
+                )
                 pending = pending[2048:]
                 request_has_text = self.ever_text = True
                 reset_pending = False
@@ -308,21 +345,33 @@ class DraftStreamEvents:
             elif isinstance(event, FinalResultEvent):
                 output_call = event.tool_call_id
                 text_result = event.tool_name is None
-                output_index = next((index for index, part in parts.items()
-                                     if (text_result and isinstance(part, TextPart)) or
-                                     (isinstance(part, ToolCallPart) and output_call and part.tool_call_id == output_call)), None)
+                output_index = next(
+                    (
+                        index
+                        for index, part in parts.items()
+                        if (text_result and isinstance(part, TextPart))
+                        or (
+                            isinstance(part, ToolCallPart)
+                            and output_call
+                            and part.tool_call_id == output_call
+                        )
+                    ),
+                    None,
+                )
             else:
                 continue
             from .provider_tool_activity import observe_provider_tool
 
             if isinstance(event, (PartStartEvent, PartEndEvent)):
-                observe_provider_tool(self.recorder, self.request_id, event.part, native_operations, native_seen)
+                observe_provider_tool(
+                    self.recorder, self.request_id, event.part, native_operations, native_seen
+                )
             for index, part in parts.items():
                 if index == output_index:
                     readable = self._readable(part)
                     if readable is not None and readable != previous:
                         if readable.startswith(previous):
-                            pending += readable[len(previous):]
+                            pending += readable[len(previous) :]
                         else:
                             pending = readable
                             reset_pending = request_has_text
@@ -331,30 +380,55 @@ class DraftStreamEvents:
                 # provider's summary events. Raw reasoning lives separately in
                 # provider_details and encrypted content in signature.
                 elif isinstance(part, ThinkingPart):
-                    summary = public_summary(part, self.connection, self.connection.get("_activity_model_id", ""))
+                    summary = public_summary(
+                        part, self.connection, self.connection.get("_activity_model_id", "")
+                    )
                     if summary and summary != summaries.get(index):
-                        if len(summary) - len(summaries.get(index, "")) >= 256 or time.monotonic() - summary_last_flush >= .2 or isinstance(event, PartEndEvent):
+                        if (
+                            len(summary) - len(summaries.get(index, "")) >= 256
+                            or time.monotonic() - summary_last_flush >= 0.2
+                            or isinstance(event, PartEndEvent)
+                        ):
                             # Legacy stream receives snapshots; activity stores
                             # only the new fragment until the final section.
                             if self.request_id:
-                                self._save("assistant_reasoning_summary", summary[len(summaries.get(index, "")):], section_id=index)
+                                self._save(
+                                    "assistant_reasoning_summary",
+                                    summary[len(summaries.get(index, "")) :],
+                                    section_id=index,
+                                )
                             else:
                                 self._save("assistant_reasoning_summary", summary, section_id=index)
                             summaries[index] = summary
                             summary_last_flush = time.monotonic()
-            if len(pending) >= 256 or time.monotonic() - last_flush >= .2:
+            if len(pending) >= 256 or time.monotonic() - last_flush >= 0.2:
                 flush()
         flush()
         if self.request_id:
             for index, part in parts.items():
                 if isinstance(part, ThinkingPart):
-                    summary = public_summary(part, self.connection, self.connection.get("_activity_model_id", ""))
+                    summary = public_summary(
+                        part, self.connection, self.connection.get("_activity_model_id", "")
+                    )
                     if summary:
-                        self._save("assistant_reasoning_summary", summary, section_id=index, complete=True)
+                        self._save(
+                            "assistant_reasoning_summary", summary, section_id=index, complete=True
+                        )
             if previous:
                 operation = self.sections.get(("draft", output_index))
                 if operation:
-                    self.recorder.record(operation, "draft", "completed", "AI response draft", {"text": previous, "request_id": self.request_id, "section_id": str(output_index), "delta": False})
+                    self.recorder.record(
+                        operation,
+                        "draft",
+                        "completed",
+                        "AI response draft",
+                        {
+                            "text": previous,
+                            "request_id": self.request_id,
+                            "section_id": str(output_index),
+                            "delta": False,
+                        },
+                    )
 
 
 def _tool_return(value):
@@ -428,7 +502,11 @@ class LocalToolBridge:
 
                 with activity_scope(self.request_operation()):
                     value = await dispatch(
-                        "direct", definition, self.context, arguments, invocation_id=invocation_id,
+                        "direct",
+                        definition,
+                        self.context,
+                        arguments,
+                        invocation_id=invocation_id,
                     )
             except asyncio.CancelledError:
                 raise
@@ -473,7 +551,6 @@ class MeteredModel(WrapperModel):
         sources=None,
         requests=None,
         expected_model=None,
-        hosted_code=None,
     ):
         super().__init__(wrapped)
         self.route = route
@@ -486,7 +563,6 @@ class MeteredModel(WrapperModel):
         self.sources = sources if sources is not None else {}
         self.requests = requests if requests is not None else []
         self.expected_model = expected_model
-        self.hosted_code = hosted_code
         # (input bytes, reported input tokens) of the last fully reported request.
         self._calibration = None
         self.activity = ActivityRecorder(None if check_mode else context)
@@ -496,16 +572,38 @@ class MeteredModel(WrapperModel):
     async def _activity_request(self, messages, settings, parameters):
         from pydantic_ai.messages import ModelMessagesTypeAdapter
 
-        operation = self.activity.start("model_request", "Content supplied by Quantix",
-            {"messages": json.loads(ModelMessagesTypeAdapter.dump_json(messages)),
-             "settings": settings or {}, "parameters": dataclasses.asdict(self._parameters(parameters)),
-             "billing": self.connection.get("billing"), "protocol": self.connection.get("protocol")},
-            provider=self.connection.get("provider_id"), model=self.route.get("model_id"), phase="prepared")
+        operation = self.activity.start(
+            "model_request",
+            "Content supplied by Quantix",
+            {
+                "messages": json.loads(ModelMessagesTypeAdapter.dump_json(messages)),
+                "settings": settings or {},
+                "parameters": dataclasses.asdict(self._parameters(parameters)),
+                "billing": self.connection.get("billing"),
+                "protocol": self.connection.get("protocol"),
+            },
+            provider=self.connection.get("provider_id"),
+            model=self.route.get("model_id"),
+            phase="prepared",
+        )
         self.last_request_id = operation
         available = supplied_summary_supported(self.connection, self.route.get("model_id", ""))
-        self.activity.record(operation, "capability", "observed", "Thinking summaries are supported by this connection." if available else "No documented thinking summary stream for this connection.",
-            {"supported": available, "detail": "Public summaries are retained when supplied." if available else "This provider route does not expose a documented public reasoning summary."},
-            capture_status="complete" if available else "unavailable", unavailable_fields=[] if available else ["reasoning_summary"])
+        self.activity.record(
+            operation,
+            "capability",
+            "observed",
+            "Thinking summaries are supported by this connection."
+            if available
+            else "No documented thinking summary stream for this connection.",
+            {
+                "supported": available,
+                "detail": "Public summaries are retained when supplied."
+                if available
+                else "This provider route does not expose a documented public reasoning summary.",
+            },
+            capture_status="complete" if available else "unavailable",
+            unavailable_fields=[] if available else ["reasoning_summary"],
+        )
         started = time.monotonic()
         with activity_scope(operation):
             try:
@@ -513,28 +611,51 @@ class MeteredModel(WrapperModel):
             except BaseException as error:
                 if not isinstance(error, ActivityRecordingError):
                     cancelled = isinstance(error, (asyncio.CancelledError, InterruptedError))
-                    self.activity.record(operation, "model_request", "cancelled" if cancelled else "failed",
+                    self.activity.record(
+                        operation,
+                        "model_request",
+                        "cancelled" if cancelled else "failed",
                         "AI request interrupted." if cancelled else "AI request failed.",
-                        {"error": str(error) if isinstance(error, (DirectAPIError, InterruptedError)) else "The provider request did not complete."},
-                        elapsed_ms=int((time.monotonic() - started) * 1000), capture_status="partial")
+                        {
+                            "error": str(error)
+                            if isinstance(error, (DirectAPIError, InterruptedError))
+                            else "The provider request did not complete."
+                        },
+                        elapsed_ms=int((time.monotonic() - started) * 1000),
+                        capture_status="partial",
+                    )
                 raise
             else:
-                self.activity.record(operation, "model_request", "completed", "AI request completed.",
-                    elapsed_ms=int((time.monotonic() - started) * 1000))
+                self.activity.record(
+                    operation,
+                    "model_request",
+                    "completed",
+                    "AI request completed.",
+                    elapsed_ms=int((time.monotonic() - started) * 1000),
+                )
 
     async def request(self, messages, model_settings, model_request_parameters):
         async with self._activity_request(messages, model_settings, model_request_parameters):
             return await self._perform_request(messages, model_settings, model_request_parameters)
 
     @asynccontextmanager
-    async def request_stream(self, messages, model_settings, model_request_parameters, run_context=None):
+    async def request_stream(
+        self, messages, model_settings, model_request_parameters, run_context=None
+    ):
         async with self._activity_request(messages, model_settings, model_request_parameters):
-            async with self._perform_request_stream(messages, model_settings, model_request_parameters, run_context) as stream:
+            async with self._perform_request_stream(
+                messages, model_settings, model_request_parameters, run_context
+            ) as stream:
                 yield stream
 
     def _request_started(self, parameters):
-        self.activity.record(current_operation(), "model_request", "started", "Sending the approved AI request.",
-            {"parameters": dataclasses.asdict(parameters)})
+        self.activity.record(
+            current_operation(),
+            "model_request",
+            "started",
+            "Sending the approved AI request.",
+            {"parameters": dataclasses.asdict(parameters)},
+        )
 
     def __getattr__(self, name):
         return getattr(self.wrapped, name)
@@ -570,8 +691,7 @@ class MeteredModel(WrapperModel):
         capabilities = self.connection.get("_model", {}).get("capabilities", {})
         context_window = capabilities.get("context_window")
         expanded_context = (
-            bool(self.route.get("web_search")) or bool(self.route.get("native_tools"))
-            or b'"media_type":"image/' in serialized
+            bool(self.route.get("web_search")) or b'"media_type":"image/' in serialized
         )
         if (
             expanded_context
@@ -626,8 +746,6 @@ class MeteredModel(WrapperModel):
         parameters, reserved, input_bytes, expanded_context = await self._admit_request(
             messages, model_request_parameters
         )
-        if self.hosted_code is not None:
-            parameters = await self.hosted_code.prepare(parameters, reserved)
         self._request_started(parameters)
         try:
             response = await self.wrapped.request(messages, model_settings, parameters)
@@ -636,27 +754,24 @@ class MeteredModel(WrapperModel):
         except (DirectAPIError, DirectProviderError, InterruptedError, ActivityRecordingError):
             raise
         except Exception as error:
-            failure = provider_failure(error)
-            if self.hosted_code is not None:
-                from .ai_api_errors import rejected_before_processing
-                if rejected_before_processing(failure):
-                    self.hosted_code.request_rejected(reserved)
-            raise failure from None
+            raise provider_failure(error) from None
         return await self._finalize_response(response, reserved, input_bytes, expanded_context)
 
     @asynccontextmanager
-    async def _perform_request_stream(self, messages, model_settings, model_request_parameters, run_context=None):
+    async def _perform_request_stream(
+        self, messages, model_settings, model_request_parameters, run_context=None
+    ):
         """One reservation per actual streamed request, including interrupted ones."""
         import anyio
 
         parameters, reserved, input_bytes, expanded_context = await self._admit_request(
             messages, model_request_parameters
         )
-        if self.hosted_code is not None:
-            parameters = await self.hosted_code.prepare(parameters, reserved)
         self._request_started(parameters)
         try:
-            async with self.wrapped.request_stream(messages, model_settings, parameters, run_context) as stream:
+            async with self.wrapped.request_stream(
+                messages, model_settings, parameters, run_context
+            ) as stream:
                 failed = False
                 try:
                     yield stream
@@ -677,10 +792,16 @@ class MeteredModel(WrapperModel):
                             finally:
                                 # A failed transport close must not discard
                                 # already observed partial usage.
-                                await asyncio.wait_for(self._finalize_response(
-                                    response, reserved, input_bytes, expanded_context,
-                                    force_incomplete=incomplete,
-                                ), timeout=5)
+                                await asyncio.wait_for(
+                                    self._finalize_response(
+                                        response,
+                                        reserved,
+                                        input_bytes,
+                                        expanded_context,
+                                        force_incomplete=incomplete,
+                                    ),
+                                    timeout=5,
+                                )
                         except BaseException:
                             if not failed:
                                 raise
@@ -693,35 +814,33 @@ class MeteredModel(WrapperModel):
         except (DirectAPIError, DirectProviderError, InterruptedError, ActivityRecordingError):
             raise
         except Exception as error:
-            failure = provider_failure(error)
-            if self.hosted_code is not None:
-                from .ai_api_errors import rejected_before_processing
-                if rejected_before_processing(failure):
-                    self.hosted_code.request_rejected(reserved)
-            raise failure from None
+            raise provider_failure(error) from None
 
-    async def _finalize_response(self, response, reserved, input_bytes, expanded_context, *, force_incomplete=False):
-        if self.hosted_code is not None:
-            self.hosted_code.observe(response, reserved)
+    async def _finalize_response(
+        self, response, reserved, input_bytes, expanded_context, *, force_incomplete=False
+    ):
         usage = response_usage(response)
         from .ai_generation import bounded_native_call_limit
 
         native_limit = bounded_native_call_limit(self.route, self.connection)
-        native_calls = sum(getattr(part, "part_kind", "") == "builtin-tool-call"
-                           for part in getattr(response, "parts", ()) or ())
+        native_calls = sum(
+            getattr(part, "part_kind", "") == "builtin-tool-call"
+            for part in getattr(response, "parts", ()) or ()
+        )
         native_overrun = native_limit is not None and native_calls > native_limit
         if native_limit is not None:
-            usage.update(native_tool_calls=native_calls, native_call_limit=native_limit,
-                         native_call_limit_overrun=native_overrun)
+            usage.update(
+                native_tool_calls=native_calls,
+                native_call_limit=native_limit,
+                native_call_limit_overrun=native_overrun,
+            )
         if native_overrun:
             usage["usage_complete"] = False
         if force_incomplete:
             usage["usage_complete"] = False
         if usage["usage_complete"] and not expanded_context:
             self._calibration = (input_bytes, usage["input_tokens"])
-        if self.hosted_code is not None:
-            self.hosted_code.defer_usage(usage, reserved, self.on_response_callback)
-        elif self.on_response_callback is not None:
+        if self.on_response_callback is not None:
             try:
                 reported = self.on_response_callback(usage, reserved)
                 if inspect.isawaitable(reported):
@@ -739,16 +858,45 @@ class MeteredModel(WrapperModel):
             if kind == "thinking":
                 summary = public_summary(part, self.connection, self.route.get("model_id", ""))
                 if summary:
-                    public_parts.append({"part_kind": "reasoning_summary", "content": summary, "id": getattr(part, "id", None)})
+                    public_parts.append(
+                        {
+                            "part_kind": "reasoning_summary",
+                            "content": summary,
+                            "id": getattr(part, "id", None),
+                        }
+                    )
             elif kind in {"text", "tool-call", "builtin-tool-call", "builtin-tool-return", "file"}:
-                public_parts.append({name: getattr(part, name) for name in
-                    ("part_kind", "content", "tool_name", "tool_call_id", "args", "id") if hasattr(part, name)})
-        self.activity.record(current_operation(), "model_output", "observed", "Provider supplied output and usage.",
-            {"parts": public_parts, "usage": usage, "provider_response_id": getattr(response, "provider_response_id", None),
-             "finish_reason": getattr(response, "finish_reason", None)},
-            capture_status="partial" if force_incomplete else "complete")
+                public_parts.append(
+                    {
+                        name: getattr(part, name)
+                        for name in (
+                            "part_kind",
+                            "content",
+                            "tool_name",
+                            "tool_call_id",
+                            "args",
+                            "id",
+                        )
+                        if hasattr(part, name)
+                    }
+                )
+        self.activity.record(
+            current_operation(),
+            "model_output",
+            "observed",
+            "Provider supplied output and usage.",
+            {
+                "parts": public_parts,
+                "usage": usage,
+                "provider_response_id": getattr(response, "provider_response_id", None),
+                "finish_reason": getattr(response, "finish_reason", None),
+            },
+            capture_status="partial" if force_incomplete else "complete",
+        )
         if native_overrun:
-            raise DirectAPIError("The provider exceeded the reviewed shared native-call limit. Its result was withheld and the request allowance remains reserved.")
+            raise DirectAPIError(
+                "The provider exceeded the reviewed shared native-call limit. Its result was withheld and the request allowance remains reserved."
+            )
         for part in getattr(response, "parts", ()) or ():
             if getattr(part, "part_kind", "") == "builtin-tool-return":
                 _source_urls(getattr(part, "content", None), self.sources)
@@ -756,32 +904,23 @@ class MeteredModel(WrapperModel):
                 _source_urls(getattr(part, "provider_details", None), self.sources)
         actual_model = usage.get("actual_model")
         requested_model = self.expected_model or self.route.get("model_id")
-        from .ai_api_provider import canonical_model_id
+        from .ai_api_provider import same_reported_model
 
-        actual_identity = (
-            canonical_model_id(
-                self.connection.get("provider_id", ""),
-                self.connection.get("protocol", ""),
-                actual_model,
-            )
-            if isinstance(actual_model, str)
-            else actual_model
-        )
-        requested_identity = (
-            canonical_model_id(
+        if (
+            isinstance(actual_model, str)
+            and actual_model
+            and isinstance(requested_model, str)
+            and requested_model
+            and not same_reported_model(
                 self.connection.get("provider_id", ""),
                 self.connection.get("protocol", ""),
                 requested_model,
+                actual_model,
             )
-            if isinstance(requested_model, str)
-            else requested_model
-        )
-        if actual_identity and requested_identity and actual_identity != requested_identity:
+        ):
             raise DirectAPIError(
                 "The provider reported a different model. Its result was withheld; select the exact approved model identifier before retrying."
             )
-        if self.hosted_code is not None and not force_incomplete and getattr(response, "state", "complete") == "complete":
-            await self.hosted_code.collect(response)
         return response
 
 
@@ -834,12 +973,6 @@ async def _run_model(
     if max_requests < 1 or max_output < 1:
         raise DirectAPIError("The direct API request limits are invalid.")
     check_mode = operation == "check"
-    if route.get("native_tools") and not check_mode:
-        from .ai_native_tools import grant_for_execution
-        if context is None:
-            raise DirectAPIError("Native tools require a reviewed Tender execution context.")
-        native_grant = grant_for_execution(context, connection, route)
-        connection = {**connection, "_native_tool_grant": native_grant.model_dump() if native_grant else None}
     if check_mode and (max_requests > CHECK_MAX_REQUESTS or max_output > CHECK_MAX_OUTPUT_TOKENS):
         raise DirectAPIError("The connection check exceeds its small approved request limits.")
     image_support = connection.get("_model", {}).get("capabilities", {}).get("images") is True
@@ -867,7 +1000,7 @@ async def _run_model(
     ]
     try:
         generation = validate_generation(route, connection)
-        native = [NativeTool(tool) for tool in native_tools_for(route, connection, context=context)]
+        native = [NativeTool(tool) for tool in native_tools_for(route, connection)]
     except ValueError as error:
         raise DirectAPIError(str(error)) from None
     check_tool = next(
@@ -881,18 +1014,23 @@ async def _run_model(
         min(max_output, CHECK_MAX_OUTPUT_TOKENS) if check_mode else max_output
     )
     async with model_for_route(chosen, connection, credentials) as binding:
-        hosted_code = None
-        if "code_execution" in chosen.get("native_tools", []):
-            from .native_hosted_code import HostedCodeExecution
-            if on_response is None:
-                raise DirectAPIError("Hosted code requires the shared root usage recorder.")
-            hosted_code = HostedCodeExecution(context, connection, chosen, binding.client)
         try:
             validate_sdk_settings(binding.settings, binding.model.profile)
-            if generation.output_mode == "native" and not binding.model.profile.get("supports_json_schema_output"):
-                raise ValueError("This model adapter does not support native output with JSON Schema.")
-            if generation.output_mode == "native" and tools and connection.get("protocol") == "google" and not binding.model.profile.get("google_supports_tool_combination"):
-                raise ValueError("This model adapter cannot combine native output with office tools.")
+            if generation.output_mode == "native" and not binding.model.profile.get(
+                "supports_json_schema_output"
+            ):
+                raise ValueError(
+                    "This model adapter does not support native output with JSON Schema."
+                )
+            if (
+                generation.output_mode == "native"
+                and tools
+                and connection.get("protocol") == "google"
+                and not binding.model.profile.get("google_supports_tool_combination")
+            ):
+                raise ValueError(
+                    "This model adapter cannot combine native output with office tools."
+                )
         except ValueError as error:
             raise DirectAPIError(str(error)) from None
         wrapped = MeteredModel(
@@ -907,7 +1045,6 @@ async def _run_model(
             sources=sources,
             requests=request_details,
             expected_model=binding.model.model_name,
-            hosted_code=hosted_code,
         )
         bridge.request_operation = lambda: wrapped.last_request_id
         from .ai_execution import TURN_CONTEXT_MARKER
@@ -918,10 +1055,16 @@ async def _run_model(
         agent = Agent(
             wrapped,
             instructions=static if marker else instruction,
-            output_type=output_for(generation, output_type,
-                                  retries=OUTPUT_CORRECTIONS if validate_output is not None else None),
+            output_type=output_for(
+                generation,
+                output_type,
+                retries=OUTPUT_CORRECTIONS if validate_output is not None else None,
+            ),
             tools=tools,
-            capabilities=[*native, ProcessHistory(lambda messages: trim_tool_history(messages, context))],
+            capabilities=[
+                *native,
+                ProcessHistory(lambda messages: trim_tool_history(messages, context)),
+            ],
             model_settings=binding.settings,
             # One correction per tool call: a recoverable complaint about the
             # model's own arguments is worth a retry, a loop is not.
@@ -951,11 +1094,22 @@ async def _run_model(
 
         try:
             streaming = (connection.get("_model") or {}).get("capabilities", {}).get("streaming")
-            stream_events = DraftStreamEvents(context, {**connection, "_activity_model_id": chosen["model_id"]}, output_type,
-                request_operation=lambda: wrapped.last_request_id) if context is not None and not check_mode and streaming is not False else None
+            stream_events = (
+                DraftStreamEvents(
+                    context,
+                    {**connection, "_activity_model_id": chosen["model_id"]},
+                    output_type,
+                    request_operation=lambda: wrapped.last_request_id,
+                )
+                if context is not None and not check_mode and streaming is not False
+                else None
+            )
             execution = agent.run(
-                (f"{turn_context}\n\nCarry out this request and return the complete structured proposal."
-                 if marker else "Carry out the supplied instruction and return the complete structured proposal."),
+                (
+                    f"{turn_context}\n\nCarry out this request and return the complete structured proposal."
+                    if marker
+                    else "Carry out the supplied instruction and return the complete structured proposal."
+                ),
                 deps=context,
                 event_stream_handler=stream_events.handle if stream_events is not None else None,
                 usage_limits=UsageLimits(
@@ -963,7 +1117,7 @@ async def _run_model(
                     tool_calls_limit=min(1000, max_requests * 10),
                 ),
             )
-            result = await asyncio.wait_for(execution, timeout=900) if hosted_code is not None else await execution
+            result = await execution
         except asyncio.CancelledError:
             raise
         except (DirectAPIError, DirectProviderError, InterruptedError, ActivityRecordingError):
@@ -985,8 +1139,6 @@ async def _run_model(
             raise provider_failure(error) from None
         finally:
             bridge.closed = True
-            if hosted_code is not None:
-                await hosted_code.close()
     try:
         output = output_type.model_validate(result.output)
     except Exception:
@@ -997,7 +1149,6 @@ async def _run_model(
     return {
         "output": output,
         "web_sources": list(sources.values()),
-        "native_artifacts": hosted_code.artifacts if hosted_code is not None else [],
         "usage": {
             "requests": int(getattr(usage, "requests", len(request_details)) or 0),
             "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),

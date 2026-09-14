@@ -60,7 +60,7 @@ def test_later_engineering_records_make_old_progress_explicitly_outdated(tmp_pat
         idempotency_key="brief-first",
     )
     repo.update_run(first["id"], status="completed", result={"summary": "First step"})
-    greeting = repo.create_run(tid, "conversation", "Hi")
+    greeting = repo.create_run(tid, "manager", "Hi")
     repo.update_run(
         greeting["id"], status="completed", result={"kind": "conversation", "reply": "Hello"}
     )

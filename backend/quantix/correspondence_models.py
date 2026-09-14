@@ -1,10 +1,9 @@
-"""Supplier quotation drafts, explicit send decisions and public mail settings."""
+"""Supplier quotation request drafts and engineer-recorded supplier replies."""
 
 from datetime import datetime
 from email.headerregistry import Address
-from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def address(value):
@@ -65,85 +64,20 @@ class Attachment(MailModel):
     is_current: bool
 
 
-class RecipientRefusal(MailModel):
-    address: str
-    code: int
-
-
 class QuoteRecord(DraftInput):
     id: str
     tender_id: str
     message_id: str
     status: str
     attachments: list[Attachment]
-    approved_fingerprint: str | None
-    delivery_detail: str
-    refused_recipients: list[RecipientRefusal]
     created_at: str
     updated_at: str
-    submission_host: str | None = None
-    delivery_history_status: str | None = None
-    delivery_history_fingerprint: str | None = None
 
 
 class QuotePreview(MailModel):
     quote: QuoteRecord
-    sender: str | None
     attachments: list[Attachment]
-    fingerprint: str
-    smtp_host: str
-    smtp_ready: bool
     warnings: list[str]
-    restore_reconciliation_required: bool = False
-
-
-class SendDecision(MailModel):
-    fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
-    engineer_confirmed: Literal[True]
-    rationale: str = Field(min_length=1, max_length=4000)
-    restore_reconciliation: str | None = Field(default=None, min_length=1, max_length=4000)
-
-    @field_validator("rationale")
-    @classmethod
-    def nonblank(cls, value):
-        if not value.strip():
-            raise ValueError("Record why the current message is approved.")
-        return value.strip()
-
-
-class MailAccount(MailModel):
-    smtp_host: str = Field(default="", max_length=253, pattern=r"^[A-Za-z0-9.-]*$")
-    smtp_port: int = Field(default=465, ge=1, le=65535)
-    smtp_security: Literal["ssl", "starttls"] = "ssl"
-    smtp_username: str = Field(default="", max_length=300)
-    from_address: str = ""
-    imap_host: str = Field(default="", max_length=253, pattern=r"^[A-Za-z0-9.-]*$")
-    imap_port: int = Field(default=993, ge=1, le=65535)
-    imap_username: str = Field(default="", max_length=300)
-    imap_mailbox: str = Field(default="INBOX", min_length=1, max_length=200)
-
-    @field_validator("from_address")
-    @classmethod
-    def sender(cls, value):
-        return address(value) if value else ""
-
-    @field_validator("smtp_username", "imap_username", "imap_mailbox")
-    @classmethod
-    def control_free(cls, value):
-        if any(char in value for char in "\r\n\x00") or not value.isascii():
-            raise ValueError("Mail account fields must use ASCII without control characters.")
-        return value
-
-
-class MailSettingsPatch(MailAccount):
-    smtp_password: SecretStr | None = None
-    imap_password: SecretStr | None = None
-
-
-class MailSettings(MailAccount):
-    smtp_ready: bool
-    imap_ready: bool
-    detail: str
 
 
 class ManualReply(MailModel):
@@ -171,28 +105,11 @@ class ReplyRecord(MailModel):
     id: str
     tender_id: str
     quote_id: str
-    origin: Literal["manual", "imap"]
     sender: str
     received_at: str
-    date_header: str | None = None
-    date_basis: Literal["engineer_entered", "retrieved_at"]
     subject: str
     text: str
     headers: str
-    message_id: str | None
     source_ids: list[str]
     supporting_source_ids: list[str]
-    warnings: list[str]
     created_at: str
-
-
-class SyncRequest(MailModel):
-    max_messages: int = Field(default=30, ge=1, le=50)
-
-
-class SyncResult(MailModel):
-    checked: int
-    matched: int
-    skipped: int
-    more_available: bool
-    warnings: list[str]

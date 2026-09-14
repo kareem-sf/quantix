@@ -72,23 +72,37 @@ async def test_agent_results_prepare_business_proposals_then_publish_atomically(
             context, "inspect_estimate", {"offset": 0, "limit": 10}, options=kwargs
         )
         assert result["items"][0]["source"]["id"] == item["source_id"]
+        await invoke_json_tool(
+            context,
+            "propose",
+            {
+                "kind": "quote_drafts",
+                "items": [
+                    {
+                        "to": ["sales@supplier.example"],
+                        "subject": "Concrete quotation",
+                        "body": "Please quote the supplied scope.",
+                        "attachment_ids": [artifact["id"]],
+                        "source_ids": [item["source_id"]],
+                    }
+                ],
+            },
+            options=kwargs,
+        )
+        await invoke_json_tool(
+            context,
+            "propose",
+            {
+                "kind": "unit_rate_proposals",
+                "items": [{"item_id": item["id"], **proposal_payload()}],
+            },
+            options=kwargs,
+        )
         return api_result_for(
-            OfficeOutput.model_validate(
-                {
-                    "summary": "Draft request and rate allowance are ready for review.",
-                    "source_ids": [item["source_id"]],
-                    "quote_drafts": [
-                        {
-                            "to": ["sales@supplier.example"],
-                            "subject": "Concrete quotation",
-                            "body": "Please quote the supplied scope.",
-                            "attachment_ids": [artifact["id"]],
-                            "source_ids": [item["source_id"]],
-                        }
-                    ],
-                    "unit_rate_proposals": [{"item_id": item["id"], **proposal_payload()}],
-                }
-            )
+            {
+                "summary": "Draft request and rate allowance are ready for review.",
+                "source_ids": [item["source_id"]],
+            }
         )
 
     monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
@@ -108,14 +122,16 @@ async def test_unread_item_or_invented_supplier_recipient_cannot_be_published(se
     repo, tid, artifact, estimates, item, quotes, run = setup
 
     async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
-        return api_result_for(
-            OfficeOutput.model_validate(
-                {
-                    "summary": "Proposed allowance",
-                    "unit_rate_proposals": [{"item_id": item["id"], **proposal_payload()}],
-                }
-            )
+        await invoke_json_tool(
+            context,
+            "propose",
+            {
+                "kind": "unit_rate_proposals",
+                "items": [{"item_id": item["id"], **proposal_payload()}],
+            },
+            options=kwargs,
         )
+        return api_result_for({"summary": "Proposed allowance"})
 
     monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
     with pytest.raises(ValueError, match="read|item|basis"):
@@ -124,21 +140,9 @@ async def test_unread_item_or_invented_supplier_recipient_cannot_be_published(se
 
 
 @pytest.mark.asyncio
-async def test_semantic_unavailable_is_explicit_and_source_pagination_keeps_match_offset(
-    setup, monkeypatch
-):
+async def test_source_pagination_keeps_the_requested_offset(setup):
     repo, tid, artifact, estimates, item, quotes, run = setup
     context = OfficeContext(repo, tid, run["id"])
-    monkeypatch.setattr(
-        repo,
-        "search",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("No keyword fallback")),
-    )
-    result = await invoke_json_tool(
-        context, "search_semantic_sources", {"query": "foundation concrete", "limit": 5}
-    )
-    assert result["available"] is False
-    assert result["status"] in {"model_missing", "not_indexed", "empty"}
     source = await invoke_json_tool(
         context,
         "read_source",
@@ -251,31 +255,6 @@ async def test_reply_tool_returns_citable_text_without_accepting_commercial_data
 
 
 @pytest.mark.asyncio
-async def test_semantic_hit_reads_matching_offset_instead_of_source_start(setup):
-    repo, tid, artifact, estimates, item, quotes, run = setup
-    text = "A" * 15000 + "MATCHED CLAUSE" + "B" * 200
-    with repo.db.connect(write=True) as conn:
-        conn.execute("UPDATE evidence SET text=? WHERE id=?", (text, item["source_id"]))
-
-    class SemanticDouble:
-        def search(self, *args):
-            return [
-                {
-                    "id": item["source_id"],
-                    "score": 0.9,
-                    "metadata": {"semantic_match": {"start": 15000, "end": 15014}},
-                }
-            ]
-
-    context = OfficeContext(repo, tid, run["id"], semantic_service=SemanticDouble())
-    result = await invoke_json_tool(
-        context, "search_semantic_sources", {"query": "matched clause", "limit": 5}
-    )
-    assert result["sources"][0]["text"].startswith("MATCHED CLAUSE")
-    assert result["sources"][0]["text_offset"] == 15000
-
-
-@pytest.mark.asyncio
 async def test_supplier_named_in_approved_engineer_scope_is_preserved_for_publication(
     setup, monkeypatch
 ):
@@ -305,10 +284,12 @@ async def test_supplier_named_in_approved_engineer_scope_is_preserved_for_public
         await invoke_json_tool(
             context, "read_source", {"source_id": item["source_id"]}, options=kwargs
         )
-        return api_result_for(
-            OfficeOutput(
-                summary="Request drafted for review",
-                quote_drafts=[
+        await invoke_json_tool(
+            context,
+            "propose",
+            {
+                "kind": "quote_drafts",
+                "items": [
                     {
                         "to": ["named.contact@supplier.example"],
                         "subject": "Concrete quotation",
@@ -316,8 +297,10 @@ async def test_supplier_named_in_approved_engineer_scope_is_preserved_for_public
                         "source_ids": [item["source_id"]],
                     }
                 ],
-            )
+            },
+            options=kwargs,
         )
+        return api_result_for({"summary": "Request drafted for review"})
 
     monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
     prepared = await office.run_manager(repo, tid, run["id"], "Prepare the approved request")
@@ -328,9 +311,7 @@ async def test_supplier_named_in_approved_engineer_scope_is_preserved_for_public
 
 
 @pytest.mark.asyncio
-async def test_full_engineer_instruction_and_preferences_reach_manager_and_specialist(
-    setup, monkeypatch
-):
+async def test_full_engineer_instruction_and_preferences_reach_the_manager(setup, monkeypatch):
     repo, tid, artifact, estimates, item, quotes, run = setup
     preferences = "Use metric units. " * 500
     repo.set_setting("preferences", preferences)
@@ -350,28 +331,12 @@ async def test_full_engineer_instruction_and_preferences_reach_manager_and_speci
 
     monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
     await office.run_manager(repo, tid, run["id"], instruction)
-    repo.update_run(run["id"], status="completed")
-    plan = repo.create_plan(
-        tid,
-        "Scope review",
-        [
-            {
-                "title": "Review scope",
-                "description": "Review. " * 1000 + "KEEP_THIS_FINAL_ENGINEER_LIMIT",
-                "role": "Scope reviewer",
-                "source_ids": [item["source_id"]],
-            }
-        ],
-    )
-    approved = approve_plan_and_team(repo, tid, plan, "Proceed with the complete written scope.")
-    specialist_run = repo.create_run(tid, "task", approved["tasks"][0]["description"])
-    await office.run_specialist(repo, tid, specialist_run["id"], approved["tasks"][0])
 
 
 def test_oversized_worker_instruction_is_rejected_instead_of_clipped(setup):
     repo, tid, artifact, estimates, item, quotes, run = setup
     with pytest.raises(ValueError, match="instruction|limit"):
-        office._prompt(OfficeContext(repo, tid, run["id"]), "x" * 40001, None)
+        office._prompt(OfficeContext(repo, tid, run["id"]), "x" * 40001)
 
 
 @pytest.mark.asyncio

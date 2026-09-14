@@ -57,6 +57,7 @@ import { DocumentReadingMap } from "./DocumentReadingMap";
 import {
   SearchPreparation,
   searchExcerpt,
+  searchHits,
   type SearchMethod,
 } from "./DocumentSearch";
 import { createDraftScope, useFormDraft } from "./useFormDraft";
@@ -110,9 +111,7 @@ export function Files({
   const deferred = useDeferredValue(query.trim());
   // While the package is being read the map opens itself, so the first import
   // shows the Tender Manager working through the documents.
-  const reading = activeRuns.some(
-    (run) => run.kind === "import" || run.kind === "index",
-  );
+  const reading = activeRuns.some((run) => run.kind === "import");
   const showMap = mapOpen || reading;
   const history = useQuery({
     queryKey: [`${tenderPath(tenderId)}/artifacts?include_history=true`],
@@ -132,10 +131,19 @@ export function Files({
   const searchParams = new URLSearchParams({ q: deferred, mode });
   if (area !== "all") searchParams.set("area", area);
   if (status !== "all") searchParams.set("status", status);
+  if (kind !== "all") searchParams.set("document_kind", kind);
   const search = useQuery({
-    queryKey: [tenderPath(tenderId), "search", deferred, mode, area, status],
+    queryKey: [
+      tenderPath(tenderId),
+      "search",
+      deferred,
+      mode,
+      area,
+      status,
+      kind,
+    ],
     queryFn: () =>
-      api.get<Schema<"Evidence">[]>(
+      api.get<Schema<"RetrievalResponse">>(
         `${tenderPath(tenderId)}/search?${searchParams}`,
       ),
     enabled: !!deferred,
@@ -151,7 +159,7 @@ export function Files({
   const visibleIds = new Set(
     artifacts.filter(matchesFilters).map((file) => file.id),
   );
-  const matchingSources = search.data?.filter((hit) =>
+  const matchingSources = searchHits(search.data).filter((hit) =>
     visibleIds.has(hit.artifact_id),
   );
   const matchingFiles = deferred
@@ -383,14 +391,8 @@ export function Files({
           the register.
         </p>
       ) : null}
-      {meaningAvailable &&
-      (mode !== "words" || activeRuns.some((run) => run.kind === "index")) ? (
-        <SearchPreparation
-          tenderId={tenderId}
-          activeRuns={activeRuns}
-          documentKey={documentKey}
-          onWork={onWork}
-        />
+      {meaningAvailable && mode !== "words" ? (
+        <SearchPreparation tenderId={tenderId} documentKey={documentKey} />
       ) : null}
       {revision === "all" && history.isPending ? (
         <Loading>Loading earlier file versions…</Loading>
@@ -404,6 +406,11 @@ export function Files({
           <h3 className="text-sm font-medium">Source matches</h3>
           {search.isPending ? <Loading>Searching documents…</Loading> : null}
           <ErrorNotice error={search.error} />
+          {search.data?.limitations?.length ? (
+            <p className="text-xs text-muted-foreground">
+              {search.data.limitations[0]}
+            </p>
+          ) : null}
           {matchingFiles.length ? (
             <DocumentRegister
               files={matchingFiles}

@@ -16,14 +16,22 @@ it("binds a replacement to its exact retired row even when row references repeat
         return Response.json({ id: "new-row", confirmed: false });
       }
       if (new URL(String(address)).pathname.endsWith("/search"))
-        return Response.json([
-          {
-            id: "new-page",
-            artifact_name: "Revised BOQ.pdf",
-            locator: "page 7",
-            text: excerpt,
-          },
-        ]);
+        return Response.json({
+          hits: [
+            {
+              id: "new-page",
+              artifact_name: "Revised BOQ.pdf",
+              locator: "page 7",
+              text: excerpt,
+              kind: "pdf",
+            },
+          ],
+          requested_mode: "auto",
+          actual_mode: "words",
+          ranking_version: "rrf-1",
+          coverage: { truncated: false, scanned: 1, ceiling: 2000 },
+          limitations: [],
+        });
       return Response.json({
         artifact_name: "Revised BOQ.pdf",
         locator: "page 7",

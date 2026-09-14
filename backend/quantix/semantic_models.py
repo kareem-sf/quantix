@@ -4,9 +4,22 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+SemanticState = Literal[
+    "empty",
+    "model_missing",
+    "not_indexed",
+    "ready",
+    "stale",
+    "limit_exceeded",
+    "preparing",
+    "updating",
+    "stopped",
+    "failed",
+]
+
 
 class SemanticStatus(BaseModel):
-    status: Literal["empty", "model_missing", "not_indexed", "ready", "stale", "limit_exceeded"]
+    status: SemanticState
     ready: bool
     model: str
     model_fingerprint: str
@@ -17,6 +30,11 @@ class SemanticStatus(BaseModel):
     unique_chunks: int = 0
     indexed_at: str | None = None
     detail: str
+    desired_generation: int = 0
+    published_generation: int | None = None
+    progress: int = 0
+    recovery_action: str | None = None
+    last_error: str | None = None
 
 
 class SemanticUnavailable(ValueError):

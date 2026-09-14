@@ -1,16 +1,15 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   Activity,
-  BriefcaseBusiness,
   ClipboardCheck,
   Ellipsis,
   Files,
-  Globe2,
   LayoutGrid,
   ListFilter,
   Maximize2,
   Minimize2,
   PanelRight,
+  Users,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -43,10 +42,9 @@ export const workspaceViews: {
   shortcut: string;
 }[] = [
   { id: "documents", label: "Documents", icon: Files, shortcut: "D" },
-  { id: "office", label: "Office", icon: BriefcaseBusiness, shortcut: "O" },
+  { id: "team", label: "Team", icon: Users, shortcut: "T" },
   { id: "reviews", label: "Reviews", icon: ClipboardCheck, shortcut: "R" },
   { id: "activity", label: "Activity", icon: Activity, shortcut: "A" },
-  { id: "research", label: "Research", icon: Globe2, shortcut: "S" },
 ];
 
 type MenuAction = { label: string; icon: LucideIcon; onSelect: () => void };

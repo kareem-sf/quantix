@@ -24,14 +24,19 @@ export function CompanyLibrary() {
     <section aria-labelledby="company-library-heading">
       <h2 id="company-library-heading">Company library</h2>
       <p className="muted">
-        Company files stay separate from the current Tender. Expired certificates
-        cannot satisfy eligibility.
+        Company files stay separate from the current Tender. Expired
+        certificates cannot satisfy eligibility.
       </p>
       <ErrorNotice error={error} />
       <button type="button" className="button" onClick={propose}>
         Add a company file
       </button>
-      {saved ? <p>Saved as a proposal. Approve reuse before it can be offered to a Tender.</p> : null}
+      {saved ? (
+        <p>
+          Saved as a proposal. Approve reuse before it can be offered to a
+          Tender.
+        </p>
+      ) : null}
     </section>
   );
 }

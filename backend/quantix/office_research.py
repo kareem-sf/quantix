@@ -14,17 +14,6 @@ class ResearchRecord:
 
     @property
     def sources(self) -> dict[str, dict]:
-        saved = getattr(self.context, "research_state", {}).get("public_citations", {})
-        for source in saved.values() if isinstance(saved, dict) else []:
-            self._source(source, "cited")
-            if source.get("url") in self._sources:
-                self._sources[source["url"]].update(
-                    {
-                        key: source[key]
-                        for key in ("citation_id", "passage_ids", "content_sha256")
-                        if key in source
-                    }
-                )
         return self._sources
 
     @sources.setter

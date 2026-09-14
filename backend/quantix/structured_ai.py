@@ -17,34 +17,80 @@ if TYPE_CHECKING:
     from .repository import Repository
 
 Output = TypeVar("Output", bound=BaseModel)
-USAGE_COUNTERS = ("requests", "input_tokens", "output_tokens", "cached_input_tokens", "reasoning_tokens")
+USAGE_COUNTERS = (
+    "requests",
+    "input_tokens",
+    "output_tokens",
+    "cached_input_tokens",
+    "reasoning_tokens",
+)
+
+
+def light_route(approved_route, connection, model):
+    """The approved route at the model's lightest thinking level, without hosted search."""
+    from .ai_thinking import light_level
+
+    approved_limit = approved_route["max_output_tokens"]
+    route = {**approved_route, "web_search": False, "max_search_calls": 0}
+    recorded = (model.get("capabilities") or {}).get("reasoning") or []
+    candidate = light_level(connection, model)
+    effort = route.get("reasoning")
+    # Explicit token budgets stay unless the model reports a lighter named setting.
+    fixed_budget = isinstance(effort, str) and effort.startswith("budget:")
+    if (
+        effort not in {"none", "disabled"}
+        and candidate is not None
+        and (not fixed_budget or candidate in recorded)
+    ):
+        route["reasoning"] = candidate
+    effort = route.get("reasoning")
+    if isinstance(effort, str) and effort.startswith("budget:"):
+        try:
+            budget = int(effort.split(":", 1)[1])
+        except ValueError:
+            raise ValueError(
+                "Review the approved thinking-token budget before this analysis."
+            ) from None
+        if not 1 <= budget < approved_limit:
+            raise ValueError(
+                "The approved thinking budget must remain below its approved output limit."
+            )
+    return route
 
 
 async def ask_structured(
-    repo: "Repository", tender_id: str, run_id: str, prompt: str, output_type: type[Output], *,
+    repo: "Repository",
+    tender_id: str,
+    run_id: str,
+    prompt: str,
+    output_type: type[Output],
+    *,
     operation: str,
 ) -> tuple[Output, dict]:
     from .ai_connections import AIConnectionService
     from .ai_execution import execute_api
     from .ai_policy import AIPolicyService, BudgetMeter
     from .ai_readiness import require_ready
-    from .benchmark_adoption import BenchmarkAdoptionService
-    from .conversation import classification_route
 
     if repo.get_run(run_id)["tender_id"] != tender_id:
         raise ValueError("The run does not belong to this Tender.")
     policy = AIPolicyService(repo)
     connections = AIConnectionService(repo)
     route = policy.routes_for(tender_id)[:1][0]
-    adoption_route = dict(route)
     context = OfficeContext(repo, tender_id, run_id)
     with connections.lease(route["connection_id"]) as connection:
         policy.routes_for(tender_id)
-        model = next((m for m in connections.models(connection["id"]) if m["model_id"] == route["model_id"]), {})
-        route = classification_route(route, connection, model)
+        model = next(
+            (m for m in connections.models(connection["id"]) if m["model_id"] == route["model_id"]),
+            {},
+        )
+        approved_output = route["max_output_tokens"]
+        # The lightest thinking level with the Tender's full approved output limit:
+        # a batch of document briefs needs all of it.
+        route = light_route(route, connection, model) | {"max_output_tokens": approved_output}
         checked_component = require_ready(repo, connection, route["model_id"])
         meter = BudgetMeter(policy, tender_id, run_id, route)
-        before_request = BenchmarkAdoptionService(repo).guard(tender_id, run_id, adoption_route, meter.before_request)
+        before_request = meter.before_request
         with repo.db.connect() as conn:
             _, _, used_requests = policy._totals(conn, tender_id, run_id)
         local_client = connection["protocol"] in {"codex", "grok_build"}
@@ -61,11 +107,25 @@ async def ask_structured(
             },
         }
         credentials = connections.credentials(connection["id"])
+        # The prepared AI worker accepts only execute, check and conversation. A
+        # no-tools structured request is an execute with the submit tool alone;
+        # the analysis step name stays in the run's own events.
+        from .ai_connections import is_subscription_profile
+
+        worker_operation = "execute" if is_subscription_profile(connection) else operation
         try:
             response = await execute_api(
-                route, bounded, credentials, context, prompt, output_type,
-                definitions=[], operation=operation, system_instructions="",
-                before_request=before_request, on_response=meter.on_response,
+                route,
+                bounded,
+                credentials,
+                context,
+                prompt,
+                output_type,
+                definitions=[],
+                operation=worker_operation,
+                system_instructions="",
+                before_request=before_request,
+                on_response=meter.on_response,
             )
             output = output_type.model_validate(response["output"])
         except BaseException as error:
@@ -80,6 +140,11 @@ def add_usage(total: dict, part: dict) -> dict:
     for counter in USAGE_COUNTERS:
         merged[counter] = (merged.get(counter, 0) or 0) + (part.get(counter, 0) or 0)
     merged["total_tokens"] = merged.get("input_tokens", 0) + merged.get("output_tokens", 0)
-    merged["usage_complete"] = bool(total.get("usage_complete", True) and part.get("usage_complete", True))
-    merged["request_details"] = [*total.get("request_details", []), *part.get("request_details", [])]
+    merged["usage_complete"] = bool(
+        total.get("usage_complete", True) and part.get("usage_complete", True)
+    )
+    merged["request_details"] = [
+        *total.get("request_details", []),
+        *part.get("request_details", []),
+    ]
     return merged

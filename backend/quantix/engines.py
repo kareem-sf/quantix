@@ -68,8 +68,10 @@ def verify(root: Path | None = None, *, full: bool = False) -> dict:
             path = root / relative
             engine = "ocr" if relative.startswith("tesseract/") else "meaning"
             try:
-                if not path.is_file() or path.stat().st_size != expected["size"] or (
-                    full and _digest(path) != expected["sha256"]
+                if (
+                    not path.is_file()
+                    or path.stat().st_size != expected["size"]
+                    or (full and _digest(path) != expected["sha256"])
                 ):
                     ready[engine] = False
                     detail = detail or f"A bundled engine file is missing or damaged: {relative}"

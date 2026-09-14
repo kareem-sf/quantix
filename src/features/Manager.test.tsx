@@ -539,7 +539,8 @@ it("attaches saved activity to its originating engineer instruction after comple
     instruction.compareDocumentPosition(event) &
       Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
-  expect(screen.getAllByRole("region", { name: "Work activity" })).toHaveLength(
-    1,
-  );
+  // Finished work folds into one "How the Tender Manager worked" timeline.
+  expect(
+    screen.getAllByRole("region", { name: "How the Tender Manager worked" }),
+  ).toHaveLength(1);
 });

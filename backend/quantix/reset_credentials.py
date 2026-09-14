@@ -31,12 +31,17 @@ def checked_owned_path(home: Path, path: Path) -> Path:
 
 class _Credential(ctypes.Structure):
     _fields_ = [
-        ("Flags", wintypes.DWORD), ("Type", wintypes.DWORD),
-        ("TargetName", wintypes.LPWSTR), ("Comment", wintypes.LPWSTR),
-        ("LastWritten", wintypes.FILETIME), ("CredentialBlobSize", wintypes.DWORD),
+        ("Flags", wintypes.DWORD),
+        ("Type", wintypes.DWORD),
+        ("TargetName", wintypes.LPWSTR),
+        ("Comment", wintypes.LPWSTR),
+        ("LastWritten", wintypes.FILETIME),
+        ("CredentialBlobSize", wintypes.DWORD),
         ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)),
-        ("Persist", wintypes.DWORD), ("AttributeCount", wintypes.DWORD),
-        ("Attributes", ctypes.c_void_p), ("TargetAlias", wintypes.LPWSTR),
+        ("Persist", wintypes.DWORD),
+        ("AttributeCount", wintypes.DWORD),
+        ("Attributes", ctypes.c_void_p),
+        ("TargetAlias", wintypes.LPWSTR),
         ("UserName", wintypes.LPWSTR),
     ]
 
@@ -45,8 +50,12 @@ class NativeWindowsCredentials:
     def __init__(self, *, advapi=None, kernel32=None):
         if advapi is None:
             advapi = ctypes.WinDLL("Advapi32.dll", use_last_error=True)
-            advapi.CredEnumerateW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD,
-                ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(ctypes.POINTER(ctypes.POINTER(_Credential)))]
+            advapi.CredEnumerateW.argtypes = [
+                wintypes.LPCWSTR,
+                wintypes.DWORD,
+                ctypes.POINTER(wintypes.DWORD),
+                ctypes.POINTER(ctypes.POINTER(ctypes.POINTER(_Credential))),
+            ]
             advapi.CredEnumerateW.restype = wintypes.BOOL
             advapi.CredDeleteW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD]
             advapi.CredDeleteW.restype = wintypes.BOOL
@@ -65,9 +74,13 @@ class NativeWindowsCredentials:
             raise ctypes.WinError(error)
         try:
             # CredentialBlob and every other value-bearing field remain untouched.
-            return [{"type": int(buffer[index].contents.Type),
-                     "target": buffer[index].contents.TargetName}
-                    for index in range(count.value)]
+            return [
+                {
+                    "type": int(buffer[index].contents.Type),
+                    "target": buffer[index].contents.TargetName,
+                }
+                for index in range(count.value)
+            ]
         finally:
             self.advapi.CredFree(buffer)
 
@@ -82,10 +95,22 @@ class NativeWindowsCredentials:
     def canonicalize(self, path: Path) -> str:
         if self.kernel32 is None:
             kernel = ctypes.WinDLL("Kernel32.dll", use_last_error=True)
-            kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-                ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+            kernel.CreateFileW.argtypes = [
+                wintypes.LPCWSTR,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                ctypes.c_void_p,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.HANDLE,
+            ]
             kernel.CreateFileW.restype = wintypes.HANDLE
-            kernel.GetFinalPathNameByHandleW.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+            kernel.GetFinalPathNameByHandleW.argtypes = [
+                wintypes.HANDLE,
+                wintypes.LPWSTR,
+                wintypes.DWORD,
+                wintypes.DWORD,
+            ]
             kernel.GetFinalPathNameByHandleW.restype = wintypes.DWORD
             kernel.CloseHandle.argtypes = [wintypes.HANDLE]
             kernel.CloseHandle.restype = wintypes.BOOL
@@ -131,7 +156,10 @@ class WindowsCredentialAdapter:
         identity = hashlib.sha256(str(root).encode()).hexdigest()[:16]
         services = (f"Quantix-{identity}", f"Quantix-mail-{identity}")
         ids = set(account_ids)
-        if any(not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", value) for value in ids):
+        if any(
+            not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", value)
+            for value in ids
+        ):
             raise ValueError("A saved AI account has an unsafe account identifier.")
         runtimes = checked_owned_path(root, root / "ai-runtimes")
         if runtimes.exists():
@@ -161,17 +189,29 @@ class WindowsCredentialAdapter:
 
     @staticmethod
     def _owned(target, services, codex_targets):
-        return target in codex_targets or any(target == service or target.endswith("@" + service) for service in services)
+        return target in codex_targets or any(
+            target == service or target.endswith("@" + service) for service in services
+        )
 
     def inventory(self, home: Path, account_ids: list[str]) -> list[dict]:
         services, codex_targets = self._ownership(home, account_ids)
-        return sorted((entry for entry in self.native.enumerate()
-                       if entry["type"] == 1 and isinstance(entry["target"], str)
-                       and self._owned(entry["target"], services, codex_targets)), key=lambda entry: entry["target"])
+        return sorted(
+            (
+                entry
+                for entry in self.native.enumerate()
+                if entry["type"] == 1
+                and isinstance(entry["target"], str)
+                and self._owned(entry["target"], services, codex_targets)
+            ),
+            key=lambda entry: entry["target"],
+        )
 
     def validate_targets(self, home: Path, account_ids: list[str], targets: list[dict]):
         services, codex_targets = self._ownership(home, account_ids)
-        if any(target["type"] != 1 or not self._owned(target["target"], services, codex_targets) for target in targets):
+        if any(
+            target["type"] != 1 or not self._owned(target["target"], services, codex_targets)
+            for target in targets
+        ):
             raise ValueError("A saved reset credential does not belong to this Quantix home.")
 
     def delete(self, target: dict):

@@ -71,7 +71,10 @@ function processAlive(pid) {
 }
 
 function parseOwnedFile(name) {
-  const match = /^quantix-[a-z][a-z0-9_-]{0,48}-(\d+)-([a-f0-9]{32})\.jsonl(?:\.(\d+))?$/.exec(name);
+  const match =
+    /^quantix-[a-z][a-z0-9_-]{0,48}-(\d+)-([a-f0-9]{32})\.jsonl(?:\.(\d+))?$/.exec(
+      name,
+    );
   if (!match) return undefined;
   return { pid: Number(match[1]), backup: Number(match[3] || 0) };
 }
@@ -87,7 +90,12 @@ function retainLogs(directory, currentPath) {
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     const owned = parseOwnedFile(entry.name);
-    if (!owned || entry.name === path.basename(currentPath) || processAlive(owned.pid)) continue;
+    if (
+      !owned ||
+      entry.name === path.basename(currentPath) ||
+      processAlive(owned.pid)
+    )
+      continue;
     const fullPath = path.join(directory, entry.name);
     try {
       const stat = statSync(fullPath);
@@ -155,7 +163,8 @@ function safeFields(fields) {
 
 function errorFields(error) {
   const errorClass = SAFE_ERROR_TYPES.has(error?.name) ? error.name : "Unknown";
-  const code = typeof error?.code === "string" ? error.code.toUpperCase() : undefined;
+  const code =
+    typeof error?.code === "string" ? error.code.toUpperCase() : undefined;
   return {
     error_class: errorClass,
     ...(code && SAFE_CODE.test(code) ? { error_code: code } : {}),
@@ -176,7 +185,9 @@ class DiagnosticLogger {
     try {
       this.#sessionId = sessionIdentifier();
     } catch {
-      this.#sessionId = `${Date.now().toString(16)}${process.pid.toString(16)}`.padStart(32, "0").slice(-32);
+      this.#sessionId = `${Date.now().toString(16)}${process.pid.toString(16)}`
+        .padStart(32, "0")
+        .slice(-32);
     }
     try {
       const directory = quantixPaths().logs;
@@ -205,12 +216,14 @@ class DiagnosticLogger {
   }
 
   #rotate(nextBytes) {
-    if (this.#handle === undefined || this.#bytes + nextBytes <= MAX_FILE_BYTES) return;
+    if (this.#handle === undefined || this.#bytes + nextBytes <= MAX_FILE_BYTES)
+      return;
     try {
       closeSync(this.#handle);
       this.#handle = undefined;
       for (let index = BACKUP_COUNT; index >= 1; index -= 1) {
-        const source = index === 1 ? this.#filePath : `${this.#filePath}.${index - 1}`;
+        const source =
+          index === 1 ? this.#filePath : `${this.#filePath}.${index - 1}`;
         const destination = `${this.#filePath}.${index}`;
         if (existsSync(destination)) unlinkSync(destination);
         if (existsSync(source)) renameSync(source, destination);

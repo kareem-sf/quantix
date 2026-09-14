@@ -36,7 +36,11 @@ def _source(repo, tender_id: str) -> str:
         "Sources/spec.txt",
         digest,
         len(body),
-        {"kind": "text", "status": "extracted", "segments": [{"locator": "line:1", "text": body.decode()}]},
+        {
+            "kind": "text",
+            "status": "extracted",
+            "segments": [{"locator": "line:1", "text": body.decode()}],
+        },
     )
     return repo.artifact_evidence(tender_id, artifact["id"])[0]["id"]
 
@@ -45,7 +49,15 @@ def _decision(repo, tender_id: str) -> None:
     with repo.atomic() as conn:
         conn.execute(
             "INSERT INTO decisions VALUES(?,?,?,?,?,?,?)",
-            ("decision-read", tender_id, "synthetic", "record-1", "approve", "Synthetic test decision", "2026-09-10T00:00:00Z"),
+            (
+                "decision-read",
+                tender_id,
+                "synthetic",
+                "record-1",
+                "approve",
+                "Synthetic test decision",
+                "2026-09-10T00:00:00Z",
+            ),
         )
 
 
@@ -134,10 +146,13 @@ def test_manager_read_event_rolls_back_with_rejected_result_and_commits_on_succe
 
     assert context.seen_sources == set()
     with repo.db.connect() as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM run_events WHERE run_id=? AND kind='sources_read'",
-            (run_id,),
-        ).fetchone()[0] == 0
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM run_events WHERE run_id=? AND kind='sources_read'",
+                (run_id,),
+            ).fetchone()[0]
+            == 0
+        )
 
     monkeypatch.setattr(tool_policy, "MAX_RESULT_BYTES", 1024 * 1024)
     result = asyncio.run(
@@ -152,16 +167,18 @@ def test_manager_read_event_rolls_back_with_rejected_result_and_commits_on_succe
     assert json.loads(result)["id"] == source_id
     assert context.seen_sources == {source_id}
     with repo.db.connect() as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM run_events WHERE run_id=? AND kind='sources_read'",
-            (run_id,),
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM run_events WHERE run_id=? AND kind='sources_read'",
+                (run_id,),
+            ).fetchone()[0]
+            == 1
+        )
 
 
-def test_cross_tender_source_and_unauthorized_staff_read_still_fail(tmp_path):
+def test_cross_tender_source_read_fails(tmp_path):
     repo, first_id, run_id = _workspace(tmp_path)
     second = repo.create_tender("Other Tender")
-    first_source = _source(repo, first_id)
     other_source = _source(repo, second["id"])
     read = _definition("read_source")
 
@@ -173,18 +190,6 @@ def test_cross_tender_source_and_unauthorized_staff_read_still_fail(tmp_path):
                 OfficeContext(repo, first_id, run_id),
                 {"source_id": other_source},
                 invocation_id="cross-tender-read",
-            )
-        )
-
-    staff = OfficeContext(repo, first_id, run_id)
-    staff.actor_id = "staff-unauthorized"
-    staff.assignment_id = "assignment-unauthorized"
-    staff.route_binding_id = "binding-unauthorized"
-    staff.reviewed_tools = []
-    with pytest.raises(ToolFenceError):
-        asyncio.run(
-            dispatch(
-                "nested", read, staff, {"source_id": first_source}, invocation_id="staff-read"
             )
         )
 
@@ -210,20 +215,17 @@ def test_result_validation_rejects_nonfinite_oversized_and_unserializable_values
             asyncio.run(dispatch("nested", definition, context, {}, invocation_id=definition.name))
 
 
-def test_rejected_staff_result_does_not_commit_read_receipt_or_seen_source(tmp_path, monkeypatch):
-    from test_staff_context import _build_staff_context, _context_workspace
-
-    repo, tender, _staff, binding, assignment_id, artifact = _context_workspace(
-        tmp_path, monkeypatch, tools=("read_source",)
+def test_rejected_staff_result_does_not_commit_seen_source(tmp_path):
+    repo, tender_id, run_id = _workspace(tmp_path)
+    source_id = _source(repo, tender_id)
+    context = OfficeContext(
+        repo, tender_id, run_id, actor_id="staff-1", assignment_id="assignment-1"
     )
-    context = _build_staff_context(repo, binding.id, assignment_id)
-    source_id = repo.artifact_evidence(tender["id"], artifact["id"])[0]["id"]
 
     from quantix.office_tools import scoped_tool
 
     @scoped_tool
     async def read_source(ctx: ToolContext[OfficeContext], source_id: str) -> str:
-        ctx.context.require_tool("read_source")
         ctx.context.source(source_id)
         return "x" * (1024 * 1024 + 1)
 
@@ -239,12 +241,8 @@ def test_rejected_staff_result_does_not_commit_read_receipt_or_seen_source(tmp_p
         )
 
     assert context.seen_sources == set()
-    with repo.db.connect() as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM staff_source_receipts WHERE assignment_id=?", (assignment_id,)
-        ).fetchone()[0] == 0
 
-    manager = OfficeContext(repo, tender["id"], binding.root_run_id)
+    manager = OfficeContext(repo, tender_id, run_id)
     with pytest.raises(ToolFenceError):
         asyncio.run(
             dispatch(
@@ -274,17 +272,21 @@ def test_stopped_run_does_not_invoke_or_publish_a_tool_result(tmp_path):
     assert calls == []
 
 
-def test_successful_timed_read_commits_its_actual_inspection(tmp_path, monkeypatch):
-    from test_staff_context import _build_staff_context, _context_workspace
-
-    repo, tender, _staff, binding, assignment_id, artifact = _context_workspace(
-        tmp_path, monkeypatch, tools=("read_source",))
-    context = _build_staff_context(repo, binding.id, assignment_id)
-    source_id = repo.artifact_evidence(tender["id"], artifact["id"])[0]["id"]
-    result = asyncio.run(dispatch("direct", _definition("read_source"), context,
-                                 {"source_id": source_id}, invocation_id="timed-read", timeout=5))
+def test_successful_timed_read_commits_its_actual_inspection(tmp_path):
+    repo, tender_id, run_id = _workspace(tmp_path)
+    source_id = _source(repo, tender_id)
+    context = OfficeContext(
+        repo, tender_id, run_id, actor_id="staff-1", assignment_id="assignment-1"
+    )
+    result = asyncio.run(
+        dispatch(
+            "direct",
+            _definition("read_source"),
+            context,
+            {"source_id": source_id},
+            invocation_id="timed-read",
+            timeout=5,
+        )
+    )
     assert source_id in result
     assert source_id in context.seen_sources
-    with repo.db.connect() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM staff_source_receipts WHERE assignment_id=?",
-                            (assignment_id,)).fetchone()[0] == 1

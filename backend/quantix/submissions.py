@@ -64,26 +64,42 @@ class SubmissionService:
             requirement_ids = selection.requirement_ids
             if requirement_ids is None:
                 requirement_ids = [row["id"] for row in active_requirements]
-            requirement_basis = self.requirements.submission_basis(tender_id, requirement_ids, selection.output_ids)
+            requirement_basis = self.requirements.submission_basis(
+                tender_id, requirement_ids, selection.output_ids
+            )
             blockers.extend(requirement_basis["blocking_reasons"])
             repairs.extend(requirement_basis["blockers"])
             warnings.extend(requirement_basis["warnings"])
-            omitted = [row["title"] for row in active_requirements if row["id"] not in requirement_ids]
+            omitted = [
+                row["title"] for row in active_requirements if row["id"] not in requirement_ids
+            ]
             if omitted:
                 warnings.append("Requirements outside this scoped export: " + "; ".join(omitted))
             if not active_requirements:
-                warnings.append("No submission requirements are registered. Required Tender contents have not been established.")
+                warnings.append(
+                    "No submission requirements are registered. Required Tender contents have not been established."
+                )
             for identifier in sorted(selection.output_ids):
                 output = self.outputs.get(tender_id, identifier)
                 outputs.append(output)
                 try:
                     self.outputs.path(tender_id, identifier)
                     captured = self.outputs.check_current(tender_id, output)
-                    output_reasons = [output["filename"] + ": " + reason for reason in captured["blocking_reasons"]]
+                    output_reasons = [
+                        output["filename"] + ": " + reason
+                        for reason in captured["blocking_reasons"]
+                    ]
                 except (ValueError, KeyError) as exc:
                     output_reasons = [output["filename"] + ": " + str(exc)]
                 blockers.extend(output_reasons)
-                repairs.extend({"code": "output_changed", "message": reason, "target": {"kind": "output", "record_id": identifier, "output_ids": []}} for reason in output_reasons)
+                repairs.extend(
+                    {
+                        "code": "output_changed",
+                        "message": reason,
+                        "target": {"kind": "output", "record_id": identifier, "output_ids": []},
+                    }
+                    for reason in output_reasons
+                )
                 warnings.extend(
                     output["filename"] + ": " + warning
                     for warning in output["metadata"].get("warnings", [])
@@ -104,7 +120,10 @@ class SubmissionService:
         path = self.directory / ("submission-" + identifier + ".zip")
         try:
             with self.repo.atomic():
-                selection = {"output_ids": decision.output_ids, "requirement_ids": decision.requirement_ids}
+                selection = {
+                    "output_ids": decision.output_ids,
+                    "requirement_ids": decision.requirement_ids,
+                }
                 preview = self.preview(tender_id, selection)
                 if decision.fingerprint != preview["fingerprint"]:
                     raise ValueError(
@@ -146,10 +165,7 @@ class SubmissionService:
                 with ZipFile(path) as archive:
                     if archive.testzip() is not None:
                         raise ValueError("The frozen package failed its integrity check.")
-                if (
-                    self.preview(tender_id, selection)["fingerprint"]
-                    != preview["fingerprint"]
-                ):
+                if self.preview(tender_id, selection)["fingerprint"] != preview["fingerprint"]:
                     raise ValueError("The source or output files changed during final export.")
                 result = manifest | {
                     "size": path.stat().st_size,

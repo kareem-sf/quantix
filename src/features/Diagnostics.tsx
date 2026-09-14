@@ -16,7 +16,9 @@ export function Diagnostics({ open = false }: { open?: boolean } = {}) {
         className={`diagnostics-status ${value.available ? "available" : "unavailable"}`}
         role="status"
       >
-        <strong>{value.available ? "Recording is on" : "Recording is unavailable"}</strong>
+        <strong>
+          {value.available ? "Recording is on" : "Recording is unavailable"}
+        </strong>
         <p>{value.detail}</p>
       </div>
       <label>
@@ -46,13 +48,12 @@ export function Diagnostics({ open = false }: { open?: boolean } = {}) {
         </div>
       </dl>
       <p className="field-help">
-        The retention target is approximate while active log files remain
-        open.
+        The retention target is approximate while active log files remain open.
       </p>
       <p className="field-help">
-        Quantix records technical events here without raw Tender content. If
-        you ask for support, share the request reference shown in the error and
-        this diagnostics folder.
+        Quantix records technical events here without raw Tender content. If you
+        ask for support, share the request reference shown in the error and this
+        diagnostics folder.
       </p>
       <button
         type="button"

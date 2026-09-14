@@ -10,7 +10,7 @@ from quantix.repository import Repository
 def workspace(tmp_path):
     repo = Repository(tmp_path)
     tender = repo.create_tender("Synthetic streaming Tender")
-    run = repo.create_run(tender["id"], "conversation", "Read the synthetic BOQ")
+    run = repo.create_run(tender["id"], "manager", "Read the synthetic BOQ")
     return repo, tender, run
 
 
@@ -151,6 +151,7 @@ async def test_reset_closes_existing_observer_before_database_access(tmp_path, m
 @pytest.mark.asyncio
 async def test_activity_stream_keeps_every_event_with_its_own_identity(tmp_path):
     from quantix.chat_stream import RunChatStream
+
     repo, tender, run = workspace(tmp_path)
     repo.event(run["id"], "tool_started", "First source")
     repo.event(run["id"], "tool_started", "Second source")

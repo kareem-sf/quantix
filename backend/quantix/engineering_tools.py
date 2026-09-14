@@ -20,13 +20,11 @@ from .work_products import WorkProductService
 
 
 def _sources(office, references):
-    from .research_service import ResearchService
-
-    identity = identity_from_office_context(office)
-    ResearchService(office.repo).validate_work_product_refs(identity, references)
     for reference in references:
-        if reference.startswith("public_citation:"):
-            continue
+        if reference.startswith(("http://", "https://")):
+            raise ValueError(
+                "Cite Tender evidence IDs here. Web sources belong in proposed web findings."
+            )
         office.ensure_evidence_allowed(reference, tool_id=None)
         if reference not in office.seen_sources:
             raise ValueError("Read each source before using it in a work product or calculation.")
@@ -47,9 +45,6 @@ def _work(ctx, capability, payload, action, event, *, source_refs=()):
         # No await or provider operation occurs while this guard is held.
         if office.repo.get_run(office.run_id)["status"] not in {"queued", "running"}:
             raise InterruptedError("This Tender run is no longer active.")
-        office.require_tool(capability)
-        office._active_root()
-        office.ensure_scope_current()
         _sources(office, source_refs)
         conn.execute("""CREATE TABLE IF NOT EXISTS engineering_work_receipts (
             root_id TEXT NOT NULL, actor_id TEXT NOT NULL, invocation_id TEXT NOT NULL,
@@ -157,8 +152,7 @@ def engineering_tools():
                 )
             references = json.loads(original["result_json"]).get("source_refs", [])
             for reference in references:
-                if not reference.startswith("public_citation:"):
-                    ctx.context.ensure_evidence_allowed(reference, tool_id=None)
+                ctx.context.ensure_evidence_allowed(reference, tool_id=None)
             result = CalculationService(ctx.context.repo).check(
                 identity,
                 CalculationCheckRequest(
@@ -192,7 +186,7 @@ def engineering_tools():
         product_id: str | None = None,
         expected_version: int | None = None,
     ) -> str:
-        """Save an intermediate draft table, comparison, chart, calculation sheet, note, timeline or document. Cite inspected evidence IDs or validated public_citation references. A new product is created unless its ID and current version are explicitly supplied."""
+        """Save an intermediate draft table, comparison, chart, calculation sheet, note, timeline or document. Cite evidence IDs you read in this run. A new product is created unless its ID and current version are explicitly supplied."""
         references = source_refs or []
         draft = WorkProductDraft(
             kind=kind,
@@ -223,15 +217,11 @@ def engineering_tools():
     ) -> str:
         """Read a specific saved work-product version and a bounded page of its rows. Inspect its cited sources separately before adopting its findings."""
         office = ctx.context
-        office.require_tool("read_work_product")
-        office._active_root()
-        office.ensure_scope_current()
         if offset < 0 or not 1 <= limit <= 100:
             raise ValueError("Choose a non-negative row offset and a limit of 1–100.")
         result = WorkProductService(office.repo).get(office.tender_id, product_id, version)
         for reference in result.source_refs:
-            if not reference.startswith("public_citation:"):
-                office.ensure_evidence_allowed(reference, tool_id=None)
+            office.ensure_evidence_allowed(reference, tool_id=None)
         return dump(
             {
                 **result.model_dump(mode="json"),
@@ -249,22 +239,9 @@ def engineering_tools():
     ) -> str:
         """List saved work products newest first: ID, title, kind, current version and whether a source behind it changed. Use read_work_product for the content."""
         office = ctx.context
-        office.require_tool("list_work_products")
-        office._active_root()
-        office.ensure_scope_current()
         if offset < 0 or not 1 <= limit <= 50:
             raise ToolArgumentError("Choose a non-negative offset and a limit of 1–50.")
         page = WorkProductService(office.repo).list(office.tender_id, offset=offset, limit=limit)
-        items = [
-            item
-            for item in page.items
-            if not office.is_staff
-            or all(
-                office.evidence_allowed(reference)
-                for reference in item.source_refs
-                if not reference.startswith("public_citation:")
-            )
-        ]
         return dump(
             {
                 "items": [
@@ -277,9 +254,8 @@ def engineering_tools():
                         "dependency_state": item.dependency_state,
                         "created_at": item.created_at,
                     }
-                    for item in items
+                    for item in page.items
                 ],
-                "withheld_count": len(page.items) - len(items),
                 "next_offset": page.next_offset,
                 "total": page.total,
             }

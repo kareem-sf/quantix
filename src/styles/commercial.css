@@ -1,53 +1,3 @@
-.commercial-workspace {
-  display: grid;
-  gap: 1.5rem;
-  min-width: 0;
-}
-.workspace-body > .commercial-workspace,
-.workspace-body > .estimate-workspace {
-  padding: 24px 32px;
-}
-.estimate-workspace > .estimate-page {
-  padding-inline: 0;
-}
-@media (max-width: 760px) {
-  .workspace-body > .commercial-workspace,
-  .workspace-body > .estimate-workspace {
-    padding: 20px;
-  }
-}
-.commercial-workspace h1,
-.commercial-workspace h2 {
-  margin-bottom: 0.45rem;
-}
-.commercial-workspace .page-description {
-  margin: 0;
-}
-.feature-view-nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 0.65rem;
-}
-.feature-view-nav button {
-  border: 0;
-  border-radius: 0.5rem;
-  padding: 0.65rem 0.85rem;
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  cursor: pointer;
-}
-.feature-view-nav button:hover {
-  background: var(--surface-muted);
-  color: var(--text);
-}
-.feature-view-nav button[aria-current="page"] {
-  background: var(--legacy-accent-soft);
-  color: var(--legacy-accent);
-  font-weight: 600;
-}
 .settings-focused {
   max-width: 48rem;
 }
@@ -58,51 +8,7 @@
 .settings-focused form > button {
   justify-self: start;
 }
-.commercial-more {
-  margin-top: 1.5rem;
-}
-.commercial-more > summary {
-  cursor: pointer;
-}
-.commercial-workspace .outputs-section,
-.commercial-workspace .submissions-section,
-.commercial-workspace .submission-requirements {
-  margin-top: 0;
-}
-.commercial-output-create {
-  display: flex;
-  align-items: end;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  margin: 1.5rem 0;
-}
-.commercial-output-create label {
-  flex: 1 1 16rem;
-}
-.commercial-output-detail {
-  scroll-margin-top: 1rem;
-  background: var(--surface);
-  padding: 1rem;
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-}
-.commercial-output-detail p {
-  overflow-wrap: anywhere;
-}
-.commercial-record-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 1rem;
-  margin-top: 0.75rem;
-}
-.commercial-mail-check {
-  padding-block: 1rem;
-  border-block: 1px solid var(--border);
-  margin-bottom: 1rem;
-}
-.commercial-mail-check p {
-  max-width: 70ch;
-}
+
 .commercial-blocker {
   margin-block: 0.75rem;
 }
@@ -110,26 +16,10 @@
   display: block;
   margin-top: 0.4rem;
 }
-.commercial-workspace code {
-  overflow-wrap: anywhere;
-}
-.commercial-workspace .numeric {
-  font-variant-numeric: tabular-nums;
-}
+
 .field-error {
   display: block;
   color: var(--danger);
   font-size: var(--qx-text-body);
   margin-top: 0.3rem;
-}
-@media (max-width: 640px) {
-  .commercial-output-create > button {
-    width: 100%;
-  }
-  .feature-view-nav {
-    gap: 0.15rem;
-  }
-  .feature-view-nav button {
-    padding: 0.65rem;
-  }
 }

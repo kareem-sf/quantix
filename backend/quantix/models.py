@@ -82,10 +82,21 @@ class Evidence(ApiModel):
     kind: str
     metadata: dict[str, Any] = Field(default_factory=dict)
     score: float = 0
+    extraction_id: str | None = None
+    extraction_current: bool | None = None
 
 
 class ResultLink(ApiModel):
-    kind: Literal["finding", "plan", "task", "output", "requirement", "boq_item", "work_product", "calculation"]
+    kind: Literal[
+        "finding",
+        "plan",
+        "task",
+        "output",
+        "requirement",
+        "boq_item",
+        "work_product",
+        "calculation",
+    ]
     id: str
     title: str
     target: str
@@ -224,7 +235,6 @@ class DecisionRequest(ApiModel):
 
 class ApprovalRequest(ApiModel):
     rationale: str = Field(min_length=1, max_length=4000)
-    ai_team_fingerprint: str | None = None
 
 
 class Settings(ApiModel):
@@ -245,7 +255,6 @@ class Health(ApiModel):
     version: str
     ai_setup_revision: int = 7
     workspace_revision: int = 1
-    office_revision: int = 0
     reset_pending: bool = False
     provider_ready: bool
     model: str

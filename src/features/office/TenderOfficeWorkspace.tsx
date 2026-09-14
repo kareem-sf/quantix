@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -13,12 +13,11 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Manager } from "../Manager";
-import { StaffDraftContent } from "./StaffDraftContent";
 import { Citations, type SourceSelection } from "../Sources";
 import { tenderRoute } from "@/navigation/routes";
 import { RightWorkspace } from "./RightWorkspace";
 import { tenderDisplayName } from "../../app/tender-name";
-import { ResearchLibrary } from "../ResearchLibrary";
+import { Team } from "../Team";
 import { WorkProductLibrary } from "../WorkProductLibrary";
 import { CalculationInspector } from "../CalculationInspector";
 import { sourceSelectionKey, useWorkspaceState } from "./workspace-state";
@@ -29,22 +28,10 @@ import {
   WorkspaceReviews,
 } from "./WorkspaceViews";
 
-export const OFFICE_WORKSPACE_REVISION = 2;
-
-export type LiveOfficeRenderProps = {
-  tenderId: string;
-  onClose: () => void;
-  onSource: (source: SourceSelection) => void;
-  onOpenResult: (id: string) => void;
-  onOpenOutput: (id: string) => void;
-};
-
 export type TenderOfficeWorkspaceProps = {
   overview: Schema<"Overview">;
   artifacts: Schema<"Artifact">[];
   settings?: Schema<"Settings">;
-  officeRevision?: number;
-  officeRevisionPending?: boolean;
   sourceSelection?: SourceSelection | null;
   recordView?: string;
   recordId?: string;
@@ -58,7 +45,6 @@ export type TenderOfficeWorkspaceProps = {
   onRecord?: (view: string, recordId: string) => void;
   onRepair?: (target: string) => void;
   onCustomizeManager?: () => void;
-  renderLiveOffice?: (props: LiveOfficeRenderProps) => ReactNode;
 };
 
 /** Keep a Tender's workbench isolated while preserving its Manager during layout changes. */
@@ -70,8 +56,6 @@ function TenderWorkspaceContent({
   overview,
   artifacts,
   settings,
-  officeRevision,
-  officeRevisionPending = false,
   sourceSelection = null,
   recordView,
   recordId,
@@ -85,13 +69,10 @@ function TenderWorkspaceContent({
   onRecord,
   onRepair,
   onCustomizeManager,
-  renderLiveOffice,
 }: TenderOfficeWorkspaceProps) {
   const workspace = useWorkspaceState();
   const chatRef = useRef<HTMLElement>(null);
   const openingDocumentList = useRef(false);
-  const [focusedCitationId, setFocusedCitationId] = useState<string>();
-  const officeReady = officeRevision === OFFICE_WORKSPACE_REVISION;
   const selectedResult =
     recordId && isResultView(recordView)
       ? { id: recordId, view: recordView }
@@ -196,9 +177,9 @@ function TenderWorkspaceContent({
             close();
             showDocumentList();
           }}
-          onOffice={() => {
+          onTeam={() => {
             close();
-            open("office");
+            open("team");
           }}
           onSource={(selection) => {
             close();
@@ -220,45 +201,15 @@ function TenderWorkspaceContent({
               onRegister={onDocuments}
             />
           );
-        if (view === "office") {
-          if (officeRevisionPending)
-            return <Loading>Checking live office compatibility…</Loading>;
-          if (!officeReady)
-            return (
-              <OfficeCompatibility
-                onSettings={onSettings}
-                revision={officeRevision}
-              />
-            );
-          return renderLiveOffice ? (
-            renderLiveOffice({
-              tenderId: overview.tender.id,
-              onClose: returnToConversation,
-              onSource: showSource,
-              onOpenResult: (id) => showRecord("office-result", id),
-              onOpenOutput: (id) => showRecord("output", id),
-            })
-          ) : (
-            <div className="flex flex-col gap-3">
-              <p className="text-sm text-muted-foreground">
-                The live office is unavailable in this workspace.
-              </p>
-              <Button variant="outline" onClick={onSettings}>
-                Open Settings
-              </Button>
-            </div>
-          );
-        }
-        if (view === "research")
+        if (view === "team")
           return (
-            <ResearchLibrary
+            <Team
               tenderId={overview.tender.id}
-              focusCitationId={focusedCitationId}
-              tenderRevision={overview.tender.revision}
-              workRevision={overview.active_runs
-                .map((run) => `${run.id}:${run.status}`)
-                .sort()
-                .join("|")}
+              managerRunId={
+                overview.active_runs.find((run) =>
+                  ["manager", "conversation"].includes(run.kind),
+                )?.id
+              }
               onSource={showSource}
             />
           );
@@ -290,10 +241,6 @@ function TenderWorkspaceContent({
                 recordId={selectedResult.id}
                 onSource={showSource}
                 onBack={reviewOverview}
-                onPublicCitation={(citationId) => {
-                  setFocusedCitationId(citationId);
-                  open("research");
-                }}
               />
             </div>
           );
@@ -307,56 +254,12 @@ function TenderWorkspaceContent({
             }
             focusedFinding={recordView === "finding" ? recordId : undefined}
             onSource={showSource}
-            onRepair={onRepair}
             onPlan={(id) => showRecord("plan-review", id)}
             onConversation={returnToConversation}
-            onPublicCitation={(citationId) => {
-              setFocusedCitationId(citationId);
-              open("research");
-            }}
           />
         );
       }}
     />
-  );
-}
-
-function OfficeCompatibility({
-  onSettings,
-  revision,
-}: {
-  onSettings: () => void;
-  revision?: number;
-}) {
-  return (
-    <Alert>
-      <TriangleAlert />
-      <AlertTitle>Live office update required</AlertTitle>
-      <AlertDescription className="flex flex-col items-start gap-2">
-        <span>
-          Manager work remains available. Update Quantix before opening staff
-          workspace.
-        </span>
-        <Button
-          type="button"
-          variant="link"
-          size="sm"
-          className="h-auto px-0"
-          onClick={onSettings}
-        >
-          Open Settings
-        </Button>
-        {revision !== undefined ? (
-          <details className="text-xs">
-            <summary className="cursor-pointer">More options</summary>
-            <p className="mt-1">
-              Current office revision: {revision}. Required:{" "}
-              {OFFICE_WORKSPACE_REVISION}.
-            </p>
-          </details>
-        ) : null}
-      </AlertDescription>
-    </Alert>
   );
 }
 
@@ -368,7 +271,6 @@ function ResultPane({
   recordId,
   onSource,
   onBack,
-  onPublicCitation,
 }: {
   tenderId: string;
   tenderRevision: number;
@@ -377,7 +279,6 @@ function ResultPane({
   recordId: string;
   onSource: (source: SourceSelection) => void;
   onBack: () => void;
-  onPublicCitation: (citationId: string) => void;
 }) {
   if (view === "work-product")
     return (
@@ -387,7 +288,6 @@ function ResultPane({
         workRevision={workRevision}
         focusedProductId={recordId}
         onSource={(sourceId) => onSource({ sourceId })}
-        onPublicCitation={onPublicCitation}
         onBack={onBack}
       />
     );
@@ -400,67 +300,12 @@ function ResultPane({
         initiallyOpen
       />
     );
-  return view === "output" ? (
+  return (
     <SavedOutputResult
       tenderId={tenderId}
       recordId={recordId}
       onSource={onSource}
     />
-  ) : (
-    <SavedStaffResult
-      tenderId={tenderId}
-      recordId={recordId}
-      onSource={onSource}
-    />
-  );
-}
-
-function SavedStaffResult({
-  tenderId,
-  recordId,
-  onSource,
-}: {
-  tenderId: string;
-  recordId: string;
-  onSource: (source: SourceSelection) => void;
-}) {
-  const api = useApi();
-  const result = useQuery({
-    queryKey: [tenderPath(tenderId), "office-result", recordId],
-    queryFn: ({ signal }) =>
-      api.get<Schema<"StaffResult">>(
-        `${tenderPath(tenderId)}/office/results/${encodeURIComponent(recordId)}`,
-        signal,
-      ),
-    retry: false,
-  });
-  if (result.isPending) return <Loading>Loading saved result…</Loading>;
-  if (result.error || !result.data)
-    return (
-      <ErrorNotice
-        error={result.error ?? new Error("This saved result is unavailable.")}
-      />
-    );
-  return (
-    <article
-      className="flex flex-col gap-3 rounded-xl border bg-card p-4 text-sm shadow-xs"
-      aria-label="Saved staff result"
-    >
-      <p className="text-xs text-muted-foreground">
-        Saved {formatDate(result.data.created_at)} · Staff version{" "}
-        {result.data.staff_version}
-      </p>
-      <div className="legacy-screen">
-        <StaffDraftContent
-          result={result.data}
-          onSource={onSource}
-          compact
-          renderEvidence={(ids) => (
-            <Citations ids={ids} tenderId={tenderId} onOpen={onSource} />
-          )}
-        />
-      </div>
-    </article>
   );
 }
 
@@ -545,12 +390,7 @@ function SavedOutputResult({
 
 function isResultView(value: string | undefined) {
   return (
-    value === "result" ||
-    value === "staff-result" ||
-    value === "office-result" ||
-    value === "work-product" ||
-    value === "calculation" ||
-    value === "output"
+    value === "work-product" || value === "calculation" || value === "output"
   );
 }
 

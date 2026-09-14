@@ -7,6 +7,7 @@ import json
 import math
 import os
 import posixpath
+import re
 import threading
 import warnings
 import zipfile
@@ -48,6 +49,73 @@ _SPREADSHEET_LOCK = threading.Lock()
 
 _S = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_HEADING_STYLE = re.compile(r"^heading\s*(\d+)$", re.I)
+
+
+def _docx_paragraph_structure(paragraph) -> dict:
+    """Record observed Word heading/style. Do not invent a heading from short lines."""
+
+    text = (paragraph.text or "").strip()
+    style = ""
+    try:
+        style = str(getattr(paragraph.style, "name", "") or "")
+    except (AttributeError, ValueError):
+        style = ""
+    match = _HEADING_STYLE.match(style.strip())
+    if match:
+        return {
+            "block_kind": "heading",
+            "heading": text,
+            "heading_level": int(match.group(1)),
+            "style_name": style,
+        }
+    lowered = style.strip().casefold()
+    if lowered in {"title", "subtitle"}:
+        return {
+            "block_kind": "heading",
+            "heading": text,
+            "heading_level": 0 if lowered == "title" else 1,
+            "style_name": style,
+        }
+    outline = None
+    try:
+        properties = paragraph._element.pPr
+        if properties is not None and properties.outlineLvl is not None:
+            outline = int(properties.outlineLvl.val)
+    except (AttributeError, TypeError, ValueError):
+        outline = None
+    if outline is not None and 0 <= outline <= 8 and text:
+        return {
+            "block_kind": "heading",
+            "heading": text,
+            "heading_level": outline + 1,
+            "style_name": style or None,
+            "heading_source": "outline_level",
+        }
+    return {
+        "block_kind": "word_paragraph",
+        "style_name": style or None,
+    }
+
+
+def _observed_sheet_header(cells: list[dict]) -> tuple[list[dict], bool]:
+    """Use a row as headers only when it is observed text without formulas."""
+
+    if not cells:
+        return [], True
+    if any(item.get("formula") for item in cells):
+        return [], True
+    labels = []
+    for item in cells:
+        value = item.get("value")
+        if not isinstance(value, str) or not value.strip():
+            continue
+        coordinate = str(item.get("coordinate") or "")
+        column = "".join(ch for ch in coordinate if ch.isalpha())
+        labels.append({"column": column, "label": value.strip(), "coordinate": coordinate})
+    if not labels:
+        return [], True
+    return labels, False
 
 
 @dataclass
@@ -348,6 +416,8 @@ def _extract_pdf(path, result, collector, cancelled):
                                 "page_width": page.get_width(),
                                 "page_height": page.get_height(),
                                 "method": "embedded_text",
+                                "block_kind": "page",
+                                "structure_uncertain": True,
                             },
                         )
                     )
@@ -379,9 +449,7 @@ def _read_scanned_pages(path, result, collector, cancelled, pages):
     from .extraction_worker import OCRProcessError, OCRTimeoutError
     from .tesseract_runtime import tesseract_languages
 
-    unreadable = (
-        "This page has no text Quantix can read. It may be blank or scanned; check the page preview."
-    )
+    unreadable = "This page has no text Quantix can read. It may be blank or scanned; check the page preview."
     if extraction_worker.ocr_available().get("available") is not True:
         for number, _width, _height in pages:
             _warn(result, "pdf_no_text", unreadable, f"page:{number}")
@@ -397,7 +465,10 @@ def _read_scanned_pages(path, result, collector, cancelled, pages):
 
     recognised = 0
     with ThreadPoolExecutor(max_workers=OCR_WORKERS, thread_name_prefix="quantix-ocr") as pool:
-        futures = [(number, width, height, pool.submit(recognise, number)) for number, width, height in pages]
+        futures = [
+            (number, width, height, pool.submit(recognise, number))
+            for number, width, height in pages
+        ]
         for number, width, height, future in futures:
             _cancel(cancelled)
             locator = f"page:{number}"
@@ -417,8 +488,14 @@ def _read_scanned_pages(path, result, collector, cancelled, pages):
                     locator,
                     page.text,
                     page=number,
-                    metadata={"page_width": width, "page_height": height, "method": "ocr",
-                              "ocr_confidence": page.confidence},
+                    metadata={
+                        "page_width": width,
+                        "page_height": height,
+                        "method": "ocr",
+                        "ocr_confidence": page.confidence,
+                        "block_kind": "page",
+                        "structure_uncertain": True,
+                    },
                 )
             )
             if page.confidence < OCR_LOW_CONFIDENCE:
@@ -591,6 +668,8 @@ def _read_spreadsheet(path, archive, result, collector, cancelled):
                     continue
                 columns = min(context["max_column"], MAX_COLUMNS)
                 rows = min(context["max_row"], MAX_ROWS)
+                observed_header: list[dict] = []
+                header_uncertain = True
                 if context["max_column"] > MAX_COLUMNS:
                     _warn(
                         result,
@@ -668,6 +747,34 @@ def _read_spreadsheet(path, archive, result, collector, cancelled):
                             + (f" [stored result: {c['cached_value']}]" if c["formula"] else "")
                             for c in cells
                         )
+                        if not observed_header:
+                            observed_header, header_uncertain = _observed_sheet_header(cells)
+                            row_role = (
+                                "observed_header"
+                                if observed_header and not header_uncertain
+                                else "data"
+                            )
+                        else:
+                            row_role = "data"
+                        metadata = {
+                            "cells": cells,
+                            "row": row_number,
+                            "row_hidden": row_number in context["hidden_rows"],
+                            "sheet_state": sheet.sheet_state,
+                            "merged_ranges": [
+                                r
+                                for r in context["merged_ranges"]
+                                if openpyxl.worksheet.cell_range.CellRange(r).min_row
+                                <= row_number
+                                <= openpyxl.worksheet.cell_range.CellRange(r).max_row
+                            ],
+                            "column_interpretation": "unverified",
+                            "block_kind": "spreadsheet_row",
+                            "row_role": row_role,
+                            "header_uncertain": header_uncertain,
+                        }
+                        if row_role == "data" and observed_header:
+                            metadata["header_cells"] = observed_header
                         collector.add(
                             Segment(
                                 f"sheet:{sheet.title}/range:{cell_range}",
@@ -675,20 +782,7 @@ def _read_spreadsheet(path, archive, result, collector, cancelled):
                                 sheet=sheet.title,
                                 cell_range=cell_range,
                                 kind="spreadsheet_row",
-                                metadata={
-                                    "cells": cells,
-                                    "row": row_number,
-                                    "row_hidden": row_number in context["hidden_rows"],
-                                    "sheet_state": sheet.sheet_state,
-                                    "merged_ranges": [
-                                        r
-                                        for r in context["merged_ranges"]
-                                        if openpyxl.worksheet.cell_range.CellRange(r).min_row
-                                        <= row_number
-                                        <= openpyxl.worksheet.cell_range.CellRange(r).max_row
-                                    ],
-                                    "column_interpretation": "unverified",
-                                },
+                                metadata=metadata,
                             )
                         )
     finally:
@@ -713,7 +807,7 @@ def _extract_docx(path, archive, result, collector, cancelled):
     else:
         document = Document(path)
 
-    def blocks(container, prefix="", depth=0):
+    def blocks(container, prefix="", depth=0, section_heading=None, section_level=None):
         if depth > 12:
             _warn(
                 result,
@@ -721,31 +815,81 @@ def _extract_docx(path, archive, result, collector, cancelled):
                 "Deeply nested Word tables were not fully indexed.",
                 prefix,
             )
-            return
+            return section_heading, section_level
         paragraphs = tables = 0
+        heading = section_heading
+        level = section_level
         for block in container.iter_inner_content():
             _cancel(cancelled)
             if isinstance(block, Paragraph):
                 paragraphs += 1
                 if block.text.strip():
+                    observed = _docx_paragraph_structure(block)
+                    kind = (
+                        "heading" if observed.get("block_kind") == "heading" else "word_paragraph"
+                    )
+                    metadata = dict(observed)
+                    if kind == "heading":
+                        heading = observed.get("heading")
+                        level = observed.get("heading_level")
+                    else:
+                        if heading:
+                            metadata["section_heading"] = heading
+                            metadata["heading_level"] = level
                     collector.add(
                         Segment(
-                            f"{prefix}paragraph:{paragraphs}", block.text, kind="word_paragraph"
+                            f"{prefix}paragraph:{paragraphs}",
+                            block.text,
+                            kind=kind,
+                            metadata=metadata,
                         )
                     )
             elif isinstance(block, Table):
                 tables += 1
                 seen_cells = set()
+                first_row_labels = []
                 for row_index, row in enumerate(block.rows, 1):
+                    row_texts = []
                     for cell_index, cell in enumerate(row.cells, 1):
                         if cell._tc in seen_cells:
                             continue
                         seen_cells.add(cell._tc)
+                        label = (cell.text or "").strip()
+                        if label:
+                            row_texts.append(label)
+                        cell_meta = {
+                            "block_kind": "table_cell",
+                            "table_index": tables,
+                            "table_row": row_index,
+                            "table_cell": cell_index,
+                            "header_uncertain": True,
+                        }
+                        if heading:
+                            cell_meta["section_heading"] = heading
+                            cell_meta["heading_level"] = level
+                        if row_index == 1:
+                            first_row_labels = row_texts
+                            cell_meta["row_role"] = "first_row"
+                        elif first_row_labels:
+                            cell_meta["header_cells"] = [
+                                {"label": item} for item in first_row_labels
+                            ]
                         blocks(
                             cell,
                             f"{prefix}table:{tables}/row:{row_index}/cell:{cell_index}/",
                             depth + 1,
+                            heading,
+                            level,
                         )
+                        # Attach table coordinates onto the segments just added for this cell.
+                        cell_prefix = f"{prefix}table:{tables}/row:{row_index}/cell:{cell_index}/"
+                        for segment in result.segments:
+                            if (
+                                segment.locator.startswith(cell_prefix)
+                                and "table_index" not in segment.metadata
+                            ):
+                                segment.metadata.update(cell_meta)
+        return heading, level
 
     blocks(document)
     seen_parts = set()

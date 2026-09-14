@@ -262,6 +262,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tenders/{tender_id}/search-index/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Search Index */
+        post: operations["cancel_search_index_api_tenders__tender_id__search_index_cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tenders/{tender_id}/messages": {
         parameters: {
             query?: never;
@@ -657,15 +674,15 @@ export interface paths {
         patch: operations["update_manager_profile_api_manager_profile_patch"];
         trace?: never;
     };
-    "/api/tenders/{tender_id}/office": {
+    "/api/tenders/{tender_id}/team": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Office */
-        get: operations["get_office_api_tenders__tender_id__office_get"];
+        /** View */
+        get: operations["view_api_tenders__tender_id__team_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -674,15 +691,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tenders/{tender_id}/staff": {
+    "/api/tenders/{tender_id}/team/assignments/{assignment_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Staff */
-        get: operations["get_staff_api_tenders__tender_id__staff_get"];
+        /** Assignment */
+        get: operations["assignment_api_tenders__tender_id__team_assignments__assignment_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -691,7 +708,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tenders/{tender_id}/staff/{staff_id}/lifecycle": {
+    "/api/tenders/{tender_id}/team/staff/{staff_id}/retire": {
         parameters: {
             query?: never;
             header?: never;
@@ -700,15 +717,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Change Staff Lifecycle */
-        post: operations["change_staff_lifecycle_api_tenders__tender_id__staff__staff_id__lifecycle_post"];
+        /** Retire */
+        post: operations["retire_api_tenders__tender_id__team_staff__staff_id__retire_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/tenders/{tender_id}/staff/{staff_id}/preferences": {
+    "/api/tenders/{tender_id}/runs/{run_id}/steering": {
         parameters: {
             query?: never;
             header?: never;
@@ -717,368 +734,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Change Staff Preferences */
-        patch: operations["change_staff_preferences_api_tenders__tender_id__staff__staff_id__preferences_patch"];
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/staff/{staff_id}/notebook": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Notebook */
-        get: operations["get_notebook_api_tenders__tender_id__staff__staff_id__notebook_get"];
-        put?: never;
-        /** Append Notebook */
-        post: operations["append_notebook_api_tenders__tender_id__staff__staff_id__notebook_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/handoffs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Handoffs */
-        get: operations["list_handoffs_api_tenders__tender_id__handoffs_get"];
-        put?: never;
-        /** Transfer Handoff */
-        post: operations["transfer_handoff_api_tenders__tender_id__handoffs_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/handoffs/{handoff_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Handoff */
-        get: operations["read_handoff_api_tenders__tender_id__handoffs__handoff_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/office/deliveries": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Deliver Office Message */
-        post: operations["deliver_office_message_api_tenders__tender_id__office_deliveries_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/office/messages/{message_id}/acknowledge": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Acknowledge Office Message */
-        post: operations["acknowledge_office_message_api_tenders__tender_id__office_messages__message_id__acknowledge_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/office/messages/{message_id}/delivery": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Message Delivery State */
-        get: operations["message_delivery_state_api_tenders__tender_id__office_messages__message_id__delivery_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/office/graphs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Propose Work Graph */
-        post: operations["propose_work_graph_api_tenders__tender_id__office_graphs_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/office/graphs/revisions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Revise Work Graph */
-        post: operations["revise_work_graph_api_tenders__tender_id__office_graphs_revisions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/office/graphs/latest": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Latest Work Graph */
-        get: operations["latest_work_graph_api_tenders__tender_id__office_graphs_latest_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/office/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Office Status */
-        get: operations["office_status_api_tenders__tender_id__office_status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/office/instructions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Instructions */
-        get: operations["list_instructions_api_tenders__tender_id__office_instructions_get"];
-        put?: never;
-        /** Admit Instruction */
-        post: operations["admit_instruction_api_tenders__tender_id__office_instructions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/staff/{staff_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Staff Desk */
-        get: operations["get_staff_desk_api_tenders__tender_id__staff__staff_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/staff/{staff_id}/versions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Staff Versions */
-        get: operations["get_staff_versions_api_tenders__tender_id__staff__staff_id__versions_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/staff/{staff_id}/work-orders": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Staff Work Orders */
-        get: operations["get_staff_work_orders_api_tenders__tender_id__staff__staff_id__work_orders_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/staff/{staff_id}/results": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Staff Results */
-        get: operations["get_staff_results_api_tenders__tender_id__staff__staff_id__results_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/office/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Office Events */
-        get: operations["get_office_events_api_tenders__tender_id__office_events_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/office/messages": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Office Messages */
-        get: operations["get_office_messages_api_tenders__tender_id__office_messages_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/office/assignments": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Office Assignments */
-        get: operations["get_office_assignments_api_tenders__tender_id__office_assignments_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/office/assignments/{assignment_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Office Assignment */
-        get: operations["get_office_assignment_api_tenders__tender_id__office_assignments__assignment_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/office/results/{result_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Office Result */
-        get: operations["get_office_result_api_tenders__tender_id__office_results__result_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/office/assignments/{assignment_id}/receipts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Office Receipts */
-        get: operations["get_office_receipts_api_tenders__tender_id__office_assignments__assignment_id__receipts_get"];
-        put?: never;
-        post?: never;
+        /**
+         * Steer
+         * @description Give the running Manager an instruction it applies at its next turn.
+         */
+        post: operations["steer_api_tenders__tender_id__runs__run_id__steering_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1376,41 +1036,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/mail/settings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Mail Settings */
-        get: operations["mail_settings_api_mail_settings_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Update Settings */
-        patch: operations["update_settings_api_mail_settings_patch"];
-        trace?: never;
-    };
-    "/api/mail/sync": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Sync */
-        post: operations["sync_api_mail_sync_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/tenders/{tender_id}/quotes": {
         parameters: {
             query?: never;
@@ -1474,40 +1099,6 @@ export interface paths {
         get: operations["eml_api_tenders__tender_id__quotes__quote_id__eml_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/quotes/{quote_id}/approve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Approve */
-        post: operations["approve_api_tenders__tender_id__quotes__quote_id__approve_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/quotes/{quote_id}/send": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Send */
-        post: operations["send_api_tenders__tender_id__quotes__quote_id__send_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1601,50 +1192,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tenders/{tender_id}/measurements/calculate": {
+    "/api/tenders/{tender_id}/takeoff": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
-        /** Calculate */
-        post: operations["calculate_api_tenders__tender_id__measurements_calculate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/measurements": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Records */
-        get: operations["records_api_tenders__tender_id__measurements_get"];
-        put?: never;
-        /** Create */
-        post: operations["create_api_tenders__tender_id__measurements_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/measurements/{measurement_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Record */
-        get: operations["record_api_tenders__tender_id__measurements__measurement_id__get"];
+        /** Lines */
+        get: operations["lines_api_tenders__tender_id__takeoff_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1653,7 +1209,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tenders/{tender_id}/measurements/{measurement_id}/link": {
+    "/api/tenders/{tender_id}/takeoff/{line_id}/review": {
         parameters: {
             query?: never;
             header?: never;
@@ -1662,8 +1218,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Link */
-        post: operations["link_api_tenders__tender_id__measurements__measurement_id__link_post"];
+        /** Review */
+        post: operations["review_api_tenders__tender_id__takeoff__line_id__review_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1999,57 +1555,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tenders/{tender_id}/plans/{plan_id}/ai-team": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Team */
-        get: operations["team_api_tenders__tender_id__plans__plan_id__ai_team_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/plans/{plan_id}/ai-team/refresh": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Refresh Team */
-        post: operations["refresh_team_api_tenders__tender_id__plans__plan_id__ai_team_refresh_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/plans/{plan_id}/ai-team/approve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Approve Team */
-        post: operations["approve_team_api_tenders__tender_id__plans__plan_id__ai_team_approve_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/tenders/{tender_id}/ai-usage": {
         parameters: {
             query?: never;
@@ -2307,724 +1812,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/benchmark-adoption": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Decisions */
-        get: operations["decisions_api_benchmark_adoption_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/benchmark-adoption/review": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Review */
-        post: operations["review_api_benchmark_adoption_review_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/benchmark-adoption/reports/{report_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Verified Report */
-        get: operations["verified_report_api_benchmark_adoption_reports__report_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agent-definitions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Definitions */
-        get: operations["list_definitions_api_agent_definitions_get"];
-        put?: never;
-        /** Create Definition */
-        post: operations["create_definition_api_agent_definitions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agent-definitions/{definition_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Definition */
-        get: operations["get_definition_api_agent_definitions__definition_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Edit Definition */
-        patch: operations["edit_definition_api_agent_definitions__definition_id__patch"];
-        trace?: never;
-    };
-    "/api/agent-definitions/{definition_id}/versions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Definition Versions */
-        get: operations["definition_versions_api_agent_definitions__definition_id__versions_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agent-definitions/{definition_id}/duplicate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Duplicate Definition */
-        post: operations["duplicate_definition_api_agent_definitions__definition_id__duplicate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agent-definitions/{definition_id}/retire": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Retire Definition */
-        post: operations["retire_definition_api_agent_definitions__definition_id__retire_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agent-definitions/{definition_id}/export": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Export Definition */
-        get: operations["export_definition_api_agent_definitions__definition_id__export_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/local-code-runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Local Runs */
-        get: operations["local_runs_api_tenders__tender_id__local_code_runs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/local-code-runs/{engine}/{identifier}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Local Detail */
-        get: operations["local_detail_api_tenders__tender_id__local_code_runs__engine___identifier__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/local-code-runs/{engine}/{identifier}/files/{kind}/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Local File */
-        get: operations["local_file_api_tenders__tender_id__local_code_runs__engine___identifier__files__kind___name__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/sandbox": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Status */
-        get: operations["status_api_sandbox_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/sandbox/actions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Action */
-        post: operations["action_api_sandbox_actions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/python-runs/{identifier}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Receipt */
-        get: operations["read_receipt_api_tenders__tender_id__python_runs__identifier__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/python-runs/{identifier}/outputs/{filename}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Output */
-        get: operations["output_api_tenders__tender_id__python_runs__identifier__outputs__filename__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/research/browser/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Browser Status */
-        get: operations["browser_status_api_tenders__tender_id__research_browser_status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/research/browser/setup": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Setup Browser */
-        post: operations["setup_browser_api_tenders__tender_id__research_browser_setup_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/research": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Research */
-        get: operations["list_research_api_tenders__tender_id__research_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/research/receipts/{receipt_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Research Receipt */
-        get: operations["get_research_receipt_api_tenders__tender_id__research_receipts__receipt_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/research/search": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Pending Search */
-        get: operations["pending_search_api_tenders__tender_id__research_search_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/research/search/{request_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Search */
-        get: operations["get_search_api_tenders__tender_id__research_search__request_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/research/fetch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Fetch Public */
-        post: operations["fetch_public_api_tenders__tender_id__research_fetch_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/research/browser/fetch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Fetch Rendered Public */
-        post: operations["fetch_rendered_public_api_tenders__tender_id__research_browser_fetch_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/research/citations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Cite Public */
-        post: operations["cite_public_api_tenders__tender_id__research_citations_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/research/citations/{citation_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Citation */
-        get: operations["get_citation_api_tenders__tender_id__research_citations__citation_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/research/market": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Market */
-        get: operations["list_market_api_tenders__tender_id__research_market_get"];
-        put?: never;
-        /** Record Market */
-        post: operations["record_market_api_tenders__tender_id__research_market_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/memory": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Memory Overview */
-        get: operations["memory_overview_api_tenders__tender_id__memory_get"];
-        put?: never;
-        /** Save Memory */
-        post: operations["save_memory_api_tenders__tender_id__memory_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/memory/working": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Working Memory */
-        get: operations["working_memory_api_tenders__tender_id__memory_working_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/memory/affected": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Affected Memory */
-        get: operations["affected_memory_api_tenders__tender_id__memory_affected_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/memory/{memory_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Memory */
-        get: operations["get_memory_api_tenders__tender_id__memory__memory_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/memory/{memory_id}/promote": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Promote Memory */
-        post: operations["promote_memory_api_tenders__tender_id__memory__memory_id__promote_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/ai/connections/{connection_id}/native-capabilities": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Capabilities */
-        get: operations["capabilities_api_ai_connections__connection_id__native_capabilities_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/native-sessions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Sessions */
-        get: operations["sessions_api_tenders__tender_id__native_sessions_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/runs/{run_id}/native-artifacts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Artifacts */
-        get: operations["artifacts_api_tenders__tender_id__runs__run_id__native_artifacts_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/native-artifacts/{artifact_id}/content": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Artifact Content */
-        get: operations["artifact_content_api_tenders__tender_id__native_artifacts__artifact_id__content_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/native-cleanup": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Cleanup */
-        get: operations["cleanup_api_tenders__tender_id__native_cleanup_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/native-cleanup/{receipt_id}/review": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Review Cleanup */
-        post: operations["review_cleanup_api_tenders__tender_id__native_cleanup__receipt_id__review_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/plans/{plan_id}/review": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Review */
-        get: operations["review_api_tenders__tender_id__plans__plan_id__review_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/plans/{plan_id}/delegation": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Update Delegation */
-        patch: operations["update_delegation_api_tenders__tender_id__plans__plan_id__delegation_patch"];
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/plans/{plan_id}/delegation/artifacts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Delegation Artifacts */
-        get: operations["delegation_artifacts_api_tenders__tender_id__plans__plan_id__delegation_artifacts_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/plans/{plan_id}/review/approve-and-start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Approve And Start */
-        post: operations["approve_and_start_api_tenders__tender_id__plans__plan_id__review_approve_and_start_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/tenders/{tender_id}/submissions": {
         parameters: {
             query?: never;
@@ -3198,40 +1985,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tenders/{tender_id}/watches": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Watch */
-        post: operations["create_watch_api_tenders__tender_id__watches_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/watches/{watch_id}/activate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Activate Watch */
-        post: operations["activate_watch_api_tenders__tender_id__watches__watch_id__activate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/tenders/{tender_id}/calculations": {
         parameters: {
             query?: never;
@@ -3260,75 +2013,6 @@ export interface paths {
         get: operations["get_calculation_api_tenders__tender_id__calculations__calculation_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/reviews": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Reviews */
-        get: operations["list_reviews_api_tenders__tender_id__reviews_get"];
-        put?: never;
-        /** Start Review */
-        post: operations["start_review_api_tenders__tender_id__reviews_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/reviews/{session_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Review */
-        get: operations["get_review_api_tenders__tender_id__reviews__session_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/reviews/{session_id}/contributions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Contribute Review */
-        post: operations["contribute_review_api_tenders__tender_id__reviews__session_id__contributions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/reviews/{session_id}/resolve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Resolve Review */
-        post: operations["resolve_review_api_tenders__tender_id__reviews__session_id__resolve_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3369,40 +2053,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tenders/{tender_id}/transcriptions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Transcribe */
-        post: operations["transcribe_api_tenders__tender_id__transcriptions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/transcriptions/json": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Transcribe Json */
-        post: operations["transcribe_json_api_tenders__tender_id__transcriptions_json_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3437,15 +2087,11 @@ export interface components {
              * @enum {string}
              */
             output_mode?: "auto" | "tool" | "native" | "prompted";
-            /** Native Tools */
-            native_tools?: ("web_search" | "web_fetch" | "code_execution")[];
             /**
              * Max Search Calls
              * @default 3
              */
             max_search_calls: number;
-            /** Max Native Tool Calls */
-            max_native_tool_calls?: number;
             /** Connection Id */
             connection_id: string;
             /** Model Id */
@@ -3455,49 +2101,6 @@ export interface components {
              * @default false
              */
             web_search: boolean;
-        };
-        /** AITeam */
-        AITeam: {
-            /** Plan Id */
-            plan_id: string;
-            /** Policy Revision */
-            policy_revision: number;
-            manager: components["schemas"]["AIRoute"] | null;
-            /** Specialists */
-            specialists: components["schemas"]["AITeamMember"][];
-            /** Fallback Routes */
-            fallback_routes: components["schemas"]["AIRoute"][];
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "proposed" | "approved";
-            /** Warnings */
-            warnings: string[];
-            /** Fingerprint */
-            fingerprint: string;
-        };
-        /** AITeamApproval */
-        AITeamApproval: {
-            /** Fingerprint */
-            fingerprint: string;
-            /**
-             * Engineer Confirmed
-             * @constant
-             */
-            engineer_confirmed: true;
-            /** Rationale */
-            rationale: string;
-        };
-        /** AITeamMember */
-        AITeamMember: {
-            /** Task Id */
-            task_id: string;
-            /** Role */
-            role: string;
-            route: components["schemas"]["AIRoute"];
-            /** Rationale */
-            rationale: string;
         };
         /** AIUsageRecord */
         AIUsageRecord: {
@@ -3517,7 +2120,7 @@ export interface components {
              * Billing
              * @enum {string}
              */
-            billing: "metered" | "subscription" | "local" | "unknown";
+            billing: "metered" | "subscription" | "unknown";
             /** Status */
             status: string;
             /** Requests */
@@ -3552,127 +2155,10 @@ export interface components {
             /** Page */
             page?: number | null;
         };
-        /** AgentDefinitionCreate */
-        AgentDefinitionCreate: {
-            profile: components["schemas"]["StaffProfileDraft"];
-            generation_settings?: components["schemas"]["GenerationSettings"];
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** AgentDefinitionDuplicate */
-        AgentDefinitionDuplicate: {
-            /** Source Version */
-            source_version: number;
-            /** Display Name */
-            display_name: string;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** AgentDefinitionEdit */
-        AgentDefinitionEdit: {
-            /** Expected Version */
-            expected_version: number;
-            profile: components["schemas"]["StaffProfileDraft"];
-            generation_settings?: components["schemas"]["GenerationSettings"];
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /**
-         * AgentDefinitionExport
-         * @description Portable provider-independent fields from one immutable version.
-         */
-        AgentDefinitionExport: {
-            /**
-             * Schema Version
-             * @default 1
-             * @constant
-             */
-            schema_version: 1;
-            /** Definition Id */
-            definition_id: string;
-            /** Version */
-            version: number;
-            /** Fingerprint */
-            fingerprint: string;
-            profile: components["schemas"]["StaffProfileDraft"];
-            generation_settings: components["schemas"]["GenerationSettings"];
-        };
-        /** AgentDefinitionRecord */
-        AgentDefinitionRecord: {
-            /** Id */
-            id: string;
-            /** Version */
-            version: number;
-            /**
-             * Lifecycle
-             * @enum {string}
-             */
-            lifecycle: "active" | "retired";
-            profile: components["schemas"]["StaffProfileDraft"];
-            generation_settings: components["schemas"]["GenerationSettings"];
-            /** Fingerprint */
-            fingerprint: string;
-            /** Source Definition Id */
-            source_definition_id?: string | null;
-            /** Source Definition Version */
-            source_definition_version?: number | null;
-            /** Created At */
-            created_at: string;
-            /** Updated At */
-            updated_at: string;
-        };
-        /** AgentDefinitionRetire */
-        AgentDefinitionRetire: {
-            /** Expected Version */
-            expected_version: number;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** AgentMeasurementProposal */
-        AgentMeasurementProposal: {
-            /** Artifact Id */
-            artifact_id: string;
-            /** Page */
-            page: number;
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "length" | "area" | "count";
-            /** Points */
-            points: [
-                number,
-                number
-            ][];
-            /** Calibration Points */
-            calibration_points?: [
-                number,
-                number
-            ][] | null;
-            /** Calibration Metres */
-            calibration_metres?: string | null;
-            /** Scope Label */
-            scope_label: string;
-            /** Source Ids */
-            source_ids: string[];
-        };
-        /** AgentQuantityProposal */
-        AgentQuantityProposal: {
-            /** Item Id */
-            item_id: string;
-            /** Quantity */
-            quantity: string;
-            /** Calculation */
-            calculation: string;
-            /** Source Ids */
-            source_ids: string[];
-        };
         /** ApprovalRequest */
         ApprovalRequest: {
             /** Rationale */
             rationale: string;
-            /** Ai Team Fingerprint */
-            ai_team_fingerprint?: string | null;
         };
         /** Artifact */
         Artifact: {
@@ -3709,32 +2195,64 @@ export interface components {
             /** Created At */
             created_at: string;
         };
-        /**
-         * ArtifactBasis
-         * @description The exact current artifact version admitted to a reviewed source scope.
-         */
-        ArtifactBasis: {
-            /** Artifact Id */
-            artifact_id: string;
-            /** Version */
-            version: number;
-            /** Content Hash */
-            content_hash: string;
-        };
-        /**
-         * AssignmentPage
-         * @description Bounded Tender-scoped assignment history.
-         */
-        AssignmentPage: {
-            /** Items */
-            items?: components["schemas"]["StaffAssignment"][];
-            /** Next Offset */
-            next_offset?: number | null;
+        /** Assignment */
+        Assignment: {
+            /** Id */
+            id: string;
+            /** Tender Id */
+            tender_id: string;
+            /** Run Id */
+            run_id: string;
+            /** Staff Id */
+            staff_id: string;
+            /** Title */
+            title: string;
+            /** Brief */
+            brief: string;
+            /** Expected Result */
+            expected_result: string;
+            /** Source Ids */
+            source_ids: string[];
+            /** Connection Id */
+            connection_id: string;
+            /** Model Id */
+            model_id: string;
             /**
-             * Has More
-             * @default false
+             * Status
+             * @enum {string}
              */
-            has_more: boolean;
+            status: "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled";
+            /** Question */
+            question?: string | null;
+            /** Answer */
+            answer?: string | null;
+            result?: components["schemas"]["AssignmentResult"] | null;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /** Usage */
+            usage?: {
+                [key: string]: unknown;
+            };
+            /** Created At */
+            created_at: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /** AssignmentResult */
+        AssignmentResult: {
+            /** Summary */
+            summary: string;
+            /** Findings */
+            findings?: components["schemas"]["FindingProposal"][];
+            /** Source Ids */
+            source_ids?: string[];
+            /** Saved Records */
+            saved_records?: {
+                [key: string]: number;
+            };
         };
         /** Attachment */
         Attachment: {
@@ -3802,117 +2320,6 @@ export interface components {
              */
             purpose: "manual" | "before_restore";
         };
-        /** BenchmarkAdoptionDecision */
-        BenchmarkAdoptionDecision: {
-            /** Configuration Hash */
-            configuration_hash: string;
-            /** Report Id */
-            report_id: string;
-            /** Report Hash */
-            report_hash: string;
-            /** Baseline Report Id */
-            baseline_report_id?: string | null;
-            /** Baseline Report Hash */
-            baseline_report_hash?: string | null;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "critical_block" | "review_required" | "accepted";
-            /** Connection Id */
-            connection_id: string;
-            /** Model Id */
-            model_id: string;
-            /** Manager Profile Version */
-            manager_profile_version: number;
-            /** Reasons */
-            reasons: string[];
-            /** Updated At */
-            updated_at: string;
-            /** Review Rationale */
-            review_rationale?: string | null;
-        };
-        /** BenchmarkAdoptionReview */
-        BenchmarkAdoptionReview: {
-            /** Configuration Hash */
-            configuration_hash: string;
-            /** Report Id */
-            report_id: string;
-            /** Report Hash */
-            report_hash: string;
-            /** Baseline Report Id */
-            baseline_report_id: string;
-            /** Baseline Report Hash */
-            baseline_report_hash: string;
-            /**
-             * Engineer Confirmed
-             * @constant
-             */
-            engineer_confirmed: true;
-            /** Rationale */
-            rationale: string;
-        };
-        /** BenchmarkReport */
-        BenchmarkReport: {
-            /** Id */
-            id: string;
-            /** Dataset Version */
-            dataset_version: string;
-            /** Dataset Hash */
-            dataset_hash: string;
-            /**
-             * Evaluator Version
-             * @default 1
-             */
-            evaluator_version: string;
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "dataset_validation" | "deterministic_checks" | "synthetic_executor" | "synthetic_model" | "live";
-            /** Created At */
-            created_at: string;
-            /** Repetitions */
-            repetitions: number;
-            /** Cases */
-            cases?: components["schemas"]["CaseResult"][];
-            /** Validated Cases */
-            validated_cases: number;
-            /** Deterministic Checks */
-            deterministic_checks?: {
-                [key: string]: unknown;
-            }[];
-            /**
-             * Overall Completed
-             * @default false
-             */
-            overall_completed: boolean;
-            /**
-             * Detail
-             * @default
-             */
-            detail: string;
-        };
-        /** Body_transcribe_api_tenders__tender_id__transcriptions_post */
-        Body_transcribe_api_tenders__tender_id__transcriptions_post: {
-            /**
-             * Transcript
-             * @default
-             */
-            transcript: string;
-            /**
-             * Auto Send
-             * @default false
-             */
-            auto_send: boolean;
-            /**
-             * Retain
-             * @default false
-             */
-            retain: boolean;
-            /** Audio */
-            audio?: string | null;
-        };
         /**
          * BriefPoint
          * @description A point already settled for this work, with the Tender sources behind it.
@@ -3968,24 +2375,6 @@ export interface components {
              * @enum {string}
              */
             dependency_state: "current" | "needs_review";
-        };
-        /** BrowserResearchStatusModel */
-        BrowserResearchStatusModel: {
-            /** Ready */
-            ready: boolean;
-            /** Podman Available */
-            podman_available: boolean;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "not_installed" | "prerequisite_required" | "setup_required" | "stopped" | "ready" | "needs_repair" | "busy";
-            /** Image */
-            image: string;
-            /** Image Id */
-            image_id?: string | null;
-            /** Detail */
-            detail: string;
         };
         /** CalculationRecord */
         CalculationRecord: {
@@ -4141,24 +2530,6 @@ export interface components {
             /** Evidence */
             evidence?: string[];
         };
-        /** CaseResult */
-        CaseResult: {
-            /** Case Id */
-            case_id: string;
-            /**
-             * Category
-             * @enum {string}
-             */
-            category: "boq" | "specification_conflict" | "drawing_revision" | "market_observation" | "supplier_comparison" | "integrated_work";
-            /** Repetition */
-            repetition: number;
-            /** Critical */
-            critical: boolean;
-            /** Case Hash */
-            case_hash: string;
-            observed: components["schemas"]["ObservedRun"];
-            scores: components["schemas"]["Scores"];
-        };
         /** ClientBoqInput */
         ClientBoqInput: {
             /** Artifact Id */
@@ -4269,7 +2640,7 @@ export interface components {
              * Protocol
              * @enum {string}
              */
-            protocol: "openai_responses" | "openai_chat" | "anthropic" | "google" | "bedrock" | "mistral" | "cohere" | "codex" | "copilot" | "gemini_cli" | "grok_build" | "claude_agent" | "claude_code";
+            protocol: "openai_responses" | "openai_chat" | "anthropic" | "google" | "codex" | "grok_build";
             /** Base Url */
             base_url?: string | null;
             /**
@@ -4277,13 +2648,13 @@ export interface components {
              * @default api_key
              * @enum {string}
              */
-            auth_type: "api_key" | "environment" | "azure_identity" | "aws_identity" | "google_identity" | "client_login" | "none";
+            auth_type: "api_key" | "environment" | "client_login";
             /**
              * Billing
              * @default metered
              * @enum {string}
              */
-            billing: "metered" | "subscription" | "local" | "unknown";
+            billing: "metered" | "subscription" | "unknown";
             /**
              * Enabled
              * @default true
@@ -4322,19 +2693,19 @@ export interface components {
              * Protocol
              * @enum {string}
              */
-            protocol: "openai_responses" | "openai_chat" | "anthropic" | "google" | "bedrock" | "mistral" | "cohere" | "codex" | "copilot" | "gemini_cli" | "grok_build" | "claude_agent" | "claude_code";
+            protocol: "openai_responses" | "openai_chat" | "anthropic" | "google" | "codex" | "grok_build";
             /** Base Url */
             base_url: string | null;
             /**
              * Auth Type
              * @enum {string}
              */
-            auth_type: "api_key" | "environment" | "azure_identity" | "aws_identity" | "google_identity" | "client_login" | "none";
+            auth_type: "api_key" | "environment" | "client_login";
             /**
              * Billing
              * @enum {string}
              */
-            billing: "metered" | "subscription" | "local" | "unknown";
+            billing: "metered" | "subscription" | "unknown";
             /** Enabled */
             enabled: boolean;
             /** Environment Key */
@@ -4384,36 +2755,6 @@ export interface components {
             activities: components["schemas"]["ProgrammeActivity"][];
             /** Assumptions */
             assumptions?: string[];
-        };
-        /** CoordinationRequest */
-        CoordinationRequest: {
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "calculation_handoff" | "review_challenge" | "change_notice" | "work_transfer" | "escalation" | "question";
-            /** Text */
-            text: string;
-            /** Root Run Id */
-            root_run_id: string;
-            /** Recipient Staff Id */
-            recipient_staff_id: string;
-            /** Recipient Assignment Id */
-            recipient_assignment_id?: string | null;
-            /** Source Ids */
-            source_ids?: string[];
-            /** Source Versions */
-            source_versions?: number[];
-            /** Reply To */
-            reply_to?: string | null;
-            /** Required Response */
-            required_response?: string | null;
-            /** Idempotency Key */
-            idempotency_key: string;
-            /** Checked */
-            checked?: boolean | null;
-            /** Accepted */
-            accepted?: boolean | null;
         };
         /** Coverage */
         Coverage: {
@@ -4471,278 +2812,6 @@ export interface components {
             /** Rationale */
             rationale: string;
         };
-        /**
-         * DelegationArtifactOption
-         * @description A current source artifact available to the delegation editor.
-         */
-        DelegationArtifactOption: {
-            /** Artifact Id */
-            artifact_id: string;
-            /** Name */
-            name: string;
-            /** Display Name */
-            display_name: string;
-            /** Relative Path */
-            relative_path: string;
-            /** Version */
-            version: number;
-            /** Content Hash */
-            content_hash: string;
-            /** Status */
-            status: string;
-        };
-        /**
-         * DelegationArtifactOptionPage
-         * @description A bounded source-choice page for large Tender artifact catalogs.
-         */
-        DelegationArtifactOptionPage: {
-            /** Items */
-            items?: components["schemas"]["DelegationArtifactOption"][];
-            /** Next Offset */
-            next_offset?: number | null;
-            /** Total */
-            total: number;
-        };
-        /**
-         * DelegationEnvelope
-         * @description Explicit scope and aggregate limits acquired by one plan approval.
-         */
-        DelegationEnvelope: {
-            /**
-             * Version
-             * @default 1
-             * @constant
-             */
-            version: 1;
-            /** Purpose */
-            purpose: string;
-            /**
-             * Source Scope
-             * @enum {string}
-             */
-            source_scope: "reviewed_tender" | "selected_sources";
-            /** Artifacts */
-            artifacts?: components["schemas"]["ArtifactBasis"][];
-            /** Tools */
-            tools?: components["schemas"]["ToolCapability"][];
-            /** Native Tools */
-            native_tools?: {
-                [key: string]: components["schemas"]["ReviewedNativeTools"];
-            };
-            /** Code Runtimes */
-            code_runtimes?: components["schemas"]["ReviewedCodeRuntime"][];
-            /** Allowed Draft Outputs */
-            allowed_draft_outputs: string[];
-            /** Route Options */
-            route_options: components["schemas"]["DelegationRouteOption"][];
-            /** Max Staff */
-            max_staff: number;
-            /** Max Assignments */
-            max_assignments: number;
-            /** Max Depth */
-            max_depth: number;
-            /** Max Concurrency */
-            max_concurrency: number;
-            /** Max Requests */
-            max_requests: number;
-            /** Max Search Calls */
-            max_search_calls: number;
-            /** Run Budget Usd */
-            run_budget_usd?: number | null;
-            /** Tender Budget Usd */
-            tender_budget_usd?: number | null;
-        };
-        /**
-         * DelegationOptions
-         * @description Bounded current choices and the saved selections for a future editor.
-         */
-        DelegationOptions: {
-            /** Artifacts */
-            artifacts?: components["schemas"]["DelegationArtifactOption"][];
-            /** Tools */
-            tools?: components["schemas"]["ToolCapability"][];
-            /** Code Runtimes */
-            code_runtimes?: components["schemas"]["ReviewedCodeRuntime"][];
-            /** Route Options */
-            route_options?: components["schemas"]["DelegationRouteOption"][];
-            /** Supported Draft Outputs */
-            supported_draft_outputs?: string[];
-            selected?: components["schemas"]["DelegationProposal"] | null;
-        };
-        /**
-         * DelegationProposal
-         * @description Persisted plan-scoped selection with a compare-and-swap version.
-         */
-        DelegationProposal: {
-            /** Tender Id */
-            tender_id: string;
-            /** Plan Id */
-            plan_id: string;
-            /** Version */
-            version: number;
-            /**
-             * Source Scope
-             * @enum {string}
-             */
-            source_scope: "reviewed_tender" | "selected_sources";
-            /** Artifact Ids */
-            artifact_ids?: string[];
-            /** Tool Ids */
-            tool_ids?: string[];
-            /** Native Tools */
-            native_tools?: {
-                [key: string]: components["schemas"]["ReviewedNativeTools"];
-            };
-            /** Code Runtimes */
-            code_runtimes?: components["schemas"]["ReviewedCodeRuntime"][];
-            /** Allowed Draft Outputs */
-            allowed_draft_outputs: string[];
-            /** Route Option Ids */
-            route_option_ids: string[];
-            /** Max Staff */
-            max_staff: number;
-            /** Max Assignments */
-            max_assignments: number;
-            /**
-             * Max Depth
-             * @default 1
-             */
-            max_depth: number;
-            /**
-             * Max Concurrency
-             * @default 1
-             */
-            max_concurrency: number;
-            /** Max Requests */
-            max_requests: number;
-            /** Max Search Calls */
-            max_search_calls: number;
-            /** Updated At */
-            updated_at: string;
-        };
-        /**
-         * DelegationProposalEdit
-         * @description Engineer-controlled delegation selections, without authority fields.
-         */
-        DelegationProposalEdit: {
-            /** Expected Version */
-            expected_version: number;
-            /**
-             * Source Scope
-             * @enum {string}
-             */
-            source_scope: "reviewed_tender" | "selected_sources";
-            /** Artifact Ids */
-            artifact_ids?: string[];
-            /** Tool Ids */
-            tool_ids?: string[];
-            /** Native Tools */
-            native_tools?: {
-                [key: string]: components["schemas"]["ReviewedNativeTools"];
-            };
-            /** Code Runtimes */
-            code_runtimes?: components["schemas"]["ReviewedCodeRuntime"][];
-            /** Allowed Draft Outputs */
-            allowed_draft_outputs: string[];
-            /** Route Option Ids */
-            route_option_ids: string[];
-            /** Max Staff */
-            max_staff: number;
-            /** Max Assignments */
-            max_assignments: number;
-            /**
-             * Max Depth
-             * @default 1
-             */
-            max_depth: number;
-            /**
-             * Max Concurrency
-             * @default 1
-             */
-            max_concurrency: number;
-            /** Max Requests */
-            max_requests: number;
-            /** Max Search Calls */
-            max_search_calls: number;
-        };
-        /**
-         * DelegationRouteOption
-         * @description One exact route alternative displayed during plan review.
-         */
-        DelegationRouteOption: {
-            /** Id */
-            id: string;
-            route: components["schemas"]["AIRoute"];
-            /** Connection Revision */
-            connection_revision: number;
-            /** Model Revision */
-            model_revision: string;
-            /** Model */
-            model: {
-                [key: string]: unknown;
-            };
-            /** Account Name */
-            account_name: string;
-            /** Provider */
-            provider: string;
-            /** Data Destination */
-            data_destination: string;
-            /**
-             * Billing
-             * @enum {string}
-             */
-            billing: "metered" | "subscription" | "unknown" | "local";
-            /**
-             * Provider Managed Extras
-             * @default false
-             */
-            provider_managed_extras: boolean;
-            /**
-             * Readiness
-             * @default ready
-             * @enum {string}
-             */
-            readiness: "ready" | "missing" | "unknown";
-        };
-        /** DeliveryReceipt */
-        DeliveryReceipt: {
-            /** Message Id */
-            message_id: string;
-            /** Recipient Assignment Id */
-            recipient_assignment_id?: string | null;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "delivered" | "acknowledged" | "inspected";
-            /** Extent */
-            extent: string;
-            /** Required Response */
-            required_response?: string | null;
-            /** At */
-            at: string;
-            /**
-             * Replayed
-             * @default false
-             */
-            replayed: boolean;
-        };
-        /** DependencyImpact */
-        DependencyImpact: {
-            /** Owner Kind */
-            owner_kind: string;
-            /** Owner Id */
-            owner_id: string;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "current" | "needs_review";
-            /** Review Reasons */
-            review_reasons: string[];
-            /** Dependencies */
-            dependencies: components["schemas"]["MemoryDependency"][];
-        };
         /** DiagnosticEventAck */
         DiagnosticEventAck: {
             /** Recorded */
@@ -4766,20 +2835,6 @@ export interface components {
             max_file_bytes: number;
             /** Backup Count */
             backup_count: number;
-        };
-        /**
-         * DraftDocumentProposal
-         * @description Routine draft content proposed inside an engineer-approved work plan.
-         */
-        DraftDocumentProposal: {
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "boq_xlsx" | "analysis_docx" | "technical_docx" | "registers_xlsx" | "comparison_xlsx" | "programme_xlsx";
-            /** Task Id */
-            task_id?: string | null;
-            programme?: components["schemas"]["ConstructionProgramme"] | null;
         };
         /** DraftInput */
         DraftInput: {
@@ -4931,6 +2986,10 @@ export interface components {
              * @default 0
              */
             score: number;
+            /** Extraction Id */
+            extraction_id?: string | null;
+            /** Extraction Current */
+            extraction_current?: boolean | null;
         };
         /** Finding */
         Finding: {
@@ -4961,15 +3020,6 @@ export interface components {
             created_at: string;
             /** Updated At */
             updated_at: string;
-        };
-        /** FindingAnswer */
-        FindingAnswer: {
-            /** Code */
-            code: string;
-            /** Description */
-            description: string;
-            /** Evidence */
-            evidence?: string[];
         };
         /** FindingProposal */
         FindingProposal: {
@@ -5027,135 +3077,16 @@ export interface components {
              * @enum {string}
              */
             output_mode: "auto" | "tool" | "native" | "prompted";
-            /** Native Tools */
-            native_tools?: ("web_search" | "web_fetch" | "code_execution")[];
             /**
              * Max Search Calls
              * @default 3
              */
             max_search_calls: number;
-            /**
-             * Max Native Tool Calls
-             * @default 3
-             */
-            max_native_tool_calls: number;
-        };
-        /** GraphDraft */
-        GraphDraft: {
-            /** Outcome */
-            outcome: string;
-            /** Root Run Id */
-            root_run_id: string;
-            /** Nodes */
-            nodes: components["schemas"]["GraphNodeDraft"][];
-            /** Engineer Message Id */
-            engineer_message_id?: string | null;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** GraphNodeDraft */
-        GraphNodeDraft: {
-            /** Key */
-            key: string;
-            /** Brief */
-            brief: string;
-            /** Expected Output */
-            expected_output: string;
-            /** Completion Criteria */
-            completion_criteria: string;
-            /** Owner Staff Id */
-            owner_staff_id?: string | null;
-            /** Prerequisite Keys */
-            prerequisite_keys?: string[];
-        };
-        /** GraphRevisionRequest */
-        GraphRevisionRequest: {
-            /** Expected Revision */
-            expected_revision: number;
-            /** Root Run Id */
-            root_run_id: string;
-            /** Reason */
-            reason: string;
-            /** Nodes */
-            nodes: components["schemas"]["GraphNodeDraft"][];
-            /** Idempotency Key */
-            idempotency_key: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
-        };
-        /** Handoff */
-        Handoff: {
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Sender Staff Id */
-            sender_staff_id: string;
-            /** Recipient Staff Id */
-            recipient_staff_id: string;
-            /** Result Id */
-            result_id: string;
-            /** Purpose */
-            purpose: string;
-            /** Basis Fingerprint */
-            basis_fingerprint: string;
-            /**
-             * Applicability
-             * @default current
-             * @enum {string}
-             */
-            applicability: "current" | "needs_review" | "historical";
-            /** Created At */
-            created_at: string;
-        };
-        /** HandoffPage */
-        HandoffPage: {
-            /** Items */
-            items?: components["schemas"]["HandoffView"][];
-            /** Next Cursor */
-            next_cursor?: string | null;
-            /**
-             * Total
-             * @default 0
-             */
-            total: number;
-        };
-        /** HandoffPayload */
-        HandoffPayload: {
-            handoff: components["schemas"]["Handoff"];
-            /** Items */
-            items?: {
-                [key: string]: unknown;
-            }[];
-            /** Next Offset */
-            next_offset?: number | null;
-            /** Total Rows */
-            total_rows: number;
-            /** Exact Versions */
-            exact_versions?: {
-                [key: string]: unknown;
-            };
-            /**
-             * Applicability
-             * @enum {string}
-             */
-            applicability: "current" | "needs_review" | "historical";
-        };
-        /** HandoffView */
-        HandoffView: {
-            handoff: components["schemas"]["Handoff"];
-            /**
-             * Direction
-             * @enum {string}
-             */
-            direction: "received" | "sent";
-            /** Counterpart Staff Id */
-            counterpart_staff_id: string;
-            /** Counterpart Display Name */
-            counterpart_display_name: string;
         };
         /** Health */
         Health: {
@@ -5171,11 +3102,6 @@ export interface components {
              * @default 1
              */
             workspace_revision: number;
-            /**
-             * Office Revision
-             * @default 0
-             */
-            office_revision: number;
             /**
              * Reset Pending
              * @default false
@@ -5194,19 +3120,6 @@ export interface components {
         ImportRequest: {
             /** Source Path */
             source_path: string;
-        };
-        /** IndependentCheck */
-        IndependentCheck: {
-            /** Creator Actor Id */
-            creator_actor_id: string;
-            /** Reviewer Actor Id */
-            reviewer_actor_id: string;
-            /** Reviewer Assignment Id */
-            reviewer_assignment_id: string;
-            /** Reviewer Result Id */
-            reviewer_result_id: string;
-            /** Evidence */
-            evidence: string[];
         };
         /** InspectBackupRequest */
         InspectBackupRequest: {
@@ -5417,233 +3330,6 @@ export interface components {
             /** Is Current */
             is_current: boolean;
         };
-        /** LocalCodeDetail */
-        LocalCodeDetail: {
-            run: components["schemas"]["LocalCodeRun"];
-            /** Code */
-            code: string;
-            /** Code Sha256 */
-            code_sha256: string;
-            /**
-             * Record Integrity
-             * @enum {string}
-             */
-            record_integrity: "verified" | "legacy_hashes_only";
-            /** Limits */
-            limits: {
-                [key: string]: unknown;
-            };
-            /** Runtime */
-            runtime: {
-                [key: string]: unknown;
-            };
-            /** Inputs */
-            inputs?: components["schemas"]["LocalCodeFile"][];
-            /** Input Values */
-            input_values?: {
-                [key: string]: unknown;
-            } | null;
-            /** Inputs Sha256 */
-            inputs_sha256?: string | null;
-            /** Outputs */
-            outputs?: components["schemas"]["LocalCodeFile"][];
-            /** Logs */
-            logs?: components["schemas"]["LocalCodeFile"][];
-            /**
-             * Stdout
-             * @default
-             */
-            stdout: string;
-            /**
-             * Stderr
-             * @default
-             */
-            stderr: string;
-            /**
-             * Printed
-             * @default
-             */
-            printed: string;
-            /** Output */
-            output?: unknown;
-            /** Calls */
-            calls?: {
-                [key: string]: unknown;
-            }[];
-        };
-        /** LocalCodeFile */
-        LocalCodeFile: {
-            /** Name */
-            name: string;
-            /** Size Bytes */
-            size_bytes: number;
-            /** Sha256 */
-            sha256: string;
-            /** Id */
-            id?: string | null;
-            /** Source Version */
-            source_version?: string | null;
-        };
-        /** LocalCodePage */
-        LocalCodePage: {
-            /** Items */
-            items: components["schemas"]["LocalCodeRun"][];
-            /** Next Cursor */
-            next_cursor?: string | null;
-        };
-        /** LocalCodeRun */
-        LocalCodeRun: {
-            /** Id */
-            id: string;
-            /**
-             * Engine
-             * @enum {string}
-             */
-            engine: "monty" | "python";
-            /** Root Run Id */
-            root_run_id: string;
-            /** Actor Id */
-            actor_id?: string | null;
-            /** Assignment Id */
-            assignment_id?: string | null;
-            /**
-             * Legacy Attribution
-             * @default false
-             */
-            legacy_attribution: boolean;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "running" | "completed" | "failed" | "cancelled" | "interrupted";
-            /** Phase */
-            phase: string;
-            /** Created At */
-            created_at: string;
-            /**
-             * Duration Seconds
-             * @default 0
-             */
-            duration_seconds: number;
-            /**
-             * Detail
-             * @default
-             */
-            detail: string;
-            /**
-             * Root Active
-             * @default false
-             */
-            root_active: boolean;
-        };
-        /** MailSettings */
-        MailSettings: {
-            /**
-             * Smtp Host
-             * @default
-             */
-            smtp_host: string;
-            /**
-             * Smtp Port
-             * @default 465
-             */
-            smtp_port: number;
-            /**
-             * Smtp Security
-             * @default ssl
-             * @enum {string}
-             */
-            smtp_security: "ssl" | "starttls";
-            /**
-             * Smtp Username
-             * @default
-             */
-            smtp_username: string;
-            /**
-             * From Address
-             * @default
-             */
-            from_address: string;
-            /**
-             * Imap Host
-             * @default
-             */
-            imap_host: string;
-            /**
-             * Imap Port
-             * @default 993
-             */
-            imap_port: number;
-            /**
-             * Imap Username
-             * @default
-             */
-            imap_username: string;
-            /**
-             * Imap Mailbox
-             * @default INBOX
-             */
-            imap_mailbox: string;
-            /** Smtp Ready */
-            smtp_ready: boolean;
-            /** Imap Ready */
-            imap_ready: boolean;
-            /** Detail */
-            detail: string;
-        };
-        /** MailSettingsPatch */
-        MailSettingsPatch: {
-            /**
-             * Smtp Host
-             * @default
-             */
-            smtp_host: string;
-            /**
-             * Smtp Port
-             * @default 465
-             */
-            smtp_port: number;
-            /**
-             * Smtp Security
-             * @default ssl
-             * @enum {string}
-             */
-            smtp_security: "ssl" | "starttls";
-            /**
-             * Smtp Username
-             * @default
-             */
-            smtp_username: string;
-            /**
-             * From Address
-             * @default
-             */
-            from_address: string;
-            /**
-             * Imap Host
-             * @default
-             */
-            imap_host: string;
-            /**
-             * Imap Port
-             * @default 993
-             */
-            imap_port: number;
-            /**
-             * Imap Username
-             * @default
-             */
-            imap_username: string;
-            /**
-             * Imap Mailbox
-             * @default INBOX
-             */
-            imap_mailbox: string;
-            /** Smtp Password */
-            smtp_password?: string | null;
-            /** Imap Password */
-            imap_password?: string | null;
-        };
         /**
          * ManagerProfile
          * @description An immutable, server-versioned Tender Manager snapshot.
@@ -5753,209 +3439,6 @@ export interface components {
             /** Evidence Hash */
             evidence_hash: string;
         };
-        /** MarketObservation */
-        MarketObservation: {
-            /**
-             * Basis
-             * @enum {string}
-             */
-            basis: "observed_quotation" | "published_price" | "estimate";
-            /** Product */
-            product: string;
-            /** Specification */
-            specification: string;
-            /** Value */
-            value: string;
-            /** Unit */
-            unit: string;
-            /** Geography */
-            geography: string;
-            /** Currency */
-            currency: string;
-            /**
-             * Tax Basis
-             * @enum {string}
-             */
-            tax_basis: "excluding_vat" | "including_vat" | "unknown";
-            /** Delivery Terms */
-            delivery_terms: string;
-            /** Observed On */
-            observed_on: string;
-            /** Valid Until */
-            valid_until?: string | null;
-            /** Citation Ids */
-            citation_ids: string[];
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Run Id */
-            run_id?: string | null;
-            /** Actor Id */
-            actor_id: string;
-            /** Citations */
-            citations: components["schemas"]["ResearchCitation"][];
-            /** Created At */
-            created_at: string;
-            /** Needs Recheck */
-            needs_recheck: boolean;
-            /** Review Reasons */
-            review_reasons: string[];
-        };
-        /** MarketObservationCommand */
-        MarketObservationCommand: {
-            /**
-             * Basis
-             * @enum {string}
-             */
-            basis: "observed_quotation" | "published_price" | "estimate";
-            /** Product */
-            product: string;
-            /** Specification */
-            specification: string;
-            /** Value */
-            value: string;
-            /** Unit */
-            unit: string;
-            /** Geography */
-            geography: string;
-            /** Currency */
-            currency: string;
-            /**
-             * Tax Basis
-             * @enum {string}
-             */
-            tax_basis: "excluding_vat" | "including_vat" | "unknown";
-            /** Delivery Terms */
-            delivery_terms: string;
-            /** Observed On */
-            observed_on: string;
-            /** Valid Until */
-            valid_until?: string | null;
-            /** Citation Ids */
-            citation_ids: string[];
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** MeasurementCalculation */
-        MeasurementCalculation: {
-            source: components["schemas"]["MeasurementPage"];
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "length" | "area" | "count";
-            /** Points */
-            points: [
-                number,
-                number
-            ][];
-            /** Calibration Points */
-            calibration_points: [
-                number,
-                number
-            ][] | null;
-            /** Calibration Metres */
-            calibration_metres: string | null;
-            /** Quantity */
-            quantity: string;
-            /**
-             * Unit
-             * @enum {string}
-             */
-            unit: "m" | "m2" | "nr";
-            /** Calculation */
-            calculation: string;
-            /** Calculation Version */
-            calculation_version: string;
-            /**
-             * Coordinate System
-             * @constant
-             */
-            coordinate_system: "normalized_top_left";
-            /** Precision Note */
-            precision_note: string;
-        };
-        /** MeasurementCreate */
-        MeasurementCreate: {
-            /**
-             * Engineer Confirmed
-             * @constant
-             */
-            engineer_confirmed: true;
-            /** Rationale */
-            rationale: string;
-            /** Artifact Id */
-            artifact_id: string;
-            /** Page */
-            page: number;
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "length" | "area" | "count";
-            /** Points */
-            points: [
-                number,
-                number
-            ][];
-            /** Calibration Points */
-            calibration_points?: [
-                number,
-                number
-            ][] | null;
-            /** Calibration Metres */
-            calibration_metres?: string | null;
-            /** Scope Label */
-            scope_label: string;
-        };
-        /** MeasurementInput */
-        MeasurementInput: {
-            /** Artifact Id */
-            artifact_id: string;
-            /** Page */
-            page: number;
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "length" | "area" | "count";
-            /** Points */
-            points: [
-                number,
-                number
-            ][];
-            /** Calibration Points */
-            calibration_points?: [
-                number,
-                number
-            ][] | null;
-            /** Calibration Metres */
-            calibration_metres?: string | null;
-        };
-        /** MeasurementLink */
-        MeasurementLink: {
-            /**
-             * Engineer Confirmed
-             * @constant
-             */
-            engineer_confirmed: true;
-            /** Rationale */
-            rationale: string;
-            /** Item Id */
-            item_id: string;
-        };
-        /** MeasurementLinkRecord */
-        MeasurementLinkRecord: {
-            /** Item Id */
-            item_id: string;
-            /** Proposal Id */
-            proposal_id: string;
-            /** Rationale */
-            rationale: string;
-            /** Created At */
-            created_at: string;
-        };
         /** MeasurementPage */
         MeasurementPage: {
             /** Artifact Id */
@@ -5979,155 +3462,6 @@ export interface components {
             ];
             /** Is Current */
             is_current: boolean;
-        };
-        /** MeasurementRecord */
-        MeasurementRecord: {
-            source: components["schemas"]["MeasurementPage"];
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "length" | "area" | "count";
-            /** Points */
-            points: [
-                number,
-                number
-            ][];
-            /** Calibration Points */
-            calibration_points: [
-                number,
-                number
-            ][] | null;
-            /** Calibration Metres */
-            calibration_metres: string | null;
-            /** Quantity */
-            quantity: string;
-            /**
-             * Unit
-             * @enum {string}
-             */
-            unit: "m" | "m2" | "nr";
-            /** Calculation */
-            calculation: string;
-            /** Calculation Version */
-            calculation_version: string;
-            /**
-             * Coordinate System
-             * @constant
-             */
-            coordinate_system: "normalized_top_left";
-            /** Precision Note */
-            precision_note: string;
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Source Id */
-            source_id: string;
-            /** Scope Label */
-            scope_label: string;
-            /**
-             * Status
-             * @constant
-             */
-            status: "proposed";
-            /**
-             * Origin
-             * @enum {string}
-             */
-            origin: "engineer" | "agent";
-            /** Reviewed At */
-            reviewed_at: string | null;
-            /** Review Rationale */
-            review_rationale: string | null;
-            /** Run Id */
-            run_id?: string | null;
-            /** Supporting Source Ids */
-            supporting_source_ids?: string[];
-            /** Supporting Sources */
-            supporting_sources?: components["schemas"]["MeasurementSupportingSource"][];
-            /** Is Current */
-            is_current: boolean;
-            /** Created At */
-            created_at: string;
-            /** Links */
-            links: components["schemas"]["MeasurementLinkRecord"][];
-            /** Source Available */
-            source_available: boolean;
-            /** Stale Reasons */
-            stale_reasons: string[];
-        };
-        /** MeasurementSupportingSource */
-        MeasurementSupportingSource: {
-            /** Source Id */
-            source_id: string;
-            /** Artifact Id */
-            artifact_id: string;
-            /** Artifact Name */
-            artifact_name: string;
-            /** Relative Path */
-            relative_path: string;
-            /** Locator */
-            locator: string;
-            /** Page */
-            page: number | null;
-            /** Version */
-            version: number;
-            /** Content Hash */
-            content_hash: string;
-            /** Evidence Hash */
-            evidence_hash: string;
-            /** Kind */
-            kind: string;
-        };
-        /** MemoryDependency */
-        MemoryDependency: {
-            /** Source Id */
-            source_id: string;
-            /** Artifact Id */
-            artifact_id: string;
-            /** Artifact Version */
-            artifact_version: number;
-            /** Content Hash */
-            content_hash: string;
-            /** Evidence Hash */
-            evidence_hash: string;
-            /** Current */
-            current: boolean;
-            /** Reason */
-            reason?: string | null;
-        };
-        /** MemoryOverview */
-        MemoryOverview: {
-            /** Working Memory */
-            working_memory: components["schemas"]["WorkingMemoryRecord"][];
-            /** Approved Decisions */
-            approved_decisions: {
-                [key: string]: unknown;
-            }[];
-            /** Company Knowledge */
-            company_knowledge: {
-                [key: string]: unknown;
-            }[];
-        };
-        /** MemoryPromotionRequest */
-        MemoryPromotionRequest: {
-            /**
-             * Category
-             * @enum {string}
-             */
-            category: "preference" | "method" | "reference" | "price" | "tax";
-            /**
-             * Engineer Confirmed
-             * @constant
-             */
-            engineer_confirmed: true;
-            /** Rationale */
-            rationale: string;
-            /** Verified On */
-            verified_on?: string | null;
-            /** Recheck After */
-            recheck_after?: string | null;
         };
         /** Message */
         Message: {
@@ -6185,10 +3519,6 @@ export interface components {
             temperature?: boolean | null;
             /** Top P */
             top_p?: boolean | null;
-            /** Web Fetch */
-            web_fetch?: boolean | null;
-            /** Code Execution */
-            code_execution?: boolean | null;
             /** Tools */
             tools?: boolean | null;
             /** Structured Output */
@@ -6237,146 +3567,6 @@ export interface components {
         MutationReceipt: {
             /** Ok */
             ok: boolean;
-        };
-        /** NativeArtifact */
-        NativeArtifact: {
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Run Id */
-            run_id: string;
-            /** Filename */
-            filename: string;
-            /** Size Bytes */
-            size_bytes: number;
-            /** Content Hash */
-            content_hash: string;
-            /**
-             * Origin
-             * @default provider_code
-             */
-            origin: string;
-            /**
-             * Status
-             * @default unreviewed
-             */
-            status: string;
-            /** Input Artifacts */
-            input_artifacts?: components["schemas"]["NativeUploadArtifact"][];
-            /** Actor Id */
-            actor_id?: string | null;
-            /** Assignment Id */
-            assignment_id?: string | null;
-            /** Connection Id */
-            connection_id?: string | null;
-            /** Model Id */
-            model_id?: string | null;
-        };
-        /** NativeCleanupReceipt */
-        NativeCleanupReceipt: {
-            /** Id */
-            id: string;
-            /** Run Id */
-            run_id: string;
-            /** Connection Id */
-            connection_id: string;
-            /** Connection Revision */
-            connection_revision: number;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "upload" | "container";
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "pending" | "uncertain";
-            /** Created At */
-            created_at: string;
-        };
-        /** NativeCleanupReview */
-        NativeCleanupReview: {
-            /**
-             * Engineer Confirmed
-             * @constant
-             */
-            engineer_confirmed: true;
-            /** Rationale */
-            rationale: string;
-        };
-        /** NativeClientCapability */
-        NativeClientCapability: {
-            /** Id */
-            id: string;
-            /**
-             * Origin
-             * @enum {string}
-             */
-            origin: "client" | "quantix";
-            /** Supported */
-            supported: boolean;
-            /** Detail */
-            detail: string;
-            /** Source */
-            source: string;
-        };
-        /** NativeCodePrice */
-        NativeCodePrice: {
-            /** Per Session Usd */
-            per_session_usd: number;
-            /** Source */
-            source: string;
-            /** As Of */
-            as_of: string;
-        };
-        /** NativeSessionBinding */
-        NativeSessionBinding: {
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Protocol
-             * @enum {string}
-             */
-            protocol: "codex" | "grok_build";
-            /** Connection Id */
-            connection_id: string;
-            /** Connection Revision */
-            connection_revision: number;
-            /** Model Id */
-            model_id: string;
-            /** Runtime Revision */
-            runtime_revision: string;
-            /** Profile Id */
-            profile_id: string;
-            /** Profile Version */
-            profile_version: number;
-            /** Scope Fingerprint */
-            scope_fingerprint: string;
-            /** Settings Fingerprint */
-            settings_fingerprint: string;
-            /** Provider Session Id */
-            provider_session_id?: string | null;
-            /**
-             * State
-             * @default prepared
-             * @enum {string}
-             */
-            state: "prepared" | "running" | "completed" | "interrupted" | "failed" | "incompatible";
-        };
-        /** NativeUploadArtifact */
-        NativeUploadArtifact: {
-            /** Artifact Id */
-            artifact_id: string;
-            /** Version */
-            version: number;
-            /** Content Hash */
-            content_hash: string;
         };
         /** NodeDecision */
         NodeDecision: {
@@ -6458,468 +3648,6 @@ export interface components {
             related_boq_item_ids: string[];
             /** Decisions */
             decisions: components["schemas"]["MapDecisionRecord"][];
-        };
-        /** NodeStatus */
-        NodeStatus: {
-            /** Key */
-            key: string;
-            /**
-             * Derived
-             * @enum {string}
-             */
-            derived: "ready" | "waiting" | "working" | "completed" | "needs_owner" | "needs_attempt";
-            /** Waiting On */
-            waiting_on?: string[];
-            /** Remedy */
-            remedy: string;
-        };
-        /** NotebookEntry */
-        NotebookEntry: {
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "finding" | "assumption" | "open_question" | "failed_approach" | "handover" | "preference";
-            /** Text */
-            text: string;
-            /** Refs */
-            refs?: string[];
-            /**
-             * Applicability
-             * @default current_assignment
-             */
-            applicability: string;
-            /** Supersedes Id */
-            supersedes_id?: string | null;
-            /** Assignment Id */
-            assignment_id?: string | null;
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Staff Id */
-            staff_id: string;
-            /** Created At */
-            created_at: string;
-            /** Actor Id */
-            actor_id?: string | null;
-            /** Profile Version */
-            profile_version?: number | null;
-            /** Route Binding Id */
-            route_binding_id?: string | null;
-            /** Root Run Id */
-            root_run_id?: string | null;
-            /**
-             * Source Scope
-             * @default unbound
-             */
-            source_scope: string;
-            /**
-             * Current
-             * @default true
-             */
-            current: boolean;
-            /**
-             * Stale
-             * @default false
-             */
-            stale: boolean;
-        };
-        /** NotebookEntryDraft */
-        NotebookEntryDraft: {
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "finding" | "assumption" | "open_question" | "failed_approach" | "handover" | "preference";
-            /** Text */
-            text: string;
-            /** Refs */
-            refs?: string[];
-            /**
-             * Applicability
-             * @default current_assignment
-             */
-            applicability: string;
-            /** Supersedes Id */
-            supersedes_id?: string | null;
-            /** Assignment Id */
-            assignment_id?: string | null;
-        };
-        /** NotebookPage */
-        NotebookPage: {
-            /** Items */
-            items?: components["schemas"]["NotebookEntry"][];
-            /** Next Cursor */
-            next_cursor?: string | null;
-            /**
-             * Total
-             * @default 0
-             */
-            total: number;
-        };
-        /** NumberAnswer */
-        NumberAnswer: {
-            /** Value */
-            value: string;
-            /** Unit */
-            unit: string;
-            /** Evidence */
-            evidence?: string[];
-            /** Calculation Id */
-            calculation_id?: string | null;
-        };
-        /**
-         * ObservedRun
-         * @description Constructed by the driver from saved records, never by provider output.
-         */
-        ObservedRun: {
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "completed" | "failed" | "cancelled" | "blocked";
-            /** Numbers */
-            numbers?: {
-                [key: string]: components["schemas"]["NumberAnswer"];
-            };
-            /** Findings */
-            findings?: components["schemas"]["FindingAnswer"][];
-            /** Read Evidence */
-            read_evidence?: string[];
-            /** Events */
-            events?: string[];
-            /** Artifact Ids */
-            artifact_ids?: string[];
-            /** Calculation Ids */
-            calculation_ids?: string[];
-            /** Checked Calculation Ids */
-            checked_calculation_ids?: string[];
-            /** Calculation Values */
-            calculation_values?: string[];
-            /** Calculation Outputs */
-            calculation_outputs?: {
-                [key: string]: string[];
-            };
-            /** Calculation Evidence */
-            calculation_evidence?: {
-                [key: string]: string[];
-            };
-            /** Independent Checks */
-            independent_checks?: {
-                [key: string]: components["schemas"]["IndependentCheck"];
-            };
-            /**
-             * Calculations Verified
-             * @default false
-             */
-            calculations_verified: boolean;
-            /**
-             * Completed Assignments
-             * @default 0
-             */
-            completed_assignments: number;
-            /** Tender Id */
-            tender_id?: string | null;
-            /** Root Run Id */
-            root_run_id?: string | null;
-            /** Connection Id */
-            connection_id?: string | null;
-            /** Model Id */
-            model_id?: string | null;
-            /** Engine */
-            engine?: string | null;
-            /** Manager Profile Version */
-            manager_profile_version?: number | null;
-            /** Configuration Hash */
-            configuration_hash?: string | null;
-            /**
-             * Latency Seconds
-             * @default 0
-             */
-            latency_seconds: number;
-            /** Requests */
-            requests?: number | null;
-            /** Input Tokens */
-            input_tokens?: number | null;
-            /** Output Tokens */
-            output_tokens?: number | null;
-            /** Estimated Cost Usd */
-            estimated_cost_usd?: string | null;
-            /** Provider Reported Cost Usd */
-            provider_reported_cost_usd?: string | null;
-            /** Provider Cost Is Partial */
-            provider_cost_is_partial?: boolean | null;
-            /**
-             * Usage Complete
-             * @default false
-             */
-            usage_complete: boolean;
-            /**
-             * Detail
-             * @default
-             */
-            detail: string;
-        };
-        /**
-         * OfficeArtifactReference
-         * @description A server-resolved immutable reference attached to one message.
-         */
-        OfficeArtifactReference: {
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "source" | "output" | "staff_result";
-            /** Id */
-            id: string;
-            /** Artifact Id */
-            artifact_id?: string | null;
-            /** Artifact Version */
-            artifact_version?: number | null;
-            /** Content Hash */
-            content_hash?: string | null;
-            /** Locator */
-            locator?: string | null;
-            /** Sha256 */
-            sha256?: string | null;
-            /** Filename */
-            filename?: string | null;
-            /** Assignment Id */
-            assignment_id?: string | null;
-            /** Staff Id */
-            staff_id?: string | null;
-            /** Staff Version */
-            staff_version?: number | null;
-            /** Root Run Id */
-            root_run_id?: string | null;
-        };
-        /**
-         * OfficeEvent
-         * @description One immutable, server-created office activity record.
-         */
-        OfficeEvent: {
-            /** Event Id */
-            event_id: string;
-            /** Sequence */
-            sequence: number;
-            /** Tender Id */
-            tender_id: string;
-            /**
-             * Event Type
-             * @enum {string}
-             */
-            event_type: "staff_created" | "profile_updated" | "assignment_queued" | "assignment_started" | "assignment_waiting" | "assignment_completed" | "assignment_failed" | "assignment_cancelled" | "assignment_interrupted" | "message_posted" | "artifact_shared" | "scope_changed" | "source_inspected";
-            /** Actor Id */
-            actor_id?: string | null;
-            /** Assignment Id */
-            assignment_id?: string | null;
-            /** Record Ref */
-            record_ref?: {
-                [key: string]: unknown;
-            } | null;
-            /** Payload */
-            payload?: {
-                [key: string]: unknown;
-            } | null;
-            /** Occurred At */
-            occurred_at: string;
-        };
-        /**
-         * OfficeEventPageWithInstance
-         * @description Event polling response carrying the server history incarnation.
-         */
-        OfficeEventPageWithInstance: {
-            /** Items */
-            items?: components["schemas"]["OfficeEvent"][];
-            /** Cursor */
-            cursor?: string | null;
-            /**
-             * Has More
-             * @default false
-             */
-            has_more: boolean;
-            /**
-             * Reset Required
-             * @default false
-             */
-            reset_required: boolean;
-            /** Instance Id */
-            instance_id: string;
-        };
-        /**
-         * OfficeMessage
-         * @description One actual authored exchange between the Manager and staff.
-         */
-        OfficeMessage: {
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Root Run Id */
-            root_run_id: string;
-            sender: components["schemas"]["OfficeParticipant"];
-            /** Recipients */
-            recipients: components["schemas"]["OfficeParticipant"][];
-            /** Assignment Id */
-            assignment_id?: string | null;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "instruction" | "note" | "question" | "reply" | "finding" | "handoff";
-            /** Text */
-            text: string;
-            /** Artifact Refs */
-            artifact_refs?: components["schemas"]["OfficeArtifactReference"][];
-            /** Reply To */
-            reply_to?: string | null;
-            /** Created At */
-            created_at: string;
-            /** Delivery State */
-            delivery_state?: ("delivered" | "acknowledged" | "inspected") | null;
-            /** Required Response */
-            required_response?: string | null;
-        };
-        /**
-         * OfficeMessagePage
-         * @description A bounded chronological page of retained messages.
-         */
-        OfficeMessagePage: {
-            /** Items */
-            items: components["schemas"]["OfficeMessage"][];
-            /** Next Cursor */
-            next_cursor?: string | null;
-        };
-        /** OfficeOutput */
-        OfficeOutput: {
-            /** Summary */
-            summary: string;
-            /** Source Ids */
-            source_ids?: string[];
-            /** Findings */
-            findings?: components["schemas"]["FindingProposal"][];
-            plan?: components["schemas"]["PlanProposal"] | null;
-            /** Web Findings */
-            web_findings?: components["schemas"]["WebFinding"][];
-            /** Price Proposals */
-            price_proposals?: components["schemas"]["PriceProposal"][];
-            /** Quote Drafts */
-            quote_drafts?: components["schemas"]["DraftInput"][];
-            /** Unit Rate Proposals */
-            unit_rate_proposals?: components["schemas"]["UnitRateProposalInput"][];
-            /** Project Map Nodes */
-            project_map_nodes?: components["schemas"]["NodeInput"][];
-            /** Submission Requirements */
-            submission_requirements?: components["schemas"]["RequirementProposal"][];
-            programme_proposal?: components["schemas"]["ConstructionProgramme"] | null;
-            /** Drawing Measurements */
-            drawing_measurements?: components["schemas"]["AgentMeasurementProposal"][];
-            /** Draft Documents */
-            draft_documents?: components["schemas"]["DraftDocumentProposal"][];
-            /** Quantity Proposals */
-            quantity_proposals?: components["schemas"]["AgentQuantityProposal"][];
-            /** Boq Item Proposals */
-            boq_item_proposals?: components["schemas"]["SourceBoqProposal"][];
-        };
-        /**
-         * OfficePartialFlags
-         * @description Tell the client which bounded collections require a follow-up read.
-         */
-        OfficePartialFlags: {
-            /**
-             * Staff
-             * @default false
-             */
-            staff: boolean;
-            /**
-             * Assignments
-             * @default false
-             */
-            assignments: boolean;
-            /**
-             * Messages
-             * @default false
-             */
-            messages: boolean;
-            /**
-             * Work Orders
-             * @default false
-             */
-            work_orders: boolean;
-            /**
-             * Results
-             * @default false
-             */
-            results: boolean;
-            /**
-             * Receipts
-             * @default false
-             */
-            receipts: boolean;
-            /**
-             * Versions
-             * @default false
-             */
-            versions: boolean;
-        };
-        /**
-         * OfficeParticipant
-         * @description A historic speaker or recipient snapshot supplied by the service.
-         */
-        OfficeParticipant: {
-            /** Id */
-            id: string;
-            /** Version */
-            version: number;
-            /** Display Name */
-            display_name: string;
-            /** Title */
-            title: string;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "manager" | "staff";
-            /** Assignment Id */
-            assignment_id?: string | null;
-        };
-        /**
-         * OfficeSnapshot
-         * @description One consistent, bounded view of a Tender's live office.
-         */
-        OfficeSnapshot: {
-            manager: components["schemas"]["ManagerProfile"];
-            /** Staff */
-            staff?: components["schemas"]["StaffProfileRecord"][];
-            /** Assignments */
-            assignments?: components["schemas"]["StaffAssignment"][];
-            messages: components["schemas"]["OfficeMessagePage"];
-            /** Cursor */
-            cursor?: string | null;
-            /**
-             * Sequence
-             * @default 0
-             */
-            sequence: number;
-            /** Instance Id */
-            instance_id: string;
-            /**
-             * Interrupted Assignment Count
-             * @default 0
-             */
-            interrupted_assignment_count: number;
-            /**
-             * Staff Total
-             * @default 0
-             */
-            staff_total: number;
-            /**
-             * Assignments Total
-             * @default 0
-             */
-            assignments_total: number;
-            partial_flags?: components["schemas"]["OfficePartialFlags"];
         };
         /** OutputRecord */
         OutputRecord: {
@@ -7072,239 +3800,6 @@ export interface components {
             /** Working Habits */
             working_habits: string[];
         };
-        /** PlanApprovalResult */
-        PlanApprovalResult: {
-            /** Plan */
-            plan: {
-                [key: string]: unknown;
-            };
-            review: components["schemas"]["PlanReview"];
-            /** Work Intents */
-            work_intents: components["schemas"]["WorkIntent"][];
-        };
-        /** PlanProposal */
-        PlanProposal: {
-            /** Title */
-            title: string;
-            /** Tasks */
-            tasks: components["schemas"]["TaskProposal"][];
-        };
-        /** PlanReview */
-        PlanReview: {
-            /** Tender Id */
-            tender_id: string;
-            /** Plan Id */
-            plan_id: string;
-            /** Plan Version */
-            plan_version: number;
-            /**
-             * Plan Status
-             * @default proposed
-             * @enum {string}
-             */
-            plan_status: "proposed" | "approved" | "superseded";
-            scope: components["schemas"]["PlanReviewScope"];
-            /** Tasks */
-            tasks: components["schemas"]["PlanReviewTask"][];
-            /** Routes */
-            routes: components["schemas"]["PlanReviewRoute"][];
-            delegation?: components["schemas"]["DelegationEnvelope"] | null;
-            /**
-             * Delegation Proposal Version
-             * @default 0
-             */
-            delegation_proposal_version: number;
-            delegation_options?: components["schemas"]["DelegationOptions"] | null;
-            /** Ai Summary */
-            ai_summary: string;
-            /** Meaningful Changes */
-            meaningful_changes?: components["schemas"]["PlanReviewChange"][];
-            /** Blockers */
-            blockers?: components["schemas"]["PlanReviewBlocker"][];
-            snapshot: components["schemas"]["PlanReviewSnapshot"];
-            /** Fingerprint */
-            fingerprint: string;
-            /** Can Approve */
-            can_approve: boolean;
-            /** Reviewed At */
-            reviewed_at: string;
-        };
-        /** PlanReviewApproval */
-        PlanReviewApproval: {
-            /** Fingerprint */
-            fingerprint: string;
-            /**
-             * Engineer Confirmed
-             * @constant
-             */
-            engineer_confirmed: true;
-            /**
-             * Rationale
-             * @default Engineer approved the displayed work plan and AI team.
-             */
-            rationale: string;
-        };
-        /** PlanReviewBlocker */
-        PlanReviewBlocker: {
-            /**
-             * Code
-             * @enum {string}
-             */
-            code: "configuration" | "sign_in" | "model_check" | "spending" | "sources" | "running_work" | "plan" | "connection";
-            /** Detail */
-            detail: string;
-            /** Repair Target */
-            repair_target: string;
-            /** Connection Id */
-            connection_id?: string | null;
-            /** Model Id */
-            model_id?: string | null;
-            /** Task Id */
-            task_id?: string | null;
-        };
-        /** PlanReviewChange */
-        PlanReviewChange: {
-            /** Code */
-            code: string;
-            /** Detail */
-            detail: string;
-            /** Before */
-            before?: unknown;
-            /** After */
-            after?: unknown;
-        };
-        /**
-         * PlanReviewRoute
-         * @description A displayed route and its immutable account/model evidence.
-         */
-        PlanReviewRoute: {
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "manager" | "specialist" | "fallback";
-            /** Task Id */
-            task_id?: string | null;
-            /** Role */
-            role?: string | null;
-            route: components["schemas"]["AIRoute"];
-            /** Connection Revision */
-            connection_revision: number;
-            /** Model */
-            model: {
-                [key: string]: unknown;
-            };
-            /**
-             * Readiness
-             * @enum {string}
-             */
-            readiness: "ready" | "missing" | "unknown";
-            /** Account Name */
-            account_name: string;
-            /** Provider */
-            provider: string;
-            /** Data Destination */
-            data_destination: string;
-            /**
-             * Billing
-             * @enum {string}
-             */
-            billing: "metered" | "subscription" | "unknown" | "local";
-            /**
-             * Provider Managed Extras
-             * @default false
-             */
-            provider_managed_extras: boolean;
-            /** Spending Detail */
-            spending_detail: string;
-        };
-        /**
-         * PlanReviewScope
-         * @description The exact engineer scope used when the review was generated.
-         */
-        PlanReviewScope: {
-            /** Title */
-            title: string;
-            /** Plan Version */
-            plan_version: number;
-            /** Tender Revision */
-            tender_revision: number;
-            /** Source Ids */
-            source_ids?: string[];
-            /** Source Revision */
-            source_revision: number;
-        };
-        /**
-         * PlanReviewSnapshot
-         * @description All mutable authority inputs bound by the approval fingerprint.
-         */
-        PlanReviewSnapshot: {
-            /** Tender Revision */
-            tender_revision: number;
-            /** Source Revision */
-            source_revision: number;
-            /** Policy Revision */
-            policy_revision: number;
-            /** Allowed Connection Ids */
-            allowed_connection_ids?: string[];
-            /** Connection Revisions */
-            connection_revisions?: {
-                [key: string]: number;
-            };
-            /** Model Revisions */
-            model_revisions?: {
-                [key: string]: string;
-            };
-            /** Route Intents */
-            route_intents?: {
-                [key: string]: unknown;
-            }[];
-            /** Run Budget Usd */
-            run_budget_usd?: number | null;
-            /** Tender Budget Usd */
-            tender_budget_usd?: number | null;
-            /** Max Requests */
-            max_requests: number;
-            /** Spent Usd */
-            spent_usd: number;
-            /** Reserved Usd */
-            reserved_usd: number;
-            /** Usage Fingerprint */
-            usage_fingerprint: string;
-            /**
-             * Provider Managed Extras
-             * @description Current displayed Grok account revisions whose enabled extras are proposed for explicit approval.
-             */
-            provider_managed_extras?: {
-                [key: string]: number;
-            };
-            /** Allowed Destinations */
-            allowed_destinations?: {
-                [key: string]: unknown;
-            }[];
-            /** Restore Reconciliation Required */
-            restore_reconciliation_required: boolean;
-            /** Spend History May Be Incomplete */
-            spend_history_may_be_incomplete: boolean;
-            /** Active Run Ids */
-            active_run_ids?: string[];
-        };
-        /** PlanReviewTask */
-        PlanReviewTask: {
-            /** Id */
-            id: string;
-            /** Title */
-            title: string;
-            /** Description */
-            description: string;
-            /** Role */
-            role: string;
-            /** Status */
-            status: string;
-            /** Source Ids */
-            source_ids?: string[];
-            route?: components["schemas"]["AIRoute"] | null;
-        };
         /** PriceCard */
         PriceCard: {
             /** Input Per Million */
@@ -7319,40 +3814,6 @@ export interface components {
             as_of: string;
             /** Web Search Per Call */
             web_search_per_call?: number | null;
-            /** Code Execution Per Session */
-            code_execution_per_session?: number | null;
-            /** Code Execution Source */
-            code_execution_source?: string | null;
-            /** Code Execution As Of */
-            code_execution_as_of?: string | null;
-        };
-        /** PriceProposal */
-        PriceProposal: {
-            /** Item */
-            item: string;
-            /** Amount */
-            amount: string;
-            /** Currency */
-            currency: string;
-            /** Unit */
-            unit: string;
-            /** Location */
-            location: string;
-            /** Tax Basis */
-            tax_basis: string;
-            /**
-             * Basis
-             * @enum {string}
-             */
-            basis: "observed" | "estimated";
-            /** Observed On */
-            observed_on: string | null;
-            /** Valid Until */
-            valid_until: string | null;
-            /** Conditions */
-            conditions: string;
-            /** Urls */
-            urls: string[];
         };
         /** ProfilePatch */
         ProfilePatch: {
@@ -7430,253 +3891,27 @@ export interface components {
              */
             kind: "api" | "runtime";
             /** Protocols */
-            protocols: ("openai_responses" | "openai_chat" | "anthropic" | "google" | "bedrock" | "mistral" | "cohere" | "codex" | "copilot" | "gemini_cli" | "grok_build" | "claude_agent" | "claude_code")[];
+            protocols: ("openai_responses" | "openai_chat" | "anthropic" | "google" | "codex" | "grok_build")[];
             /**
              * Default Protocol
              * @enum {string}
              */
-            default_protocol: "openai_responses" | "openai_chat" | "anthropic" | "google" | "bedrock" | "mistral" | "cohere" | "codex" | "copilot" | "gemini_cli" | "grok_build" | "claude_agent" | "claude_code";
+            default_protocol: "openai_responses" | "openai_chat" | "anthropic" | "google" | "codex" | "grok_build";
             /** Base Url */
             base_url?: string | null;
             /** Auth Methods */
-            auth_methods: ("api_key" | "environment" | "azure_identity" | "aws_identity" | "google_identity" | "client_login" | "none")[];
+            auth_methods: ("api_key" | "environment" | "client_login")[];
             /**
              * Billing
              * @enum {string}
              */
-            billing: "metered" | "subscription" | "local" | "unknown";
+            billing: "metered" | "subscription" | "unknown";
             /** Docs Url */
             docs_url: string;
             /** Notes */
             notes?: string[];
             /** Settings Fields */
             settings_fields?: string[];
-        };
-        /** PublicFetchCommand */
-        PublicFetchCommand: {
-            /** Url */
-            url: string;
-            /**
-             * Max Bytes
-             * @default 1000000
-             */
-            max_bytes: number;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** PublicResearchReceipt */
-        PublicResearchReceipt: {
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Run Id */
-            run_id?: string | null;
-            /** Actor Id */
-            actor_id: string;
-            /**
-             * Retrieval Mode
-             * @enum {string}
-             */
-            retrieval_mode: "http" | "browser";
-            /** Requested Url */
-            requested_url: string;
-            /** Final Url */
-            final_url: string;
-            /** Redirect Chain */
-            redirect_chain: string[];
-            /** Status Code */
-            status_code: number;
-            /** Content Type */
-            content_type: string;
-            /** Content Bytes */
-            content_bytes: number;
-            /** Content Sha256 */
-            content_sha256: string;
-            /**
-             * Title
-             * @default
-             */
-            title: string;
-            /** Retrieved At */
-            retrieved_at: string;
-            /** Passages */
-            passages: components["schemas"]["ResearchPassage"][];
-            /** Cited */
-            cited: boolean;
-            /** Renderer Image Id */
-            renderer_image_id?: string | null;
-            /** Renderer Fingerprint */
-            renderer_fingerprint?: string | null;
-        };
-        /** PublicSearchHit */
-        PublicSearchHit: {
-            /** Url */
-            url: string;
-            /**
-             * Title
-             * @default
-             */
-            title: string;
-            /**
-             * Summary
-             * @default
-             */
-            summary: string;
-            /** Retrieved At */
-            retrieved_at: string;
-            /**
-             * Provider Metadata
-             * @default true
-             * @constant
-             */
-            provider_metadata: true;
-            /**
-             * Citable
-             * @default false
-             * @constant
-             */
-            citable: false;
-        };
-        /** PublicSearchReceipt */
-        PublicSearchReceipt: {
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Root Run Id */
-            root_run_id: string;
-            /** Actor Id */
-            actor_id: string;
-            /** Requested By Actor Id */
-            requested_by_actor_id: string;
-            /** Requested By Assignment Id */
-            requested_by_assignment_id?: string | null;
-            /** Requested By Route Binding Id */
-            requested_by_route_binding_id?: string | null;
-            /** Requested By Staff Version */
-            requested_by_staff_version?: number | null;
-            /** Query */
-            query: string;
-            /** Limit */
-            limit: number;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "deferred" | "completed" | "failed";
-            /** Route Option Id */
-            route_option_id: string;
-            /** Connection Id */
-            connection_id: string;
-            /** Review Fingerprint */
-            review_fingerprint: string;
-            /** Source Scope Fingerprint */
-            source_scope_fingerprint: string;
-            /** Request Hash */
-            request_hash: string;
-            /** Results */
-            results: components["schemas"]["PublicSearchHit"][];
-            /** Usage */
-            usage?: {
-                [key: string]: unknown;
-            };
-            /** Created At */
-            created_at: string;
-            /** Completed At */
-            completed_at?: string | null;
-            /** Detail */
-            detail: string;
-        };
-        /** PythonAnalysisReceipt */
-        PythonAnalysisReceipt: {
-            /** Id */
-            id: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "running" | "completed" | "failed" | "cancelled";
-            /** Code Sha256 */
-            code_sha256: string;
-            /** Image Id */
-            image_id: string;
-            /** Library Versions */
-            library_versions: {
-                [key: string]: string;
-            };
-            /** Input Hashes */
-            input_hashes: {
-                [key: string]: string;
-            };
-            /** Outputs */
-            outputs?: components["schemas"]["PythonOutput"][];
-            /**
-             * Stdout
-             * @default
-             */
-            stdout: string;
-            /**
-             * Stderr
-             * @default
-             */
-            stderr: string;
-            /**
-             * Detail
-             * @default
-             */
-            detail: string;
-            limits: components["schemas"]["PythonLimits"];
-            /**
-             * Network
-             * @default denied
-             * @constant
-             */
-            network: "denied";
-            /** Created At */
-            created_at: string;
-            /**
-             * Duration Seconds
-             * @default 0
-             */
-            duration_seconds: number;
-        };
-        /** PythonLimits */
-        PythonLimits: {
-            /**
-             * Cpus
-             * @default 2
-             */
-            cpus: number;
-            /**
-             * Memory Mib
-             * @default 2048
-             */
-            memory_mib: number;
-            /**
-             * Seconds
-             * @default 120
-             */
-            seconds: number;
-            /**
-             * Processes
-             * @default 64
-             */
-            processes: number;
-            /**
-             * Output Mib
-             * @default 50
-             */
-            output_mib: number;
-        };
-        /** PythonOutput */
-        PythonOutput: {
-            /** Name */
-            name: string;
-            /** Size Bytes */
-            size_bytes: number;
-            /** Sha256 */
-            sha256: string;
         };
         /** QuantityProposal */
         QuantityProposal: {
@@ -7724,23 +3959,10 @@ export interface components {
         /** QuotePreview */
         QuotePreview: {
             quote: components["schemas"]["QuoteRecord"];
-            /** Sender */
-            sender: string | null;
             /** Attachments */
             attachments: components["schemas"]["Attachment"][];
-            /** Fingerprint */
-            fingerprint: string;
-            /** Smtp Host */
-            smtp_host: string;
-            /** Smtp Ready */
-            smtp_ready: boolean;
             /** Warnings */
             warnings: string[];
-            /**
-             * Restore Reconciliation Required
-             * @default false
-             */
-            restore_reconciliation_required: boolean;
         };
         /** QuoteRecord */
         QuoteRecord: {
@@ -7766,22 +3988,10 @@ export interface components {
             status: string;
             /** Attachments */
             attachments: components["schemas"]["Attachment"][];
-            /** Approved Fingerprint */
-            approved_fingerprint: string | null;
-            /** Delivery Detail */
-            delivery_detail: string;
-            /** Refused Recipients */
-            refused_recipients: components["schemas"]["RecipientRefusal"][];
             /** Created At */
             created_at: string;
             /** Updated At */
             updated_at: string;
-            /** Submission Host */
-            submission_host?: string | null;
-            /** Delivery History Status */
-            delivery_history_status?: string | null;
-            /** Delivery History Fingerprint */
-            delivery_history_fingerprint?: string | null;
         };
         /** RateApproval */
         RateApproval: {
@@ -7861,27 +4071,6 @@ export interface components {
             /** Conditions */
             conditions: string;
         };
-        /** ReceiptRequest */
-        ReceiptRequest: {
-            /** Message Id */
-            message_id: string;
-            /** Recipient Assignment Id */
-            recipient_assignment_id?: string | null;
-            /**
-             * Extent
-             * @default received
-             */
-            extent: string;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** RecipientRefusal */
-        RecipientRefusal: {
-            /** Address */
-            address: string;
-            /** Code */
-            code: number;
-        };
         /** RenameTender */
         RenameTender: {
             /** Name */
@@ -7895,36 +4084,20 @@ export interface components {
             tender_id: string;
             /** Quote Id */
             quote_id: string;
-            /**
-             * Origin
-             * @enum {string}
-             */
-            origin: "manual" | "imap";
             /** Sender */
             sender: string;
             /** Received At */
             received_at: string;
-            /** Date Header */
-            date_header?: string | null;
-            /**
-             * Date Basis
-             * @enum {string}
-             */
-            date_basis: "engineer_entered" | "retrieved_at";
             /** Subject */
             subject: string;
             /** Text */
             text: string;
             /** Headers */
             headers: string;
-            /** Message Id */
-            message_id: string | null;
             /** Source Ids */
             source_ids: string[];
             /** Supporting Source Ids */
             supporting_source_ids: string[];
-            /** Warnings */
-            warnings: string[];
             /** Created At */
             created_at: string;
         };
@@ -7944,6 +4117,31 @@ export interface components {
              * @default pypdfium2-5.13.0
              */
             reader_version: string;
+            /** Artifact Id */
+            artifact_id?: string | null;
+        };
+        /** ReprocessResult */
+        ReprocessResult: {
+            /** Id */
+            id: string;
+            /** Original Hash Unchanged */
+            original_hash_unchanged: boolean;
+            /** Extracted Pages */
+            extracted_pages: number;
+            /** Exception Pages */
+            exception_pages: number;
+            /** Reader Id */
+            reader_id: string;
+            /** Reader Version */
+            reader_version: string;
+            /** Published Artifact Ids */
+            published_artifact_ids?: string[];
+            /** Published Evidence Ids */
+            published_evidence_ids?: string[];
+            /** Retained Locators */
+            retained_locators?: string[];
+            /** Retrieval Generation */
+            retrieval_generation?: number | null;
         };
         /** RequirementAudit */
         RequirementAudit: {
@@ -8159,60 +4357,6 @@ export interface components {
             /** Recheck Reasons */
             recheck_reasons: string[];
         };
-        /** ResearchCitation */
-        ResearchCitation: {
-            /** Receipt Id */
-            receipt_id: string;
-            /** Passage Ids */
-            passage_ids: string[];
-            /** Purpose */
-            purpose: string;
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Run Id */
-            run_id?: string | null;
-            /** Actor Id */
-            actor_id: string;
-            /** Url */
-            url: string;
-            /**
-             * Title
-             * @default
-             */
-            title: string;
-            /** Retrieved At */
-            retrieved_at: string;
-            /** Content Sha256 */
-            content_sha256: string;
-            /** Work Product Reference */
-            work_product_reference: string;
-            /** Created At */
-            created_at: string;
-        };
-        /** ResearchCitationCommand */
-        ResearchCitationCommand: {
-            /** Receipt Id */
-            receipt_id: string;
-            /** Passage Ids */
-            passage_ids: string[];
-            /** Purpose */
-            purpose: string;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** ResearchPassage */
-        ResearchPassage: {
-            /** Id */
-            id: string;
-            /** Index */
-            index: number;
-            /** Text */
-            text: string;
-            /** Sha256 */
-            sha256: string;
-        };
         /** ResetPreview */
         ResetPreview: {
             /** Supported */
@@ -8349,43 +4493,157 @@ export interface components {
             /** Supplied Quantity */
             supplied_quantity: string | null;
         };
-        /** ReviewContribution */
-        ReviewContribution: {
-            /** Topic */
-            topic: string;
-            /** Agreed */
-            agreed: boolean;
-            /** Detail */
-            detail: string;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** ReviewDraft */
-        ReviewDraft: {
-            /** Subject Id */
-            subject_id: string;
-            /** Workings */
-            workings: string;
-            /** Calculation Id */
-            calculation_id?: string | null;
+        /** RetrievalCoverage */
+        RetrievalCoverage: {
             /**
-             * Hide Author Conclusion
-             * @default true
+             * Truncated
+             * @default false
              */
-            hide_author_conclusion: boolean;
-            /** Idempotency Key */
-            idempotency_key: string;
+            truncated: boolean;
+            /**
+             * Scanned
+             * @default 0
+             */
+            scanned: number;
+            /**
+             * Ceiling
+             * @default 0
+             */
+            ceiling: number;
+            /** Meaning Status */
+            meaning_status?: string | null;
+            /**
+             * Unsupported Answer
+             * @default false
+             */
+            unsupported_answer: boolean;
+            /** Unsupported Reason */
+            unsupported_reason?: string | null;
         };
-        /** ReviewFinding */
-        ReviewFinding: {
+        /** RetrievalHit */
+        RetrievalHit: {
             /** Id */
             id: string;
-            /** Topic */
-            topic: string;
-            /** Agreed */
-            agreed: boolean;
-            /** Detail */
-            detail: string;
+            /** Artifact Id */
+            artifact_id: string;
+            /** Artifact Name */
+            artifact_name: string;
+            /** Relative Path */
+            relative_path: string;
+            /** Locator */
+            locator: string;
+            /** Text */
+            text: string;
+            /** Page */
+            page?: number | null;
+            /** Sheet */
+            sheet?: string | null;
+            /** Cell Range */
+            cell_range?: string | null;
+            /** Kind */
+            kind: string;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Score
+             * @default 0
+             */
+            score: number;
+            /** Extraction Id */
+            extraction_id?: string | null;
+            /** Extraction Current */
+            extraction_current?: boolean | null;
+            /**
+             * Collection
+             * @default tender_evidence
+             * @constant
+             */
+            collection: "tender_evidence";
+            /**
+             * Found By
+             * @default words
+             */
+            found_by: string;
+            /**
+             * Weak Match
+             * @default false
+             */
+            weak_match: boolean;
+            /** Content Hash */
+            content_hash?: string | null;
+            /** Source Version */
+            source_version?: number | null;
+            /** Document Kind */
+            document_kind?: string | null;
+            /** Spans */
+            spans?: components["schemas"]["RetrievalSpan"][];
+            /** Duplicate Occurrences */
+            duplicate_occurrences?: components["schemas"]["RetrievalOccurrence"][];
+            open_target?: components["schemas"]["RetrievalOpenTarget"] | null;
+        };
+        /** RetrievalOccurrence */
+        RetrievalOccurrence: {
+            /** Evidence Id */
+            evidence_id: string;
+            /** Artifact Id */
+            artifact_id: string;
+            /** Relative Path */
+            relative_path: string;
+            /** Locator */
+            locator: string;
+        };
+        /** RetrievalOpenTarget */
+        RetrievalOpenTarget: {
+            /** Evidence Id */
+            evidence_id: string;
+            /** Artifact Id */
+            artifact_id: string;
+            /** Locator */
+            locator: string;
+            /** Start */
+            start?: number | null;
+            /** End */
+            end?: number | null;
+        };
+        /** RetrievalResponse */
+        RetrievalResponse: {
+            /** Hits */
+            hits: components["schemas"]["RetrievalHit"][];
+            /**
+             * Requested Mode
+             * @enum {string}
+             */
+            requested_mode: "auto" | "words" | "meaning" | "combined";
+            /**
+             * Actual Mode
+             * @enum {string}
+             */
+            actual_mode: "words" | "meaning" | "combined";
+            /** Ranking Version */
+            ranking_version: string;
+            /** Generation */
+            generation?: string | null;
+            coverage: components["schemas"]["RetrievalCoverage"];
+            /** Limitations */
+            limitations?: string[];
+            /** Continuation */
+            continuation?: string | null;
+        };
+        /** RetrievalSpan */
+        RetrievalSpan: {
+            /** Start */
+            start: number;
+            /** End */
+            end: number;
+            /**
+             * Found By
+             * @enum {string}
+             */
+            found_by: "words" | "meaning";
+            /** Heading */
+            heading?: string | null;
         };
         /** ReviewInput */
         ReviewInput: {
@@ -8462,95 +4720,6 @@ export interface components {
             is_current: boolean;
             /** Stale Reasons */
             stale_reasons: string[];
-        };
-        /** ReviewResolution */
-        ReviewResolution: {
-            /** Resolution */
-            resolution: string;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** ReviewSession */
-        ReviewSession: {
-            /** Id */
-            id: string;
-            /** Subject Id */
-            subject_id: string;
-            /** Author Conclusion Hidden */
-            author_conclusion_hidden: boolean;
-            /** Findings */
-            findings: components["schemas"]["ReviewFinding"][];
-            /** Calculation Id */
-            calculation_id?: string | null;
-            /** Calculation Method Id */
-            calculation_method_id?: string | null;
-            /** Calculation Method Version */
-            calculation_method_version?: string | null;
-            /** Checked Basis Fingerprint */
-            checked_basis_fingerprint?: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "checked" | "incomplete" | "needs_review";
-            /** Resolution */
-            resolution?: string | null;
-            /** Resolved At */
-            resolved_at?: string | null;
-            /** Limitations */
-            limitations: string[];
-            /** Created At */
-            created_at: string;
-        };
-        /** ReviewedCodeRuntime */
-        ReviewedCodeRuntime: {
-            /**
-             * Engine
-             * @enum {string}
-             */
-            engine: "monty" | "python";
-            /** Fingerprint */
-            fingerprint: string;
-            /** Version */
-            version: string;
-            /** Image Id */
-            image_id?: string | null;
-            /** Library Versions */
-            library_versions?: {
-                [key: string]: string;
-            };
-            /** Seconds */
-            seconds: number;
-            /** Memory Mib */
-            memory_mib: number;
-            /** Cpus */
-            cpus: number;
-            /** Processes */
-            processes: number;
-            /** Output Mib */
-            output_mib: number;
-            /** Tool Calls */
-            tool_calls: number;
-        };
-        /**
-         * ReviewedNativeTools
-         * @description Per-route selection inside a reviewed envelope; never an AIRoute grant.
-         */
-        ReviewedNativeTools: {
-            /** Native Tools */
-            native_tools?: ("web_search" | "web_fetch" | "code_execution")[];
-            /** Web Fetch Domains */
-            web_fetch_domains?: string[];
-            /** Uploaded Artifact Ids */
-            uploaded_artifact_ids?: string[];
-            /**
-             * Max Calls Per Request
-             * @default 3
-             */
-            max_calls_per_request: number;
-            /** Max Charge Usd */
-            max_charge_usd?: number | null;
-            code_execution_price?: components["schemas"]["NativeCodePrice"] | null;
         };
         /** Run */
         Run: {
@@ -8746,69 +4915,13 @@ export interface components {
             docs_url?: string | null;
             subscription_usage?: components["schemas"]["SubscriptionUsage"] | null;
         };
-        /** SandboxAction */
-        SandboxAction: {
-            /**
-             * Action
-             * @enum {string}
-             */
-            action: "setup" | "repair" | "remove" | "start" | "stop";
-        };
-        /** SandboxStatus */
-        SandboxStatus: {
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "not_installed" | "prerequisite_required" | "setup_required" | "stopped" | "ready" | "needs_repair" | "busy";
-            /** Detail */
-            detail: string;
-            /** Next Action */
-            next_action: string;
-            /** Machine Name */
-            machine_name: string;
-            /** Composition Available */
-            composition_available: boolean;
-            /**
-             * Python Available
-             * @default false
-             */
-            python_available: boolean;
-            /** Image Id */
-            image_id?: string | null;
-            /** Library Versions */
-            library_versions?: {
-                [key: string]: string;
-            };
-            limits?: components["schemas"]["PythonLimits"];
-            /**
-             * Active Runs
-             * @default 0
-             */
-            active_runs: number;
-        };
-        /** Scores */
-        Scores: {
-            /** Task Completed */
-            task_completed: boolean;
-            /** Evidence Precision */
-            evidence_precision: number;
-            /** Evidence Recall */
-            evidence_recall: number;
-            /** Numerical Accuracy */
-            numerical_accuracy: number;
-            /** Findings Recall */
-            findings_recall: number;
-            /** Violations */
-            violations: string[];
-        };
         /** SemanticStatus */
         SemanticStatus: {
             /**
              * Status
              * @enum {string}
              */
-            status: "empty" | "model_missing" | "not_indexed" | "ready" | "stale" | "limit_exceeded";
+            status: "empty" | "model_missing" | "not_indexed" | "ready" | "stale" | "limit_exceeded" | "preparing" | "updating" | "stopped" | "failed";
             /** Ready */
             ready: boolean;
             /** Model */
@@ -8835,20 +4948,22 @@ export interface components {
             indexed_at?: string | null;
             /** Detail */
             detail: string;
-        };
-        /** SendDecision */
-        SendDecision: {
-            /** Fingerprint */
-            fingerprint: string;
             /**
-             * Engineer Confirmed
-             * @constant
+             * Desired Generation
+             * @default 0
              */
-            engineer_confirmed: true;
-            /** Rationale */
-            rationale: string;
-            /** Restore Reconciliation */
-            restore_reconciliation?: string | null;
+            desired_generation: number;
+            /** Published Generation */
+            published_generation?: number | null;
+            /**
+             * Progress
+             * @default 0
+             */
+            progress: number;
+            /** Recovery Action */
+            recovery_action?: string | null;
+            /** Last Error */
+            last_error?: string | null;
         };
         /** Settings */
         Settings: {
@@ -9098,7 +5213,7 @@ export interface components {
              * Billing
              * @enum {string}
              */
-            billing: "metered" | "subscription" | "local" | "unknown";
+            billing: "metered" | "subscription" | "unknown";
             /**
              * Access Kind
              * @default api_key
@@ -9208,441 +5323,35 @@ export interface components {
             /** Current Artifact Id */
             current_artifact_id: string | null;
         };
-        /**
-         * StaffAssignment
-         * @description One server-owned assignment state and its immutable work identity.
-         */
-        StaffAssignment: {
+        /** StaffMember */
+        StaffMember: {
+            /** Name */
+            name: string;
+            /** Role */
+            role: string;
+            /** Specialisms */
+            specialisms: string[];
+            /** Background */
+            background: string;
+            /** Working Style */
+            working_style: string;
             /** Id */
             id: string;
             /** Tender Id */
             tender_id: string;
-            /** Root Run Id */
-            root_run_id: string;
-            /** Staff Id */
-            staff_id: string;
-            /** Staff Version */
-            staff_version: number;
-            /** Work Order Id */
-            work_order_id: string;
-            /** Route Binding Id */
-            route_binding_id: string;
             /**
              * Status
              * @enum {string}
              */
-            status: "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled" | "interrupted";
-            /** Revision */
-            revision: number;
-            /** Detail */
-            detail: string;
-            /** Result Id */
-            result_id?: string | null;
-            /** Parent Assignment Id */
-            parent_assignment_id?: string | null;
-            /**
-             * Depth
-             * @default 0
-             */
-            depth: number;
-            /** Prerequisites */
-            prerequisites?: string[];
+            status: "active" | "retired";
+            /** Portrait Seed */
+            portrait_seed: string;
+            /** Created Run Id */
+            created_run_id: string;
             /** Created At */
             created_at: string;
             /** Updated At */
             updated_at: string;
-        };
-        /**
-         * StaffDesk
-         * @description A bounded, attributable read model for one generated colleague.
-         */
-        StaffDesk: {
-            profile: components["schemas"]["StaffProfileRecord"];
-            /** Version Numbers */
-            version_numbers?: number[];
-            /** Work Orders */
-            work_orders?: components["schemas"]["StaffWorkOrderRecord"][];
-            /** Assignments */
-            assignments?: components["schemas"]["StaffAssignment"][];
-            /** Results */
-            results?: components["schemas"]["StaffResult"][];
-            /** Receipts */
-            receipts?: components["schemas"]["StaffSourceReceipt"][];
-            messages: components["schemas"]["OfficeMessagePage"];
-            partial_flags?: components["schemas"]["OfficePartialFlags"];
-        };
-        /** StaffLifecycleReceipt */
-        StaffLifecycleReceipt: {
-            staff: components["schemas"]["StaffProfileRecord"];
-            /**
-             * Replayed
-             * @default false
-             */
-            replayed: boolean;
-        };
-        /** StaffLifecycleRequest */
-        StaffLifecycleRequest: {
-            /** Staff Id */
-            staff_id: string;
-            /** Expected Version */
-            expected_version: number;
-            /**
-             * Target
-             * @enum {string}
-             */
-            target: "available" | "retired" | "archived";
-            /** Reason */
-            reason: string;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /**
-         * StaffPage
-         * @description Stable creation-order pagination over all retained staff identities.
-         */
-        StaffPage: {
-            /** Items */
-            items?: components["schemas"]["StaffProfileRecord"][];
-            /** Next Cursor */
-            next_cursor?: string | null;
-        };
-        /**
-         * StaffPortrait
-         * @description Stable renderer metadata for one generated staff identity.
-         */
-        StaffPortrait: {
-            /** Style */
-            style: string;
-            /** Seed */
-            seed: string;
-        };
-        /** StaffPreferenceRequest */
-        StaffPreferenceRequest: {
-            /** Staff Id */
-            staff_id: string;
-            /** Expected Version */
-            expected_version: number;
-            /** Preferences */
-            preferences: string[];
-            /**
-             * Applies From
-             * @default subsequent
-             * @enum {string}
-             */
-            applies_from: "subsequent" | "explicit_revision";
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /**
-         * StaffProfileDraft
-         * @description Complete Manager-generated professional profile for a live colleague.
-         */
-        StaffProfileDraft: {
-            /** Display Name */
-            display_name: string;
-            /** Role */
-            role: string;
-            /** Title */
-            title: string;
-            /** Specialisms */
-            specialisms: string[];
-            /** Persona */
-            persona: string;
-            personality: components["schemas"]["Personality"];
-            /** Responsibilities */
-            responsibilities: string[];
-            /** Objectives */
-            objectives: string[];
-            /** Methods */
-            methods: string[];
-            /** Deliverables */
-            deliverables: string[];
-            /** Success Criteria */
-            success_criteria: string[];
-            /** Context Needs */
-            context_needs: string[];
-            /** Requested Tool Ids */
-            requested_tool_ids: string[];
-            /** Creation Reason */
-            creation_reason: string;
-        };
-        /**
-         * StaffProfileRecord
-         * @description One immutable generated profile version.
-         */
-        StaffProfileRecord: {
-            /** Display Name */
-            display_name: string;
-            /** Role */
-            role: string;
-            /** Title */
-            title: string;
-            /** Specialisms */
-            specialisms: string[];
-            /** Persona */
-            persona: string;
-            personality: components["schemas"]["Personality"];
-            /** Responsibilities */
-            responsibilities: string[];
-            /** Objectives */
-            objectives: string[];
-            /** Methods */
-            methods: string[];
-            /** Deliverables */
-            deliverables: string[];
-            /** Success Criteria */
-            success_criteria: string[];
-            /** Context Needs */
-            context_needs: string[];
-            /** Requested Tool Ids */
-            requested_tool_ids: string[];
-            /** Creation Reason */
-            creation_reason: string;
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Version */
-            version: number;
-            /** Creator Run Id */
-            creator_run_id: string;
-            /** Manager Profile Version */
-            manager_profile_version: number;
-            /** Created At */
-            created_at: string;
-            /** Updated At */
-            updated_at: string;
-            /** Lifecycle */
-            lifecycle: string;
-            portrait: components["schemas"]["StaffPortrait"];
-            /** Definition Id */
-            definition_id?: string | null;
-            /** Definition Version */
-            definition_version?: number | null;
-        };
-        /**
-         * StaffReceiptPage
-         * @description Bounded canonical source-read receipt history for one assignment.
-         */
-        StaffReceiptPage: {
-            /** Items */
-            items?: components["schemas"]["StaffSourceReceipt"][];
-            /** Next Offset */
-            next_offset?: number | null;
-            /**
-             * Has More
-             * @default false
-             */
-            has_more: boolean;
-        };
-        /**
-         * StaffResult
-         * @description An immutable, source-attributable staff draft.
-         *
-         *     This is still draft engineering content.  It contains no engineer
-         *     acceptance and cannot be published by this service.
-         */
-        StaffResult: {
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Assignment Id */
-            assignment_id: string;
-            /** Root Run Id */
-            root_run_id: string;
-            /** Staff Id */
-            staff_id: string;
-            /** Staff Version */
-            staff_version: number;
-            /** Work Order Id */
-            work_order_id: string;
-            /** Route Binding Id */
-            route_binding_id: string;
-            office_output: components["schemas"]["OfficeOutput"];
-            /** Authored Notes */
-            authored_notes?: string[];
-            /** Source Ids Read */
-            source_ids_read?: string[];
-            /** Source Bases */
-            source_bases?: components["schemas"]["StaffSourceBasis"][];
-            /** Web Sources */
-            web_sources?: {
-                [key: string]: unknown;
-            }[];
-            /** Item Bases */
-            item_bases?: [
-                string,
-                string
-            ][];
-            /** Trusted Recipients */
-            trusted_recipients?: string[];
-            /** Source Recipients */
-            source_recipients?: [
-                string,
-                string[]
-            ][];
-            /** Approved Plan Id */
-            approved_plan_id?: string | null;
-            /** Usage */
-            usage?: {
-                [key: string]: unknown;
-            };
-            /** Created At */
-            created_at: string;
-            /**
-             * Currentness
-             * @enum {string}
-             */
-            currentness: "current" | "needs_review";
-        };
-        /**
-         * StaffResultPage
-         * @description Paged immutable draft results for a generated colleague.
-         */
-        StaffResultPage: {
-            /** Items */
-            items?: components["schemas"]["StaffResult"][];
-            /** Next Offset */
-            next_offset?: number | null;
-            /**
-             * Has More
-             * @default false
-             */
-            has_more: boolean;
-        };
-        /**
-         * StaffSourceBasis
-         * @description The exact evidence and artifact basis used by a saved staff draft.
-         */
-        StaffSourceBasis: {
-            /** Source Id */
-            source_id: string;
-            /** Artifact Id */
-            artifact_id: string;
-            /** Artifact Version */
-            artifact_version: number;
-            /** Artifact Hash */
-            artifact_hash: string;
-            /** Locator */
-            locator: string;
-        };
-        /**
-         * StaffSourceReceipt
-         * @description Attributable extent actually returned by one successful staff read.
-         */
-        StaffSourceReceipt: {
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Actor Id */
-            actor_id: string;
-            /** Profile Id */
-            profile_id: string;
-            /** Profile Version */
-            profile_version: number;
-            /** Assignment Id */
-            assignment_id: string;
-            /** Route Binding Id */
-            route_binding_id: string;
-            /** Root Run Id */
-            root_run_id: string;
-            /** Source Id */
-            source_id: string;
-            /** Artifact Id */
-            artifact_id: string;
-            /** Artifact Version */
-            artifact_version: number;
-            /** Content Hash */
-            content_hash: string;
-            /** Locator */
-            locator: string;
-            /** Text Offset */
-            text_offset?: number | null;
-            /** Text Length */
-            text_length?: number | null;
-            /** Page */
-            page?: number | null;
-            /** Region */
-            region?: number[] | null;
-            /** Visible Cells */
-            visible_cells?: string[];
-            /** Method */
-            method: string;
-            /** Created At */
-            created_at: string;
-        };
-        /**
-         * StaffVersionPage
-         * @description Paged immutable profile versions for a generated colleague.
-         */
-        StaffVersionPage: {
-            /** Items */
-            items?: components["schemas"]["StaffProfileRecord"][];
-            /** Next Offset */
-            next_offset?: number | null;
-            /**
-             * Has More
-             * @default false
-             */
-            has_more: boolean;
-        };
-        /**
-         * StaffWorkOrder
-         * @description The bounded brief and checks for one actual staff assignment.
-         */
-        StaffWorkOrder: {
-            /** Brief */
-            brief: string;
-            /** Goal */
-            goal: string;
-            /** Source Ids */
-            source_ids: string[];
-            /** Expected Outputs */
-            expected_outputs: string[];
-            /** Completion Checks */
-            completion_checks: string[];
-        };
-        /**
-         * StaffWorkOrderPage
-         * @description Paged immutable work orders for a generated colleague.
-         */
-        StaffWorkOrderPage: {
-            /** Items */
-            items?: components["schemas"]["StaffWorkOrderRecord"][];
-            /** Next Offset */
-            next_offset?: number | null;
-            /**
-             * Has More
-             * @default false
-             */
-            has_more: boolean;
-        };
-        /**
-         * StaffWorkOrderRecord
-         * @description Immutable assignment snapshot tied to a staff profile version.
-         */
-        StaffWorkOrderRecord: {
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Staff Id */
-            staff_id: string;
-            /** Staff Version */
-            staff_version: number;
-            /** Creator Run Id */
-            creator_run_id: string;
-            /** Scope Id */
-            scope_id: string;
-            work_order: components["schemas"]["StaffWorkOrder"];
-            /** Created At */
-            created_at: string;
-            /** Definition Id */
-            definition_id?: string | null;
-            /** Definition Version */
-            definition_version?: number | null;
         };
         /** SubmissionApproval */
         SubmissionApproval: {
@@ -9800,26 +5509,84 @@ export interface components {
             /** Detail */
             detail: string;
         };
-        /** SyncRequest */
-        SyncRequest: {
-            /**
-             * Max Messages
-             * @default 30
-             */
-            max_messages: number;
+        /** TakeoffBoqItem */
+        TakeoffBoqItem: {
+            /** Description */
+            description: string;
+            /** Unit */
+            unit: string;
+            /** Quantity */
+            quantity: string | null;
         };
-        /** SyncResult */
-        SyncResult: {
-            /** Checked */
-            checked: number;
-            /** Matched */
-            matched: number;
-            /** Skipped */
-            skipped: number;
-            /** More Available */
-            more_available: boolean;
-            /** Warnings */
-            warnings: string[];
+        /** TakeoffLine */
+        TakeoffLine: {
+            /** Id */
+            id: string;
+            /** Tender Id */
+            tender_id: string;
+            /** Run Id */
+            run_id: string;
+            /** Assignment Id */
+            assignment_id?: string | null;
+            /** Author */
+            author: string;
+            /** Description */
+            description: string;
+            /** Location */
+            location: string;
+            /** Unit */
+            unit: string;
+            /** Quantity */
+            quantity: string | null;
+            /** Method */
+            method: ("dimensions" | "schedule" | "scaled" | "counted") | null;
+            /** Working */
+            working: string;
+            /** Source Ids */
+            source_ids: string[];
+            /** Boq Item Id */
+            boq_item_id: string | null;
+            boq: components["schemas"]["TakeoffBoqItem"] | null;
+            /**
+             * Comparison
+             * @enum {string}
+             */
+            comparison: "matches" | "differs" | "unit_differs" | "no_boq_quantity" | "not_in_boq" | "not_on_drawings";
+            /** Difference */
+            difference?: string | null;
+            /** Difference Percent */
+            difference_percent?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "proposed" | "accepted" | "rejected";
+            /**
+             * Review Note
+             * @default
+             */
+            review_note: string;
+            /** Reviewed At */
+            reviewed_at?: string | null;
+            /** Is Current */
+            is_current: boolean;
+            /** Created At */
+            created_at: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /** TakeoffReview */
+        TakeoffReview: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "accepted" | "rejected";
+            /**
+             * Note
+             * @default
+             */
+            note: string;
         };
         /** Task */
         Task: {
@@ -9850,17 +5617,12 @@ export interface components {
             /** Updated At */
             updated_at: string;
         };
-        /** TaskProposal */
-        TaskProposal: {
-            /** Title */
-            title: string;
-            /** Description */
-            description: string;
-            /** Role */
-            role: string;
-            /** Source Ids */
-            source_ids?: string[];
-            ai_route?: components["schemas"]["AIRoute"] | null;
+        /** TeamView */
+        TeamView: {
+            /** Staff */
+            staff: components["schemas"]["StaffMember"][];
+            /** Assignments */
+            assignments: components["schemas"]["Assignment"][];
         };
         /** Tender */
         Tender: {
@@ -10045,58 +5807,6 @@ export interface components {
             off: boolean;
         };
         /**
-         * ToolCapability
-         * @description A closed, versioned product operation available to staff.
-         */
-        ToolCapability: {
-            /** Id */
-            id: string;
-            /** Version */
-            version: number;
-            /** Description */
-            description: string;
-            /** Read Only */
-            read_only: boolean;
-        };
-        /** TranscriptionRequest */
-        TranscriptionRequest: {
-            /**
-             * Transcript
-             * @default
-             */
-            transcript: string;
-            /**
-             * Auto Send
-             * @default false
-             */
-            auto_send: boolean;
-            /**
-             * Retain
-             * @default false
-             */
-            retain: boolean;
-            /**
-             * Language
-             * @default en
-             */
-            language: string;
-            /** Capability Id */
-            capability_id?: string | null;
-        };
-        /** TransferRequest */
-        TransferRequest: {
-            /** Result Id */
-            result_id: string;
-            /** Recipient Staff Id */
-            recipient_staff_id: string;
-            /** Purpose */
-            purpose: string;
-            /** Expected Basis Fingerprint */
-            expected_basis_fingerprint: string;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /**
          * UnitRateInput
          * @description A proposed commercial rate, with no quantity or approval authority.
          */
@@ -10116,25 +5826,6 @@ export interface components {
             vat_percent?: string | null;
             provenance: components["schemas"]["RateSource"];
         };
-        /** UnitRateProposalInput */
-        UnitRateProposalInput: {
-            /** Unit Rate */
-            unit_rate?: string | null;
-            /** Components */
-            components?: components["schemas"]["RateComponent"][] | null;
-            /** Currency */
-            currency: string;
-            /**
-             * Tax Basis
-             * @enum {string}
-             */
-            tax_basis: "excluding_vat" | "including_vat" | "unknown";
-            /** Vat Percent */
-            vat_percent?: string | null;
-            provenance: components["schemas"]["RateSource"];
-            /** Item Id */
-            item_id: string;
-        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -10147,88 +5838,6 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
-        };
-        /** WatchActivation */
-        WatchActivation: {
-            /** Fingerprint */
-            fingerprint: string;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** WatchDraft */
-        WatchDraft: {
-            /** Scope */
-            scope: string;
-            /** Trigger */
-            trigger: string;
-            /**
-             * Schedule
-             * @default 0 * * * *
-             */
-            schedule: string;
-            /**
-             * Timezone
-             * @default UTC
-             */
-            timezone: string;
-            /**
-             * Stop Condition
-             * @default manual
-             */
-            stop_condition: string;
-            /** Budget */
-            budget: number;
-            /**
-             * Notification Policy
-             * @default meaningful_change
-             */
-            notification_policy: string;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** WatchSpec */
-        WatchSpec: {
-            /** Id */
-            id: string;
-            /** Scope */
-            scope: string;
-            /** Trigger */
-            trigger: string;
-            /** Schedule */
-            schedule: string;
-            /** Timezone */
-            timezone: string;
-            /** Last Successful Check */
-            last_successful_check?: string | null;
-            /** Next Due */
-            next_due?: string | null;
-            /** Stop Condition */
-            stop_condition: string;
-            /** Budget */
-            budget: number;
-            /** Notification Policy */
-            notification_policy: string;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "draft" | "active" | "paused" | "stopped" | "exhausted";
-            /**
-             * Missed Checks
-             * @default 0
-             */
-            missed_checks: number;
-            /** Fingerprint */
-            fingerprint: string;
-        };
-        /** WebFinding */
-        WebFinding: {
-            /** Title */
-            title: string;
-            /** Detail */
-            detail: string;
-            /** Urls */
-            urls: string[];
         };
         /** WorkBrief */
         WorkBrief: {
@@ -10287,81 +5896,6 @@ export interface components {
         /** WorkBriefState */
         WorkBriefState: {
             brief?: components["schemas"]["WorkBrief"] | null;
-        };
-        /** WorkGraphStatus */
-        WorkGraphStatus: {
-            graph: components["schemas"]["WorkGraphVersion"];
-            /** Nodes */
-            nodes?: components["schemas"]["NodeStatus"][];
-        };
-        /** WorkGraphVersion */
-        WorkGraphVersion: {
-            /** Id */
-            id: string;
-            /** Root Id */
-            root_id: string;
-            /** Revision */
-            revision: number;
-            /** Instruction Revision Id */
-            instruction_revision_id: string;
-            /** Nodes */
-            nodes: components["schemas"]["WorkNode"][];
-            /** Edges */
-            edges: string[][];
-            /** Basis Fingerprint */
-            basis_fingerprint: string;
-            /** Created At */
-            created_at: string;
-        };
-        /** WorkIntent */
-        WorkIntent: {
-            /** Id */
-            id: string;
-            /** Run Id */
-            run_id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Plan Id */
-            plan_id: string;
-            /** Task Id */
-            task_id?: string | null;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "task" | "manager";
-            /** Instruction */
-            instruction: string;
-            /**
-             * Status
-             * @constant
-             */
-            status: "queued";
-            /** Created At */
-            created_at: string;
-        };
-        /** WorkNode */
-        WorkNode: {
-            /** Id */
-            id: string;
-            /** Key */
-            key: string;
-            /** Owner Staff Id */
-            owner_staff_id?: string | null;
-            /** Expected Output */
-            expected_output: string;
-            /** Completion Criteria */
-            completion_criteria: string;
-            /** Prerequisite Ids */
-            prerequisite_ids?: string[];
-            /**
-             * State
-             * @default ready
-             * @enum {string}
-             */
-            state: "ready" | "blocked" | "running" | "completed" | "failed" | "cancelled";
-            /** Brief */
-            brief: string;
         };
         /** WorkPlan */
         WorkPlan: {
@@ -10485,8 +6019,6 @@ export interface components {
             dependency_state: "current" | "needs_review";
             /** Review Reasons */
             review_reasons?: string[];
-            /** Public Citation Refs */
-            public_citation_refs?: string[];
             /** Sha256 */
             sha256: string;
             /**
@@ -10533,83 +6065,12 @@ export interface components {
             source_refs?: string[];
             /** Method Refs */
             method_refs?: string[];
-            /** Public Citation Refs */
-            public_citation_refs?: string[];
             /** Sha256 */
             sha256: string;
             /** Row Count */
             row_count: number;
             /** Created At */
             created_at: string;
-        };
-        /** WorkStatusSnapshot */
-        WorkStatusSnapshot: {
-            /** Tender Id */
-            tender_id: string;
-            /** Root Run Id */
-            root_run_id: string | null;
-            /** Owners */
-            owners: string[];
-            /** Blockers */
-            blockers: string[];
-            /**
-             * Provider Requests
-             * @default 0
-             */
-            provider_requests: number;
-        };
-        /** WorkingMemoryCommand */
-        WorkingMemoryCommand: {
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "scratch" | "assumption";
-            /** Title */
-            title: string;
-            /** Content */
-            content: string;
-            /** Source Ids */
-            source_ids?: string[];
-            /** Valid Until */
-            valid_until?: string | null;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** WorkingMemoryRecord */
-        WorkingMemoryRecord: {
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "scratch" | "assumption";
-            /** Title */
-            title: string;
-            /** Content */
-            content: string;
-            /** Source Ids */
-            source_ids?: string[];
-            /** Valid Until */
-            valid_until?: string | null;
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Run Id */
-            run_id?: string | null;
-            /** Actor Id */
-            actor_id: string;
-            /** Created At */
-            created_at: string;
-            /** Dependencies */
-            dependencies: components["schemas"]["MemoryDependency"][];
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "current" | "needs_review";
-            /** Review Reasons */
-            review_reasons: string[];
         };
         /** DiagnosticEventInput */
         DiagnosticEventInput: {
@@ -11104,9 +6565,12 @@ export interface operations {
         parameters: {
             query?: {
                 q?: string;
-                mode?: "words" | "meaning" | "combined";
+                mode?: "auto" | "words" | "meaning" | "combined";
                 area?: string | null;
                 status?: string | null;
+                document_kind?: string | null;
+                limit?: number;
+                cursor?: string | null;
             };
             header?: never;
             path: {
@@ -11122,7 +6586,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Evidence"][];
+                    "application/json": components["schemas"]["RetrievalResponse"];
                 };
             };
             /** @description Validation Error */
@@ -11184,7 +6648,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Run"];
+                    "application/json": components["schemas"]["SemanticStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_search_index_api_tenders__tender_id__search_index_cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SemanticStatus"];
                 };
             };
             /** @description Validation Error */
@@ -12007,7 +7502,7 @@ export interface operations {
             };
         };
     };
-    get_office_api_tenders__tender_id__office_get: {
+    view_api_tenders__tender_id__team_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12024,7 +7519,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["OfficeSnapshot"];
+                    "application/json": components["schemas"]["TeamView"];
                 };
             };
             /** @description Validation Error */
@@ -12038,16 +7533,13 @@ export interface operations {
             };
         };
     };
-    get_staff_api_tenders__tender_id__staff_get: {
+    assignment_api_tenders__tender_id__team_assignments__assignment_id__get: {
         parameters: {
-            query?: {
-                cursor?: string | null;
-                limit?: number;
-                lifecycle?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 tender_id: string;
+                assignment_id: string;
             };
             cookie?: never;
         };
@@ -12059,7 +7551,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["StaffPage"];
+                    "application/json": components["schemas"]["Assignment"];
                 };
             };
             /** @description Validation Error */
@@ -12073,87 +7565,9 @@ export interface operations {
             };
         };
     };
-    change_staff_lifecycle_api_tenders__tender_id__staff__staff_id__lifecycle_post: {
+    retire_api_tenders__tender_id__team_staff__staff_id__retire_post: {
         parameters: {
             query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                staff_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["StaffLifecycleRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StaffLifecycleReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    change_staff_preferences_api_tenders__tender_id__staff__staff_id__preferences_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                staff_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["StaffPreferenceRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StaffProfileRecord"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_notebook_api_tenders__tender_id__staff__staff_id__notebook_get: {
-        parameters: {
-            query?: {
-                cursor?: string | null;
-                limit?: number;
-                query?: string;
-                kind?: ("finding" | "assumption" | "open_question" | "failed_approach" | "handover" | "preference") | null;
-                current?: boolean | null;
-            };
             header?: never;
             path: {
                 tender_id: string;
@@ -12169,7 +7583,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["NotebookPage"];
+                    "application/json": components["schemas"]["StaffMember"];
                 };
             };
             /** @description Validation Error */
@@ -12183,426 +7597,13 @@ export interface operations {
             };
         };
     };
-    append_notebook_api_tenders__tender_id__staff__staff_id__notebook_post: {
+    steer_api_tenders__tender_id__runs__run_id__steering_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 tender_id: string;
-                staff_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NotebookEntryDraft"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NotebookEntry"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_handoffs_api_tenders__tender_id__handoffs_get: {
-        parameters: {
-            query: {
-                staff_id: string;
-                direction?: string;
-                cursor?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HandoffPage"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    transfer_handoff_api_tenders__tender_id__handoffs_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TransferRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Handoff"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_handoff_api_tenders__tender_id__handoffs__handoff_id__get: {
-        parameters: {
-            query?: {
-                offset?: number;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-                handoff_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HandoffPayload"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    deliver_office_message_api_tenders__tender_id__office_deliveries_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CoordinationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DeliveryReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    acknowledge_office_message_api_tenders__tender_id__office_messages__message_id__acknowledge_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                message_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ReceiptRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DeliveryReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    message_delivery_state_api_tenders__tender_id__office_messages__message_id__delivery_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                message_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DeliveryReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    propose_work_graph_api_tenders__tender_id__office_graphs_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GraphDraft"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkGraphVersion"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    revise_work_graph_api_tenders__tender_id__office_graphs_revisions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GraphRevisionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkGraphVersion"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    latest_work_graph_api_tenders__tender_id__office_graphs_latest_get: {
-        parameters: {
-            query: {
-                root_run_id: string;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkGraphStatus"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    office_status_api_tenders__tender_id__office_status_get: {
-        parameters: {
-            query?: {
-                root_run_id?: string | null;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkStatusSnapshot"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_instructions_api_tenders__tender_id__office_instructions_get: {
-        parameters: {
-            query: {
-                root_run_id: string;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["InstructionAdmission"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    admit_instruction_api_tenders__tender_id__office_instructions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
+                run_id: string;
             };
             cookie?: never;
         };
@@ -12619,350 +7620,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstructionAdmission"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_staff_desk_api_tenders__tender_id__staff__staff_id__get: {
-        parameters: {
-            query?: {
-                version?: number | null;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-                staff_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StaffDesk"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_staff_versions_api_tenders__tender_id__staff__staff_id__versions_get: {
-        parameters: {
-            query?: {
-                offset?: number;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-                staff_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StaffVersionPage"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_staff_work_orders_api_tenders__tender_id__staff__staff_id__work_orders_get: {
-        parameters: {
-            query?: {
-                offset?: number;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-                staff_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StaffWorkOrderPage"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_staff_results_api_tenders__tender_id__staff__staff_id__results_get: {
-        parameters: {
-            query?: {
-                offset?: number;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-                staff_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StaffResultPage"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_office_events_api_tenders__tender_id__office_events_get: {
-        parameters: {
-            query?: {
-                after?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfficeEventPageWithInstance"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_office_messages_api_tenders__tender_id__office_messages_get: {
-        parameters: {
-            query?: {
-                cursor?: string | null;
-                limit?: number;
-                staff_id?: string | null;
-                assignment_id?: string | null;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfficeMessagePage"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_office_assignments_api_tenders__tender_id__office_assignments_get: {
-        parameters: {
-            query?: {
-                staff_id?: string | null;
-                root_run_id?: string | null;
-                offset?: number;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AssignmentPage"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_office_assignment_api_tenders__tender_id__office_assignments__assignment_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                assignment_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StaffAssignment"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_office_result_api_tenders__tender_id__office_results__result_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                result_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StaffResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_office_receipts_api_tenders__tender_id__office_assignments__assignment_id__receipts_get: {
-        parameters: {
-            query?: {
-                offset?: number;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-                assignment_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StaffReceiptPage"];
                 };
             };
             /** @description Validation Error */
@@ -13555,92 +8212,6 @@ export interface operations {
             };
         };
     };
-    mail_settings_api_mail_settings_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MailSettings"];
-                };
-            };
-        };
-    };
-    update_settings_api_mail_settings_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MailSettingsPatch"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MailSettings"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    sync_api_mail_sync_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SyncRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SyncResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     quotes_api_tenders__tender_id__quotes_get: {
         parameters: {
             query?: never;
@@ -13793,78 +8364,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    approve_api_tenders__tender_id__quotes__quote_id__approve_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                quote_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SendDecision"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QuoteRecord"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    send_api_tenders__tender_id__quotes__quote_id__send_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                quote_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SendDecision"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QuoteRecord"];
-                };
             };
             /** @description Validation Error */
             422: {
@@ -14112,48 +8611,9 @@ export interface operations {
             };
         };
     };
-    calculate_api_tenders__tender_id__measurements_calculate_post: {
+    lines_api_tenders__tender_id__takeoff_get: {
         parameters: {
             query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MeasurementInput"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MeasurementCalculation"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    records_api_tenders__tender_id__measurements_get: {
-        parameters: {
-            query?: {
-                artifact_id?: string | null;
-                offset?: number;
-                limit?: number;
-            };
             header?: never;
             path: {
                 tender_id: string;
@@ -14168,7 +8628,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MeasurementRecord"][];
+                    "application/json": components["schemas"]["TakeoffLine"][];
                 };
             };
             /** @description Validation Error */
@@ -14182,18 +8642,19 @@ export interface operations {
             };
         };
     };
-    create_api_tenders__tender_id__measurements_post: {
+    review_api_tenders__tender_id__takeoff__line_id__review_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 tender_id: string;
+                line_id: string;
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["MeasurementCreate"];
+                "application/json": components["schemas"]["TakeoffReview"];
             };
         };
         responses: {
@@ -14203,75 +8664,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MeasurementRecord"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    record_api_tenders__tender_id__measurements__measurement_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                measurement_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MeasurementRecord"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    link_api_tenders__tender_id__measurements__measurement_id__link_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                measurement_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MeasurementLink"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QuantityProposal"];
+                    "application/json": components["schemas"]["TakeoffLine"];
                 };
             };
             /** @description Validation Error */
@@ -15090,106 +9483,6 @@ export interface operations {
             };
         };
     };
-    team_api_tenders__tender_id__plans__plan_id__ai_team_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                plan_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AITeam"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    refresh_team_api_tenders__tender_id__plans__plan_id__ai_team_refresh_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                plan_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AITeam"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    approve_team_api_tenders__tender_id__plans__plan_id__ai_team_approve_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                plan_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AITeamApproval"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AITeam"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     usage_api_tenders__tender_id__ai_usage_get: {
         parameters: {
             query?: never;
@@ -15740,1525 +10033,6 @@ export interface operations {
             };
         };
     };
-    decisions_api_benchmark_adoption_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BenchmarkAdoptionDecision"][];
-                };
-            };
-        };
-    };
-    review_api_benchmark_adoption_review_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BenchmarkAdoptionReview"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BenchmarkAdoptionDecision"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    verified_report_api_benchmark_adoption_reports__report_id__get: {
-        parameters: {
-            query: {
-                expected_hash: string;
-            };
-            header?: never;
-            path: {
-                report_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BenchmarkReport"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_definitions_api_agent_definitions_get: {
-        parameters: {
-            query?: {
-                include_retired?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentDefinitionRecord"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_definition_api_agent_definitions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AgentDefinitionCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentDefinitionRecord"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_definition_api_agent_definitions__definition_id__get: {
-        parameters: {
-            query?: {
-                version?: number | null;
-            };
-            header?: never;
-            path: {
-                definition_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentDefinitionRecord"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    edit_definition_api_agent_definitions__definition_id__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                definition_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AgentDefinitionEdit"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentDefinitionRecord"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    definition_versions_api_agent_definitions__definition_id__versions_get: {
-        parameters: {
-            query?: {
-                offset?: number;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                definition_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentDefinitionRecord"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    duplicate_definition_api_agent_definitions__definition_id__duplicate_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                definition_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AgentDefinitionDuplicate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentDefinitionRecord"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    retire_definition_api_agent_definitions__definition_id__retire_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                definition_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AgentDefinitionRetire"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentDefinitionRecord"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    export_definition_api_agent_definitions__definition_id__export_get: {
-        parameters: {
-            query?: {
-                version?: number | null;
-            };
-            header?: never;
-            path: {
-                definition_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentDefinitionExport"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    local_runs_api_tenders__tender_id__local_code_runs_get: {
-        parameters: {
-            query: {
-                root_run_id: string;
-                actor_id?: string | null;
-                assignment_id?: string | null;
-                cursor?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LocalCodePage"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    local_detail_api_tenders__tender_id__local_code_runs__engine___identifier__get: {
-        parameters: {
-            query: {
-                root_run_id: string;
-                actor_id?: string | null;
-                assignment_id?: string | null;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-                engine: string;
-                identifier: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LocalCodeDetail"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    local_file_api_tenders__tender_id__local_code_runs__engine___identifier__files__kind___name__get: {
-        parameters: {
-            query: {
-                root_run_id: string;
-                actor_id?: string | null;
-                assignment_id?: string | null;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-                engine: string;
-                identifier: string;
-                kind: string;
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    status_api_sandbox_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SandboxStatus"];
-                };
-            };
-        };
-    };
-    action_api_sandbox_actions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SandboxAction"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SandboxStatus"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_receipt_api_tenders__tender_id__python_runs__identifier__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                identifier: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PythonAnalysisReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    output_api_tenders__tender_id__python_runs__identifier__outputs__filename__get: {
-        parameters: {
-            query?: {
-                download?: boolean;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-                identifier: string;
-                filename: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    browser_status_api_tenders__tender_id__research_browser_status_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrowserResearchStatusModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    setup_browser_api_tenders__tender_id__research_browser_setup_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrowserResearchStatusModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_research_api_tenders__tender_id__research_get: {
-        parameters: {
-            query?: {
-                offset?: number;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PublicResearchReceipt"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_research_receipt_api_tenders__tender_id__research_receipts__receipt_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                receipt_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PublicResearchReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    pending_search_api_tenders__tender_id__research_search_get: {
-        parameters: {
-            query: {
-                root_run_id: string;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PublicSearchReceipt"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_search_api_tenders__tender_id__research_search__request_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                request_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PublicSearchReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fetch_public_api_tenders__tender_id__research_fetch_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PublicFetchCommand"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PublicResearchReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fetch_rendered_public_api_tenders__tender_id__research_browser_fetch_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PublicFetchCommand"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PublicResearchReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cite_public_api_tenders__tender_id__research_citations_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ResearchCitationCommand"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchCitation"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_citation_api_tenders__tender_id__research_citations__citation_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                citation_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchCitation"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_market_api_tenders__tender_id__research_market_get: {
-        parameters: {
-            query?: {
-                offset?: number;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MarketObservation"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    record_market_api_tenders__tender_id__research_market_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MarketObservationCommand"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MarketObservation"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    memory_overview_api_tenders__tender_id__memory_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MemoryOverview"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    save_memory_api_tenders__tender_id__memory_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkingMemoryCommand"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkingMemoryRecord"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    working_memory_api_tenders__tender_id__memory_working_get: {
-        parameters: {
-            query?: {
-                offset?: number;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkingMemoryRecord"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    affected_memory_api_tenders__tender_id__memory_affected_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DependencyImpact"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_memory_api_tenders__tender_id__memory__memory_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                memory_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkingMemoryRecord"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    promote_memory_api_tenders__tender_id__memory__memory_id__promote_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                memory_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MemoryPromotionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["KnowledgeRecord"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    capabilities_api_ai_connections__connection_id__native_capabilities_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                connection_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeClientCapability"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    sessions_api_tenders__tender_id__native_sessions_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeSessionBinding"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    artifacts_api_tenders__tender_id__runs__run_id__native_artifacts_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeArtifact"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    artifact_content_api_tenders__tender_id__native_artifacts__artifact_id__content_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                artifact_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cleanup_api_tenders__tender_id__native_cleanup_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeCleanupReceipt"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    review_cleanup_api_tenders__tender_id__native_cleanup__receipt_id__review_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                receipt_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NativeCleanupReview"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MutationReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    review_api_tenders__tender_id__plans__plan_id__review_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                plan_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PlanReview"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_delegation_api_tenders__tender_id__plans__plan_id__delegation_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                plan_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DelegationProposalEdit"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DelegationProposal"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delegation_artifacts_api_tenders__tender_id__plans__plan_id__delegation_artifacts_get: {
-        parameters: {
-            query?: {
-                offset?: number;
-                limit?: number;
-                query?: string | null;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-                plan_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DelegationArtifactOptionPage"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    approve_and_start_api_tenders__tender_id__plans__plan_id__review_approve_and_start_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                plan_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PlanReviewApproval"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PlanApprovalResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_submissions_api_tenders__tender_id__submissions_get: {
         parameters: {
             query?: never;
@@ -17697,77 +10471,6 @@ export interface operations {
             };
         };
     };
-    create_watch_api_tenders__tender_id__watches_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WatchDraft"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WatchSpec"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    activate_watch_api_tenders__tender_id__watches__watch_id__activate_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                watch_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WatchActivation"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WatchSpec"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     calculate_api_tenders__tender_id__calculations_post: {
         parameters: {
             query?: never;
@@ -17835,181 +10538,6 @@ export interface operations {
             };
         };
     };
-    list_reviews_api_tenders__tender_id__reviews_get: {
-        parameters: {
-            query?: {
-                status?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReviewSession"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_review_api_tenders__tender_id__reviews_post: {
-        parameters: {
-            query?: {
-                author_total?: string | null;
-            };
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ReviewDraft"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReviewSession"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_review_api_tenders__tender_id__reviews__session_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReviewSession"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    contribute_review_api_tenders__tender_id__reviews__session_id__contributions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ReviewContribution"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReviewSession"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    resolve_review_api_tenders__tender_id__reviews__session_id__resolve_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ReviewResolution"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReviewSession"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     propose_asset_api_company_assets_post: {
         parameters: {
             query?: never;
@@ -18064,77 +10592,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    transcribe_api_tenders__tender_id__transcriptions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_transcribe_api_tenders__tender_id__transcriptions_post"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    transcribe_json_api_tenders__tender_id__transcriptions_json_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TranscriptionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ReprocessResult"];
                 };
             };
             /** @description Validation Error */

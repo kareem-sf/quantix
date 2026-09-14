@@ -34,17 +34,9 @@ class ToolFenceError(ValueError):
         super().__init__(detail)
 
 
-def _granted_ids(context) -> set[str]:
-    tools = getattr(context, "reviewed_tools", None) or []
-    granted: set[str] = set()
-    for item in tools:
-        identifier = item.id if hasattr(item, "id") else item.get("id")
-        if identifier:
-            granted.add(identifier)
-    return granted
-
-
-def _blocked(identity: OfficeExecutionIdentity, capability_id: str, request_id: str, detail: str) -> ExecutionReceipt:
+def _blocked(
+    identity: OfficeExecutionIdentity, capability_id: str, request_id: str, detail: str
+) -> ExecutionReceipt:
     return ExecutionReceipt(
         status="blocked",
         capability_id=capability_id,
@@ -54,7 +46,9 @@ def _blocked(identity: OfficeExecutionIdentity, capability_id: str, request_id: 
     )
 
 
-def _uncertain(identity: OfficeExecutionIdentity, capability_id: str, request_id: str, detail: str) -> ExecutionReceipt:
+def _uncertain(
+    identity: OfficeExecutionIdentity, capability_id: str, request_id: str, detail: str
+) -> ExecutionReceipt:
     return ExecutionReceipt(
         status="uncertain_external_outcome",
         capability_id=capability_id,
@@ -103,14 +97,12 @@ async def invoke(
         raise ToolFenceError(
             _blocked(identity, capability_id, request_id, "Tool arguments must be an object.")
         )
-    granted = _granted_ids(context)
-    if identity.actor_kind == "staff" and capability_id not in granted:
-        detail = f"The tool '{capability_id}' is not granted for this staff assignment."
-        raise ToolFenceError(_blocked(identity, capability_id, request_id, detail))
     from .run_activity import ActivityRecorder, current_operation
 
     if current_operation():
-        ActivityRecorder(context).record(current_operation(), "tool", "started", f"Using {definition.name}.")
+        ActivityRecorder(context).record(
+            current_operation(), "tool", "started", f"Using {definition.name}."
+        )
     try:
         from .office_tools import commit_deferred_read, defer_read_commit
 
@@ -200,37 +192,85 @@ async def _dispatch(
     return receipt.result
 
 
-async def dispatch(entrypoint: Entrypoint, definition, context, arguments: dict | None, *, invocation_id: str | None = None, timeout: float | None = None):
+async def dispatch(
+    entrypoint: Entrypoint,
+    definition,
+    context,
+    arguments: dict | None,
+    *,
+    invocation_id: str | None = None,
+    timeout: float | None = None,
+):
     """Record one actual invocation, including nested calls and refused attempts."""
     from .run_activity import ActivityRecorder, ActivityRecordingError, activity_scope
 
     recorder = ActivityRecorder(context)
     operation = recorder.start(
-        "tool", f"Preparing {definition.name}.",
+        "tool",
+        f"Preparing {definition.name}.",
         {"inputs": arguments or {}, "entrypoint": entrypoint, "read_only": definition.read_only},
-        phase="prepared", tool=definition.name, provider_call_id=invocation_id,
+        phase="prepared",
+        tool=definition.name,
+        provider_call_id=invocation_id,
     )
     missing = object()
     result = missing
     with activity_scope(operation):
         try:
-            result = await _dispatch(entrypoint, definition, context, arguments, invocation_id=invocation_id, timeout=timeout)
+            result = await _dispatch(
+                entrypoint,
+                definition,
+                context,
+                arguments,
+                invocation_id=invocation_id,
+                timeout=timeout,
+            )
             _ensure_active(context)
         except ActivityRecordingError:
             raise
         except (asyncio.CancelledError, InterruptedError):
             returned = result is not missing
-            recorder.record(operation, "tool", "interrupted",
-                            f"{definition.name} returned after Stop; its result was not delivered to the model." if returned else f"{definition.name} stopped before a confirmed result.",
-                            {"outputs": result, "outcome": "A tool result was returned. Final run publication is separate and was not confirmed here."} if returned else {"outcome": "No completed result was confirmed."})
+            recorder.record(
+                operation,
+                "tool",
+                "interrupted",
+                f"{definition.name} returned after Stop; its result was not delivered to the model."
+                if returned
+                else f"{definition.name} stopped before a confirmed result.",
+                {
+                    "outputs": result,
+                    "outcome": "A tool result was returned. Final run publication is separate and was not confirmed here.",
+                }
+                if returned
+                else {"outcome": "No completed result was confirmed."},
+            )
             raise
         except ToolFenceError as error:
-            phase = "uncertain" if error.receipt.status == "uncertain_external_outcome" else "blocked"
-            recorder.record(operation, "tool", phase, f"{definition.name} could not complete.",
-                            {"error": str(error), "receipt": error.receipt.model_dump(mode="json"), "recoverable": error.recoverable})
+            phase = (
+                "uncertain" if error.receipt.status == "uncertain_external_outcome" else "blocked"
+            )
+            recorder.record(
+                operation,
+                "tool",
+                phase,
+                f"{definition.name} could not complete.",
+                {
+                    "error": str(error),
+                    "receipt": error.receipt.model_dump(mode="json"),
+                    "recoverable": error.recoverable,
+                },
+            )
             raise
         except Exception as error:
-            recorder.record(operation, "tool", "failed", f"{definition.name} failed.", {"error": str(error), "error_type": type(error).__name__})
+            recorder.record(
+                operation,
+                "tool",
+                "failed",
+                f"{definition.name} failed.",
+                {"error": str(error), "error_type": type(error).__name__},
+            )
             raise
-        recorder.record(operation, "tool", "completed", f"Finished {definition.name}.", {"outputs": result})
+        recorder.record(
+            operation, "tool", "completed", f"Finished {definition.name}.", {"outputs": result}
+        )
         return result

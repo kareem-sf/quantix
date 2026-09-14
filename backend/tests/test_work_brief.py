@@ -243,52 +243,22 @@ async def test_manager_saves_a_brief_and_the_next_turn_continues_from_it(manager
 
 @pytest.mark.asyncio
 async def test_staff_cannot_use_the_manager_brief_tool(manager_run):
-    from quantix.office_manager_tools import manager_office_tools
     from quantix.office_tools import OfficeContext
+    from quantix.work_brief_tools import work_brief_tools
 
     repo, tender, _, new_run = manager_run
     run = new_run("Synthetic")
-    tools = {item.name: item for item in manager_office_tools(repo, tender["id"], run["id"], None)}
+    tools = {item.name: item for item in work_brief_tools(repo, tender["id"], run["id"], "manager")}
     staff_like = OfficeContext(
-        repo,
-        tender["id"],
-        run["id"],
-        actor_id="staff-1",
-        assignment_id="assignment-1",
-        route_binding_id="binding-1",
+        repo, tender["id"], run["id"], actor_id="staff-1", assignment_id="assignment-1"
     )
-    with pytest.raises(ValueError, match="Tender Manager context"):
+    with pytest.raises(ValueError, match="Only the Tender Manager"):
         await tools["save_work_brief"].invoke(
             staff_like,
             {"outcome": "x", "status": "in_progress", "expected_version": 0},
             invocation_id="staff-call",
         )
     assert WorkBriefService(repo).current(tender["id"]) is None
-
-
-@pytest.mark.asyncio
-async def test_conversation_routing_sees_progress_headlines_only(manager_run):
-    from quantix.conversation import _prompt
-
-    repo, tender, evidence, _ = manager_run
-    WorkBriefService(repo).save(
-        tender["id"],
-        "run-synthetic",
-        "manager-synthetic",
-        _draft(
-            settled=[BriefPoint(text="Supplier A delivers in 5 days.", source_ids=[evidence["id"]])]
-        ),
-        expected_version=0,
-        inspected_source_ids={evidence["id"]},
-        idempotency_key="headline",
-    )
-    prompt = _prompt(repo, tender["id"], "Where are we?")
-    payload = json.loads(prompt[prompt.index("{") :])
-    headlines = payload["saved_status"]["manager_work_brief"]
-    assert headlines["next_step"] == "Read supplier B's delivery terms."
-    assert headlines["open_questions"][0]["owner"] == "engineer"
-    assert "settled" not in headlines
-    assert evidence["id"] not in prompt
 
 
 def test_brief_route_returns_the_current_brief(tmp_path):

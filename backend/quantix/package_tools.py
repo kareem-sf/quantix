@@ -35,12 +35,6 @@ def package_tools():
     ) -> str:
         """Check what the estimate still lacks: BOQ rows without a rate or usable quantity, unconfirmed rows, unknown VAT, possible duplicate rows, pending quantity and rate proposals, and whether totals are complete. Returns counts plus the rows that need attention."""
         office = ctx.context
-        office.require_tool("check_estimate_coverage")
-        office.ensure_scope_current()
-        if office.is_staff:
-            raise ValueError(
-                "The estimate check covers the whole Tender and is available to the Tender Manager."
-            )
         if offset < 0 or not 1 <= limit <= 50:
             raise ToolArgumentError("Choose a non-negative offset and a limit of 1–50.")
         from .estimates import EstimateService
@@ -138,12 +132,6 @@ def package_tools():
     ) -> str:
         """Rehearse the submission package without exporting it: check every registered submission requirement and the package documents (by default the generated documents linked to requirements) for missing approvals, completion reviews, linked documents, changed sources and stale drafts. Returns blockers with the record each concerns."""
         office = ctx.context
-        office.require_tool("rehearse_submission")
-        office.ensure_scope_current()
-        if office.is_staff:
-            raise ValueError(
-                "The submission rehearsal covers the whole Tender and is available to the Tender Manager."
-            )
         from .outputs import OutputService
         from .submissions import SubmissionService
         from .tender_requirements import RequirementService

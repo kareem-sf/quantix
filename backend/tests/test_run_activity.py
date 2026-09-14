@@ -277,30 +277,47 @@ def test_legacy_filters_match_their_visible_category_and_phase(tmp_path):
 
 
 def test_stop_and_recovery_revoke_authority_even_if_activity_capture_fails(tmp_path, monkeypatch):
-    from test_staff_routing import _ready_binding_workspace
+    from test_catalog_authority import configured_office
 
     from quantix.jobs import JobManager
     from quantix.run_activity import ActivityRecorder
     from quantix.settings import SettingsService
-    from quantix.staff_assignments import StaffAssignmentService
+    from quantix.team import TeamService
+    from quantix.team_models import StaffDraft
 
-    repo, tender, _, _, _, envelope, routing, staff, context, _ = _ready_binding_workspace(
-        tmp_path, monkeypatch
+    repo, tender, *_, route = configured_office(tmp_path, monkeypatch)
+    run = repo.create_run(tender["id"], "manager", "Capture stop")
+    team = TeamService(repo)
+    member = team.hire(
+        tender["id"],
+        run["id"],
+        StaffDraft(
+            name="Samir Haddad",
+            role="Quantity Surveyor",
+            specialisms=["BOQ"],
+            background="Pricing.",
+            working_style="Careful.",
+        ),
     )
-    binding = routing.bind(
-        context, staff.staff.id, staff.work_order.id, envelope.route_options[0].id, "capture-stop"
+    assignment = team.assign(
+        tender["id"],
+        run["id"],
+        member.id,
+        title="Check",
+        brief="Check.",
+        expected_result="Result",
+        source_ids=[],
+        route=route,
     )
-    assignments = StaffAssignmentService(repo)
-    assignment = assignments.queue(context, binding.id, "capture-stop")
     jobs = JobManager(repo, SettingsService(repo))
 
     def fail(*args, **kwargs):
         raise sqlite3.OperationalError("disk full")
 
     monkeypatch.setattr(ActivityRecorder, "_append", fail)
-    jobs._stop(repo.get_run(assignment.root_run_id), None)
-    assert repo.get_run(assignment.root_run_id)["status"] == "cancelled"
-    assert assignments.get(tender["id"], assignment.id).status == "interrupted"
+    jobs._stop(repo.get_run(run["id"]), None)
+    assert repo.get_run(run["id"])["status"] == "cancelled"
+    assert team.get(tender["id"], assignment.id).status == "cancelled"
     repo.recover_interrupted_runs()
 
 

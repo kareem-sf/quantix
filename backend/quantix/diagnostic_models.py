@@ -22,10 +22,20 @@ class DiagnosticsStatus(DiagnosticModel):
 
 class DiagnosticEventInput(DiagnosticModel):
     event: Literal["renderer_error", "unhandled_rejection", "react_boundary", "api_network_error"]
-    error_type: Literal[
-        "Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError",
-        "URIError", "EvalError", "AggregateError", "Unknown",
-    ] | None = None
+    error_type: (
+        Literal[
+            "Error",
+            "TypeError",
+            "RangeError",
+            "ReferenceError",
+            "SyntaxError",
+            "URIError",
+            "EvalError",
+            "AggregateError",
+            "Unknown",
+        ]
+        | None
+    ) = None
     source: Literal["app", "api", "renderer"] | None = None
     line: int | None = Field(default=None, ge=0, le=1_000_000)
     column: int | None = Field(default=None, ge=0, le=1_000_000)

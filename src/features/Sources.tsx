@@ -7,7 +7,6 @@ import {
   History,
   Minus,
   Plus,
-  Ruler,
   X,
 } from "lucide-react";
 import { tenderPath, useApi, type Schema } from "../api";
@@ -32,7 +31,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { Measurements } from "./Measurements";
 
 export type SourceSelection =
   | ({ sourceId: string } & SourceContext)
@@ -221,7 +219,6 @@ export function SourceDrawer({
   const [page, setPage] = useState<number | null>(null);
   const [pageInput, setPageInput] = useState("");
   const [pageInputError, setPageInputError] = useState<Error | null>(null);
-  const [measuring, setMeasuring] = useState(false);
   const [zoom, setZoom] = useState(100);
   const [hiddenPreviewFor, setHiddenPreviewFor] = useState<string | null>(null);
   const previewVisible = hiddenPreviewFor !== artifactId;
@@ -384,313 +381,270 @@ export function SourceDrawer({
   const sourcePath = artifact?.relative_path ?? source.data?.relative_path;
   const sourceBody = (
     <div className="flex flex-col gap-4">
-      {measuring && artifactId ? (
-        <div className="legacy-screen">
-          <Measurements
-            key={`${artifactId}:${activePage}:${artifact?.version ?? selection.version ?? ""}`}
-            tenderId={tenderId}
-            artifactId={artifactId}
-            initialPage={activePage}
-            artifactVersion={artifact?.version ?? selection.version}
-            contentHash={artifact?.content_hash ?? selection.contentHash}
-            onClose={() => setMeasuring(false)}
-          />
-        </div>
-      ) : (
-        <>
-          {sourcePath ? (
-            <p className="text-xs break-all text-muted-foreground" dir="auto">
-              {sourcePath}
-            </p>
+      {sourcePath ? (
+        <p className="text-xs break-all text-muted-foreground" dir="auto">
+          {sourcePath}
+        </p>
+      ) : null}
+      {artifact ? (
+        <div
+          className="flex flex-wrap items-center gap-1.5"
+          aria-label="Source context"
+        >
+          <Badge variant="secondary" className="font-normal">
+            Version {artifact.version}
+          </Badge>
+          {artifact.area ? (
+            <Badge variant="secondary" className="font-normal">
+              {artifact.area}
+            </Badge>
           ) : null}
-          {artifact ? (
-            <div
-              className="flex flex-wrap items-center gap-1.5"
-              aria-label="Source context"
-            >
-              <Badge variant="secondary" className="font-normal">
-                Version {artifact.version}
-              </Badge>
-              {artifact.area ? (
-                <Badge variant="secondary" className="font-normal">
-                  {artifact.area}
-                </Badge>
-              ) : null}
-              {context.sheet ? (
-                <Badge variant="secondary" className="font-normal">
-                  {context.sheet}
-                </Badge>
-              ) : null}
-              {context.cellRange ? (
-                <Badge variant="secondary" className="font-mono font-normal">
-                  {context.cellRange}
-                </Badge>
-              ) : null}
-              {context.contentHash ? (
-                <>
-                  <Badge
-                    variant="outline"
-                    className="font-mono font-normal text-muted-foreground"
-                    title={context.contentHash}
-                  >
-                    Hash {context.contentHash.slice(0, 12)}…
-                  </Badge>
-                  <CopyButton value={context.contentHash} />
-                </>
-              ) : null}
-            </div>
+          {context.sheet ? (
+            <Badge variant="secondary" className="font-normal">
+              {context.sheet}
+            </Badge>
           ) : null}
-          {(isPdf && artifactId) || artifact ? (
-            <div className="flex flex-wrap gap-2">
-              {isPdf && artifactId ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setMeasuring(true)}
-                >
-                  <Ruler data-icon="inline-start" />
-                  Measure drawing
-                </Button>
-              ) : null}
-              {artifact ? (
-                <MicroButton
-                  kind="download"
-                  type="button"
-                  disabled={downloading}
-                  onClick={() => void downloadOriginal(artifact)}
-                >
-                  {downloading ? "Downloading…" : "Download original"}
-                </MicroButton>
-              ) : null}
-            </div>
+          {context.cellRange ? (
+            <Badge variant="secondary" className="font-mono font-normal">
+              {context.cellRange}
+            </Badge>
           ) : null}
-          {artifact && !artifact.is_current ? (
-            <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
-              <History
-                className="mt-0.5 size-3.5 shrink-0"
-                aria-hidden="true"
-              />
-              <span>
-                Earlier file revision · Version {artifact.version}. The original
-                and source text remain available for review.
-              </span>
-            </p>
-          ) : null}
-          <ErrorNotice
-            error={
-              pageInputError ||
-              (invalidRequestedPage
-                ? new Error(
-                    `Page ${requestedPage} is outside the available range 1–${pageCount}. Showing page ${activePage}.`,
-                  )
-                : null) ||
-              source.error ||
-              (!isSpreadsheet && evidence.error) ||
-              savedArtifact.error ||
-              downloadError
-            }
-          />
-          {sourceId && source.isPending ? (
-            <Loading>Loading source…</Loading>
-          ) : null}
-          {isSpreadsheet && artifactId ? (
-            <WorksheetNavigation
-              key={JSON.stringify([artifactId, activeSheet, activeCellRange])}
-              sheets={recordedSheets(artifact?.metadata?.sheets)}
-              sheet={activeSheet ?? ""}
-              cellRange={activeCellRange ?? ""}
-              error={evidence.error}
-              disabled={!!sourceId && source.isPending}
-              onApply={changeWorksheet}
-            />
-          ) : null}
-          {isPdf ? (
+          {context.contentHash ? (
             <>
-              <MicroButton
-                kind="preview"
-                active={previewVisible}
-                className="self-start"
-                aria-expanded={previewVisible}
-                aria-controls={previewId}
-                onClick={() =>
-                  setHiddenPreviewFor(
-                    previewVisible ? (artifactId ?? null) : null,
-                  )
-                }
+              <Badge
+                variant="outline"
+                className="font-mono font-normal text-muted-foreground"
+                title={context.contentHash}
               >
-                {previewVisible ? "Hide preview" : "Preview"}
-              </MicroButton>
-              <div id={previewId} hidden={!previewVisible}>
-                <div className="quantix-reveal flex flex-col gap-3">
-                  <div className="flex flex-wrap items-center gap-1 rounded-lg border bg-card p-1">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      disabled={activePage <= 1}
-                      onClick={() => changePage(activePage - 1)}
-                      aria-label="Previous page"
-                    >
-                      <ChevronLeft className="rtl:-scale-x-100" />
-                    </Button>
-                    <form
-                      className="flex items-center gap-1"
-                      onSubmit={submitPage}
-                    >
-                      <Input
-                        aria-label="Page number"
-                        inputMode="numeric"
-                        className="h-7 w-14 text-center tabular-nums"
-                        value={pageInput}
-                        onChange={(event) => setPageInput(event.target.value)}
-                      />
-                      <Button
-                        type="submit"
-                        variant="ghost"
-                        size="sm"
-                        disabled={!pageCount}
-                      >
-                        Go to page
-                      </Button>
-                    </form>
-                    <span
-                      className="px-1 text-xs text-muted-foreground tabular-nums"
-                      aria-live="polite"
-                    >
-                      {pageCount
-                        ? `Page ${activePage} of ${pageCount}`
-                        : `Page ${activePage}`}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      disabled={
-                        pageCount === undefined || activePage >= pageCount
-                      }
-                      onClick={() => changePage(activePage + 1)}
-                      aria-label="Next page"
-                    >
-                      <ChevronRight className="rtl:-scale-x-100" />
-                    </Button>
-                    <Separator orientation="vertical" className="mx-1 h-5" />
-                    <div
-                      role="group"
-                      aria-label="Preview controls"
-                      className="flex items-center gap-1"
-                    >
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setZoom(100)}
-                        aria-pressed={zoom === 100}
-                      >
-                        Fit width
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        disabled={zoom <= 50}
-                        aria-label="Zoom out"
-                        onClick={() =>
-                          setZoom((current) => Math.max(50, current - 25))
-                        }
-                      >
-                        <Minus />
-                      </Button>
-                      <span
-                        className="w-10 text-center text-xs text-muted-foreground tabular-nums"
-                        aria-live="polite"
-                      >
-                        {zoom}%
-                      </span>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        disabled={zoom >= 200}
-                        aria-label="Zoom in"
-                        onClick={() =>
-                          setZoom((current) => Math.min(200, current + 25))
-                        }
-                      >
-                        <Plus />
-                      </Button>
-                    </div>
-                  </div>
-                  {pageInfo.isPending && metadataPageCount === undefined ? (
-                    <p className="text-xs text-muted-foreground">
-                      Checking the PDF page count…
-                    </p>
-                  ) : null}
-                  {pageInfo.error && metadataPageCount === undefined ? (
-                    <p className="text-xs text-muted-foreground">
-                      The total page count is unavailable. Use the source text
-                      or original download while the page index is unavailable.
-                    </p>
-                  ) : null}
-                  {preview.isPending ? <Loading>Loading page…</Loading> : null}
-                  <ErrorNotice error={preview.error} />
-                  {imageUrl ? (
-                    <div className="max-h-[70vh] overflow-auto rounded-lg border bg-muted/40 p-2">
-                      <img
-                        className="mx-auto block rounded-sm bg-white shadow-sm"
-                        style={{ width: `${zoom}%`, maxWidth: "none" }}
-                        src={imageUrl}
-                        alt={`${artifact?.name ?? "Document"}, page ${activePage}`}
-                      />
-                    </div>
-                  ) : null}
-                </div>
-              </div>
+                Hash {context.contentHash.slice(0, 12)}…
+              </Badge>
+              <CopyButton value={context.contentHash} />
             </>
           ) : null}
-          {sourceId && source.data ? (
-            <SourceText evidence={source.data} highlighted />
-          ) : null}
-          {!sourceId ? (
-            <div className="flex flex-col gap-2">
-              <h3 className="text-sm font-medium">Source text</h3>
-              {evidence.isPending ? (
-                <Loading>Loading source text…</Loading>
-              ) : null}
-              {evidence.data?.map((item) => (
-                <SourceText key={item.id} evidence={item} />
-              ))}
-              {evidence.data?.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  {isSpreadsheet && (activeSheet || activeCellRange)
-                    ? "No extracted rows match this selection. Clear the range, choose another sheet or download the original to inspect it."
-                    : "This file has no extracted text. View the page preview or download the original to inspect it."}
+        </div>
+      ) : null}
+      {artifact ? (
+        <div className="flex flex-wrap gap-2">
+          <MicroButton
+            kind="download"
+            type="button"
+            disabled={downloading}
+            onClick={() => void downloadOriginal(artifact)}
+          >
+            {downloading ? "Downloading…" : "Download original"}
+          </MicroButton>
+        </div>
+      ) : null}
+      {artifact && !artifact.is_current ? (
+        <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+          <History className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          <span>
+            Earlier file revision · Version {artifact.version}. The original and
+            source text remain available for review.
+          </span>
+        </p>
+      ) : null}
+      <ErrorNotice
+        error={
+          pageInputError ||
+          (invalidRequestedPage
+            ? new Error(
+                `Page ${requestedPage} is outside the available range 1–${pageCount}. Showing page ${activePage}.`,
+              )
+            : null) ||
+          source.error ||
+          (!isSpreadsheet && evidence.error) ||
+          savedArtifact.error ||
+          downloadError
+        }
+      />
+      {sourceId && source.isPending ? <Loading>Loading source…</Loading> : null}
+      {isSpreadsheet && artifactId ? (
+        <WorksheetNavigation
+          key={JSON.stringify([artifactId, activeSheet, activeCellRange])}
+          sheets={recordedSheets(artifact?.metadata?.sheets)}
+          sheet={activeSheet ?? ""}
+          cellRange={activeCellRange ?? ""}
+          error={evidence.error}
+          disabled={!!sourceId && source.isPending}
+          onApply={changeWorksheet}
+        />
+      ) : null}
+      {isPdf ? (
+        <>
+          <MicroButton
+            kind="preview"
+            active={previewVisible}
+            className="self-start"
+            aria-expanded={previewVisible}
+            aria-controls={previewId}
+            onClick={() =>
+              setHiddenPreviewFor(previewVisible ? (artifactId ?? null) : null)
+            }
+          >
+            {previewVisible ? "Hide preview" : "Preview"}
+          </MicroButton>
+          <div id={previewId} hidden={!previewVisible}>
+            <div className="quantix-reveal flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-1 rounded-lg border bg-card p-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={activePage <= 1}
+                  onClick={() => changePage(activePage - 1)}
+                  aria-label="Previous page"
+                >
+                  <ChevronLeft className="rtl:-scale-x-100" />
+                </Button>
+                <form className="flex items-center gap-1" onSubmit={submitPage}>
+                  <Input
+                    aria-label="Page number"
+                    inputMode="numeric"
+                    className="h-7 w-14 text-center tabular-nums"
+                    value={pageInput}
+                    onChange={(event) => setPageInput(event.target.value)}
+                  />
+                  <Button
+                    type="submit"
+                    variant="ghost"
+                    size="sm"
+                    disabled={!pageCount}
+                  >
+                    Go to page
+                  </Button>
+                </form>
+                <span
+                  className="px-1 text-xs text-muted-foreground tabular-nums"
+                  aria-live="polite"
+                >
+                  {pageCount
+                    ? `Page ${activePage} of ${pageCount}`
+                    : `Page ${activePage}`}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={pageCount === undefined || activePage >= pageCount}
+                  onClick={() => changePage(activePage + 1)}
+                  aria-label="Next page"
+                >
+                  <ChevronRight className="rtl:-scale-x-100" />
+                </Button>
+                <Separator orientation="vertical" className="mx-1 h-5" />
+                <div
+                  role="group"
+                  aria-label="Preview controls"
+                  className="flex items-center gap-1"
+                >
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setZoom(100)}
+                    aria-pressed={zoom === 100}
+                  >
+                    Fit width
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={zoom <= 50}
+                    aria-label="Zoom out"
+                    onClick={() =>
+                      setZoom((current) => Math.max(50, current - 25))
+                    }
+                  >
+                    <Minus />
+                  </Button>
+                  <span
+                    className="w-10 text-center text-xs text-muted-foreground tabular-nums"
+                    aria-live="polite"
+                  >
+                    {zoom}%
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={zoom >= 200}
+                    aria-label="Zoom in"
+                    onClick={() =>
+                      setZoom((current) => Math.min(200, current + 25))
+                    }
+                  >
+                    <Plus />
+                  </Button>
+                </div>
+              </div>
+              {pageInfo.isPending && metadataPageCount === undefined ? (
+                <p className="text-xs text-muted-foreground">
+                  Checking the PDF page count…
                 </p>
               ) : null}
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={offset === 0}
-                  onClick={() => setOffset(Math.max(0, offset - 30))}
-                >
-                  Previous sources
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={!evidence.data || evidence.data.length < 30}
-                  onClick={() => setOffset(offset + 30)}
-                >
-                  Next sources
-                </Button>
-              </div>
+              {pageInfo.error && metadataPageCount === undefined ? (
+                <p className="text-xs text-muted-foreground">
+                  The total page count is unavailable. Use the source text or
+                  original download while the page index is unavailable.
+                </p>
+              ) : null}
+              {preview.isPending ? <Loading>Loading page…</Loading> : null}
+              <ErrorNotice error={preview.error} />
+              {imageUrl ? (
+                <div className="max-h-[70vh] overflow-auto rounded-lg border bg-muted/40 p-2">
+                  <img
+                    className="mx-auto block rounded-sm bg-white shadow-sm"
+                    style={{ width: `${zoom}%`, maxWidth: "none" }}
+                    src={imageUrl}
+                    alt={`${artifact?.name ?? "Document"}, page ${activePage}`}
+                  />
+                </div>
+              ) : null}
             </div>
-          ) : null}
+          </div>
         </>
-      )}
+      ) : null}
+      {sourceId && source.data ? (
+        <SourceText evidence={source.data} highlighted />
+      ) : null}
+      {!sourceId ? (
+        <div className="flex flex-col gap-2">
+          <h3 className="text-sm font-medium">Source text</h3>
+          {evidence.isPending ? <Loading>Loading source text…</Loading> : null}
+          {evidence.data?.map((item) => (
+            <SourceText key={item.id} evidence={item} />
+          ))}
+          {evidence.data?.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {isSpreadsheet && (activeSheet || activeCellRange)
+                ? "No extracted rows match this selection. Clear the range, choose another sheet or download the original to inspect it."
+                : "This file has no extracted text. View the page preview or download the original to inspect it."}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - 30))}
+            >
+              Previous sources
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!evidence.data || evidence.data.length < 30}
+              onClick={() => setOffset(offset + 30)}
+            >
+              Next sources
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
   if (presentation === "inline") {

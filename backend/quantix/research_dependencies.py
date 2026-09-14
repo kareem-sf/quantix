@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import Literal
+
+from pydantic import Field
 
 from .db import new_id, now
-from .memory_models import DependencyImpact, MemoryDependency
+from .staff_models import IdentifierText, OfficeModel
 
 _SCHEMA = (
     """
@@ -29,6 +32,24 @@ _SCHEMA = (
     ON research_dependencies(tender_id,owner_kind,owner_id)
     """,
 )
+
+
+class MemoryDependency(OfficeModel):
+    source_id: IdentifierText
+    artifact_id: IdentifierText
+    artifact_version: int = Field(ge=1)
+    content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    evidence_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    current: bool
+    reason: str | None = None
+
+
+class DependencyImpact(OfficeModel):
+    owner_kind: str
+    owner_id: IdentifierText
+    state: Literal["current", "needs_review"]
+    review_reasons: list[str]
+    dependencies: list[MemoryDependency]
 
 
 def _evidence_hash(evidence: dict) -> str:
@@ -128,6 +149,8 @@ class DependencyService:
                     or artifact["content_hash"] != row["content_hash"]
                 ):
                     reason = "source_revision_changed"
+                elif evidence.get("extraction_current") is False:
+                    reason = "source_extraction_changed"
                 elif _evidence_hash(evidence) != row["evidence_hash"]:
                     reason = "source_evidence_changed"
             except KeyError:

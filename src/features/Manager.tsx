@@ -31,7 +31,6 @@ import {
 } from "@/components/ui/item";
 import { ProgressiveBlur } from "@/components/ui/progressive-blur";
 import { Typewriter } from "@/components/ui/typewriter";
-import { WorkingDots } from "@/components/ui/working-dots";
 import { cn } from "@/lib/utils";
 import { Composer } from "./Composer";
 import { ManagerMessage } from "./ManagerMessage";
@@ -41,7 +40,7 @@ import { PlanReview } from "./PlanReview";
 import { RunRow } from "./RunRow";
 import { AnalysisStages } from "./AnalysisStages";
 import { ThinkingPicker } from "./ThinkingPicker";
-import { LiveRunStream } from "./LiveRunStream";
+import { ManagerPlanning } from "./ManagerPlanning";
 import type { SourceSelection } from "./Sources";
 import { parseRouteContext } from "../navigation/routes";
 
@@ -421,8 +420,6 @@ export function Manager({
                                 "finding",
                                 "decisions",
                                 "output",
-                                "office-result",
-                                "staff-result",
                                 "work-product",
                                 "calculation",
                               ].includes(record.view)
@@ -440,7 +437,7 @@ export function Manager({
                       item.role === "engineer" &&
                       item.run_id === message.run_id,
                   )?.id === message.id ? (
-                    <LiveRunStream
+                    <ManagerPlanning
                       tenderId={tenderId}
                       runId={message.run_id}
                       startedAt={
@@ -467,17 +464,7 @@ export function Manager({
                   card, because that is the only place the reason appears, and it
                   belongs at the end of the conversation where the engineer is
                   reading rather than above the history where it scrolls away. */}
-              {packageRun ? (
-                <AnalysisStages run={packageRun} />
-              ) : activeRuns.length ? (
-                <div
-                  className="flex items-center gap-2.5 text-sm text-muted-foreground"
-                  aria-live="polite"
-                >
-                  <WorkingDots className="text-foreground/70" />
-                  <span>Tender Manager is working</span>
-                </div>
-              ) : null}
+              {packageRun ? <AnalysisStages run={packageRun} /> : null}
               {activeRuns
                 .filter(
                   (run) =>
@@ -485,7 +472,7 @@ export function Manager({
                     !attachedRunIds.has(run.id),
                 )
                 .map((run) => (
-                  <LiveRunStream
+                  <ManagerPlanning
                     key={run.id}
                     tenderId={tenderId}
                     runId={run.id}

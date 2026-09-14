@@ -27,7 +27,7 @@ Useful evidence includes the setup phase, provider protocol, software version, s
 3. **Check** sends a generic sample through the real model/tool exchange. Inspect the terminal result and check evidence. A model response alone does not establish a passed check.
 4. **Ready** applies to the checked account revision, model and software version. Tender selection/data authority and ordinary engineering work remain separate.
 
-For the reproduced 9 September failure, discovery was blocked by a permission rule before the actual check tool ran. See [the specific repair](grok-repair-2026-09-09.md). Do not solve future failures by globally allowing native tools, increasing spending authority or accepting an unknown model identity.
+For the reproduced 9 September failure, discovery was blocked by a permission rule before the actual check tool ran. Do not solve future failures by globally allowing native tools, increasing spending authority or accepting an unknown model identity.
 
 ## What the files contain
 
@@ -43,4 +43,4 @@ If a log directory cannot be written, diagnostic recording must fail without sto
 
 ## Acceptance status
 
-The precise source-review, targeted diagnostic probes and live connection result for this increment are recorded in [progress](progress.md) and the [implementation record](superpowers/plans/2026-09-09-diagnostics-and-ai-repair.md). Do not infer full MVP verification from the presence of a log file.
+The precise source-review, targeted diagnostic probes and live connection result for this increment are recorded in git history. Do not infer full MVP verification from the presence of a log file.

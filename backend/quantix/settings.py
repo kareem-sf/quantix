@@ -10,12 +10,17 @@ class SettingsService:
     def public(self):
         from .ai_connections import AIConnectionService
         from .ai_readiness import ready_model_ids
+
         connections = [c for c in AIConnectionService(self.repo).list() if c["enabled"]]
         present = any(ready_model_ids(self.repo, c) for c in connections)
-        return Settings(provider_ready=present, model="Choose an AI for each Tender",
-                        default_currency=self.repo.setting("default_currency", "EGP"),
-                        home=str(self.repo.home), preferences=self.repo.setting("preferences", ""),
-                        provider_detail="Connect an AI account in Settings, then choose it for your Tender.")
+        return Settings(
+            provider_ready=present,
+            model="Choose an AI for each Tender",
+            default_currency=self.repo.setting("default_currency", "EGP"),
+            home=str(self.repo.home),
+            preferences=self.repo.setting("preferences", ""),
+            provider_detail="Connect an AI account in Settings, then choose it for your Tender.",
+        )
 
     def update(self, patch):
         with self.repo.atomic():

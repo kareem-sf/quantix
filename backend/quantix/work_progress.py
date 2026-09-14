@@ -13,7 +13,7 @@ _MATERIAL_FIELDS = (
     "unit_rate_proposals",
     "quote_drafts",
     "project_map_nodes",
-    "drawing_measurements",
+    "takeoff",
     "programme_proposal",
     "draft_documents",
     "requested_drafts",
@@ -61,7 +61,7 @@ def later_work_run(repo, brief):
 
 
 def require_current_brief(output, context):
-    if context.is_staff or context.repo.get_run(context.run_id)["kind"] == "task":
+    if context.is_staff:
         return
     with context.repo.db.connect() as conn:
         saved_work = conn.execute(

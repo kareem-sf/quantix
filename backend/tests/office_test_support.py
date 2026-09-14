@@ -26,11 +26,10 @@ def api_result_for(output, web_sources=None, usage=None):
 
 
 def _definitions(options):
-    definitions = source_tools()
-    consult = options.get("consult") if options else None
-    if consult is not None:
-        definitions.append(consult)
-    return definitions
+    """The tools a real turn offered, or the source and proposal tools outside a turn."""
+    from quantix.proposal_tools import proposal_tools
+
+    return options.get("definitions") or [*source_tools(), *proposal_tools()]
 
 
 async def invoke_tool(context, name, arguments, *, options=None):
@@ -47,18 +46,6 @@ async def invoke_json_tool(context, name, arguments, *, options=None):
 
 
 def approve_plan_and_team(repo, tender_id, plan, rationale):
-    """Create the current approved plan/team state required by job execution."""
+    """Approve a plan as the engineer does; the Manager assigns its team at run time."""
 
-    from quantix.ai_policy import AIPolicyService
-
-    policy = AIPolicyService(repo)
-    proposed = policy.propose_team(tender_id, plan["id"])
-    approved = repo.approve_plan(tender_id, plan["id"], rationale)
-    policy.approve_team(
-        tender_id,
-        plan["id"],
-        proposed["fingerprint"],
-        rationale=rationale,
-        require_approved_plan=True,
-    )
-    return approved
+    return repo.approve_plan(tender_id, plan["id"], rationale)

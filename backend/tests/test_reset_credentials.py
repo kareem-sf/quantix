@@ -38,12 +38,30 @@ def test_exact_home_services_and_orphaned_codex_profiles_leave_independent_crede
     (home / "ai-runtimes" / "orphan" / "codex").mkdir(parents=True)
     identity = hashlib.sha256(str(home).encode()).hexdigest()[:16]
     ai, mail = f"Quantix-{identity}", f"Quantix-mail-{identity}"
-    codex_hash = hashlib.sha256(("\\\\?\\" + str(home / "ai-runtimes" / "orphan" / "codex")).encode()).hexdigest()[:16]
-    owned = {ai, f"orphan-ai@{ai}", f"openai@{ai}", mail, f"smtp@{mail}", f"imap@{mail}",
-             f"cli|{codex_hash}.Codex Auth", f"secrets|{codex_hash}.codex"}
-    foreign = {"Quantix-other-home", "imap@Quantix-mail-other", "cli|global.Codex Auth",
-               "secrets|global.codex", ai + "-not-owned", "prefix" + ai}
-    native = Native([{"type": 1, "target": target} for target in owned | foreign] + [{"type": 2, "target": ai}])
+    codex_hash = hashlib.sha256(
+        ("\\\\?\\" + str(home / "ai-runtimes" / "orphan" / "codex")).encode()
+    ).hexdigest()[:16]
+    owned = {
+        ai,
+        f"orphan-ai@{ai}",
+        f"openai@{ai}",
+        mail,
+        f"smtp@{mail}",
+        f"imap@{mail}",
+        f"cli|{codex_hash}.Codex Auth",
+        f"secrets|{codex_hash}.codex",
+    }
+    foreign = {
+        "Quantix-other-home",
+        "imap@Quantix-mail-other",
+        "cli|global.Codex Auth",
+        "secrets|global.codex",
+        ai + "-not-owned",
+        "prefix" + ai,
+    }
+    native = Native(
+        [{"type": 1, "target": target} for target in owned | foreign] + [{"type": 2, "target": ai}]
+    )
     adapter = m.WindowsCredentialAdapter(native=native)
     targets = adapter.inventory(home, ["saved_without_runtime"])
     assert {entry["target"] for entry in targets} == owned
@@ -54,7 +72,9 @@ def test_exact_home_services_and_orphaned_codex_profiles_leave_independent_crede
     assert native.paths == [home / "ai-runtimes" / "orphan" / "codex"]
 
 
-def test_inventory_rejects_external_runtime_junction_before_deriving_keyring_identity(tmp_path, monkeypatch):
+def test_inventory_rejects_external_runtime_junction_before_deriving_keyring_identity(
+    tmp_path, monkeypatch
+):
     m = module()
     home = tmp_path / "home"
     candidate = home / "ai-runtimes" / "linked"
@@ -125,13 +145,17 @@ def test_win32_enumeration_copies_only_metadata_and_always_frees_buffer(monkeypa
         def CredEnumerateW(self, prefix, flags, count, output):
             assert prefix is None and flags == 0
             ctypes.cast(count, ctypes.POINTER(ctypes.c_ulong))[0] = 1
-            ctypes.cast(output, ctypes.POINTER(ctypes.POINTER(ctypes.POINTER(m._Credential))))[0] = pointers
+            ctypes.cast(output, ctypes.POINTER(ctypes.POINTER(ctypes.POINTER(m._Credential))))[
+                0
+            ] = pointers
             return 1
 
         def CredFree(self, value):
             freed.append(bool(value))
 
-    monkeypatch.setattr(ctypes, "string_at", lambda *_: pytest.fail("Credential blobs must not be decoded"))
+    monkeypatch.setattr(
+        ctypes, "string_at", lambda *_: pytest.fail("Credential blobs must not be decoded")
+    )
     result = m.NativeWindowsCredentials(advapi=API()).enumerate()
     assert result == [{"type": 1, "target": "synthetic-target"}]
     assert freed == [True]

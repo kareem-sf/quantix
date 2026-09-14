@@ -2,7 +2,7 @@
 
 ## Local service and desktop shell
 
-The [9 September project review](project-review-2026-09-09.md) records source findings and the focused diagnostics/AI repair. The subsequent [unified storage contract](unified-storage.md) establishes `~/.quantix` as the normal home for all Quantix-managed data, including `logs/`, AI installations/profiles, runtime state and temporary work. It supersedes the earlier split storage layout.
+The [unified storage contract](unified-storage.md) establishes `~/.quantix` as the home for all Quantix-managed data, including `logs/`, AI installations/profiles, runtime state and temporary work.
 
 Use a Python 3.12 service for project records, document processing and AI execution; React/TypeScript/Vite for the interface; Tauri 2 for Windows, macOS and Linux. Rust owns desktop lifecycle and native dialogs, not a second copy of the domain. Release-only native packaging embeds the service; installers remain unbuilt for this increment.
 
@@ -20,13 +20,13 @@ Use pypdfium2 for text/page geometry/rendering, openpyxl for spreadsheet cells/f
 
 OCR/conversion must be capability-tested and traceable. No result is marked reviewed merely because parsing succeeded. Raw cells, formulas and number formats are preserved before normalisation. Extraction artifacts and search indexes are reproducible derived data.
 
-## Manager and specialists
+## Manager and team
 
-The guided on-demand design now supersedes the earlier in-process provider layout below. Provider SDKs and client binaries live in selected, private component environments; the core retains source, budget and publication authority. See [AI setup architecture](ai-setup-architecture.md) for the current implementation and [provider support](ai-provider-support.md) for dated integration limits.
+The Tender Manager and its staff are described in [tender team runtime](design/tender-team-runtime.md). One Manager run holds the whole piece of work: Manager turns, then the staff assignments they queued, then another Manager turn with the outcomes, up to six Manager turns. Everything runs under one Tender AI route, request allowance and budget meter; there are no per-assignment approvals, grants or route bindings.
 
-Use Pydantic AI with request-scoped native provider SDKs for direct model APIs. Official original-client runtimes are separate adapters with a scoped local MCP bridge. Provider-neutral tools call Tender-scoped service methods; Quantix validates evidence and publishes proposals outside the model loop. Hosted search URLs come from native provider metadata, not generated prose. SDK history remains separate from domain decisions and the job ledger.
+The model answers with a summary, cited source IDs and findings. Every other record is staged with the `propose` tool and saved only when the run finishes, or for staff when their assignment completes, after the same checks run again. Quantix, not the model, validates evidence, computes takeoff comparisons and publishes domain records, inside one SQLite transaction with the run's terminal state.
 
-Named profiles record access/billing method, endpoint, model capabilities and dated rates. Keys use an OS secret store or explicit session-only memory; selected cloud identity/environment access is supported. Tender policies approve destinations and budgets. Plans snapshot AI teams and connection revisions; alternatives must already be approved. Budget reservations persist through interruption. External SDK tracing is disabled; original client sign-ins remain in private runtime homes. No cached subscription credentials are repurposed as API keys. Details and trade-offs: [AI connections](ai-connections.md).
+Direct model APIs use Pydantic AI with request-scoped native provider SDKs in the service. ChatGPT/Codex and Grok subscriptions run their official clients in an isolated worker process that reaches the Tender only through a scoped local MCP bridge. Provider-neutral tools call Tender-scoped service methods. Hosted search URLs come from native provider metadata, not generated prose. Keys use the OS secret store or session-only memory; subscription sign-ins stay in private client homes and are never reused as API keys. See [AI setup architecture](ai-setup-architecture.md) and [provider support](ai-provider-support.md).
 
 ## Validation sources
 
@@ -46,6 +46,6 @@ Project structure and review scopes use ordinary SQLite records, source snapshot
 
 Client-format workbook export edits targeted OOXML members in a new copy so VBA, drawings and unsupported Excel objects can remain intact. The workflow rejects ambiguous targets instead of silently re-saving or repairing the source workbook. Final release records a checked local ZIP, its selected requirement coverage and engineer-approved scope; transmission is separate.
 
-Agent-produced drafts use approved plan authority rather than synthesizing an engineer decision. Their source snapshots and originating task remain stable through finalization. The primary service owns both publication and rollback cleanup. Calibrated and general quantity proposals retain author origin and remain separate from pricing approval.
+Agent-produced drafts use approved plan authority rather than synthesizing an engineer decision. Their source snapshots and originating task remain stable through finalization. The primary service owns both publication and rollback cleanup. Takeoff lines and quantity proposals retain their author and remain separate from BOQ quantities and pricing approval.
 
-Development verification is active: backend tests, UI tests, typecheck, ruff and clippy run on every change set (see README commands). Modules exist only when production code imports them; synthetic acceptance drivers exercise product services, never test-only stand-ins.
+Backend tests, UI tests, typecheck, Ruff and formatting checks run in CI on every pull request (see README commands). Modules exist only when production code imports them; synthetic acceptance drivers exercise product services, never test-only stand-ins.

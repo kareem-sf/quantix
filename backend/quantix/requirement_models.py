@@ -9,8 +9,13 @@ from .estimate_models import EngineerDecision, EstimateModel
 from .submission_models import SubmissionBlocker
 
 DeliverableKind = Literal[
-    "boq_xlsx", "analysis_docx", "technical_docx", "registers_xlsx",
-    "comparison_xlsx", "programme_xlsx", "client_boq",
+    "boq_xlsx",
+    "analysis_docx",
+    "technical_docx",
+    "registers_xlsx",
+    "comparison_xlsx",
+    "programme_xlsx",
+    "client_boq",
 ]
 RequirementAction = Literal["approve", "withdraw", "satisfied", "exception", "reopen"]
 
@@ -24,7 +29,9 @@ class RequirementProposal(EstimateModel):
     source_quote: str = Field(default="", max_length=6000)
     applicability: Literal["unconditional", "conditional", "unknown"] = "unknown"
     condition: str = Field(default="", max_length=3000)
-    exceptions: list[Annotated[str, Field(min_length=1, max_length=3000)]] = Field(default_factory=list, max_length=20)
+    exceptions: list[Annotated[str, Field(min_length=1, max_length=3000)]] = Field(
+        default_factory=list, max_length=20
+    )
 
     @model_validator(mode="after")
     def distinct_sources(self):
@@ -74,7 +81,9 @@ class RequirementLinkedOutput(EstimateModel):
 
 class RequirementAudit(EstimateModel):
     id: str
-    action: Literal["approve", "withdraw", "satisfied", "exception", "reopen", "link_output", "unlink_output"]
+    action: Literal[
+        "approve", "withdraw", "satisfied", "exception", "reopen", "link_output", "unlink_output"
+    ]
     rationale: str
     created_at: str
     output_id: str | None = None

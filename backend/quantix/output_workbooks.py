@@ -127,7 +127,12 @@ def _extra_excel(path, tender, request, data, sources, warnings):
                 [
                     item["id"],
                     item["title"],
-                    item["detail"] + ("\nRejected exclusion. This exclusion does not apply." if kind == "exclusion" and item["state"] == "rejected" else ""),
+                    item["detail"]
+                    + (
+                        "\nRejected exclusion. This exclusion does not apply."
+                        if kind == "exclusion" and item["state"] == "rejected"
+                        else ""
+                    ),
                     item["state"],
                     "Source changed" if item.get("is_stale") else "Current source record",
                     ", ".join(item["source_ids"]),

@@ -14,7 +14,7 @@ from quantix.jobs import JobManager
 from quantix.manager_profile import ManagerProfileService
 from quantix.office_types import OfficeOutput
 from quantix.settings import SettingsService
-from quantix.staff_store import StaffStore
+from quantix.team import TeamService
 
 
 @pytest.fixture(autouse=True)
@@ -49,7 +49,9 @@ def test_prepared_validation_checks_sources_without_publishing(tmp_path, monkeyp
     context.source(evidence["id"])
     prepared = prepare_result(
         OfficeOutput(summary="Synthetic source-backed draft.", source_ids=[evidence["id"]]),
-        context, {}, ResearchRecord(context),
+        context,
+        {},
+        ResearchRecord(context),
     )
     validated = validate_prepared(repo, prepared)
     assert validated.seen_sources == {evidence["id"]}
@@ -59,8 +61,9 @@ def test_prepared_validation_checks_sources_without_publishing(tmp_path, monkeyp
         validate_prepared(repo, replace(prepared, source_ids_read=()))
 
 
-def test_custom_manager_prompt_redacts_private_text_without_losing_profile_structure(tmp_path, monkeypatch):
-    from quantix.conversation import _prompt as conversation_prompt
+def test_custom_manager_prompt_redacts_private_text_without_losing_profile_structure(
+    tmp_path, monkeypatch
+):
     from quantix.manager_runtime import prompt_profile
     from quantix.office import _prompt as engineering_prompt
     from quantix.office_tools import OfficeContext
@@ -68,20 +71,29 @@ def test_custom_manager_prompt_redacts_private_text_without_losing_profile_struc
     repo, tender, *_ = configured_office(tmp_path, monkeypatch)
     service = ManagerProfileService(repo)
     before = service.get()
-    edit = editable(before, persona='Use the note at C:\\private\\manager.txt and explain "why" clearly.')
-    edit["personality"]["traits"] = ["Patient", "Arabic: مراجع دقيق", "sk-synthetic-private-token123"]
+    edit = editable(
+        before, persona='Use the note at C:\\private\\manager.txt and explain "why" clearly.'
+    )
+    edit["personality"]["traits"] = [
+        "Patient",
+        "Arabic: مراجع دقيق",
+        "sk-synthetic-private-token123",
+    ]
     profile = service.update(edit)
     run = repo.create_run(tender["id"], "manager", "Synthetic profile")
     context = OfficeContext(repo, tender["id"], run["id"])
     public_profile = prompt_profile(profile)
-    encoded = engineering_prompt(context, "Review", None, public_profile)
-    conversation = conversation_prompt(repo, tender["id"], "Review", public_profile)
-    for payload in (json.loads(encoded), json.loads(conversation.split("\n\n", 1)[1])):
-        professional = payload["manager_profile"]
-        assert 'explain "why" clearly.' in professional["persona"]
-        assert "[local path]" in professional["persona"]
-        assert professional["personality"]["traits"] == ["Patient", "Arabic: مراجع دقيق", "[credential]"]
-        assert set(professional["personality"]) == set(public_profile["personality"])
+    professional = json.loads(engineering_prompt(context, "Review", public_profile))[
+        "manager_profile"
+    ]
+    assert 'explain "why" clearly.' in professional["persona"]
+    assert "[local path]" in professional["persona"]
+    assert professional["personality"]["traits"] == [
+        "Patient",
+        "Arabic: مراجع دقيق",
+        "[credential]",
+    ]
+    assert set(professional["personality"]) == set(public_profile["personality"])
     assert profile.personality.traits[-1] == "sk-synthetic-private-token123"
 
 
@@ -103,9 +115,11 @@ def test_actual_api_keeps_one_customizable_manager_and_no_staff(tmp_path, monkey
         initial = response.json()
         assert initial["display_name"] == "Tender Manager"
         assert "manager_profile" in client.get("/api/health").json()["capabilities"]
-        tenders = [client.post("/api/tenders", json={"name": name}).json()
-                   for name in ("Synthetic Office A", "Synthetic Office B")]
-        store = StaffStore(app.state.repo)
+        tenders = [
+            client.post("/api/tenders", json={"name": name}).json()
+            for name in ("Synthetic Office A", "Synthetic Office B")
+        ]
+        store = TeamService(app.state.repo)
         assert all(store.list_staff(tender["id"]) == [] for tender in tenders)
         profile = ManagerProfileService(app.state.repo).get()
         body = editable(profile, display_name="Custom engineering coordinator")
@@ -121,7 +135,7 @@ def test_actual_api_keeps_one_customizable_manager_and_no_staff(tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_conversation_and_engineering_use_the_admitted_manager_version(tmp_path, monkeypatch):
+async def test_a_manager_run_uses_the_version_admitted_with_it(tmp_path, monkeypatch):
     repo, tender, *_ = configured_office(tmp_path, monkeypatch)
     profiles = ManagerProfileService(repo)
     initial = profiles.get()
@@ -130,12 +144,10 @@ async def test_conversation_and_engineering_use_the_admitted_manager_version(tmp
     prompts = []
 
     async def provider(route, connection, credentials, context, prompt, output_type, **options):
-        payload = json.loads(prompt.split("\n\n", 1)[-1])
+        payload = json.loads(prompt)
         prompts.append(payload)
         assert payload["manager_profile"]["display_name"] == before.display_name
-        if options.get("operation") == "conversation":
-            profiles.update(editable(profiles.get(), display_name="Changed during current work"))
-            return api_result_for({"kind": "engineering", "reply": "", "next_action": "Review sources."})
+        profiles.update(editable(profiles.get(), display_name="Changed during current work"))
         return api_result_for(OfficeOutput(summary="Synthetic review saved."))
 
     monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
@@ -143,44 +155,9 @@ async def test_conversation_and_engineering_use_the_admitted_manager_version(tmp
     await asyncio.gather(*list(jobs.tasks.values()))
     run = repo.get_run(submitted["run"]["id"])
     assert run["status"] == "completed"
-    assert len(prompts) == 2
+    assert len(prompts) == 1
     assert profiles.get().display_name == "Changed during current work"
     from quantix.manager_runtime import ManagerRunProfiles
+
     assert ManagerRunProfiles(repo).get(tender["id"], run["id"]).version == before.version
     await jobs.close()
-
-
-@pytest.mark.asyncio
-async def test_manager_creates_staff_through_actual_generation_tools(tmp_path, monkeypatch):
-    from test_dynamic_staff import _order, _profile
-
-    from quantix.office import run_manager
-    from quantix.office_events import OfficeEventService
-
-    repo, tender, *_ = configured_office(tmp_path, monkeypatch)
-    run = repo.create_run(tender["id"], "manager", "Plan an unfamiliar review")
-    calls = []
-
-    async def provider(route, connection, credentials, context, prompt, output_type, **options):
-        definitions = {item.name: item for item in options.get("definitions", [])}
-        assert "create_staff" in definitions
-        profile = _profile(role="Unregistered envelope-interface examiner")
-        arguments = {"profile": profile, "work_order": _order()}
-        first = json.loads(await definitions["create_staff"].invoke(
-            context, arguments, invocation_id="synthetic-create-1"))
-        again = json.loads(await definitions["create_staff"].invoke(
-            context, arguments, invocation_id="synthetic-create-1"))
-        assert first["staff"]["id"] == again["staff"]["id"]
-        assert again["replayed"]
-        calls.append(first)
-        return api_result_for(OfficeOutput(summary="The staff profile and planned work are saved."))
-
-    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
-    prepared = await run_manager(repo, tender["id"], run["id"], run["instruction"])
-    assert prepared.output.summary == "The staff profile and planned work are saved."
-    staff = StaffStore(repo).list_staff(tender["id"])
-    assert len(calls) == len(staff) == 1
-    assert staff[0].role == "Unregistered envelope-interface examiner"
-    assert staff[0].lifecycle == "available"
-    assert [item.event_type for item in OfficeEventService(repo).page(tender["id"]).items] == ["staff_created"]
-    assert repo.messages(tender["id"]) == []

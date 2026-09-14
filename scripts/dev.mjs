@@ -27,7 +27,9 @@ process.on("unhandledRejection", (reason) => {
   unhandledRejectionEscalated = true;
   process.exitCode = 1;
   queueMicrotask(() => {
-    throw reason instanceof Error ? reason : new Error("Unhandled promise rejection.");
+    throw reason instanceof Error
+      ? reason
+      : new Error("Unhandled promise rejection.");
   });
 });
 process.on("exit", (code) => {
@@ -44,14 +46,25 @@ try {
   await mkdir(storage.tmp, { recursive: true });
   await mkdir(storage.cache, { recursive: true });
 } catch (error) {
-  diagnostics.recordError("startup_failed", { phase: "runtime_directory" }, error);
+  diagnostics.recordError(
+    "startup_failed",
+    { phase: "runtime_directory" },
+    error,
+  );
   throw error;
 }
 try {
   await prepareAIHost();
-  diagnostics.record("ai_host_prepared", { phase: "prepare_ai_host", outcome: "success" });
+  diagnostics.record("ai_host_prepared", {
+    phase: "prepare_ai_host",
+    outcome: "success",
+  });
 } catch (error) {
-  diagnostics.recordError("startup_failed", { phase: "prepare_ai_host" }, error);
+  diagnostics.recordError(
+    "startup_failed",
+    { phase: "prepare_ai_host" },
+    error,
+  );
   throw error;
 }
 const token = randomBytes(32).toString("hex");
@@ -104,7 +117,11 @@ function spawnBackend() {
   });
   child.on("error", (error) => {
     if (child !== backend) return;
-    diagnostics.recordError("process_error", { phase: "backend", process: "backend" }, error);
+    diagnostics.recordError(
+      "process_error",
+      { phase: "backend", process: "backend" },
+      error,
+    );
     console.error(error.message);
     process.exitCode = 1;
   });
@@ -135,7 +152,11 @@ function spawnBackend() {
 try {
   backend = spawnBackend();
 } catch (error) {
-  diagnostics.recordError("process_spawn_failed", { phase: "backend_spawn", process: "backend" }, error);
+  diagnostics.recordError(
+    "process_spawn_failed",
+    { phase: "backend_spawn", process: "backend" },
+    error,
+  );
   throw error;
 }
 
@@ -144,7 +165,10 @@ async function stop(code = 0) {
   stopping = true;
   clearTimeout(retryTimer);
   await sourceWatcher?.close();
-  diagnostics.record("shutdown_started", { phase: "launcher", outcome: "requested" });
+  diagnostics.record("shutdown_started", {
+    phase: "launcher",
+    outcome: "requested",
+  });
   vite?.kill();
   try {
     await fetch(`${baseUrl}/shutdown`, {
@@ -153,7 +177,11 @@ async function stop(code = 0) {
       signal: AbortSignal.timeout(2000),
     });
   } catch (error) {
-    diagnostics.recordError("shutdown_request_failed", { phase: "service_shutdown" }, error);
+    diagnostics.recordError(
+      "shutdown_request_failed",
+      { phase: "service_shutdown" },
+      error,
+    );
     /* A failed startup may not have an HTTP listener. */
   }
   const until = Date.now() + 17000;
@@ -174,7 +202,11 @@ async function stop(code = 0) {
       await new Promise((resolve) => {
         killer.once("exit", resolve);
         killer.once("error", (error) => {
-          diagnostics.recordError("process_stop_failed", { phase: "backend_stop", process: "backend" }, error);
+          diagnostics.recordError(
+            "process_stop_failed",
+            { phase: "backend_stop", process: "backend" },
+            error,
+          );
           resolve();
         });
       });
@@ -223,7 +255,9 @@ const RETRY_MAX_MS = 30000;
 function scheduleRecovery(reason) {
   if (stopping) return;
   clearTimeout(retryTimer);
-  retryDelay = retryDelay ? Math.min(retryDelay * 2, RETRY_MAX_MS) : RETRY_MIN_MS;
+  retryDelay = retryDelay
+    ? Math.min(retryDelay * 2, RETRY_MAX_MS)
+    : RETRY_MIN_MS;
   diagnostics.record("backend_reload", {
     phase: "backend_reload",
     outcome: "retry_scheduled",
@@ -245,7 +279,10 @@ async function reloadBackend(reason) {
   clearTimeout(retryTimer);
   reloading = true;
   console.log(`Quantix service reloading (${reason})…`);
-  diagnostics.record("backend_reload", { phase: "backend_reload", outcome: "requested" });
+  diagnostics.record("backend_reload", {
+    phase: "backend_reload",
+    outcome: "requested",
+  });
   const previous = backend;
   try {
     await fetch(`${baseUrl}/shutdown`, {
@@ -257,7 +294,11 @@ async function reloadBackend(reason) {
     /* An already-stopped service still reaches the wait below. */
   }
   const until = Date.now() + 17000;
-  while (previous.exitCode === null && previous.signalCode === null && Date.now() < until)
+  while (
+    previous.exitCode === null &&
+    previous.signalCode === null &&
+    Date.now() < until
+  )
     await new Promise((resolve) => setTimeout(resolve, 100));
   if (previous.exitCode === null && previous.signalCode === null) {
     if (process.platform === "win32")
@@ -283,7 +324,9 @@ async function reloadBackend(reason) {
       // A save arrived while this attempt was starting. It most likely
       // finishes the edit that broke the start, so use it straight away.
       reloadQueued = false;
-      console.error("The Quantix service did not start. Retrying with your latest save…");
+      console.error(
+        "The Quantix service did not start. Retrying with your latest save…",
+      );
       await reloadBackend("further changes");
       return;
     }
@@ -307,24 +350,48 @@ async function watchBackend() {
         // Only changed source bytes reset recovery backoff. Metadata touches,
         // cache writes and duplicate save notifications never restart service.
         retryDelay = 0;
-        void reloadBackend(files.length === 1 ? files[0] : `${files.length} source files changed`);
+        void reloadBackend(
+          files.length === 1
+            ? files[0]
+            : `${files.length} source files changed`,
+        );
       },
-      onError: (error) => diagnostics.recordError("backend_watch_failed", { phase: "backend_watch" }, error),
+      onError: (error) =>
+        diagnostics.recordError(
+          "backend_watch_failed",
+          { phase: "backend_watch" },
+          error,
+        ),
     });
-    if (stopping) { await sourceWatcher.close(); return; }
+    if (stopping) {
+      await sourceWatcher.close();
+      return;
+    }
     watching = true;
-    console.log("Watching backend/quantix — the service reloads when Python source content changes.");
+    console.log(
+      "Watching backend/quantix — the service reloads when Python source content changes.",
+    );
   } catch (error) {
-    diagnostics.recordError("backend_watch_failed", { phase: "backend_watch" }, error);
+    diagnostics.recordError(
+      "backend_watch_failed",
+      { phase: "backend_watch" },
+      error,
+    );
   }
 }
 
 process.on("SIGINT", () => {
-  diagnostics.record("signal_received", { phase: "launcher", signal_name: "SIGINT" });
+  diagnostics.record("signal_received", {
+    phase: "launcher",
+    signal_name: "SIGINT",
+  });
   void stop();
 });
 process.on("SIGTERM", () => {
-  diagnostics.record("signal_received", { phase: "launcher", signal_name: "SIGTERM" });
+  diagnostics.record("signal_received", {
+    phase: "launcher",
+    signal_name: "SIGTERM",
+  });
   void stop();
 });
 
@@ -365,9 +432,18 @@ if (!ready) {
         },
       },
     );
-    diagnostics.record("process_spawned", { phase: "vite_spawn", process: "vite", outcome: "success", child_process_id: vite.pid });
+    diagnostics.record("process_spawned", {
+      phase: "vite_spawn",
+      process: "vite",
+      outcome: "success",
+      child_process_id: vite.pid,
+    });
     vite.on("error", (error) => {
-      diagnostics.recordError("process_error", { phase: "vite", process: "vite" }, error);
+      diagnostics.recordError(
+        "process_error",
+        { phase: "vite", process: "vite" },
+        error,
+      );
       console.error(error.message);
       void stop(1);
     });
@@ -382,7 +458,10 @@ if (!ready) {
       });
       if (!stopping) void stop(code ?? 0);
     });
-    diagnostics.record("startup_ready", { phase: "launcher", outcome: "success" });
+    diagnostics.record("startup_ready", {
+      phase: "launcher",
+      outcome: "success",
+    });
     console.log(
       "Quantix local workspace is ready. Interface: http://127.0.0.1:1420",
     );

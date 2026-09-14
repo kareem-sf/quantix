@@ -8,7 +8,10 @@ export function useLoop(delay = 1000, enabled = true) {
   const [key, setKey] = useState(0);
   useEffect(() => {
     if (!enabled) return;
-    const interval = window.setInterval(() => setKey((value) => value + 1), delay);
+    const interval = window.setInterval(
+      () => setKey((value) => value + 1),
+      delay,
+    );
     return () => window.clearInterval(interval);
   }, [delay, enabled]);
   return { key };

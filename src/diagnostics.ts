@@ -174,9 +174,7 @@ function enqueue(event: DiagnosticEvent) {
   }
 }
 
-function reportEvent(
-  create: () => DiagnosticEvent,
-) {
+function reportEvent(create: () => DiagnosticEvent) {
   try {
     enqueue(create());
   } catch {

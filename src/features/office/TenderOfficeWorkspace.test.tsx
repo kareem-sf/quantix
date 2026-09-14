@@ -143,7 +143,6 @@ it.each(["work", "tender"])(
               active_runs: updated && signal === "work" ? [] : [run],
             }}
             artifacts={[artifact]}
-            officeRevision={2}
             recordView="work-product"
             recordId="product-live"
             onImport={vi.fn()}
@@ -198,33 +197,9 @@ function renderWorkspace(
           assumptions: ["Addressed calculation assumption"],
           created_at: "",
         });
-      if (path.endsWith("/office/results/result-1"))
-        return Response.json({
-          id: "result-1",
-          tender_id: "one",
-          assignment_id: "assignment-1",
-          root_run_id: "run-1",
-          staff_id: "staff-1",
-          staff_version: 1,
-          work_order_id: "work-1",
-          route_binding_id: "route-1",
-          office_output: {
-            summary: "The drainage route is clear for engineer review.",
-            source_ids: ["source-1"],
-          },
-          source_ids_read: ["source-1"],
-          source_bases: [
-            {
-              source_id: "source-1",
-              artifact_id: artifact.id,
-              artifact_version: artifact.version,
-              artifact_hash: artifact.content_hash,
-              locator: "page 4",
-            },
-          ],
-          created_at: "2026-09-10T08:00:00Z",
-          currentness: "current",
-        });
+      if (path.endsWith("/team"))
+        return Response.json({ staff: [], assignments: [] });
+      if (path.endsWith("/work-brief")) return Response.json({ brief: null });
       if (path.endsWith("/evidence/source-1"))
         return Response.json({
           id: "source-1",
@@ -252,7 +227,6 @@ function renderWorkspace(
         <TenderOfficeWorkspace
           overview={overview}
           artifacts={[artifact]}
-          officeRevision={2}
           onImport={() => {}}
           onSettings={() => {}}
           onSource={() => {}}
@@ -282,25 +256,17 @@ it("opens an addressed calculation in Reviews and preserves the Manager draft", 
   );
 });
 
-it("starts with the workspace launcher and opens the office without losing the Manager draft", async () => {
+it("starts with the workspace launcher and opens the team without losing the Manager draft", async () => {
   const user = userEvent.setup();
-  renderWorkspace({
-    renderLiveOffice: () => (
-      <section aria-label="Live office">
-        <h2>Live office</h2>
-      </section>
-    ),
-  });
+  renderWorkspace();
   expect(
     screen.getByRole("region", { name: "Manager conversation" }),
   ).toBeInTheDocument();
   expect(
-    screen.queryByRole("region", { name: "Live office" }),
+    screen.queryByRole("region", { name: "Tender team" }),
   ).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: /^Office/ }));
-  expect(
-    screen.getByRole("region", { name: "Live office" }),
-  ).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: /^Team/ }));
+  expect(await screen.findByText(/No staff yet/)).toBeInTheDocument();
   expect(
     screen.queryByRole("region", { name: "Current document" }),
   ).not.toBeInTheDocument();
@@ -309,25 +275,7 @@ it("starts with the workspace launcher and opens the office without losing the M
   ).toHaveValue("Keep this instruction");
 });
 
-it("hands the work pane to an opened result instead of the office", async () => {
-  renderWorkspace({
-    renderLiveOffice: () => (
-      <section aria-label="Live office">
-        <h2>Live office</h2>
-      </section>
-    ),
-    recordView: "staff-result",
-    recordId: "result-1",
-  });
-  expect(
-    await screen.findByRole("heading", { name: "Saved result" }),
-  ).toBeInTheDocument();
-  expect(
-    screen.queryByRole("region", { name: "Live office" }),
-  ).not.toBeInTheDocument();
-});
-
-it("opens the document list when the live office is unavailable", async () => {
+it("opens the document list", async () => {
   const user = userEvent.setup();
   renderWorkspace();
   await user.click(screen.getByRole("button", { name: /^Documents/ }));
@@ -336,39 +284,11 @@ it("opens the document list when the live office is unavailable", async () => {
   ).toHaveTextContent("Drainage plan.pdf");
 });
 
-it("shows a saved staff result with source citations instead of raw JSON", async () => {
-  renderWorkspace({ recordView: "staff-result", recordId: "result-1" });
-  expect(
-    await screen.findByText("The drainage route is clear for engineer review."),
-  ).toBeInTheDocument();
-  expect(
-    screen.getByRole("heading", { name: "Saved result" }),
-  ).toBeInTheDocument();
-  expect(
-    screen.queryByText(/office_output|route_binding_id|source_bases/),
-  ).not.toBeInTheDocument();
-  expect(
-    await screen.findByRole("button", { name: /Drainage plan.pdf/ }),
-  ).toBeInTheDocument();
-});
-
-it("blocks office activation for an incompatible office revision while keeping Settings recovery visible", async () => {
-  const user = userEvent.setup();
-  const onSettings = vi.fn();
-  renderWorkspace({ officeRevision: 0, onSettings });
-  await user.click(screen.getByRole("button", { name: /^Office/ }));
-  expect(screen.getByRole("alert")).toHaveTextContent(
-    "Live office update required",
-  );
-  await user.click(screen.getByRole("button", { name: "Open Settings" }));
-  expect(onSettings).toHaveBeenCalledOnce();
-});
-
 it("opens the requested source ahead of its parent result on a collapsed deep link", async () => {
   localStorage.setItem("quantix.right-workspace.v2", "hidden");
   renderWorkspace({
-    recordView: "staff-result",
-    recordId: "result-1",
+    recordView: "calculation",
+    recordId: "calc-addressed",
     sourceSelection: {
       sourceId: "source-1",
       artifactId: artifact.id,
@@ -381,33 +301,6 @@ it("opens the requested source ahead of its parent result on a collapsed deep li
     await screen.findByRole("region", { name: "Source document" }),
   ).toBeVisible();
   expect(screen.getByRole("tab", { name: "Documents" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
-});
-
-it("reopens an unchanged saved result from the office after switching or closing its tab", async () => {
-  const user = userEvent.setup();
-  renderWorkspace({
-    recordView: "staff-result",
-    recordId: "result-1",
-    renderLiveOffice: ({ onOpenResult }) => (
-      <button onClick={() => onOpenResult("result-1")}>
-        Open saved result
-      </button>
-    ),
-  });
-  await screen.findByRole("tab", { name: "Reviews" });
-  await user.click(screen.getByRole("button", { name: "Workspace home" }));
-  await user.click(screen.getByRole("button", { name: /^Office/ }));
-  await user.click(screen.getByRole("button", { name: "Open saved result" }));
-  expect(screen.getByRole("tab", { name: "Reviews" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
-  await user.click(screen.getByRole("button", { name: "Close Reviews tab" }));
-  await user.click(screen.getByRole("button", { name: "Open saved result" }));
-  expect(screen.getByRole("tab", { name: "Reviews" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -461,8 +354,8 @@ it("clears visited documents and transient Manager state when changing Tender", 
 it("honors View all documents when clearing a source that has a parent result", async () => {
   const user = userEvent.setup();
   const view = renderWorkspace({
-    recordView: "staff-result",
-    recordId: "result-1",
+    recordView: "calculation",
+    recordId: "calc-addressed",
     sourceSelection: {
       sourceId: "source-1",
       artifactId: artifact.id,

@@ -40,6 +40,10 @@ def cache_dir(home: Path | str | None = None) -> Path:
     return resolve_home(home) / "cache"
 
 
+def models_dir(home: Path | str | None = None) -> Path:
+    return resolve_home(home) / "models"
+
+
 def logs_dir(home: Path | str | None = None) -> Path:
     return resolve_home(home) / "logs"
 
@@ -50,10 +54,6 @@ def ai_components_dir(home: Path | str | None = None) -> Path:
 
 def scratch_dir(home: Path | str | None = None) -> Path:
     return resolve_home(home) / "scratch"
-
-
-def transcription_dir(home: Path | str | None = None) -> Path:
-    return runtime_tmp_dir(home) / "transcription"
 
 
 def connection_file(home: Path | str | None = None) -> Path:
@@ -72,7 +72,6 @@ def ensure_runtime_dirs(home: Path | str | None = None) -> Path:
     cache_dir(root).mkdir(parents=True, exist_ok=True)
     logs_dir(root).mkdir(parents=True, exist_ok=True)
     scratch_dir(root).mkdir(parents=True, exist_ok=True)
-    transcription_dir(root).mkdir(parents=True, exist_ok=True)
     return root
 
 
@@ -87,8 +86,15 @@ def desktop_browser_context() -> dict[str, str | None]:
         return dict(_desktop_profile_environment)
     return {
         key: os.environ.get(key)
-        for key in ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
-                    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME")
+        for key in (
+            "HOME",
+            "USERPROFILE",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+        )
     }
 
 
@@ -103,8 +109,15 @@ def prepare_process_environment(home: Path | str | None = None) -> Path:
     if _desktop_profile_environment is None:
         _desktop_profile_environment = {
             key: os.environ.get(key)
-            for key in ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
-                        "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME")
+            for key in (
+                "HOME",
+                "USERPROFILE",
+                "APPDATA",
+                "LOCALAPPDATA",
+                "XDG_CONFIG_HOME",
+                "XDG_DATA_HOME",
+                "XDG_CACHE_HOME",
+            )
         }
     root = ensure_runtime_dirs(home)
     _process_home = root

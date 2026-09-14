@@ -64,10 +64,13 @@ export function FilterDisclosure({
 
   function select(id: string) {
     onChange(id);
-    window.setTimeout(() => {
-      setOpen(false);
-      requestAnimationFrame(() => trigger.current?.focus());
-    }, reduce ? 0 : 180);
+    window.setTimeout(
+      () => {
+        setOpen(false);
+        requestAnimationFrame(() => trigger.current?.focus());
+      },
+      reduce ? 0 : 180,
+    );
   }
 
   return (
@@ -128,8 +131,15 @@ export function FilterDisclosure({
                     >
                       <motion.span
                         initial={false}
-                        animate={{ scale: selected ? 1 : 0, opacity: selected ? 1 : 0 }}
-                        transition={{ type: "spring", stiffness: 520, damping: 30 }}
+                        animate={{
+                          scale: selected ? 1 : 0,
+                          opacity: selected ? 1 : 0,
+                        }}
+                        transition={{
+                          type: "spring",
+                          stiffness: 520,
+                          damping: 30,
+                        }}
                       >
                         <Check
                           className="size-2.5 text-primary-foreground"

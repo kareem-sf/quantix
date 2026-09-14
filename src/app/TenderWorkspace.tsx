@@ -7,10 +7,9 @@ import { Estimate } from "../features/Estimate";
 import { Files } from "../features/Files";
 import { Outputs } from "../features/Outputs";
 import { Quotes } from "../features/Quotes";
+import { Takeoff } from "../features/Takeoff";
 import { SourceDrawer, type SourceSelection } from "../features/Sources";
 import { Work } from "../features/Work";
-import { LiveOffice } from "../features/office/LiveOffice";
-import { CurrentWork } from "../features/office/CurrentWork";
 import { TenderOfficeWorkspace } from "../features/office/TenderOfficeWorkspace";
 import {
   parseRouteContext,
@@ -155,7 +154,6 @@ function TenderView({
           overview={overview.data}
           artifacts={artifacts.data ?? []}
           settings={settings}
-          officeRevision={health.office_revision}
           sourceSelection={sourceSelection}
           recordView={context.view}
           recordId={context.recordId}
@@ -168,31 +166,6 @@ function TenderView({
           onRecord={openRecord}
           onRepair={(target) => go(target)}
           onCustomizeManager={() => openSettingsSection("manager")}
-          renderLiveOffice={
-            capabilities.includes("dynamic_office")
-              ? ({
-                  tenderId: officeTender,
-                  onClose,
-                  onSource,
-                  onOpenResult,
-                  onOpenOutput,
-                }) => (
-                  <div className="flex min-h-0 min-w-0 flex-col gap-4">
-                    <CurrentWork tenderId={officeTender} onSource={onSource} />
-                    <LiveOffice
-                      tenderId={officeTender}
-                      embedded
-                      onSource={onSource}
-                      onOpenResult={onOpenResult}
-                      onOpenOutput={onOpenOutput}
-                      onCustomizeManager={() => openSettingsSection("manager")}
-                      onOpenManager={onClose}
-                      onClose={onClose}
-                    />
-                  </div>
-                )
-              : undefined
-          }
         />
       </div>
     );
@@ -210,7 +183,6 @@ function TenderView({
         onRecord={openRecord}
         onView={showView}
         onNavigate={go}
-        onSettingsSection={openSettingsSection}
       />
     );
 
@@ -243,7 +215,6 @@ function SectionPage({
   onRecord,
   onView,
   onNavigate,
-  onSettingsSection,
 }: {
   section: Exclude<TenderSection, "manager">;
   context: TenderContext;
@@ -256,7 +227,6 @@ function SectionPage({
   onRecord: (view: string, recordId: string) => void;
   onView: (view: string) => void;
   onNavigate: (target: string) => void;
-  onSettingsSection: (section: string) => void;
 }) {
   const { tenderId } = context;
 
@@ -305,7 +275,9 @@ function SectionPage({
 
   if (section === "estimate") {
     const view =
-      context.view === "proposals" || context.view === "quotes"
+      context.view === "proposals" ||
+      context.view === "quotes" ||
+      context.view === "takeoff"
         ? context.view
         : "boq";
     const views = [
@@ -313,6 +285,11 @@ function SectionPage({
         id: "boq",
         label: "BOQ",
         available: capabilities.includes("estimates"),
+      },
+      {
+        id: "takeoff",
+        label: "Takeoff",
+        available: capabilities.includes("takeoff"),
       },
       {
         id: "proposals",
@@ -350,13 +327,14 @@ function SectionPage({
         <Page legacy={false}>
           {!active.available ? (
             <Unavailable what={active.label} />
+          ) : view === "takeoff" ? (
+            <Takeoff tenderId={tenderId} onSource={onSource} />
           ) : view === "quotes" ? (
             <Quotes
               tenderId={tenderId}
               onSource={onSource}
               selectedId={context.recordId ?? null}
               onSelect={selectRecord}
-              onSettings={() => onSettingsSection("mail")}
             />
           ) : (
             <Estimate

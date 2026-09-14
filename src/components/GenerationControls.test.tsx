@@ -5,9 +5,7 @@ import { GenerationControls } from "./GenerationControls";
 const settings = {
   max_output_tokens: 8192,
   output_mode: "auto" as const,
-  native_tools: [],
   max_search_calls: 3,
-  max_native_tool_calls: 3,
 };
 
 it("keeps advanced controls in More options and preserves unrelated preferences", () => {
@@ -33,10 +31,19 @@ it("keeps advanced controls in More options and preserves unrelated preferences"
   expect(change).toHaveBeenLastCalledWith({ ...settings, temperature: null });
 });
 
-it("makes hosted code limitations visible and keeps settings editable without an account", () => {
-  render(<GenerationControls value={settings} onChange={vi.fn()} />);
+it("keeps web search on the route and settings editable without an account", () => {
+  const onWebSearch = vi.fn();
+  render(
+    <GenerationControls
+      value={settings}
+      onChange={vi.fn()}
+      webSearch={false}
+      onWebSearch={onWebSearch}
+    />,
+  );
   fireEvent.click(screen.getByText("More options"));
-  expect(screen.getByLabelText("Provider code execution")).toBeEnabled();
+  fireEvent.click(screen.getByLabelText("Provider web search"));
+  expect(onWebSearch).toHaveBeenCalledWith(true);
   expect(screen.getByText(/Choose an account and model/)).toBeInTheDocument();
 });
 

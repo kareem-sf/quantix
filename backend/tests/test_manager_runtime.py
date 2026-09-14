@@ -23,7 +23,7 @@ def close_temporary_diagnostics():
 def test_capture_pins_version_and_get_remains_historical_after_edit(tmp_path):
     repo = Repository(tmp_path / "home")
     tender = repo.create_tender("Synthetic Tender")
-    run = repo.create_run(tender["id"], "conversation", "Review")
+    run = repo.create_run(tender["id"], "manager", "Review")
     profiles = ManagerRunProfiles(repo)
     first = profiles.capture(tender["id"], run["id"])
 
@@ -110,7 +110,7 @@ def test_outer_admission_rollback_removes_run_and_profile_pin(tmp_path):
 
     with pytest.raises(RuntimeError):
         with repo.atomic():
-            run = repo.create_run(tender["id"], "conversation", "Rollback")
+            run = repo.create_run(tender["id"], "manager", "Rollback")
             profiles.capture(tender["id"], run["id"])
             raise RuntimeError("force rollback")
 
@@ -123,7 +123,7 @@ def test_concurrent_duplicate_capture_keeps_one_pinned_version(tmp_path):
     home = tmp_path / "home"
     repo = Repository(home)
     tender = repo.create_tender("Synthetic Tender")
-    run = repo.create_run(tender["id"], "conversation", "Concurrent")
+    run = repo.create_run(tender["id"], "manager", "Concurrent")
 
     def capture_once(_):
         return ManagerRunProfiles(Repository(home)).capture(tender["id"], run["id"])
@@ -133,9 +133,12 @@ def test_concurrent_duplicate_capture_keeps_one_pinned_version(tmp_path):
 
     assert {(item.id, item.version) for item in captured} == {(captured[0].id, captured[0].version)}
     with repo.db.connect() as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM office_manager_run_profiles WHERE run_id=?", (run["id"],)
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM office_manager_run_profiles WHERE run_id=?", (run["id"],)
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def test_prompt_profile_contains_complete_user_fields_without_authority(tmp_path):

@@ -164,7 +164,9 @@ def test_grok_bridge_only_scopes_read_denial_and_keeps_account_deny_strict(tmp_p
 
     configure(tmp_path / "account", model="grok-4.5")
     account_config = (tmp_path / "account" / "grok" / "config.toml").read_text()
-    assert 'deny = ["Bash", "Read", "Write", "Edit", "Grep", "WebFetch", "MCPTool"]' in account_config
+    assert (
+        'deny = ["Bash", "Read", "Write", "Edit", "Grep", "WebFetch", "MCPTool"]' in account_config
+    )
 
 
 def test_grok_check_instruction_requires_joint_discovery_and_one_unchanged_submission():
@@ -188,23 +190,34 @@ def test_non_grok_check_instruction_keeps_existing_contract():
 
 def test_grok_check_host_limit_and_instruction_are_sent_to_worker():
     observed = {}
-    client = __import__("quantix.ai_worker_client", fromlist=["AIWorkerClient"]).AIWorkerClient(SimpleNamespace())
+    client = __import__("quantix.ai_worker_client", fromlist=["AIWorkerClient"]).AIWorkerClient(
+        SimpleNamespace()
+    )
 
     async def fake_execute(*args, **kwargs):
         observed["connection"] = args[1]
         observed["instruction"] = args[4]
-        return {"output": _ConnectionCheckOutput(value="opaque"), "usage": {"actual_model": "grok-4.5"}}
+        return {
+            "output": _ConnectionCheckOutput(value="opaque"),
+            "usage": {"actual_model": "grok-4.5"},
+        }
 
     client._execute = fake_execute
 
     import asyncio
-    result = asyncio.run(client.check(
-        {"connection_id": "connection", "model_id": "grok-4.5", "max_output_tokens": 1024},
-        {"protocol": "grok_build"},
-        {},
-    ))
 
-    assert observed["connection"]["_execution_limits"] == {"max_requests": 5, "max_output_tokens": 1024}
+    result = asyncio.run(
+        client.check(
+            {"connection_id": "connection", "model_id": "grok-4.5", "max_output_tokens": 1024},
+            {"protocol": "grok_build"},
+            {},
+        )
+    )
+
+    assert observed["connection"]["_execution_limits"] == {
+        "max_requests": 5,
+        "max_output_tokens": 1024,
+    }
     assert observed["instruction"] == connection_check_instruction("grok_build")
     assert result["output_supported"] is False
 
@@ -219,12 +232,14 @@ def test_grok_failure_messages_separate_round_exhaustion_and_provider_error():
 
 
 def test_grok_error_classification_keeps_only_allowlisted_category_and_status():
-    details = classify_provider_error({
-        "type": "error",
-        "category": "rate_limit_exceeded",
-        "status_code": 429,
-        "message": "raw provider detail with sk-secret and customer.txt",
-    })
+    details = classify_provider_error(
+        {
+            "type": "error",
+            "category": "rate_limit_exceeded",
+            "status_code": 429,
+            "message": "raw provider detail with sk-secret and customer.txt",
+        }
+    )
 
     assert details == {"category": "rate_limit", "status_code": 429}
     message = _safe_failure_message(details["category"], operation="execute")
@@ -235,12 +250,14 @@ def test_grok_error_classification_keeps_only_allowlisted_category_and_status():
 
 
 def test_grok_unknown_error_keeps_generic_failure_and_no_status():
-    details = classify_provider_error({
-        "type": "error",
-        "category": "provider-specific-secret",
-        "status_code": "500",
-        "message": "private response body",
-    })
+    details = classify_provider_error(
+        {
+            "type": "error",
+            "category": "provider-specific-secret",
+            "status_code": "500",
+            "message": "private response body",
+        }
+    )
 
     assert details == {"category": "unknown", "status_code": None}
     assert _safe_failure_message(details["category"], operation="check") == (
@@ -252,12 +269,13 @@ def test_grok_forbidden_status_is_access_denied_not_authentication_failure():
     details = classify_provider_error({"type": "error", "status_code": 403})
 
     assert details == {"category": "access_denied", "status_code": 403}
-    assert "subscription and model permissions" in _safe_failure_message(details["category"], operation="execute")
+    assert "subscription and model permissions" in _safe_failure_message(
+        details["category"], operation="execute"
+    )
     assert classify_provider_error({"type": "error", "status_code": 401}) == {
-        "category": "authentication_failed", "status_code": 401
+        "category": "authentication_failed",
+        "status_code": 401,
     }
-
-
 
 
 def test_diagnostics_preserves_documented_grok_terminal_reasons(tmp_path):

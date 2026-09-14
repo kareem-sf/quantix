@@ -34,7 +34,9 @@ _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,299}$")
 _SAFE_EVENT = re.compile(r"^[a-z][a-z0-9_.-]{0,79}$")
 _SAFE_ROUTE = re.compile(r"^/[A-Za-z0-9_./{}:-]{0,399}$")
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
-_OWNED_FILE = re.compile(r"^quantix-[A-Za-z0-9][A-Za-z0-9._-]{0,79}-(\d+)-([a-f0-9]{32})\.jsonl(?:\.\d+)?$")
+_OWNED_FILE = re.compile(
+    r"^quantix-[A-Za-z0-9][A-Za-z0-9._-]{0,79}-(\d+)-([a-f0-9]{32})\.jsonl(?:\.\d+)?$"
+)
 
 _context: contextvars.ContextVar[dict[str, object]] = contextvars.ContextVar(
     "quantix_diagnostic_context", default={}
@@ -48,11 +50,18 @@ def _utc_now() -> str:
 
 
 def _token(value, *, pattern=_SAFE_TOKEN, limit=300):
-    if (not isinstance(value, str) or len(value) > limit or not pattern.fullmatch(value)
-            or pattern is _SAFE_TOKEN and (
-                "\\" in value or value.startswith("/")
-                or re.match(r"^[A-Za-z]:[\\/]", value)
-                or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value))):
+    if (
+        not isinstance(value, str)
+        or len(value) > limit
+        or not pattern.fullmatch(value)
+        or pattern is _SAFE_TOKEN
+        and (
+            "\\" in value
+            or value.startswith("/")
+            or re.match(r"^[A-Za-z]:[\\/]", value)
+            or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value)
+        )
+    ):
         return None
     return value
 
@@ -144,7 +153,11 @@ def _safe_error_payload(value, *, depth=0, budget=None):
     result = {}
     for key, item in value.items():
         if key in {"type", "module", "function"}:
-            if isinstance(item, str) and len(item) <= 200 and re.fullmatch(r"[A-Za-z0-9_.-]+", item):
+            if (
+                isinstance(item, str)
+                and len(item) <= 200
+                and re.fullmatch(r"[A-Za-z0-9_.-]+", item)
+            ):
                 result[key] = item
         elif key in {"line", "status_code", "errno"}:
             safe = _bounded_int(item, maximum=10**12)
@@ -152,8 +165,11 @@ def _safe_error_payload(value, *, depth=0, budget=None):
                 result[key] = safe
         elif key in {"frames", "children"}:
             if isinstance(item, list):
-                result[key] = [_safe_error_payload(child, depth=depth + 1, budget=budget)
-                               for child in item[:8] if isinstance(child, dict)]
+                result[key] = [
+                    _safe_error_payload(child, depth=depth + 1, budget=budget)
+                    for child in item[:8]
+                    if isinstance(child, dict)
+                ]
         elif key in {"cause"} and isinstance(item, dict):
             result[key] = _safe_error_payload(item, depth=depth + 1, budget=budget)
         elif key in {"truncated", "frames_truncated", "children_truncated"} and type(item) is bool:
@@ -164,13 +180,16 @@ def _safe_error_payload(value, *, depth=0, budget=None):
 class DiagnosticWriter:
     """One-process JSONL writer with bounded rotation and best-effort failure."""
 
-    def __init__(self, directory=None, *, component="service", session_id=None,
-                 require_directory=False):
+    def __init__(
+        self, directory=None, *, component="service", session_id=None, require_directory=False
+    ):
         self.directory: Path | None = None
         try:
             if require_directory and directory is None:
                 raise ValueError("An explicit diagnostics directory is required.")
-            selected = Path(directory) if directory is not None else Path.home() / ".quantix" / "logs"
+            selected = (
+                Path(directory) if directory is not None else Path.home() / ".quantix" / "logs"
+            )
             self.directory = selected.expanduser().resolve()
         except Exception:
             # Diagnostics must never prevent the service or worker from
@@ -183,7 +202,10 @@ class DiagnosticWriter:
         self.path: Path | None = None
         self.lock_path: Path | None = None
         if self.directory is not None:
-            self.path = self.directory / f"quantix-{self.component}-{self.process_id}-{self.session_id}.jsonl"
+            self.path = (
+                self.directory
+                / f"quantix-{self.component}-{self.process_id}-{self.session_id}.jsonl"
+            )
             self.lock_path = self.path.with_name(self.path.name + ".lock")
         self._lock_stream = None
         self.available = False
@@ -213,6 +235,7 @@ class DiagnosticWriter:
             self._lock_stream = self.lock_path.open("a+b")
             if os.name == "nt":
                 import msvcrt
+
                 self._lock_stream.seek(0, 2)
                 if self._lock_stream.tell() == 0:
                     self._lock_stream.write(b"\0")
@@ -221,6 +244,7 @@ class DiagnosticWriter:
                 msvcrt.locking(self._lock_stream.fileno(), msvcrt.LK_NBLCK, 1)
             else:
                 import fcntl
+
                 fcntl.flock(self._lock_stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.available = True
             self.detail = "Recording local diagnostics."
@@ -255,7 +279,8 @@ class DiagnosticWriter:
             return []
         try:
             return [
-                path for path in self.directory.glob("quantix-*.jsonl*")
+                path
+                for path in self.directory.glob("quantix-*.jsonl*")
                 if path.is_file() and _OWNED_FILE.fullmatch(path.name)
             ]
         except Exception:
@@ -309,6 +334,7 @@ class DiagnosticWriter:
                 stream = marker.open("a+b")
                 if os.name == "nt":
                     import msvcrt
+
                     stream.seek(0, 2)
                     if stream.tell() == 0:
                         stream.write(b"\0")
@@ -318,6 +344,7 @@ class DiagnosticWriter:
                     msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
                 else:
                     import fcntl
+
                     fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                     fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
             except Exception:
@@ -349,6 +376,7 @@ class DiagnosticWriter:
         try:
             import ctypes
             from ctypes import wintypes
+
             kernel = ctypes.WinDLL("kernel32", use_last_error=True)
             kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
             kernel.OpenProcess.restype = wintypes.HANDLE
@@ -396,12 +424,41 @@ class DiagnosticWriter:
             self._failure()
 
     def _field(self, key, value):
-        if key in {"duration_ms", "http_status", "status_code", "errno", "line", "column", "round", "rounds", "exit_code", "requests", "max_requests", "requests_used", "input_tokens", "output_tokens", "cached_input_tokens", "reasoning_tokens", "total_tokens", "tool_calls", "web_search_calls", "progress"}:
+        if key in {
+            "duration_ms",
+            "http_status",
+            "status_code",
+            "errno",
+            "line",
+            "column",
+            "round",
+            "rounds",
+            "exit_code",
+            "requests",
+            "max_requests",
+            "requests_used",
+            "input_tokens",
+            "output_tokens",
+            "cached_input_tokens",
+            "reasoning_tokens",
+            "total_tokens",
+            "tool_calls",
+            "web_search_calls",
+            "progress",
+        }:
             maximum = 100_000_000 if key == "duration_ms" else 10**12
             if key == "exit_code":
-                return value if type(value) is int and -10**6 <= value <= maximum else None
+                return value if type(value) is int and -(10**6) <= value <= maximum else None
             return _bounded_int(value, maximum=maximum)
-        if key in {"submitted", "submission_received", "available", "usage_complete", "provider_cost_is_partial", "provider_usage_is_incomplete", "tool_in_allowlist"}:
+        if key in {
+            "submitted",
+            "submission_received",
+            "available",
+            "usage_complete",
+            "provider_cost_is_partial",
+            "provider_usage_is_incomplete",
+            "tool_in_allowlist",
+        }:
             return value if type(value) is bool else None
         if key in {"error", "exception"}:
             return _safe_error_payload(value)
@@ -414,10 +471,40 @@ class DiagnosticWriter:
                 return None
             return [item for item in value if _token(item)][:30]
         if key in {"stop_reason"}:
-            return value if value in {"end_turn", "cancelled", "max_turns", "max_tokens", "max_turn_requests", "refusal", "error", "other", "missing"} else "other"
+            return (
+                value
+                if value
+                in {
+                    "end_turn",
+                    "cancelled",
+                    "max_turns",
+                    "max_tokens",
+                    "max_turn_requests",
+                    "refusal",
+                    "error",
+                    "other",
+                    "missing",
+                }
+                else "other"
+            )
         if key in {"submission_status"}:
             return value if value in {"received", "missing", "rejected", "unknown"} else "unknown"
-        if key in {"phase", "outcome", "protocol", "model", "actual_model", "component_version", "component_id", "connection_id", "tool_name", "operation", "kind", "source", "error_type", "method"}:
+        if key in {
+            "phase",
+            "outcome",
+            "protocol",
+            "model",
+            "actual_model",
+            "component_version",
+            "component_id",
+            "connection_id",
+            "tool_name",
+            "operation",
+            "kind",
+            "source",
+            "error_type",
+            "method",
+        }:
             return _token(value)
         return None
 
@@ -439,7 +526,9 @@ class DiagnosticWriter:
             safe = self._field(key, value)
             if safe is not None:
                 record[key] = safe
-        encoded = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        encoded = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode(
+            "utf-8"
+        )
         if len(encoded) > MAX_RECORD_BYTES:
             return False
         with self._lock:
@@ -462,7 +551,9 @@ class DiagnosticWriter:
 
     def record_exception(self, event, error, *, level="error", **fields):
         supplied = fields.get("error_reference")
-        reference = supplied if isinstance(supplied, str) and _ID.fullmatch(supplied) else uuid4().hex
+        reference = (
+            supplied if isinstance(supplied, str) and _ID.fullmatch(supplied) else uuid4().hex
+        )
         fields = dict(fields)
         fields["error_reference"] = reference
         fields["error"] = _safe_error(error)
@@ -478,9 +569,11 @@ class DiagnosticWriter:
             try:
                 if os.name != "nt":
                     import fcntl
+
                     fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
                 else:
                     import msvcrt
+
                     stream.seek(0)
                     msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
                 stream.close()
@@ -494,7 +587,10 @@ class DiagnosticWriter:
     def accept_renderer_event(self, event):
         now = time.monotonic()
         with self._lock:
-            while self._renderer_events and now - self._renderer_events[0] >= RENDERER_RATE_WINDOW_SECONDS:
+            while (
+                self._renderer_events
+                and now - self._renderer_events[0] >= RENDERER_RATE_WINDOW_SECONDS
+            ):
                 self._renderer_events.popleft()
             if len(self._renderer_events) >= RENDERER_RATE_LIMIT:
                 return False
@@ -523,9 +619,9 @@ def initialize(directory=None, *, component="service", session_id=None, require_
                 selected = Path(directory).expanduser().resolve()
             except Exception:
                 directory_error = True
-        same_directory = not directory_error and (selected is None or (
-            _writer is not None and selected == _writer.directory
-        ))
+        same_directory = not directory_error and (
+            selected is None or (_writer is not None and selected == _writer.directory)
+        )
         same_session = session_id is None or (
             _writer is not None and session_id == _writer.session_id
         )
@@ -565,7 +661,11 @@ def record_exception(event, error, *, level="error", **fields):
 
 @contextlib.contextmanager
 def diagnostic_context(**values):
-    safe = {key: value for key, value in values.items() if key in {"request_id", "operation_id", "run_id", "session_id"}}
+    safe = {
+        key: value
+        for key, value in values.items()
+        if key in {"request_id", "operation_id", "run_id", "session_id"}
+    }
     token = _context.set(safe)
     try:
         yield

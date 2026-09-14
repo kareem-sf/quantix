@@ -72,7 +72,9 @@ async def owned_client(client, *, close_method="close", force_method=None):
         while not startup.done() and asyncio.get_running_loop().time() < deadline:
             remaining = deadline - asyncio.get_running_loop().time()
             await _bounded_close(force, min(1, remaining))
-            await asyncio.wait({startup}, timeout=min(0.1, max(0, deadline - asyncio.get_running_loop().time())))
+            await asyncio.wait(
+                {startup}, timeout=min(0.1, max(0, deadline - asyncio.get_running_loop().time()))
+            )
         unresolved_start = not startup.done()
         if unresolved_start:
             startup.cancel()
@@ -83,7 +85,9 @@ async def owned_client(client, *, close_method="close", force_method=None):
         if not closed and force_method:
             closed = await _bounded_close(force, 1)
         if unresolved_start or not closed:
-            _logger.warning("Local AI client cleanup was not confirmed; a late startup or client process may still need to be stopped.")
+            _logger.warning(
+                "Local AI client cleanup was not confirmed; a late startup or client process may still need to be stopped."
+            )
         return closed and not unresolved_start
 
     try:
@@ -102,59 +106,80 @@ async def owned_client(client, *, close_method="close", force_method=None):
             if not startup.done():
                 startup.cancel()
                 _retain_cleanup(startup)
-            _logger.warning("Local AI client cleanup was interrupted; process termination remains unconfirmed.")
+            _logger.warning(
+                "Local AI client cleanup was interrupted; process termination remains unconfirmed."
+            )
             await _bounded_close(force, 1)
             raise
-        if not clean and not isinstance(primary_error, (ValueError, InterruptedError, asyncio.CancelledError)):
-            raise RuntimeUnavailable("The original client could not close cleanly. Its result was withheld; stop its process before retrying.") from None
+        if not clean and not isinstance(
+            primary_error, (ValueError, InterruptedError, asyncio.CancelledError)
+        ):
+            raise RuntimeUnavailable(
+                "The original client could not close cleanly. Its result was withheld; stop its process before retrying."
+            ) from None
 
 
 def child_environment(home: Path) -> dict[str, str]:
     """Also neutralise inherited keys in SDKs that merge env with os.environ."""
     allowed = {
-        "SYSTEMROOT", "WINDIR", "COMSPEC", "PATH", "PATHEXT", "SYSTEMDRIVE", "PROGRAMDATA",
-        "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "LANG", "LC_ALL",
-        "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "QUANTIX_AI_COMPONENT_ROOT", "QUANTIX_NODE_BINARY", "COPILOT_SKIP_CLI_DOWNLOAD", "QUANTIX_COMPONENT_MANAGED",
+        "SYSTEMROOT",
+        "WINDIR",
+        "COMSPEC",
+        "PATH",
+        "PATHEXT",
+        "SYSTEMDRIVE",
+        "PROGRAMDATA",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+        "LANG",
+        "LC_ALL",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "QUANTIX_AI_COMPONENT_ROOT",
+        "QUANTIX_COMPONENT_MANAGED",
     }
     env = {key: value if key.upper() in allowed else "" for key, value in os.environ.items()}
-    for directory in (home, home / "tmp", home / "config", home / "data", home / "cache",
-                      home / "codex", home / "copilot", home / "claude"):
+    for directory in (
+        home,
+        home / "tmp",
+        home / "config",
+        home / "data",
+        home / "cache",
+        home / "codex",
+    ):
         directory.mkdir(parents=True, exist_ok=True)
-    env.update({
-        "HOME": str(home), "USERPROFILE": str(home),
-        "APPDATA": str(home / "config"), "LOCALAPPDATA": str(home / "data"),
-        "XDG_CONFIG_HOME": str(home / "config"), "XDG_DATA_HOME": str(home / "data"),
-        "XDG_CACHE_HOME": str(home / "cache"),
-        "TEMP": str(home / "tmp"), "TMP": str(home / "tmp"),
-        "CODEX_HOME": str(home / "codex"),
-        "COPILOT_HOME": str(home / "copilot"),
-        "COPILOT_CACHE_HOME": str(home / "cache" / "copilot"),
-        "COPILOT_AUTO_UPDATE": "false",
-        "CLAUDE_CONFIG_DIR": str(home / "claude"),
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-        "DISABLE_TELEMETRY": "1", "DO_NOT_TRACK": "1",
-        "OTEL_SDK_DISABLED": "true",
-        "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
-    })
+    env.update(
+        {
+            "HOME": str(home),
+            "USERPROFILE": str(home),
+            "APPDATA": str(home / "config"),
+            "LOCALAPPDATA": str(home / "data"),
+            "XDG_CONFIG_HOME": str(home / "config"),
+            "XDG_DATA_HOME": str(home / "data"),
+            "XDG_CACHE_HOME": str(home / "cache"),
+            "TEMP": str(home / "tmp"),
+            "TMP": str(home / "tmp"),
+            "CODEX_HOME": str(home / "codex"),
+            "DISABLE_TELEMETRY": "1",
+            "DO_NOT_TRACK": "1",
+            "OTEL_SDK_DISABLED": "true",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+        }
+    )
     return env
-
-
-def explicit_executable(connection: dict, key: str = "executable_path") -> Path | None:
-    raw = connection.get("settings", {}).get(key)
-    if not raw:
-        return None
-    path = Path(raw)
-    if not path.is_absolute() or not path.is_file():
-        raise RuntimeUnavailable("Choose an existing absolute path to the official client executable.")
-    if os.name == "nt" and path.suffix.lower() in {".cmd", ".bat", ".ps1"}:
-        raise RuntimeUnavailable("Choose the native executable or the official JavaScript entry point, not a shell script.")
-    return path
 
 
 def execution_limits(connection: dict, route: dict) -> tuple[int, int, int]:
     limits = connection.get("_execution_limits") or {}
-    requests = min(int(limits.get("max_requests", 12)), int(connection.get("settings", {}).get("max_turns", 12)))
-    output = min(int(route.get("max_output_tokens", 8192)), int(limits.get("max_output_tokens", 8192)))
+    requests = min(
+        int(limits.get("max_requests", 12)),
+        int(connection.get("settings", {}).get("max_turns", 12)),
+    )
+    output = min(
+        int(route.get("max_output_tokens", 8192)), int(limits.get("max_output_tokens", 8192))
+    )
     timeout = int(connection.get("settings", {}).get("runtime_timeout_seconds", 900))
     if not 1 <= requests <= 100 or not 128 <= output <= 200000 or not 1 <= timeout <= 1800:
         raise ValueError("The local client's request, output or time limit is invalid.")
@@ -179,7 +204,9 @@ async def reserve_runtime(connection, route, instruction, before_request):
     capabilities = (connection.get("_model") or {}).get("capabilities") or {}
     context_window = capabilities.get("context_window")
     if context_window is None and connection.get("billing") in {"metered", "unknown"}:
-        raise RuntimeUnavailable("Record this model's context window before metered local-client work so its complete agent loop can be reserved.")
+        raise RuntimeUnavailable(
+            "Record this model's context window before metered local-client work so its complete agent loop can be reserved."
+        )
     input_bound = int(context_window or max(len(instruction), 131072))
     reservation = await call_hook(before_request, input_bound, output, requests=requests)
     return reservation, requests, output
@@ -187,26 +214,12 @@ async def reserve_runtime(connection, route, instruction, before_request):
 
 def runtime_usage(connection: dict, route: dict, **values) -> dict:
     return {
-        "requests": 0, "input_tokens": 0, "output_tokens": 0,
-        "actual_model": None, "billing": connection.get("billing", "unknown"),
-        "usage_complete": False, "runtime": connection["protocol"],
+        "requests": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "actual_model": None,
+        "billing": connection.get("billing", "unknown"),
+        "usage_complete": False,
+        "runtime": connection["protocol"],
         **values,
     }
-
-
-async def stop_process(process):
-    if process is None or process.returncode is not None:
-        return
-    try:
-        process.terminate()
-    except ProcessLookupError:
-        await process.wait()
-        return
-    try:
-        await asyncio.wait_for(process.wait(), 5)
-    except TimeoutError:
-        try:
-            process.kill()
-        except ProcessLookupError:
-            pass
-        await process.wait()

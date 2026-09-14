@@ -57,10 +57,21 @@ def release_rejected_reservations(repo) -> int:
                 or data.get("web_search_calls")
             ):
                 continue
-            conn.execute("UPDATE ai_usage SET data_json=? WHERE id=?", (dump(released_usage(data)), identifier))
+            conn.execute(
+                "UPDATE ai_usage SET data_json=? WHERE id=?",
+                (dump(released_usage(data)), identifier),
+            )
             conn.execute(
                 "INSERT INTO decisions VALUES(?,?,?,?,?,?,?)",
-                (new_id(), tender_id, "ai_usage", identifier, "release_rejected", RELEASED_DETAIL, now()),
+                (
+                    new_id(),
+                    tender_id,
+                    "ai_usage",
+                    identifier,
+                    "release_rejected",
+                    RELEASED_DETAIL,
+                    now(),
+                ),
             )
             released += 1
     return released

@@ -14,7 +14,11 @@ def create_router(repo, *, should_stop=None):
 
     @router.get("/tenders/{tender_id}/runs/{run_id}/chat-stream")
     async def observe_run(
-        tender_id: str, run_id: str, request: Request, after: int = Query(0, ge=0), cursor: str | None = Query(None, max_length=1024)
+        tender_id: str,
+        run_id: str,
+        request: Request,
+        after: int = Query(0, ge=0),
+        cursor: str | None = Query(None, max_length=1024),
     ):
         try:
             service.require_run(tender_id, run_id)
@@ -22,7 +26,9 @@ def create_router(repo, *, should_stop=None):
                 if cursor:
                     service.activity._decode(conn, run_id, cursor)
                 elif after:
-                    anchor = conn.execute("SELECT run_id FROM run_events WHERE id=?", (after,)).fetchone()
+                    anchor = conn.execute(
+                        "SELECT run_id FROM run_events WHERE id=?", (after,)
+                    ).fetchone()
                     if anchor is not None and anchor[0] != run_id:
                         raise ValueError("The activity cursor does not belong to this run.")
         except KeyError as error:

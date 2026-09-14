@@ -203,7 +203,10 @@ def ocr_page(
     def run(langs: str) -> int:
         process = subprocess.Popen(
             [str(executable), str(image), str(work / "out"), "-l", langs, "txt", "tsv"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         started = time.monotonic()
@@ -229,7 +232,9 @@ def ocr_page(
         if code != 0:
             raise OCRProcessError("OCR failed for this page after the language fallback.")
         text = (work / "out.txt").read_text(encoding="utf-8", errors="replace").strip()
-        confidence = _tsv_confidence((work / "out.tsv").read_text(encoding="utf-8", errors="replace"))
+        confidence = _tsv_confidence(
+            (work / "out.tsv").read_text(encoding="utf-8", errors="replace")
+        )
     finally:
         for child in work.iterdir():
             child.unlink(missing_ok=True)

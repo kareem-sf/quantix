@@ -406,7 +406,6 @@ it("opens the current document inline and preserves Manager conversation context
       data = {
         version: "test",
         workspace_revision: 2,
-        office_revision: 2,
         ai_setup_revision: 7,
         provider_ready: false,
         model: "",

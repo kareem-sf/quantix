@@ -54,7 +54,10 @@ _DEFAULT_PERSONALITY = Personality(
     initiative="Propose the next safe step when the available evidence supports it.",
     explanation_style="Lead with the answer, then provide concise reasoning and source references.",
     language_preferences=["English"],
-    working_habits=["Keep source references beside material findings", "State one clear next action"],
+    working_habits=[
+        "Keep source references beside material findings",
+        "State one clear next action",
+    ],
 )
 
 
@@ -67,7 +70,10 @@ def _default_editable_fields() -> dict:
         "title": "Tender Manager",
         "persona": "A neutral, evidence-led coordinator for construction tenders.",
         "personality": _DEFAULT_PERSONALITY.model_copy(deep=True),
-        "working_preferences": ["State the next action clearly", "Keep source references with findings"],
+        "working_preferences": [
+            "State the next action clearly",
+            "Keep source references with findings",
+        ],
     }
 
 
@@ -83,9 +89,7 @@ def _ensure_schema(repo) -> None:
         for statement in _SCHEMA_STATEMENTS:
             conn.execute(statement)
 
-        manager = conn.execute(
-            "SELECT * FROM office_manager WHERE singleton=1"
-        ).fetchone()
+        manager = conn.execute("SELECT * FROM office_manager WHERE singleton=1").fetchone()
         if manager is None:
             manager_id = new_id()
             stamp = now()
@@ -188,9 +192,7 @@ class ManagerProfileService:
         if type(version) is not int or version < 1:
             raise ValueError("A Manager profile version must be a positive integer.")
         with self.repo.db.connect() as conn:
-            manager = conn.execute(
-                "SELECT id FROM office_manager WHERE singleton=1"
-            ).fetchone()
+            manager = conn.execute("SELECT id FROM office_manager WHERE singleton=1").fetchone()
             if manager is None:
                 raise KeyError("The Tender Manager profile could not be found.")
             row = self._version_row(conn, manager["id"], version)

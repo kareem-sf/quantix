@@ -37,15 +37,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "httpx>=0.28,<1", "ruff>=0.12,<1", "pydantic-evals==2.40.0"]
+dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "pytest-xdist>=3.6,<4", "httpx>=0.28,<1", "ruff>=0.12,<1"]
 packaging = ["pyinstaller>=6,<7"]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["quantix*"]
-
-[tool.setuptools.package-data]
-"quantix.benchmarks" = ["fixtures/*/*.docx", "fixtures/manifest.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

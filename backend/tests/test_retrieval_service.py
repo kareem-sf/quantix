@@ -15,10 +15,20 @@ def _workspace(tmp_path, passages):
     tender = repo.create_tender("Retrieval Tender")
     run = repo.create_run(tender["id"], "manager", "Find the bid bond")
     repo.update_run(run["id"], status="running")
-    artifact, _ = repo.register_artifact(tender["id"], "Conditions/general.pdf", "c" * 64, 100, {
-        "kind": "pdf", "status": "extracted",
-        "segments": [{"locator": f"page:{index + 1}", "text": text, "page": index + 1} for index, text in enumerate(passages)],
-    })
+    artifact, _ = repo.register_artifact(
+        tender["id"],
+        "Conditions/general.pdf",
+        "c" * 64,
+        100,
+        {
+            "kind": "pdf",
+            "status": "extracted",
+            "segments": [
+                {"locator": f"page:{index + 1}", "text": text, "page": index + 1}
+                for index, text in enumerate(passages)
+            ],
+        },
+    )
     evidence = repo.artifact_evidence(tender["id"], artifact["id"], limit=50)
     return repo, tender, run, artifact, evidence
 
@@ -30,22 +40,45 @@ class FakeMeaning:
         self.repo, self.tender_id, self.ranked = repo, tender_id, ranked
 
     def search(self, tender_id, query, limit=20, **_kwargs):
-        rows = {row["id"]: row for row in self.repo.artifact_evidence(tender_id, self.repo.list_artifacts(tender_id)[0]["id"], limit=50)}
+        rows = {
+            row["id"]: row
+            for row in self.repo.artifact_evidence(
+                tender_id, self.repo.list_artifacts(tender_id)[0]["id"], limit=50
+            )
+        }
         return [
-            rows[evidence_id] | {"artifact_name": "general.pdf", "relative_path": "Conditions/general.pdf", "score": score,
-                                 "metadata": {"semantic_match": {"start": 0, "end": 20, "semantic_score": score,
-                                                                  "structure": {"heading": "Securities"}}}}
+            rows[evidence_id]
+            | {
+                "artifact_name": "general.pdf",
+                "relative_path": "Conditions/general.pdf",
+                "score": score,
+                "metadata": {
+                    "semantic_match": {
+                        "start": 0,
+                        "end": 20,
+                        "semantic_score": score,
+                        "structure": {"heading": "Securities"},
+                    }
+                },
+            }
             for evidence_id, score in self.ranked
         ][:limit]
 
 
 def test_meaning_and_word_matches_are_fused_and_labelled(tmp_path):
-    repo, tender, _run, _artifact, evidence = _workspace(tmp_path, [
-        "The tenderer shall provide a bid bond of two percent.",
-        "Tender security must remain valid for 120 days.",
-        "Concrete grade C30/37 for foundations.",
-    ])
-    meaning = FakeMeaning(repo, tender["id"], [(evidence[1]["id"], 0.86), (evidence[0]["id"], 0.82), (evidence[2]["id"], 0.70)])
+    repo, tender, _run, _artifact, evidence = _workspace(
+        tmp_path,
+        [
+            "The tenderer shall provide a bid bond of two percent.",
+            "Tender security must remain valid for 120 days.",
+            "Concrete grade C30/37 for foundations.",
+        ],
+    )
+    meaning = FakeMeaning(
+        repo,
+        tender["id"],
+        [(evidence[1]["id"], 0.86), (evidence[0]["id"], 0.82), (evidence[2]["id"], 0.70)],
+    )
     hits, info = hybrid_search(repo, tender["id"], "bid bond", 3, semantic=meaning)
     assert info["meaning"] == "ready"
     by_id = {hit["id"]: hit for hit in hits}
@@ -57,22 +90,32 @@ def test_meaning_and_word_matches_are_fused_and_labelled(tmp_path):
 
 
 def test_flat_meaning_only_results_are_weak_matches(tmp_path):
-    repo, tender, _run, _artifact, evidence = _workspace(tmp_path, ["Roof waterproofing membrane.", "Reinforcing steel B500B."])
-    meaning = FakeMeaning(repo, tender["id"], [(evidence[0]["id"], 0.717), (evidence[1]["id"], 0.716)])
+    repo, tender, _run, _artifact, evidence = _workspace(
+        tmp_path, ["Roof waterproofing membrane.", "Reinforcing steel B500B."]
+    )
+    meaning = FakeMeaning(
+        repo, tender["id"], [(evidence[0]["id"], 0.717), (evidence[1]["id"], 0.716)]
+    )
     hits, info = hybrid_search(repo, tender["id"], "orbital period of Neptune", 5, semantic=meaning)
     assert hits and all(hit["weak_match"] for hit in hits)
     assert info["weak_results"] is True
 
 
 def test_scope_is_applied_before_ranking(tmp_path):
-    repo, tender, _run, _artifact, evidence = _workspace(tmp_path, [f"bid bond clause {n}" for n in range(12)])
+    repo, tender, _run, _artifact, evidence = _workspace(
+        tmp_path, [f"bid bond clause {n}" for n in range(12)]
+    )
     permitted = evidence[11]["id"]
-    hits, _info = hybrid_search(repo, tender["id"], "bid bond", 2, mode="exact", allowed=lambda eid: eid == permitted)
+    hits, _info = hybrid_search(
+        repo, tender["id"], "bid bond", 2, mode="exact", allowed=lambda eid: eid == permitted
+    )
     assert [hit["id"] for hit in hits] == [permitted]
 
 
 def test_exact_mode_never_uses_meaning(tmp_path):
-    repo, tender, _run, _artifact, evidence = _workspace(tmp_path, ["Clause 14.7 advance payment guarantee."])
+    repo, tender, _run, _artifact, evidence = _workspace(
+        tmp_path, ["Clause 14.7 advance payment guarantee."]
+    )
 
     class Refuse:
         def search(self, *_args, **_kwargs):
@@ -84,18 +127,24 @@ def test_exact_mode_never_uses_meaning(tmp_path):
 
 def _call(context, name, payload):
     definition = next(item for item in source_tools() if item.name == name)
-    return json.loads(asyncio.run(dispatch("nested", definition, context, payload, invocation_id=f"{name}-call")))
+    return json.loads(
+        asyncio.run(dispatch("nested", definition, context, payload, invocation_id=f"{name}-call"))
+    )
 
 
 def test_whole_document_reading_pages_through_the_document_and_counts_as_read(tmp_path):
-    repo, tender, run, artifact, evidence = _workspace(tmp_path, ["A" * 7000, "B" * 7000, "C" * 3000])
+    repo, tender, run, artifact, evidence = _workspace(
+        tmp_path, ["A" * 7000, "B" * 7000, "C" * 3000]
+    )
     context = OfficeContext(repo, tender["id"], run["id"])
     first = _call(context, "read_whole_document", {"artifact_id": artifact["id"]})
     assert [passage["id"] for passage in first["passages"]] == [evidence[0]["id"]]
     assert first["next_offset"] == 1 and first["document_finished"] is False
     second = _call(context, "read_whole_document", {"artifact_id": artifact["id"], "offset": 1})
-    assert [passage["id"] for passage in second["passages"]] == [evidence[1]["id"], evidence[2]["id"]] or \
-        [passage["id"] for passage in second["passages"]] == [evidence[1]["id"]]
+    assert [passage["id"] for passage in second["passages"]] == [
+        evidence[1]["id"],
+        evidence[2]["id"],
+    ] or [passage["id"] for passage in second["passages"]] == [evidence[1]["id"]]
     assert all(context.has_seen_source(row["id"]) for row in evidence[:2])
 
 
@@ -104,12 +153,88 @@ def test_package_map_tool_reports_the_saved_map(tmp_path):
     context = OfficeContext(repo, tender["id"], run["id"])
     assert _call(context, "read_package_map", {})["available"] is False
     ensure_schema(repo)
-    data = {"overview": "Road works package.", "gaps": ["No BOQ"], "identity": {"name": "Harbour Road"},
-            "documents": [{"document_id": artifact["id"], "relative_path": "Conditions/general.pdf",
-                           "document_type": "conditions_of_contract", "brief": "General conditions."}]}
+    data = {
+        "overview": "Road works package.",
+        "gaps": ["No BOQ"],
+        "identity": {"name": "Harbour Road"},
+        "documents": [
+            {
+                "document_id": artifact["id"],
+                "relative_path": "Conditions/general.pdf",
+                "document_type": "conditions_of_contract",
+                "brief": "General conditions.",
+            }
+        ],
+    }
     with repo.db.connect(write=True) as conn:
-        conn.execute("INSERT INTO package_maps VALUES(?,?,?,?)",
-                     (tender["id"], json.dumps(data), source_fingerprint(repo.list_artifacts(tender["id"])), "now"))
+        conn.execute(
+            "INSERT INTO package_maps VALUES(?,?,?,?)",
+            (
+                tender["id"],
+                json.dumps(data),
+                source_fingerprint(repo.list_artifacts(tender["id"])),
+                "now",
+            ),
+        )
     mapped = _call(context, "read_package_map", {})
     assert mapped["current"] is True and mapped["gaps"] == ["No BOQ"]
     assert mapped["documents"][0]["type"] == "conditions of contract"
+
+
+def test_a_document_id_given_as_a_passage_id_is_a_correctable_mistake(tmp_path):
+    import pytest
+
+    from quantix.tool_policy import ToolFenceError
+
+    repo, tender, run, artifact, _evidence = _workspace(
+        tmp_path, ["Site visit on 06/09/2026 at gate 02."]
+    )
+    context = OfficeContext(repo, tender["id"], run["id"])
+    definition = next(item for item in source_tools() if item.name == "read_source")
+    with pytest.raises(ToolFenceError, match="document ID, not a passage ID") as wrong_kind:
+        asyncio.run(
+            dispatch(
+                "nested", definition, context, {"source_id": artifact["id"]}, invocation_id="doc-id"
+            )
+        )
+    assert wrong_kind.value.recoverable is True
+    with pytest.raises(ToolFenceError, match="No passage with this ID") as unknown:
+        asyncio.run(
+            dispatch(
+                "nested", definition, context, {"source_id": "f" * 32}, invocation_id="unknown"
+            )
+        )
+    assert unknown.value.recoverable is True
+
+
+def test_documents_can_be_named_by_file_and_unknown_ones_are_correctable(tmp_path):
+    import pytest
+
+    from quantix.tool_policy import ToolFenceError
+
+    repo, tender, run, artifact, evidence = _workspace(tmp_path, ["Site visit form and gate pass."])
+    context = OfficeContext(repo, tender["id"], run["id"])
+    by_name = _call(context, "read_whole_document", {"artifact_id": "general.pdf"})
+    assert [passage["id"] for passage in by_name["passages"]] == [evidence[0]["id"]]
+    definition = next(item for item in source_tools() if item.name == "read_whole_document")
+    with pytest.raises(ToolFenceError, match="No document with this ID") as unknown:
+        asyncio.run(
+            dispatch(
+                "nested",
+                definition,
+                context,
+                {"artifact_id": "missing.pdf"},
+                invocation_id="missing",
+            )
+        )
+    assert unknown.value.recoverable is True
+    with pytest.raises(ToolFenceError, match="passage ID, not a document ID"):
+        asyncio.run(
+            dispatch(
+                "nested",
+                definition,
+                context,
+                {"artifact_id": evidence[0]["id"]},
+                invocation_id="passage",
+            )
+        )

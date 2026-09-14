@@ -22,8 +22,8 @@ def report_setup(tmp_path):
     return repo, tender_id, estimates, OutputService(repo)
 
 
-def save_engineering_analysis(repo, tender_id, content, source_ids, *, kind="manager", status="completed"):
-    run = repo.create_run(tender_id, kind, "Review the Tender documents")
+def save_engineering_analysis(repo, tender_id, content, source_ids, *, status="completed"):
+    run = repo.create_run(tender_id, "manager", "Review the Tender documents")
     repo.update_run(run["id"], status="running")
     repo.add_message(tender_id, "manager", content, source_ids, run_id=run["id"])
     repo.update_run(
@@ -35,13 +35,13 @@ def save_engineering_analysis(repo, tender_id, content, source_ids, *, kind="man
 
 
 def save_conversation_reply(repo, tender_id, content):
-    run = repo.create_run(tender_id, "conversation", content)
+    run = repo.create_run(tender_id, "manager", content)
     repo.update_run(run["id"], status="running")
     repo.add_message(tender_id, "manager", content, run_id=run["id"])
     repo.update_run(
         run["id"],
         status="completed",
-        result={"kind": "conversation", "reply": content, "next_action": "Review the Tender documents."},
+        result={"summary": content, "source_ids": []},
     )
     return run
 
@@ -51,19 +51,11 @@ def document_text(outputs, tender_id, record):
     return "\n".join(paragraph.text for paragraph in document.paragraphs)
 
 
-def test_report_uses_completed_conversation_run_that_entered_engineering_after_later_greeting(
-    report_setup,
-):
+def test_report_uses_the_cited_analysis_not_a_later_greeting(report_setup):
     repo, tender_id, estimates, outputs = report_setup
     source_id = estimates.view(tender_id)["items"][0]["source_id"]
     analysis = "Allow for groundwater monitoring before excavation."
-    save_engineering_analysis(
-        repo,
-        tender_id,
-        analysis,
-        [source_id],
-        kind="conversation",
-    )
+    save_engineering_analysis(repo, tender_id, analysis, [source_id])
     save_conversation_reply(repo, tender_id, "Good morning. How can I help?")
 
     record = outputs.generate(tender_id, approval(kind="analysis_docx"))
@@ -92,7 +84,7 @@ def test_report_ignores_a_later_failed_engineering_run(report_setup):
 def test_report_states_when_no_attributable_analysis_exists(report_setup):
     repo, tender_id, _estimates, outputs = report_setup
     repo.add_message(tender_id, "manager", "Historical Manager text with no run link.")
-    unknown_run = repo.create_run(tender_id, "conversation", "Historical request")
+    unknown_run = repo.create_run(tender_id, "manager", "Historical request")
     repo.add_message(
         tender_id,
         "manager",
@@ -106,7 +98,10 @@ def test_report_states_when_no_attributable_analysis_exists(report_setup):
 
     assert "Historical Manager text with no run link." not in text
     assert "Historical text linked to a run with no recorded outcome." not in text
-    assert "No completed Tender Manager engineering analysis with recorded run provenance is available." in text
+    assert (
+        "No completed Tender Manager engineering analysis with recorded run provenance is available."
+        in text
+    )
     assert "Review limitation" in text
     assert any("recorded run provenance" in warning for warning in record["metadata"]["warnings"])
 
@@ -114,7 +109,9 @@ def test_report_states_when_no_attributable_analysis_exists(report_setup):
 def test_source_revision_still_blocks_a_report_with_attributable_analysis(report_setup):
     repo, tender_id, estimates, outputs = report_setup
     source_id = estimates.view(tender_id)["items"][0]["source_id"]
-    save_engineering_analysis(repo, tender_id, "Review based on the first source revision.", [source_id])
+    save_engineering_analysis(
+        repo, tender_id, "Review based on the first source revision.", [source_id]
+    )
     record = outputs.generate(tender_id, approval(kind="analysis_docx"))
 
     revised_bytes = b"Controlled synthetic BOQ source revision two"

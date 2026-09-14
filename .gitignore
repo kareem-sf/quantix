@@ -23,7 +23,6 @@ playwright-report/
 *.dxf
 *.doc
 *.docx
-!backend/quantix/benchmarks/fixtures/*/*.docx
 *.xls*
 *.zip
 !tests/fixtures/README.md

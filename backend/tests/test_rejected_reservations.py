@@ -41,7 +41,12 @@ def _tender_with_paid_route(tmp_path):
             "model_id": "synthetic-model",
             "display_name": "Synthetic model",
             "capabilities": {"tools": True, "max_output_tokens": 20000},
-            "pricing": {"input_per_million": 1, "output_per_million": 2, "source": "synthetic", "as_of": "2026-09-09"},
+            "pricing": {
+                "input_per_million": 1,
+                "output_per_million": 2,
+                "source": "synthetic",
+                "as_of": "2026-09-09",
+            },
         },
     )
     route = {
@@ -135,7 +140,9 @@ def test_startup_repair_releases_holds_left_by_rejected_runs(tmp_path):
     repo.update_run(rejected_run["id"], status="failed", error=REJECTION_DETAILS[0])
     other_run, other_meter = _reserve(repo, tender, policy, route)
     other_meter.interrupted()
-    repo.update_run(other_run["id"], status="failed", error="Quantix closed before this work finished.")
+    repo.update_run(
+        other_run["id"], status="failed", error="Quantix closed before this work finished."
+    )
 
     assert release_rejected_reservations(repo) == 1
     assert release_rejected_reservations(repo) == 0

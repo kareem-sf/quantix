@@ -32,8 +32,8 @@ const workViews = new Set([
   "activity",
   "ai",
 ]);
-const managerViews = new Set(["result", "staff-result", "office-result", "output"]);
-const estimateViews = new Set(["boq", "proposals", "quotes"]);
+const managerViews = new Set(["output"]);
+const estimateViews = new Set(["boq", "takeoff", "proposals", "quotes"]);
 const submissionViews = new Set(["requirements", "documents", "package"]);
 
 /** The area that owns a record view, so a link opens where the record lives. */

@@ -46,7 +46,16 @@ def convert_dwg(path: Path, *, home: Path | None = None) -> Path:
     output_dir = runtime_tmp_dir(home) / "cad-convert"
     output_dir.mkdir(parents=True, exist_ok=True)
     completed = subprocess.run(
-        [str(converter), str(source.parent), str(output_dir), "ACAD2018", "DXF", "0", "1", source.name],
+        [
+            str(converter),
+            str(source.parent),
+            str(output_dir),
+            "ACAD2018",
+            "DXF",
+            "0",
+            "1",
+            source.name,
+        ],
         capture_output=True,
         timeout=60,
         check=False,

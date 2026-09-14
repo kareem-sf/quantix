@@ -253,7 +253,6 @@ export function LiveRunStream({
               ...new Set([
                 "tool",
                 "source",
-                "assignment",
                 "model_request",
                 "draft",
                 "reasoning_summary",

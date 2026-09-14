@@ -19,10 +19,20 @@ class ToolArgumentError(ValueError):
 
 
 # Identities the server resolves for every call. A tool argument never carries them.
-SERVER_IDENTITY_FIELDS = frozenset({
-    "tender_id", "run_id", "root_run_id", "actor_id", "actor_kind", "route_binding_id",
-    "budget_scope_id", "grant_fingerprint", "invocation_id", "trusted_invocation_id",
-})
+SERVER_IDENTITY_FIELDS = frozenset(
+    {
+        "tender_id",
+        "run_id",
+        "root_run_id",
+        "actor_id",
+        "actor_kind",
+        "route_binding_id",
+        "budget_scope_id",
+        "grant_fingerprint",
+        "invocation_id",
+        "trusted_invocation_id",
+    }
+)
 
 
 def argument_problem(error: ValidationError, limit: int = 5) -> str:
@@ -180,7 +190,5 @@ def tool_activity_message(definition: ToolDefinition) -> str:
     """Describe a local tool event without copying model-controlled text."""
 
     return (
-        "Inspecting Tender context."
-        if definition.read_only
-        else "Working on the Tender request."
+        "Inspecting Tender context." if definition.read_only else "Working on the Tender request."
     )

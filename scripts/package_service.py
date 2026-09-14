@@ -30,7 +30,7 @@ for package in ("quantix", "mcp", "mcp_types", "fastembed", "onnxruntime", "pypd
 for distribution in ("quantix-service", "mcp", "fastembed", "genai-prices", "pydantic-ai-slim",
                      "pydantic-graph", "openai", "anthropic", "google-genai", "httpx2"):
     command += ["--recursive-copy-metadata", distribution]
-for package in ("openai_codex", "codex_cli_bin", "copilot", "claude_agent_sdk", "azure.identity", "boto3", "botocore", "mistralai", "cohere"):
+for package in ("openai_codex", "codex_cli_bin"):
     command += ["--exclude-module", package]
 for source, destination in ((root / "backend" / "quantix" / "diagnostics.py", "quantix"),
                             (root / "backend" / "ai-components", "ai-components"),

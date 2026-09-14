@@ -20,9 +20,7 @@ def _app(repo):
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next):
-        if not hmac.compare_digest(
-            request.headers.get("authorization", ""), f"Bearer {TOKEN}"
-        ):
+        if not hmac.compare_digest(request.headers.get("authorization", ""), f"Bearer {TOKEN}"):
             return JSONResponse({"detail": "Not authorised."}, status_code=401)
         return await call_next(request)
 

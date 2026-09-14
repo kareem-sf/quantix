@@ -42,7 +42,10 @@ def _fake_codex(tmp_path, items):
             yield SimpleNamespace(
                 method="turn/completed",
                 payload=TurnCompletedNotification.model_validate(
-                    {"threadId": self.id, "turn": {"id": "turn", "status": "completed", "items": [], "error": None}}
+                    {
+                        "threadId": self.id,
+                        "turn": {"id": "turn", "status": "completed", "items": [], "error": None},
+                    }
                 ),
             )
 
@@ -75,14 +78,32 @@ async def _run(tmp_path, monkeypatch, items):
             return {"summary": "Ready for review."}
 
     monkeypatch.setattr(openai_codex, "AsyncCodex", _fake_codex(tmp_path, items))
-    connection = {"id": "account", "revision": 1, "provider_id": "codex", "protocol": "codex",
-                  "auth_type": "client_login", "billing": "subscription"}
+    connection = {
+        "id": "account",
+        "revision": 1,
+        "provider_id": "codex",
+        "protocol": "codex",
+        "auth_type": "client_login",
+        "billing": "subscription",
+    }
     route = {"model_id": "exact-model", "max_output_tokens": 1024}
-    context = SimpleNamespace(account_home=tmp_path, operation_id="run", bridge=Bridge(),
-                              control=Control(), session_binding=None)
-    result = await execute_codex(route, connection, {}, context, "Inspect the approved source.", object,
-                                 before_request=lambda *args, **kwargs: "reservation",
-                                 on_response=lambda *args: None)
+    context = SimpleNamespace(
+        account_home=tmp_path,
+        operation_id="run",
+        bridge=Bridge(),
+        control=Control(),
+        session_binding=None,
+    )
+    result = await execute_codex(
+        route,
+        connection,
+        {},
+        context,
+        "Inspect the approved source.",
+        object,
+        before_request=lambda *args, **kwargs: "reservation",
+        on_response=lambda *args: None,
+    )
     return result, events
 
 
@@ -92,18 +113,28 @@ def _mcp(server, tool):
 
 @pytest.mark.asyncio
 async def test_resource_listing_helper_does_not_end_the_run(tmp_path, monkeypatch):
-    result, events = await _run(tmp_path, monkeypatch, [
-        _mcp("", "list_mcp_resources"),
-        _mcp("quantix", "search_sources"),
-    ])
+    result, events = await _run(
+        tmp_path,
+        monkeypatch,
+        [
+            _mcp("", "list_mcp_resources"),
+            _mcp("quantix", "search_sources"),
+        ],
+    )
     assert result["output"] == {"summary": "Ready for review."}
     tools = [data["tool"] for kind, data in events if kind == "runtime_tool_activity"]
     assert tools == ["search_sources"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("item", [_mcp("codex_apps", "search_sources"), _mcp("quantix", "read_mcp_resource"),
-                                  _mcp("quantix", "unapproved_tool")])
+@pytest.mark.parametrize(
+    "item",
+    [
+        _mcp("codex_apps", "search_sources"),
+        _mcp("quantix", "read_mcp_resource"),
+        _mcp("quantix", "unapproved_tool"),
+    ],
+)
 async def test_other_outside_tools_still_stop_and_are_named(tmp_path, monkeypatch, item):
     from quantix_ai_worker.common import RuntimeUnavailable
 

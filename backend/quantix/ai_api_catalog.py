@@ -44,8 +44,6 @@ def model_entry(item: dict, protocol: str) -> dict | None:
         ("pdf", "pdf_input"),
         ("temperature", "temperature"),
         ("top_p", "top_p"),
-        ("web_fetch", "web_fetch"),
-        ("code_execution", "code_execution"),
     ):
         value = raw.get(source)
         if isinstance(value, dict):
@@ -53,7 +51,10 @@ def model_entry(item: dict, protocol: str) -> dict | None:
         if type(value) is bool:
             capabilities[target] = value
     for target, sources in (
-        ("context_window", ("context_length", "max_context_length", "max_input_tokens", "inputTokenLimit")),
+        (
+            "context_window",
+            ("context_length", "max_context_length", "max_input_tokens", "inputTokenLimit"),
+        ),
         ("max_output_tokens", ("max_tokens", "outputTokenLimit")),
     ):
         for source in sources:
@@ -73,7 +74,9 @@ def model_entry(item: dict, protocol: str) -> dict | None:
     architecture = item.get("architecture")
     if isinstance(architecture, dict) and isinstance(architecture.get("input_modalities"), list):
         capabilities["images"] = "image" in architecture["input_modalities"]
-    name = item.get("display_name") or item.get("displayName") or item.get("modelName") or identifier
+    name = (
+        item.get("display_name") or item.get("displayName") or item.get("modelName") or identifier
+    )
     return {"model_id": identifier, "display_name": str(name), "capabilities": capabilities}
 
 
@@ -81,7 +84,9 @@ async def discover_models(connection: dict, credentials: dict[str, str]) -> list
     """Fetch provider metadata with a fresh explicitly authenticated client."""
 
     if connection.get("protocol") not in {"openai_chat", "openai_responses", "anthropic", "google"}:
-        raise DirectAPIError("Model discovery is unavailable for this direct API protocol. Add a model manually.")
+        raise DirectAPIError(
+            "Model discovery is unavailable for this direct API protocol. Add a model manually."
+        )
     route = {"model_id": "catalog", "max_output_tokens": 128, "web_search": False}
     try:
         async with asyncio.timeout(CATALOG_DEADLINE_SECONDS):
@@ -92,12 +97,16 @@ async def discover_models(connection: dict, credentials: dict[str, str]) -> list
                     async for item in await client.aio.models.list():
                         items.append(_dump(item))
                         if len(items) > MAX_CATALOG_MODELS:
-                            raise DirectAPIError("The provider catalog is too large. Add the required model manually.")
+                            raise DirectAPIError(
+                                "The provider catalog is too large. Add the required model manually."
+                            )
                 else:
                     async for item in client.models.list():
                         items.append(_dump(item))
                         if len(items) > MAX_CATALOG_MODELS:
-                            raise DirectAPIError("The provider catalog is too large. Add the required model manually.")
+                            raise DirectAPIError(
+                                "The provider catalog is too large. Add the required model manually."
+                            )
     except asyncio.CancelledError:
         raise
     except (DirectAPIError, DirectDependencyError):

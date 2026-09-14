@@ -37,10 +37,14 @@ class APIModelBinding:
 
 def _key(connection: dict, credentials: dict[str, str]) -> str:
     if connection.get("auth_type") not in {"api_key", "environment"}:
-        raise DirectAPIError("Direct API connections require an explicit API key or environment credential.")
+        raise DirectAPIError(
+            "Direct API connections require an explicit API key or environment credential."
+        )
     value = credentials.get("api_key") if isinstance(credentials, dict) else None
     if not isinstance(value, str) or not value.strip():
-        raise DirectAPIError("This connection has no API key. Enter one or configure its selected environment variable.")
+        raise DirectAPIError(
+            "This connection has no API key. Enter one or configure its selected environment variable."
+        )
     return value.strip()
 
 
@@ -74,7 +78,9 @@ def _budget(value: str, limit: int) -> int:
     except (ValueError, IndexError) as error:
         raise DirectAPIError("Use budget:<tokens> for a thinking budget.") from error
     if not 1 <= budget < limit:
-        raise DirectAPIError("The thinking budget must be positive and below the output token limit.")
+        raise DirectAPIError(
+            "The thinking budget must be positive and below the output token limit."
+        )
     return budget
 
 
@@ -109,10 +115,11 @@ def build_model_settings(route: dict, connection: dict) -> dict:
         settings.update(openai_store=False, openai_include_raw_annotations=True)
         if provider == "openai" and route.get("reasoning") not in {"disabled", "none"}:
             from pydantic_ai.providers.openai import OpenAIProvider
+
             profile = OpenAIProvider.model_profile(str(route.get("model_id") or "")) or {}
             if profile.get("openai_supports_reasoning"):
                 settings["openai_reasoning_summary"] = "auto"
-        if provider == "openai" and (route.get("web_search") or "web_search" in generation.native_tools):
+        if provider == "openai" and route.get("web_search"):
             settings["openai_include_web_search_sources"] = True
             # WebSearchTool.max_uses is Anthropic-specific. Responses exposes
             # the documented total native-tool limit through SDK extra_body.
@@ -135,9 +142,7 @@ def build_model_settings(route: dict, connection: dict) -> dict:
                 raise DirectAPIError("This reasoning option has no supported Anthropic mapping.")
         elif protocol == "google":
             if effort.startswith("budget:"):
-                settings["google_thinking_config"] = {
-                    "thinking_budget": _budget(effort, limit)
-                }
+                settings["google_thinking_config"] = {"thinking_budget": _budget(effort, limit)}
             elif effort in {"minimal", "low", "medium", "high"}:
                 settings["google_thinking_config"] = {"thinking_level": effort}
             elif effort == "disabled":
@@ -156,6 +161,7 @@ def build_model_settings(route: dict, connection: dict) -> dict:
             thinking["display"] = "summarized"
     if provider == "google" and protocol == "google":
         from pydantic_ai.profiles.google import google_model_profile
+
         profile = google_model_profile(str(route.get("model_id") or "")) or {}
         if profile.get("supports_thinking") or settings.get("google_thinking_config"):
             settings.setdefault("google_thinking_config", {})["include_thoughts"] = True
@@ -171,16 +177,32 @@ def supplied_summary_supported(connection: dict, model_id: str = "") -> bool:
         if not model_id:
             return True
         from pydantic_ai.providers.openai import OpenAIProvider
+
         return bool((OpenAIProvider.model_profile(model_id) or {}).get("openai_supports_reasoning"))
     if provider == "google":
         if protocol != "google":
             return False
         from pydantic_ai.profiles.google import google_model_profile
+
         return bool((google_model_profile(model_id) or {}).get("supports_thinking"))
     if provider == "anthropic":
         # Claude 3.7 exposed full thinking rather than summarized thinking.
-        return protocol == "anthropic" and model_id.startswith(("claude-opus-4", "claude-sonnet-4", "claude-haiku-4", "claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-mythos-5"))
-    return provider == "xai" and protocol in {"openai_responses", "openai_chat"} and model_id == "grok-4.6"
+        return protocol == "anthropic" and model_id.startswith(
+            (
+                "claude-opus-4",
+                "claude-sonnet-4",
+                "claude-haiku-4",
+                "claude-opus-5",
+                "claude-sonnet-5",
+                "claude-fable-5",
+                "claude-mythos-5",
+            )
+        )
+    return (
+        provider == "xai"
+        and protocol in {"openai_responses", "openai_chat"}
+        and model_id == "grok-4.6"
+    )
 
 
 def _openai_profile(provider: str, protocol: str, route: dict):
@@ -245,7 +267,9 @@ def _model_profile(provider: str, protocol: str, route: dict, model_name: str):
         # Gemini refuses schema bounds; see ai_gemini_schema for the evidence.
         profile = GoogleProvider.model_profile(model_name) or {}
         return {**profile, "json_schema_transformer": GeminiSchemaTransformer}
-    raise DirectAPIError("This connection protocol is unavailable in the bundled direct API runtime.")
+    raise DirectAPIError(
+        "This connection protocol is unavailable in the bundled direct API runtime."
+    )
 
 
 def _normalize_google_model(model_name: str) -> str:
@@ -262,7 +286,9 @@ async def _resolve_anthropic_model(client, model_name: str) -> str:
     resolved = await client.models.retrieve(model_name)
     resolved_id = getattr(resolved, "id", None)
     if not isinstance(resolved_id, str) or not resolved_id.strip():
-        raise DirectAPIError("The provider did not resolve this Anthropic model alias to an exact model ID.")
+        raise DirectAPIError(
+            "The provider did not resolve this Anthropic model alias to an exact model ID."
+        )
     return resolved_id.strip()
 
 
@@ -276,6 +302,24 @@ def canonical_model_id(provider_id: str, protocol: str, model_name: str) -> str:
     if protocol == "google" and model_name.startswith("models/"):
         model_name = model_name[7:]
     return _resolve_exact_alias(provider_id, model_name)
+
+
+def same_reported_model(provider_id: str, protocol: str, requested: str, actual: str) -> bool:
+    """Whether a provider's reported model is the requested one.
+
+    OpenAI-compatible gateways often report the model with its vendor
+    namespace ("deepseek/deepseek-v4.1-flash" for "deepseek-v4.1-flash").
+    Only that namespace may differ; any other difference is a different model.
+    """
+
+    wanted = canonical_model_id(provider_id, protocol, requested)
+    reported = canonical_model_id(provider_id, protocol, actual)
+    if wanted == reported:
+        return True
+    if provider_id != "custom" or "/" in wanted:
+        return False
+    namespace, _, name = reported.rpartition("/")
+    return bool(namespace) and "/" not in namespace and name == wanted
 
 
 @asynccontextmanager
@@ -300,12 +344,11 @@ async def model_for_route(route: dict, connection: dict, credentials: dict[str, 
         try:
             import httpx2
         except ImportError as error:
-            raise DirectDependencyError("The bundled HTTP client is missing. Repair the Quantix installation and retry.") from error
+            raise DirectDependencyError(
+                "The bundled HTTP client is missing. Repair the Quantix installation and retry."
+            ) from error
 
         transport = None
-        if "code_execution" in route.get("native_tools", []):
-            from .native_provider_transport import NativeCodeTransport
-            transport = NativeCodeTransport(httpx2.AsyncHTTPTransport(retries=0, trust_env=False))
         http = await stack.enter_async_context(
             httpx2.AsyncClient(
                 timeout=REQUEST_TIMEOUT_SECONDS,
@@ -320,7 +363,9 @@ async def model_for_route(route: dict, connection: dict, credentials: dict[str, 
                 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
                 from pydantic_ai.providers.openai import OpenAIProvider
             except ImportError as error:
-                raise DirectDependencyError("The bundled OpenAI adapter is missing. Repair the Quantix installation and retry.") from error
+                raise DirectDependencyError(
+                    "The bundled OpenAI adapter is missing. Repair the Quantix installation and retry."
+                ) from error
             client = await stack.enter_async_context(
                 AsyncOpenAI(
                     api_key=_key(connection, credentials),
@@ -338,7 +383,9 @@ async def model_for_route(route: dict, connection: dict, credentials: dict[str, 
             provider = OpenAIProvider(openai_client=client)
             profile = _model_profile(provider_id, protocol, route, model_name)
             model_type = OpenAIResponsesModel if protocol == "openai_responses" else OpenAIChatModel
-            yield APIModelBinding(model_type(model_name, provider=provider, profile=profile), settings, client)
+            yield APIModelBinding(
+                model_type(model_name, provider=provider, profile=profile), settings, client
+            )
             return
         if protocol == "anthropic":
             try:
@@ -346,7 +393,9 @@ async def model_for_route(route: dict, connection: dict, credentials: dict[str, 
                 from pydantic_ai.models.anthropic import AnthropicModel
                 from pydantic_ai.providers.anthropic import AnthropicProvider
             except ImportError as error:
-                raise DirectDependencyError("The bundled Anthropic adapter is missing. Repair the Quantix installation and retry.") from error
+                raise DirectDependencyError(
+                    "The bundled Anthropic adapter is missing. Repair the Quantix installation and retry."
+                ) from error
             client = await stack.enter_async_context(
                 AsyncAnthropic(
                     api_key=_key(connection, credentials),
@@ -358,7 +407,9 @@ async def model_for_route(route: dict, connection: dict, credentials: dict[str, 
             model_name = await _resolve_anthropic_model(client, model_name)
             provider = AnthropicProvider(anthropic_client=client)
             profile = _model_profile(provider_id, protocol, route, model_name)
-            yield APIModelBinding(AnthropicModel(model_name, provider=provider, profile=profile), settings, client)
+            yield APIModelBinding(
+                AnthropicModel(model_name, provider=provider, profile=profile), settings, client
+            )
             return
         try:
             from google import genai
@@ -366,7 +417,9 @@ async def model_for_route(route: dict, connection: dict, credentials: dict[str, 
             from pydantic_ai.models.google import GoogleModel
             from pydantic_ai.providers.google import GoogleProvider
         except ImportError as error:
-            raise DirectDependencyError("The bundled Google adapter is missing. Repair the Quantix installation and retry.") from error
+            raise DirectDependencyError(
+                "The bundled Google adapter is missing. Repair the Quantix installation and retry."
+            ) from error
         try:
             client = genai.Client(
                 api_key=_key(connection, credentials),
@@ -379,9 +432,13 @@ async def model_for_route(route: dict, connection: dict, credentials: dict[str, 
                 ),
             )
         except Exception as error:
-            raise DirectAPIError("The bundled Google adapter could not be configured. Check the API key and endpoint.") from error
+            raise DirectAPIError(
+                "The bundled Google adapter could not be configured. Check the API key and endpoint."
+            ) from error
         stack.callback(client.close)
         stack.push_async_callback(client.aio.aclose)
         provider = GoogleProvider(client=client)
         profile = _model_profile(provider_id, protocol, route, model_name)
-        yield APIModelBinding(GoogleModel(model_name, provider=provider, profile=profile), settings, client)
+        yield APIModelBinding(
+            GoogleModel(model_name, provider=provider, profile=profile), settings, client
+        )

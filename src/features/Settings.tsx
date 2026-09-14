@@ -27,15 +27,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Backups } from "./Backups";
-import { MailSettings } from "./MailSettings";
 import { Knowledge } from "./Knowledge";
 import { AIConnections } from "./AIConnections";
-import { BenchmarkAdoptionReviewPanel } from "./BenchmarkAdoptionReviewPanel";
 import { Diagnostics } from "./Diagnostics";
 import { FactoryReset } from "./FactoryReset";
 import { ManagerPersonality } from "./ManagerPersonality";
-import { AgentLibrary } from "./AgentLibrary";
-import { SandboxSettings } from "./SandboxSettings";
 import { CompanyLibrary } from "./CompanyLibrary";
 import { About } from "./About";
 import { createDraftScope, useFormDraft } from "./useFormDraft";
@@ -132,20 +128,14 @@ function SettingsLayout({
         {active !== "preferences" && active !== "diagnostics" ? (
           <div className="legacy-screen">
             {active === "accounts" ? (
-              <div className="space-y-6">
-                <AIConnections
-                  connectionId={connectionId}
-                  onConnectionClose={onConnectionClose}
-                />
-                <BenchmarkAdoptionReviewPanel />
-              </div>
+              <AIConnections
+                connectionId={connectionId}
+                onConnectionClose={onConnectionClose}
+              />
             ) : null}
             {active === "manager" ? <ManagerPersonality /> : null}
-            {active === "agents" ? <AgentLibrary /> : null}
-            {active === "code" ? <SandboxSettings /> : null}
             {active === "knowledge" ? <Knowledge /> : null}
             {active === "library" ? <CompanyLibrary /> : null}
-            {active === "mail" ? <MailSettings /> : null}
             {active === "backups" ? (
               <Backups onAttention={setBackupAttention} />
             ) : null}

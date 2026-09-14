@@ -74,9 +74,12 @@ class OutputService:
         if run["tender_id"] != tender_id:
             raise ValueError("The draft's originating run belongs to another Tender.")
         if run["kind"] not in {"task", "manager", "research"} or run["status"] not in {
-            "running", "completed"
+            "running",
+            "completed",
         }:
-            raise ValueError("Routine draft generation requires an active or completed Tender Office run.")
+            raise ValueError(
+                "Routine draft generation requires an active or completed Tender Office run."
+            )
         assigned = None
         if run["kind"] == "task":
             assigned = next(
@@ -86,7 +89,9 @@ class OutputService:
             if assigned is None or assigned["plan_id"] != plan_id:
                 raise ValueError("The originating task run is not part of this approved work plan.")
             if assigned["status"] not in {"running", "completed"}:
-                raise ValueError("The originating specialist task has not reached a state for draft generation.")
+                raise ValueError(
+                    "The originating specialist task has not reached a state for draft generation."
+                )
         return scope, assigned
 
     def _office_technical_scope(self, tender_id, request, plan_id):
@@ -94,7 +99,9 @@ class OutputService:
             return
         task = self.repo.get_task(tender_id, request.task_id)
         if task["plan_id"] != plan_id or task["status"] != "completed":
-            raise ValueError("A routine technical draft requires a completed task from this approved plan.")
+            raise ValueError(
+                "A routine technical draft requires a completed task from this approved plan."
+            )
 
     def _generate(self, tender_id, request, *, origin, approval_scope=None, run_id=None):
         with self.repo.atomic():
@@ -203,10 +210,10 @@ class OutputService:
                         tender_id, run_id, approval_scope["plan_id"]
                     )
                     if current_scope != approval_scope:
-                        raise ValueError("The approved work scope changed while preparing the draft.")
-                    self._office_technical_scope(
-                        tender_id, request, approval_scope["plan_id"]
-                    )
+                        raise ValueError(
+                            "The approved work scope changed while preparing the draft."
+                        )
+                    self._office_technical_scope(tender_id, request, approval_scope["plan_id"])
                 if (
                     self.capture(tender_id, request)["basis_fingerprint"]
                     != captured["basis_fingerprint"]
@@ -264,7 +271,10 @@ class OutputService:
         if request.kind in {"analysis_docx", "registers_xlsx"}:
             data["findings"] = self.repo.list_findings(tender_id)
             for finding in data["findings"]:
-                if finding["kind"] in {"assumption", "exclusion"} and finding["state"] == "proposed":
+                if (
+                    finding["kind"] in {"assumption", "exclusion"}
+                    and finding["state"] == "proposed"
+                ):
                     blockers.append("Unapproved " + finding["kind"] + ": " + finding["title"])
                 if finding["state"] == "proposed":
                     warnings.append("Awaiting engineer decision: " + finding["title"])
@@ -305,7 +315,10 @@ class OutputService:
                     warnings.append("Unresolved " + finding["kind"] + ": " + finding["title"])
                     if finding["kind"] in {"assumption", "exclusion"}:
                         blockers.append(
-                            "Unapproved " + finding["kind"] + " in saved specialist result: " + finding["title"]
+                            "Unapproved "
+                            + finding["kind"]
+                            + " in saved specialist result: "
+                            + finding["title"]
                         )
             if result.get("price_proposals") or result.get("unit_rate_proposals"):
                 blockers.append(
@@ -435,7 +448,9 @@ class OutputService:
             raise ValueError(
                 "This older draft has no current source manifest. Generate a new draft before final export."
             )
-        request_model = DraftDocumentProposal if metadata.get("origin") == "agent" else OutputRequest
+        request_model = (
+            DraftDocumentProposal if metadata.get("origin") == "agent" else OutputRequest
+        )
         captured = self.capture(tender_id, request_model.model_validate(metadata["request"]))
         if captured["basis_fingerprint"] != metadata["basis_fingerprint"]:
             raise ValueError(

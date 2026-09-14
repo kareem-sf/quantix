@@ -29,11 +29,14 @@ def test_run_activity_routes_are_read_only_authenticated_and_tender_scoped(clien
     from types import SimpleNamespace
 
     from quantix.run_activity import ActivityRecorder
+
     repo = client.app.state.repo
     tender = repo.create_tender("Synthetic activity API")
     other = repo.create_tender("Other synthetic activity API")
     run = repo.create_run(tender["id"], "manager")
-    recorder = ActivityRecorder(SimpleNamespace(repo=repo, tender_id=tender["id"], run_id=run["id"]))
+    recorder = ActivityRecorder(
+        SimpleNamespace(repo=repo, tender_id=tender["id"], run_id=run["id"])
+    )
     recorder.start("tool", "Reading synthetic quantities", {"inputs": {"source_id": "synthetic"}})
     path = f"/api/tenders/{tender['id']}/runs/{run['id']}/activity"
     before = repo.run_events(run["id"])
@@ -89,7 +92,7 @@ def test_knowledge_routes_are_registered_behind_local_auth(client):
     assert client.get("/api/knowledge", headers={"Authorization": ""}).status_code == 401
 
 
-@pytest.mark.parametrize("capability", ["measurements", "submissions"])
+@pytest.mark.parametrize("capability", ["takeoff", "submissions"])
 def test_reviewed_work_routes_are_registered_behind_local_auth(client, capability):
     assert capability in client.get("/api/health").json()["capabilities"]
     tender = client.post("/api/tenders", json={"name": "Reviewed work"}).json()
@@ -132,8 +135,9 @@ def test_real_import_and_search_through_http(client, tmp_path):
     overview = client.get(f"/api/tenders/{tender['id']}").json()
     assert overview["artifact_count"] == 1
     hits = client.get(f"/api/tenders/{tender['id']}/search", params={"q": "reinforced"}).json()
-    assert hits[0]["sheet"] == "Sheet"
-    source = client.get(f"/api/tenders/{tender['id']}/evidence/{hits[0]['id']}").json()
+    assert hits["actual_mode"] in {"words", "combined"}
+    assert hits["hits"][0]["sheet"] == "Sheet"
+    source = client.get(f"/api/tenders/{tender['id']}/evidence/{hits['hits'][0]['id']}").json()
     assert "28" in source["text"]
     messages = client.get(f"/api/tenders/{tender['id']}/messages").json()
     assert messages[0]["role"] == "system"
@@ -142,11 +146,19 @@ def test_real_import_and_search_through_http(client, tmp_path):
 
 def test_settings_never_return_provider_secret(client, monkeypatch):
     secret = "sk-test-private-value"
-    monkeypatch.setattr("keyring.set_password", lambda *_: pytest.fail("Use synthetic session credentials"))
-    account = client.post("/api/ai/connections", json={
-        "name": "Synthetic OpenAI", "provider_id": "openai", "protocol": "openai_responses",
-        "credentials": {"api_key": secret}, "session_only": True,
-    })
+    monkeypatch.setattr(
+        "keyring.set_password", lambda *_: pytest.fail("Use synthetic session credentials")
+    )
+    account = client.post(
+        "/api/ai/connections",
+        json={
+            "name": "Synthetic OpenAI",
+            "provider_id": "openai",
+            "protocol": "openai_responses",
+            "credentials": {"api_key": secret},
+            "session_only": True,
+        },
+    )
     assert account.status_code == 200
     assert account.json()["credential_state"] == "session"
     assert secret not in account.text

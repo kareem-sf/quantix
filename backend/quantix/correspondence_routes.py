@@ -1,38 +1,14 @@
-"""Quotation routes under the application's authenticated /api surface."""
+"""Quotation request draft routes under the application's authenticated /api surface."""
 
 from fastapi import APIRouter, Response
 
 from .correspondence import QuoteService
-from .correspondence_models import (
-    DraftInput,
-    MailSettings,
-    MailSettingsPatch,
-    ManualReply,
-    QuotePreview,
-    QuoteRecord,
-    ReplyRecord,
-    SendDecision,
-    SyncRequest,
-    SyncResult,
-)
+from .correspondence_models import DraftInput, ManualReply, QuotePreview, QuoteRecord, ReplyRecord
 
 
 def create_router(repo):
     service = QuoteService(repo)
-    service.recover_interrupted_sends()
     router = APIRouter(prefix="/api", tags=["Supplier quotations"])
-
-    @router.get("/mail/settings", response_model=MailSettings)
-    def mail_settings():
-        return service.settings()
-
-    @router.patch("/mail/settings", response_model=MailSettings)
-    def update_settings(request: MailSettingsPatch):
-        return service.update_settings(request.model_dump(exclude_unset=True))
-
-    @router.post("/mail/sync", response_model=SyncResult)
-    def sync(request: SyncRequest):
-        return service.sync_replies(request.max_messages)
 
     @router.get("/tenders/{tender_id}/quotes", response_model=list[QuoteRecord])
     def quotes(tender_id: str):
@@ -57,14 +33,6 @@ def create_router(repo):
             media_type="message/rfc822",
             headers={"Content-Disposition": 'attachment; filename="quotation-request.eml"'},
         )
-
-    @router.post("/tenders/{tender_id}/quotes/{quote_id}/approve", response_model=QuoteRecord)
-    def approve(tender_id: str, quote_id: str, decision: SendDecision):
-        return service.approve(tender_id, quote_id, decision.model_dump())
-
-    @router.post("/tenders/{tender_id}/quotes/{quote_id}/send", response_model=QuoteRecord)
-    def send(tender_id: str, quote_id: str, decision: SendDecision):
-        return service.send(tender_id, quote_id, decision.model_dump())
 
     @router.get("/tenders/{tender_id}/quotes/{quote_id}/replies", response_model=list[ReplyRecord])
     def replies(tender_id: str, quote_id: str):

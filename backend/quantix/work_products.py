@@ -9,7 +9,6 @@ import re
 from .db import dump, new_id, now
 from .execution_context import OfficeExecutionIdentity
 from .research_dependencies import DependencyService
-from .research_service import ResearchService
 from .staff_models import OfficeConflict
 from .work_product_models import (
     WorkProductDraft,
@@ -94,13 +93,11 @@ class WorkProductService:
         from .capability_models import validate_result_value
 
         validate_result_value(draft.model_dump(mode="json"))
-        public_refs = [item for item in draft.source_refs if item.startswith("public_citation:")]
-        local_refs = [item for item in draft.source_refs if not item.startswith("public_citation:")]
-        if public_refs or any(
-            item.startswith(("http://", "https://")) for item in draft.source_refs
-        ):
-            ResearchService(self.repo).validate_work_product_refs(ctx, draft.source_refs)
-        for source_id in local_refs:
+        if any(item.startswith(("http://", "https://")) for item in draft.source_refs):
+            raise ValueError(
+                "Cite Tender evidence IDs here. Web sources belong in the answer's web findings."
+            )
+        for source_id in draft.source_refs:
             self.repo.get_evidence(ctx.tender_id, source_id)
         payload = draft.model_dump(mode="json")
         payload_hash = _hash(payload)
@@ -183,7 +180,7 @@ class WorkProductService:
                 ctx.tender_id,
                 "work_product_version",
                 identifier,
-                local_refs,
+                draft.source_refs,
             )
             return self._version(conn, identifier)
 
@@ -281,9 +278,7 @@ class WorkProductService:
         if offset < 0 or not 1 <= limit <= 100:
             raise ValueError("Work-product row paging is outside the supported range.")
         rows = self.export_rows(tender_id, product_id, version)
-        return WorkProductRowPage(
-            total=len(rows), items=rows[offset : offset + limit], missing=0
-        )
+        return WorkProductRowPage(total=len(rows), items=rows[offset : offset + limit], missing=0)
 
     def _version(self, conn, version_id: str) -> WorkProductVersion:
         row = conn.execute(
@@ -312,18 +307,13 @@ class WorkProductService:
             status=row["status"],
             dependency_state=dependency.state,
             review_reasons=dependency.review_reasons,
-            public_citation_refs=[
-                item for item in source_refs if item.startswith("public_citation:")
-            ],
             sha256=row["sha256"],
             executed_scripts=0,
             created_at=row["created_at"],
         )
 
     def _summary(self, row) -> WorkProductVersionSummary:
-        dependency = self.dependencies.status(
-            row["tender_id"], "work_product_version", row["id"]
-        )
+        dependency = self.dependencies.status(row["tender_id"], "work_product_version", row["id"])
         source_refs = json.loads(row["source_refs_json"])
         return WorkProductVersionSummary(
             id=row["id"],
@@ -338,9 +328,6 @@ class WorkProductService:
             review_reasons=dependency.review_reasons,
             source_refs=source_refs,
             method_refs=json.loads(row["method_refs_json"]),
-            public_citation_refs=[
-                item for item in source_refs if item.startswith("public_citation:")
-            ],
             sha256=row["sha256"],
             row_count=row["row_count"],
             created_at=row["created_at"],

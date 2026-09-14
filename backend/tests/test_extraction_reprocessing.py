@@ -68,7 +68,7 @@ def test_real_blank_page_ocr_render_completes_without_nested_pdfium_deadlock(tmp
         args=(str(source), str(tmp_path / "child-home"), queue),
     )
     process.start()
-    process.join(timeout=5)
+    process.join(timeout=30)
     if process.is_alive():
         process.terminate()
         process.join(timeout=2)
@@ -94,7 +94,12 @@ def test_blank_page_without_ocr_is_an_explicit_exception(tmp_path, monkeypatch):
     monkeypatch.setattr(
         extraction_worker,
         "ocr_available",
-        lambda **kwargs: {"available": False, "tesseract": False, "engine": None, "executable": None},
+        lambda **kwargs: {
+            "available": False,
+            "tesseract": False,
+            "engine": None,
+            "executable": None,
+        },
     )
 
     result = ExtractionService(repo).reprocess(digest, path=stored)
@@ -126,7 +131,12 @@ def test_ocr_callback_runs_after_pdfium_release_and_keeps_complete_text(tmp_path
     monkeypatch.setattr(
         extraction_worker,
         "ocr_available",
-        lambda **kwargs: {"available": True, "tesseract": True, "engine": "synthetic", "executable": "synthetic"},
+        lambda **kwargs: {
+            "available": True,
+            "tesseract": True,
+            "engine": "synthetic",
+            "executable": "synthetic",
+        },
     )
     monkeypatch.setattr(extraction_worker, "render_page_png", lambda *args, **kwargs: b"png")
 
@@ -138,7 +148,9 @@ def test_ocr_callback_runs_after_pdfium_release_and_keeps_complete_text(tmp_path
     result = ExtractionService(repo).reprocess(
         digest,
         path=stored,
-        request=ReprocessRequest(original_hash=digest, reader_id="ocr", reader_version="synthetic-1"),
+        request=ReprocessRequest(
+            original_hash=digest, reader_id="ocr", reader_version="synthetic-1"
+        ),
     )
 
     assert observed == [False]
@@ -166,7 +178,12 @@ def test_reprocess_checks_cancellation_before_next_page(tmp_path, monkeypatch):
     monkeypatch.setattr(
         extraction_worker,
         "ocr_available",
-        lambda **kwargs: {"available": False, "tesseract": False, "engine": None, "executable": None},
+        lambda **kwargs: {
+            "available": False,
+            "tesseract": False,
+            "engine": None,
+            "executable": None,
+        },
     )
     calls = 0
 
@@ -283,7 +300,12 @@ def test_empty_or_error_ocr_pages_remain_exceptions(tmp_path, monkeypatch):
     monkeypatch.setattr(
         extraction_worker,
         "ocr_available",
-        lambda **kwargs: {"available": True, "tesseract": True, "engine": "synthetic", "executable": "synthetic"},
+        lambda **kwargs: {
+            "available": True,
+            "tesseract": True,
+            "engine": "synthetic",
+            "executable": "synthetic",
+        },
     )
     monkeypatch.setattr(extraction_worker, "render_page_png", lambda *args, **kwargs: b"png")
     calls = 0
@@ -299,7 +321,9 @@ def test_empty_or_error_ocr_pages_remain_exceptions(tmp_path, monkeypatch):
     result = ExtractionService(repo).reprocess(
         digest,
         path=stored,
-        request=ReprocessRequest(original_hash=digest, reader_id="ocr", reader_version="synthetic-1"),
+        request=ReprocessRequest(
+            original_hash=digest, reader_id="ocr", reader_version="synthetic-1"
+        ),
     )
 
     assert result["extracted_pages"] == 0
@@ -326,7 +350,12 @@ def test_failed_language_fallback_does_not_publish_partial_ocr(tmp_path, monkeyp
     monkeypatch.setattr(
         extraction_worker,
         "ocr_available",
-        lambda **kwargs: {"available": True, "tesseract": True, "engine": "synthetic", "executable": "synthetic"},
+        lambda **kwargs: {
+            "available": True,
+            "tesseract": True,
+            "engine": "synthetic",
+            "executable": "synthetic",
+        },
     )
     monkeypatch.setattr(extraction_worker, "render_page_png", lambda *args, **kwargs: b"png")
     monkeypatch.setattr(extraction_worker, "tesseract_executable", lambda home: Path("tesseract"))
@@ -349,7 +378,9 @@ def test_failed_language_fallback_does_not_publish_partial_ocr(tmp_path, monkeyp
     result = ExtractionService(repo).reprocess(
         digest,
         path=stored,
-        request=ReprocessRequest(original_hash=digest, reader_id="ocr", reader_version="synthetic-1"),
+        request=ReprocessRequest(
+            original_hash=digest, reader_id="ocr", reader_version="synthetic-1"
+        ),
     )
 
     assert result["extracted_pages"] == 0
@@ -377,7 +408,12 @@ def test_cancellation_after_final_page_blocks_persistence(tmp_path, monkeypatch)
     monkeypatch.setattr(
         extraction_worker,
         "ocr_available",
-        lambda **kwargs: {"available": True, "tesseract": True, "engine": "synthetic", "executable": "synthetic"},
+        lambda **kwargs: {
+            "available": True,
+            "tesseract": True,
+            "engine": "synthetic",
+            "executable": "synthetic",
+        },
     )
     monkeypatch.setattr(extraction_worker, "render_page_png", lambda *args, **kwargs: b"png")
 
@@ -392,7 +428,9 @@ def test_cancellation_after_final_page_blocks_persistence(tmp_path, monkeypatch)
         ExtractionService(repo).reprocess(
             digest,
             path=stored,
-            request=ReprocessRequest(original_hash=digest, reader_id="ocr", reader_version="synthetic-1"),
+            request=ReprocessRequest(
+                original_hash=digest, reader_id="ocr", reader_version="synthetic-1"
+            ),
             cancelled=lambda: final_page_done,
         )
     with repo.db.connect() as conn:

@@ -12,6 +12,7 @@ click==8.5.0
 colorama==0.4.6
 cryptography==50.0.1
 et-xmlfile==2.0.0
+execnet==2.1.2
 fastapi==0.141.1
 fastembed==0.8.0
 filelock==3.32.5
@@ -54,14 +55,10 @@ py-rust-stemmers==0.1.8
 pycparser==3.0
 pydantic==2.13.5
 pydantic-ai-slim==2.40.0
-pydantic-evals==2.40.0
 pydantic-monty==0.0.23
 Pint==0.26.1
 flexcache==0.3
 flexparser==0.4
-rich==15.0.0
-markdown-it-py==4.2.0
-mdurl==0.1.2
 pydantic-graph==2.40.0
 pydantic-core==2.46.5
 pygments==2.21.0
@@ -69,6 +66,7 @@ pyjwt==2.13.0
 pypdfium2==5.13.0
 pytest==9.1.1
 pytest-asyncio==1.4.0
+pytest-xdist==3.8.0
 python-docx==1.2.0
 python-multipart==0.0.32
 pywin32==312

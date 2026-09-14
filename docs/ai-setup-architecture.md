@@ -6,7 +6,7 @@ The engineer subsequently requested subscription choices again. The [subscriptio
 
 ## Current direct API design — 9 September 2026
 
-The engineer approved API-key-only setup for OpenAI, Anthropic, Google, xAI and OpenAI-compatible Custom. The [direct API contract](ai-connection-simplification.md) supersedes the historical client/installer design below. Bundled SDK adapters perform model discovery, the small connection check and Tender execution in the local service. Scoped local source tools, per-request spending reservations, cancellation and validated Office publication remain under Quantix control. Subscription profiles are retired without converting their credentials or authority.
+The engineer approved API-key-only setup for OpenAI, Anthropic, Google, xAI and OpenAI-compatible Custom. The direct API contract supersedes the historical client/installer design below. Bundled SDK adapters perform model discovery, the small connection check and Tender execution in the local service. Scoped local source tools, per-request spending reservations, cancellation and validated Office publication remain under Quantix control. Subscription profiles are retired without converting their credentials or authority.
 
 The interface offers provider, key, model and check with advanced details in More options. Known-price checks use the separate setup ledger; unknown-price checks require explicit consent to bounded requests while retaining an unknown cost. Readiness binds the account revision, exact model and direct adapter fingerprint. Health revision 6 distinguishes this contract. See [progress](progress.md) for executed checks and remaining live acceptance.
 
@@ -54,7 +54,6 @@ The [Grok integration record](grok-subscription.md) describes the native compone
 
 ## References
 
-- [Detailed component implementation and platform locks](reports/managed-ai-components.md)
 - [Provider support and official sources](ai-provider-support.md)
 - [uv managed Python](https://docs.astral.sh/uv/concepts/python-versions/), [environment installation](https://docs.astral.sh/uv/pip/environments/)
 - [PyInstaller subprocess and loader behavior](https://pyinstaller.org/en/stable/common-issues-and-pitfalls.html)

@@ -18,9 +18,8 @@ const summary = {
   status: "draft",
   dependency_state: "needs_review",
   review_reasons: ["source_revision_changed"],
-  source_refs: ["source-a", "public_citation:citation-a"],
+  source_refs: ["source-a"],
   method_refs: ["method-a"],
-  public_citation_refs: ["public_citation:citation-a"],
   sha256: "a".repeat(64),
   row_count: 60,
   created_at: "2026-09-13T08:00:00Z",
@@ -64,7 +63,6 @@ it("refreshes a saved draft's history after a missed short run without losing th
           tenderId="tender-a"
           focusedProductId="product-a"
           onSource={vi.fn()}
-          onPublicCitation={vi.fn()}
         />
       </ApiContext.Provider>
     </QueryClientProvider>,
@@ -105,7 +103,6 @@ it("resolves an addressed product outside the first page and retains its history
           tenderId="tender-a"
           focusedProductId="product-a"
           onSource={vi.fn()}
-          onPublicCitation={vi.fn()}
         />
       </ApiContext.Provider>
     </QueryClientProvider>,
@@ -129,11 +126,7 @@ it("retries a failed list read without claiming the Tender has no drafts", async
     .mockResolvedValue({ items: [summary], total: 1, next_offset: null });
   render(
     <ApiContext.Provider value={{ get } as unknown as Api}>
-      <WorkProductLibrary
-        tenderId="tender-a"
-        onSource={vi.fn()}
-        onPublicCitation={vi.fn()}
-      />
+      <WorkProductLibrary tenderId="tender-a" onSource={vi.fn()} />
     </ApiContext.Provider>,
   );
   expect(
@@ -178,11 +171,7 @@ it("does not turn a failed row read into an empty table", async () => {
       }
     >
       <ApiContext.Provider value={api}>
-        <WorkProductLibrary
-          tenderId="tender-a"
-          onSource={vi.fn()}
-          onPublicCitation={vi.fn()}
-        />
+        <WorkProductLibrary tenderId="tender-a" onSource={vi.fn()} />
       </ApiContext.Provider>
     </QueryClientProvider>,
   );
@@ -220,7 +209,6 @@ it("refreshes a mounted product list when its Tender revision changes", async ()
         tenderId="tender-a"
         tenderRevision={revision}
         onSource={vi.fn()}
-        onPublicCitation={vi.fn()}
       />
     </ApiContext.Provider>
   );
@@ -233,7 +221,6 @@ it("refreshes a mounted product list when its Tender revision changes", async ()
 
 it("opens immutable history, renders a bounded safe chart, and routes exact sources", async () => {
   const onSource = vi.fn();
-  const onPublicCitation = vi.fn();
   const rows = Array.from({ length: 50 }, (_, index) => ({
     supplier: `Supplier ${index + 1}`,
     output: index + 1,
@@ -286,11 +273,7 @@ it("opens immutable history, renders a bounded safe chart, and routes exact sour
       }
     >
       <ApiContext.Provider value={api}>
-        <WorkProductLibrary
-          tenderId="tender-a"
-          onSource={onSource}
-          onPublicCitation={onPublicCitation}
-        />
+        <WorkProductLibrary tenderId="tender-a" onSource={onSource} />
       </ApiContext.Provider>
     </QueryClientProvider>,
   );
@@ -315,10 +298,6 @@ it("opens immutable history, renders a bounded safe chart, and routes exact sour
     screen.getByRole("button", { name: "Open source source-a" }),
   );
   expect(onSource).toHaveBeenCalledWith("source-a");
-  await userEvent.click(
-    screen.getByRole("button", { name: "Open public citation citation-a" }),
-  );
-  expect(onPublicCitation).toHaveBeenCalledWith("citation-a");
 
   const history = screen.getByRole("group", { name: "Version history" });
   expect(
@@ -415,11 +394,7 @@ it("loads the fifty-first product and version without replacing the current page
       }
     >
       <ApiContext.Provider value={api}>
-        <WorkProductLibrary
-          tenderId="tender-a"
-          onSource={vi.fn()}
-          onPublicCitation={vi.fn()}
-        />
+        <WorkProductLibrary tenderId="tender-a" onSource={vi.fn()} />
       </ApiContext.Provider>
     </QueryClientProvider>,
   );
@@ -466,7 +441,6 @@ it("falls back to a table for negative charts and preserves omitted row fields a
       }}
       rows={{ items: [row], total: 1, missing: 0 }}
       onSource={vi.fn()}
-      onPublicCitation={vi.fn()}
     />,
   );
 

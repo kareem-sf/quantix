@@ -1,0 +1,9 @@
+{
+  "dataset_version": "2026-09-13.1",
+  "corpus_hash": "da9dd93ed7793ab2277a18a26d9dccff2e805dcb689a070cbc9a0f934047eb0e",
+  "questions": 88,
+  "held_out": 22,
+  "train": 66,
+  "documents": 47,
+  "smoke_queries": 6
+}

@@ -10,6 +10,27 @@ from .diagnostics import initialize
 from .pending import ensure_schema as ensure_pending_schema
 from .storage import logs_dir
 
+CURRENT_EVIDENCE_SQL = "a.is_current=1 AND COALESCE(e.is_current,1)=1"
+
+
+def _tender_item(row):
+    item = record(row)
+    item.pop("retrieval_generation", None)
+    return item
+
+
+def _artifact_item(row):
+    item = record(row)
+    item.pop("active_extraction_id", None)
+    return item
+
+
+def _evidence_item(row):
+    item = record(row)
+    if "is_current" in item:
+        item["extraction_current"] = bool(item.pop("is_current"))
+    return item
+
 
 def text(value: str, label: str, limit: int = 20000) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > limit:
@@ -26,6 +47,47 @@ class Repository:
         self.objects.mkdir(exist_ok=True)
         (self.home / "extractions").mkdir(exist_ok=True)
         ensure_pending_schema(self)
+        self.on_retrieval_generation = None
+
+    def retrieval_generation(self, tender_id) -> int:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT retrieval_generation FROM tenders WHERE id=?", (tender_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(tender_id)
+        return int(row[0] or 0)
+
+    def current_evidence_stats(self, tender_id) -> tuple[int, int]:
+        self.get_tender(tender_id)
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """SELECT COUNT(*), COALESCE(SUM(LENGTH(e.text)), 0)
+                FROM evidence e JOIN artifacts a ON a.id=e.artifact_id
+                WHERE a.tender_id=? AND a.is_current=1 AND COALESCE(e.is_current,1)=1""",
+                (tender_id,),
+            ).fetchone()
+        return int(row[0] or 0), int(row[1] or 0)
+
+    def advance_retrieval_generation(self, tender_id, conn) -> int:
+        """Advance the desired retrieval generation inside an open write transaction."""
+        stamp = now()
+        conn.execute(
+            """UPDATE tenders SET retrieval_generation=retrieval_generation+1,
+            revision=revision+1, updated_at=? WHERE id=?""",
+            (stamp, tender_id),
+        )
+        row = conn.execute(
+            "SELECT retrieval_generation FROM tenders WHERE id=?", (tender_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(tender_id)
+        return int(row[0])
+
+    def notify_retrieval_generation(self, tender_id) -> None:
+        callback = self.on_retrieval_generation
+        if callback:
+            callback(tender_id)
 
     def atomic(self):
         """Group validated synchronous domain operations in one SQLite transaction."""
@@ -34,7 +96,8 @@ class Repository:
     def list_tenders(self):
         with self.db.connect() as conn:
             return [
-                record(r) for r in conn.execute("SELECT * FROM tenders ORDER BY updated_at DESC,id")
+                _tender_item(r)
+                for r in conn.execute("SELECT * FROM tenders ORDER BY updated_at DESC,id")
             ]
 
     def create_tender(self, name: str | None = None):
@@ -63,7 +126,9 @@ class Repository:
 
     def get_tender(self, tender_id):
         with self.db.connect() as conn:
-            return record(conn.execute("SELECT * FROM tenders WHERE id=?", (tender_id,)).fetchone())
+            return _tender_item(
+                conn.execute("SELECT * FROM tenders WHERE id=?", (tender_id,)).fetchone()
+            )
 
     def list_artifacts(self, tender_id, *, current_only=True):
         self.get_tender(tender_id)
@@ -72,11 +137,11 @@ class Repository:
             if current_only:
                 query += " AND is_current=1"
             query += " ORDER BY relative_path,version DESC"
-            return [record(r) for r in conn.execute(query, (tender_id,))]
+            return [_artifact_item(r) for r in conn.execute(query, (tender_id,))]
 
     def get_artifact(self, tender_id, artifact_id):
         with self.db.connect() as conn:
-            return record(
+            return _artifact_item(
                 conn.execute(
                     "SELECT * FROM artifacts WHERE tender_id=? AND id=?", (tender_id, artifact_id)
                 ).fetchone()
@@ -101,6 +166,7 @@ class Repository:
         if relative.is_absolute() or ".." in relative.parts or not relative.name:
             raise ValueError("A source file has an unsafe relative path.")
         stamp, identifier = now(), new_id()
+        bumped = False
         with self.db.connect(write=True) as conn:
             old = conn.execute(
                 "SELECT * FROM artifacts WHERE tender_id=? AND relative_path=? AND is_current=1",
@@ -165,7 +231,9 @@ class Repository:
             )
             for segment in extraction.get("segments", []):
                 conn.execute(
-                    "INSERT INTO evidence(id,artifact_id,locator,text,page,sheet,cell_range,kind,metadata_json) VALUES(?,?,?,?,?,?,?,?,?)",
+                    """INSERT INTO evidence(
+                        id,artifact_id,locator,text,page,sheet,cell_range,kind,metadata_json,extraction_id,is_current
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,1)""",
                     (
                         new_id(),
                         identifier,
@@ -176,11 +244,26 @@ class Repository:
                         segment.get("cell_range"),
                         segment.get("kind", "text"),
                         dump(segment.get("metadata", {})),
+                        None,
                     ),
                 )
-            conn.execute(
-                "UPDATE tenders SET revision=revision+1,updated_at=? WHERE id=?", (stamp, tender_id)
+            searchable = any(
+                str(segment.get("text") or "").strip() for segment in extraction.get("segments", [])
             )
+            if old or searchable:
+                conn.execute(
+                    """UPDATE tenders SET revision=revision+1, retrieval_generation=retrieval_generation+1,
+                    updated_at=? WHERE id=?""",
+                    (stamp, tender_id),
+                )
+                bumped = True
+            else:
+                conn.execute(
+                    "UPDATE tenders SET revision=revision+1,updated_at=? WHERE id=?",
+                    (stamp, tender_id),
+                )
+        if bumped:
+            self.notify_retrieval_generation(tender_id)
         return self.get_artifact(tender_id, identifier), True
 
     @staticmethod
@@ -200,19 +283,26 @@ class Repository:
         except (TypeError, ValueError):
             raise ValueError("Enter a valid cell range such as A1:D20.") from None
 
-    def artifact_evidence(self, tender_id, artifact_id, offset=0, limit=50, *, sheet=None, cell_range=None):
+    def artifact_evidence(
+        self, tender_id, artifact_id, offset=0, limit=50, *, sheet=None, cell_range=None
+    ):
         self.get_artifact(tender_id, artifact_id)
         bounds = self._cell_range_bounds(cell_range) if cell_range is not None else None
         offset, limit = max(0, int(offset)), max(1, min(int(limit), 200))
         with self.db.connect() as conn:
             query = """SELECT e.*,a.name AS artifact_name,a.relative_path FROM evidence e JOIN artifacts a ON a.id=e.artifact_id
-                WHERE a.tender_id=? AND a.id=? AND (? IS NULL OR e.sheet=?) ORDER BY e.rowid"""
+                WHERE a.tender_id=? AND a.id=? AND COALESCE(e.is_current,1)=1 AND (? IS NULL OR e.sheet=?) ORDER BY e.rowid"""
             parameters = (tender_id, artifact_id, sheet, sheet)
             if bounds is None:
-                return [record(row) | {"score": 0.0} for row in conn.execute(query + " LIMIT ? OFFSET ?", (*parameters, limit, offset))]
+                return [
+                    _evidence_item(row) | {"score": 0.0}
+                    for row in conn.execute(
+                        query + " LIMIT ? OFFSET ?", (*parameters, limit, offset)
+                    )
+                ]
             matches, skipped = [], 0
             for row in conn.execute(query, parameters):
-                item = record(row)
+                item = _evidence_item(row)
                 source_range = item.get("cell_range")
                 if not source_range and type(item.get("metadata", {}).get("row")) is int:
                     source_range = f"A{item['metadata']['row']}:XFD{item['metadata']['row']}"
@@ -222,7 +312,12 @@ class Repository:
                     source = self._cell_range_bounds(source_range)
                 except ValueError:
                     continue
-                if source[0] > bounds[2] or source[2] < bounds[0] or source[1] > bounds[3] or source[3] < bounds[1]:
+                if (
+                    source[0] > bounds[2]
+                    or source[2] < bounds[0]
+                    or source[1] > bounds[3]
+                    or source[3] < bounds[1]
+                ):
                     continue
                 if skipped < offset:
                     skipped += 1
@@ -239,40 +334,143 @@ class Repository:
                 WHERE a.tender_id=? AND e.id=?""",
                 (tender_id, evidence_id),
             ).fetchone()
-            return record(row) | {"score": 0.0}
+            return _evidence_item(row) | {"score": 0.0}
 
-    def search(self, tender_id, query, limit=20, *, area=None, status=None):
+    def search(
+        self,
+        tender_id,
+        query,
+        limit=20,
+        *,
+        area=None,
+        status=None,
+        document_kind=None,
+        artifact_ids=None,
+        evidence_ids=None,
+        ceiling=None,
+    ):
+        hits, _meta = self.search_keyword(
+            tender_id,
+            query,
+            limit=limit,
+            area=area,
+            status=status,
+            document_kind=document_kind,
+            artifact_ids=artifact_ids,
+            evidence_ids=evidence_ids,
+            ceiling=ceiling,
+        )
+        for hit in hits:
+            hit.pop("content_hash", None)
+            hit.pop("source_version", None)
+            hit.pop("document_kind", None)
+            hit.pop("_duplicates", None)
+        return hits
+
+    def search_keyword(
+        self,
+        tender_id,
+        query,
+        limit=20,
+        *,
+        area=None,
+        status=None,
+        document_kind=None,
+        artifact_ids=None,
+        evidence_ids=None,
+        ceiling=None,
+        skip=0,
+    ):
+        """Distinct current keyword hits with scope/kind applied before the limit."""
+
+        from .retrieval_ranking import (
+            KEYWORD_SCAN_CEILING,
+            filename_needle,
+            group_distinct,
+            keyword_expression,
+        )
+
         self.get_tender(tender_id)
-        terms = re.findall(r"[^\W_]+(?:[-.][^\W_]+)*", str(query), flags=re.UNICODE)[:16]
-        if not terms:
-            return []
-        expression = " OR ".join('"' + word.replace('"', '""') + '"' for word in terms)
+        if artifact_ids is not None and len(artifact_ids) == 0:
+            return [], {"scanned": 0, "truncated": False, "more": False, "ceiling": 0}
+        if evidence_ids is not None and len(evidence_ids) == 0:
+            return [], {"scanned": 0, "truncated": False, "more": False, "ceiling": 0}
+        limit = min(max(int(limit), 1), 100)
+        skip = max(int(skip), 0)
+        ceiling = (
+            KEYWORD_SCAN_CEILING
+            if ceiling is None
+            else min(max(int(ceiling), 1), KEYWORD_SCAN_CEILING)
+        )
+        expression = keyword_expression(query)
+        needle = filename_needle(query)
+        if not expression and not needle:
+            return [], {"scanned": 0, "truncated": False, "more": False, "ceiling": ceiling}
         with self.db.connect() as conn:
-            rows = conn.execute(
-                """SELECT e.*,a.name AS artifact_name,a.relative_path,a.content_hash,bm25(evidence_fts) AS score
-                FROM evidence_fts JOIN evidence e ON e.id=evidence_fts.evidence_id JOIN artifacts a ON a.id=e.artifact_id
-                WHERE evidence_fts MATCH ? AND a.tender_id=? AND a.is_current=1
-                AND (? IS NULL OR a.area=?) AND (? IS NULL OR a.status=?) ORDER BY score LIMIT ?""",
-                (
-                    expression,
-                    tender_id,
-                    area,
-                    area,
-                    status,
-                    status,
-                    min(max(int(limit), 1), 100) * 8,
-                ),
-            ).fetchall()
-        results, seen = [], set()
-        for row in rows:
-            item = record(row)
-            identity = (item.pop("content_hash"), item["locator"])
-            if identity not in seen:
-                results.append(item)
-                seen.add(identity)
-            if len(results) >= min(max(int(limit), 1), 100):
-                break
-        return results
+            scope_sql, scope_params = self._retrieval_scope(conn, artifact_ids, evidence_ids)
+            filters = f"""a.tender_id=? AND {CURRENT_EVIDENCE_SQL}
+                AND (? IS NULL OR a.area=?) AND (? IS NULL OR a.status=?)
+                AND (? IS NULL OR a.kind=?)"""
+            filter_params = (tender_id, area, area, status, status, document_kind, document_kind)
+            rows = []
+            if expression:
+                rows.extend(
+                    conn.execute(
+                        f"""SELECT e.*,a.name AS artifact_name,a.relative_path,a.content_hash,
+                        a.version AS source_version,a.kind AS document_kind,bm25(evidence_fts) AS score
+                        FROM evidence_fts JOIN evidence e ON e.id=evidence_fts.evidence_id
+                        JOIN artifacts a ON a.id=e.artifact_id
+                        WHERE evidence_fts MATCH ? AND {filters} {scope_sql}
+                        ORDER BY score, a.relative_path, e.id LIMIT ?""",
+                        (expression, *filter_params, *scope_params, ceiling),
+                    ).fetchall()
+                )
+            seen_ids = {row["id"] for row in rows}
+            if needle and len(rows) < ceiling:
+                for row in conn.execute(
+                    f"""SELECT e.*,a.name AS artifact_name,a.relative_path,a.content_hash,
+                    a.version AS source_version,a.kind AS document_kind,1000.0 AS score
+                    FROM evidence e JOIN artifacts a ON a.id=e.artifact_id
+                    WHERE {filters} {scope_sql}
+                    AND (instr(lower(a.name), ?) > 0 OR instr(lower(a.relative_path), ?) > 0)
+                    ORDER BY a.relative_path, e.id LIMIT ?""",
+                    (*filter_params, *scope_params, needle, needle, ceiling),
+                ):
+                    if row["id"] in seen_ids:
+                        continue
+                    rows.append(row)
+                    seen_ids.add(row["id"])
+                    if len(rows) >= ceiling:
+                        break
+        scanned = len(rows)
+        items = [_evidence_item(row) for row in rows]
+        hits, more = group_distinct(items, limit=limit, skip=skip)
+        truncated = scanned >= ceiling
+        return hits, {
+            "scanned": scanned,
+            "truncated": truncated,
+            "more": more or truncated,
+            "ceiling": ceiling,
+        }
+
+    def _retrieval_scope(self, conn, artifact_ids, evidence_ids):
+        clauses = []
+        params: list = []
+        if artifact_ids is not None:
+            conn.execute("CREATE TEMP TABLE IF NOT EXISTS _perm_art (id TEXT PRIMARY KEY)")
+            conn.execute("DELETE FROM _perm_art")
+            conn.executemany(
+                "INSERT OR IGNORE INTO _perm_art(id) VALUES (?)", ((item,) for item in artifact_ids)
+            )
+            clauses.append("AND a.id IN (SELECT id FROM _perm_art)")
+        if evidence_ids is not None:
+            conn.execute("CREATE TEMP TABLE IF NOT EXISTS _perm_ev (id TEXT PRIMARY KEY)")
+            conn.execute("DELETE FROM _perm_ev")
+            conn.executemany(
+                "INSERT OR IGNORE INTO _perm_ev(id) VALUES (?)", ((item,) for item in evidence_ids)
+            )
+            clauses.append("AND e.id IN (SELECT id FROM _perm_ev)")
+        return " ".join(clauses), params
 
     def _check_sources(self, conn, tender_id, source_ids):
         if not isinstance(source_ids, list) or len(source_ids) > 200:
@@ -302,7 +500,14 @@ class Repository:
     def add_finding(self, tender_id, title, detail, kind, source_ids, origin="agent", run_id=None):
         self.get_tender(tender_id)
         title, detail = text(title, "a finding title", 300), text(detail, "the finding details")
-        if kind not in {"requirement", "risk", "question", "assumption", "observation", "exclusion"}:
+        if kind not in {
+            "requirement",
+            "risk",
+            "question",
+            "assumption",
+            "observation",
+            "exclusion",
+        }:
             raise ValueError("Choose a recognised finding type.")
         identifier, stamp = new_id(), now()
         with self.db.connect(write=True) as conn:
@@ -356,7 +561,9 @@ class Repository:
 
     @staticmethod
     def _message_cursor(message_id: str) -> str:
-        return base64.urlsafe_b64encode(f"messages-before:{message_id}".encode()).decode().rstrip("=")
+        return (
+            base64.urlsafe_b64encode(f"messages-before:{message_id}".encode()).decode().rstrip("=")
+        )
 
     @staticmethod
     def _message_anchor(cursor: str | None) -> str | None:
@@ -727,7 +934,7 @@ class Repository:
 
     def create_run(self, tender_id, kind, instruction=""):
         self.get_tender(tender_id)
-        if kind not in {"import", "manager", "conversation", "task", "research", "index", "identify", "analysis"}:
+        if kind not in {"import", "manager", "index", "identify", "analysis"}:
             raise ValueError("Unknown work type.")
         identifier, stamp = new_id(), now()
         with self.db.connect(write=True) as conn:
@@ -831,9 +1038,16 @@ class Repository:
             )
             from .run_activity import ActivityRecordingError, settle_open_operations
 
-            for row in conn.execute("SELECT DISTINCT r.id FROM runs r JOIN run_activity_operations o ON o.run_id=r.id WHERE r.status IN ('failed','cancelled','interrupted')").fetchall():
+            for row in conn.execute(
+                "SELECT DISTINCT r.id FROM runs r JOIN run_activity_operations o ON o.run_id=r.id WHERE r.status IN ('failed','cancelled','interrupted')"
+            ).fetchall():
                 try:
-                    settle_open_operations(self, row[0], "interrupted", "Quantix closed before this step had a confirmed completion.")
+                    settle_open_operations(
+                        self,
+                        row[0],
+                        "interrupted",
+                        "Quantix closed before this step had a confirmed completion.",
+                    )
                 except ActivityRecordingError:
                     pass  # Recovery must still revoke abandoned work authority.
         # Any pending instruction that survived a process restart must require
@@ -858,7 +1072,7 @@ class Repository:
                 coverage[artifact["status"]] += 1
         with self.db.connect() as conn:
             evidence_count = conn.execute(
-                "SELECT COUNT(*) FROM evidence e JOIN artifacts a ON a.id=e.artifact_id WHERE a.tender_id=? AND a.is_current=1",
+                "SELECT COUNT(*) FROM evidence e JOIN artifacts a ON a.id=e.artifact_id WHERE a.tender_id=? AND a.is_current=1 AND COALESCE(e.is_current,1)=1",
                 (tender_id,),
             ).fetchone()[0]
             has_boq = conn.execute(
