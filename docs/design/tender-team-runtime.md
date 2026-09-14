@@ -1,6 +1,6 @@
 # Tender team runtime
 
-Status: approved direction (engineer, 2026-09-14). Replaces the dynamic-office delegation stack.
+Status: implemented 2026-09-14. Replaces the dynamic-office delegation stack. Interfaces: [contracts](../contracts.md#tender-manager-and-team--14-september-2026).
 
 ## Why
 
@@ -16,13 +16,15 @@ notebooks. The local database had zero assignments.
 
 - **Tender Manager** — leads the tender. One conversation with the engineer. Editable profile.
 - **Staff member** — created by the Manager for this tender: name, role, discipline, experience, working style
-  and a portrait seed. Nothing is hard-coded. The Manager can revise or retire a member.
+  and a portrait seed. Nothing is hard-coded. The engineer can retire a member.
 - **Assignment** — work the Manager gives to one staff member: title, brief, the documents to start from,
   the expected result, and the AI model to use.
   - Status: queued, running, waiting for the Manager, completed, failed or cancelled.
-  - Holds the staff result (summary, findings, cited evidence), any question, usage and cost.
-- **Office timeline** — briefs, questions, answers and results come straight from assignments. There is no
-  separate messaging system.
+  - Holds the staff result (summary, findings, cited evidence, counts of records saved for review), any
+    question and usage.
+- **Team tab** — the engineer sees the working brief, every staff member, and each assignment's brief,
+  question, answer, result and usage, and can steer the running Manager. There is no separate messaging
+  system.
 
 ## Flow
 
@@ -53,8 +55,9 @@ notebooks. The local database had zero assignments.
 - Staff can:
   - read all current tender evidence;
   - calculate;
-  - search the public web when the tender allows it;
-  - save attributed, unapproved proposals.
+  - search the public web when the tender's route allows it;
+  - stage takeoff lines, BOQ rows, quantities, submission requirements and project map items, saved for
+    review when the assignment completes.
 - Staff cannot send, approve, delete or change engineer decisions.
 - Findings and proposals stay proposals until the engineer approves them.
 
@@ -65,15 +68,13 @@ ownership leases, the assignment scheduler and graph, handoffs, office messages 
 notebooks, the staff lifecycle and capability catalog, the agent definition library, resource leases and code
 runtime scopes.
 
-## Delivery
+## Delivered
 
-1. Backend team runtime (this document) with its tests; delete the replaced modules.
-2. Office view: staff roster, assignment timeline, results and cost in one panel.
-3. Manager harness:
-   - short core prompt;
-   - small answer schema;
-   - proposal save tools checked at call time;
-   - about 20 tools;
-   - no separate routing call.
-4. Agentic drawing takeoff: a vision staff member measures from drawings, cross-checks BOQ quantities and lists
-   items missing from the BOQ.
+1. Backend team runtime with its tests; the replaced modules are deleted.
+2. Team tab: working brief, staff roster, assignments, results, usage and steering.
+3. Manager harness: a 4,000-character core prompt (was 10,600), a three-field answer schema (1,100 characters
+   of schema, was 15,000), `propose` and `proposal_format` for every record kind, no separate routing call.
+   The Manager has 35 tools; the duplicate search and document readers were removed, but the target of
+   about 20 was not reached.
+4. Agentic takeoff: staff take quantities from the drawings with `propose(kind="takeoff")`; Quantix compares
+   each line with the BOQ and the engineer reviews them in Estimate → Takeoff.

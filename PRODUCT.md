@@ -25,7 +25,7 @@ Engineers work with drawings, specifications, BOQs, revisions, requirements, ass
 - Preserve original tender packages, revisions, source locations, and history.
 - Keep imported, extracted, analysed, and engineer-reviewed coverage distinct.
 - Keep proposed quantities and rates separate from accepted values.
-- Routine work may proceed within an approved plan. Material assumptions, quantity changes, commercial decisions, sending, and final release require engineer control.
+- The team does the work and the engineer reviews, approves and steers. Material assumptions, quantity changes, commercial decisions, sending, and final release require engineer control.
 - Keep account identities, billing, permitted models, data permissions, and spending authority explicit. No automatic paid fallback.
 - Current supported direct APIs and subscription routes are governed by docs/subscription-connections.md.
 - Quantix-managed private files and runtime data live under ~/.quantix. Do not commit customer documents, extracted content, credentials, or databases.
@@ -39,9 +39,9 @@ The name is Quantix. Product copy uses plain construction-engineering language. 
 
 - docs/spec.md: current product specification.
 - AGENTS.md: current project constraints and engineering authority.
-- docs/design/workspace-redesign.md: previous approved workspace design; its visual approach is evidence for this new redesign, not an automatic limit on it.
-- src/App.tsx, src/features, and src/styles: incumbent implementation.
-- docs/design/approved-manager.png and docs/design/approved-plan-review.png: previous concept references, not proof of current rendered behavior.
+- docs/design/tender-team-runtime.md: how the Manager and staff work.
+- docs/design/design.md and docs/design/right-workspace.md: visual direction and the Manager screen's right workspace.
+- src/app, src/features and src/components/ui: incumbent implementation.
 
 ## Product Principles
 
@@ -51,8 +51,6 @@ The name is Quantix. Product copy uses plain construction-engineering language. 
 4. Preserve engineer control without repetitive or ambiguous approval steps.
 5. Support the same core tasks with mouse, keyboard, and touch, while adapting density and layout to the available screen.
 
-## Open Decisions
+## Layout
 
-The opening layout is agreed: Manager conversation beside the current document/result, with an expandable live office. Only the Tender Manager exists by default; it generates complete staff profiles live. Staff use distinct illustrated AI portraits, with important exchanges, handoffs and questions shown by default and full retained conversations expandable. The Manager personality is engineer-customizable.
-
-Desktop and text come first; push-to-talk follows afterward. Closing the main window keeps authorized work running while the computer remains awake, with a visible tray indicator; explicit Quit stops work safely. The detailed visual concept and technical implementation must still be verified. See docs/design/live-dynamic-office.md and docs/design/office-completeness-review.md.
+The Manager conversation sits beside a collapsible right workspace with Documents, Team, Reviews and Activity. Only the Tender Manager exists by default; it hires staff with generated profiles and illustrated portraits. The Team tab shows every staff member and assignment. The Manager personality is engineer-customizable. Closing the main window keeps authorized work running while the computer remains awake, with a visible tray indicator; explicit Quit stops work safely.

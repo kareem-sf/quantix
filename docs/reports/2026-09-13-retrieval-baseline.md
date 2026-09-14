@@ -1,6 +1,6 @@
 # Retrieval baseline — 13 September 2026
 
-Status: Task 1 of the [retrieval improvements plan](../superpowers/plans/2026-09-13-retrieval-improvements.md). The production ranker was not changed. This records the measured starting point for later work.
+Status: Task 1 of the retrieval improvements plan (in git history). The production ranker was not changed. This records the measured starting point for later work.
 
 ## What was measured
 

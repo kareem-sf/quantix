@@ -39,7 +39,7 @@ The unrelated query was “What is the orbital period of Neptune?” The synthet
 
 The analysis-only probe and output are retained locally under `~/.quantix/cache/development/2026-09-13-retrieval-audit/` as `probe.py` and `probe-result.json`. It creates isolated synthetic workspaces and reads only an already installed model. Its first attempt stopped on a missing `extract_document` argument; the corrected probe completed. No customer database, account, approval or commercial-send action was used.
 
-The earlier [acceptance record](2026-09-13-full-agentic-office-acceptance.md) reports six bilingual queries over twelve records: recall@1 0.50, recall@3 1.00 and MRR 0.722222. That remains a small smoke benchmark. Most semantic regression tests use deterministic vectors; they establish mechanics, not linguistic quality.
+The earlier full agentic office acceptance record (in git history) reported six bilingual queries over twelve records: recall@1 0.50, recall@3 1.00 and MRR 0.722222. That remains a small smoke benchmark. Most semantic regression tests use deterministic vectors; they establish mechanics, not linguistic quality.
 
 The [progress record](../progress.md) also documents a previous live Manager turn using 46 requests and approximately 1.96 million input tokens, including 19 searches repeatedly returning the same passages. That is prior execution evidence of the user-experience problem, not a fresh result from this audit. It motivates passage reuse and retrieval strategy changes; it does not establish that switching search modes alone would achieve a particular saving.
 
@@ -244,4 +244,4 @@ Official pages checked on 13 September 2026. No external source received Tender 
 
 ## Delivery sequence
 
-Use the companion [implementation plan](../superpowers/plans/2026-09-13-retrieval-improvements.md). Deliver the measured baseline and source/scope fixes first; then publishable extraction/context, managed preparation, unified Manager/UI search, and typed saved-work retrieval. Finish with operational and end-to-end adoption checks. Model/reranker changes are a separate evidence-based decision after those increments.
+The companion implementation plan is in git history. Deliver the measured baseline and source/scope fixes first; then publishable extraction/context, managed preparation, unified Manager/UI search, and typed saved-work retrieval. Finish with operational and end-to-end adoption checks. Model/reranker changes are a separate evidence-based decision after those increments.

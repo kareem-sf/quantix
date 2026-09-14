@@ -223,3 +223,21 @@ Iron Law violations: 2 (generated staff, conversation router). The generated-sta
 engineer's product decision; the implementation-size findings still stand.
 Cognitive patterns applied: Simplicity Ratchet, Context is Calories, Tool Contract, Tool Loadout, Failure Mode
 Cartography, Harness Expiry Date, Memory Type Discipline, Cost as Architecture, Recovery Ladder.
+
+## Outcome (2026-09-14)
+
+| Step | Result | Commit |
+| --- | --- | --- |
+| 0 | Checkpoint of the working tree | `19ee3de` |
+| 1 | Unused UI files and npm packages removed; pytest-xdist added | `f7eb5b3` |
+| 2 | Benchmarks, voice, mail and watchers removed | `7364792`, `18716b4`, `10c52da` |
+| 3 | AI routes trimmed to the kept set | `a7be0aa` |
+| 5 | Tender team runtime replaces the delegation stack; Team tab | `963a5cc`, `783c6ba` |
+| 4 | Manager harness: 4.0k-character prompt, three-field answer, `propose` tools, no router | `a7dd4ab` |
+| 6 | Agentic takeoff; manual measurement removed | `2d6988b` |
+| 7 | Docs, formatting, CI, merge and push | this branch |
+
+Steps 4 and 5 ran in the order 5 then 4 because the harness depends on the new team tools. The Manager still has
+35 tools, not the target of about 20: removing the duplicate search and document readers was offset by the two
+proposal tools. Iron Law violations resolved: the conversation router is gone; generated staff remain by the
+engineer's decision.
