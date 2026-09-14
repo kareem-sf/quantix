@@ -13,7 +13,6 @@ from test_catalog_authority import configured_office
 from quantix.ai_api_provider import APIModelBinding
 from quantix.api import create_app
 from quantix.jobs import JobManager
-from quantix.office_types import OfficeOutput
 
 
 def _plan(repo, tender_id):
@@ -24,94 +23,6 @@ def _plan(repo, tender_id):
 
 async def _finish(jobs):
     await asyncio.gather(*list(jobs.tasks.values()))
-
-
-def test_actual_http_combined_approval_commits_before_scheduling_and_retries_once(tmp_path, monkeypatch):
-    app = create_app(tmp_path, "synthetic-session")
-    repo, tender, _, _, _, _, _ = configured_office(tmp_path, monkeypatch, repo=app.state.repo)
-    plan = _plan(repo, tender["id"])
-    jobs = app.state.jobs
-    scheduled = []
-    schedule = jobs._schedule
-
-    def committed_schedule(run, task_id=None):
-        # An independent reader sees each durable run before its coroutine is scheduled.
-        with sqlite3.connect(repo.db.path) as connection:
-            assert connection.execute("SELECT status FROM runs WHERE id=?", (run["id"],)).fetchone() == ("queued",)
-            assert connection.execute("SELECT status FROM plans WHERE id=?", (plan["id"],)).fetchone() == ("approved",)
-        assert repo.db.held_connection() is None
-        scheduled.append(run["id"])
-        return schedule(run, task_id)
-
-    async def synthetic_execute(route, connection, credentials, context, instruction, output_type, **hooks):
-        reservation = await hooks["before_request"](100, 100)
-        usage = {"requests": 1, "input_tokens": 100, "output_tokens": 50, "usage_complete": True}
-        await hooks["on_response"](usage, reservation)
-        return {"output": OfficeOutput(summary="Synthetic review complete; no source evidence was inspected."),
-                "usage": usage, "web_sources": []}
-
-    monkeypatch.setattr(jobs, "_schedule", committed_schedule)
-    monkeypatch.setattr("quantix.ai_execution.execute_api", synthetic_execute)
-    with TestClient(app) as client:
-        client.headers["Authorization"] = "Bearer synthetic-session"
-        url = f"/api/tenders/{tender['id']}/plans/{plan['id']}/review"
-        review = client.get(url)
-        assert review.status_code == 200
-        assert review.json()["can_approve"] is True
-        request = {"fingerprint": review.json()["fingerprint"], "engineer_confirmed": True, "rationale": "   "}
-        response = client.post(url + "/approve-and-start", json=request)
-        assert response.status_code == 200, response.text
-        receipt = response.json()
-        client.portal.call(_finish, jobs)
-        assert len(scheduled) == 1
-        assert receipt["work_intents"][0]["kind"] == "manager"
-        assert receipt["work_intents"][0]["task_id"] is None
-        assert {intent["run_id"] for intent in receipt["work_intents"]} == set(scheduled)
-        assert all(repo.get_run(identifier)["status"] == "completed" for identifier in scheduled)
-        retry = client.post(url + "/approve-and-start", json=request)
-        assert retry.status_code == 200
-        assert retry.json()["work_intents"] == receipt["work_intents"]
-        assert len(scheduled) == len(repo.list_runs(tender["id"])) == 1
-
-
-def test_actual_http_combined_approval_queue_failure_rolls_back_every_grant(tmp_path, monkeypatch):
-    app = create_app(tmp_path, "synthetic-session")
-    repo, tender, connections, account, _, policy, _ = configured_office(tmp_path, monkeypatch, repo=app.state.repo)
-    plan = _plan(repo, tender["id"])
-    # A displayed, stale account grant is eligible for explicit renewal, but
-    # must remain stale if recording the single Manager root fails.
-    with repo.db.connect(write=True) as conn:
-        row = conn.execute("SELECT data_json FROM tender_ai_policy WHERE tender_id=?", (tender["id"],)).fetchone()
-        saved = json.loads(row[0])
-        saved["_connection_versions"][account["id"]] = 0
-        conn.execute("UPDATE tender_ai_policy SET data_json=? WHERE tender_id=?", (json.dumps(saved), tender["id"]))
-        policy_before = conn.execute("SELECT revision,data_json FROM tender_ai_policy WHERE tender_id=?", (tender["id"],)).fetchone()
-        policy_before = tuple(policy_before)
-    original = app.state.jobs._queue
-    calls = []
-
-    def fail_after_root(*args, **kwargs):
-        result = original(*args, **kwargs)
-        calls.append(result["id"])
-        raise RuntimeError("Synthetic failure after saving the Manager root")
-
-    monkeypatch.setattr(app.state.jobs, "_queue", fail_after_root)
-    with TestClient(app, raise_server_exceptions=False) as client:
-        client.headers["Authorization"] = "Bearer synthetic-session"
-        url = f"/api/tenders/{tender['id']}/plans/{plan['id']}/review"
-        review = client.get(url).json()
-        assert review["can_approve"] is True, review["blockers"]
-        response = client.post(url + "/approve-and-start", json={
-            "fingerprint": review["fingerprint"], "engineer_confirmed": True})
-        assert response.status_code == 500
-        assert len(calls) == 1
-        assert repo.list_runs(tender["id"]) == []
-        assert app.state.jobs.tasks == {}
-        assert repo.get_plan(tender["id"], plan["id"])["status"] == "proposed"
-        with repo.db.connect() as conn:
-            assert tuple(conn.execute("SELECT revision,data_json FROM tender_ai_policy WHERE tender_id=?", (tender["id"],)).fetchone()) == policy_before
-            for table in ("plan_ai_team", "ai_team_history", "plan_review_approvals"):
-                assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
 
 
 @pytest.mark.asyncio

@@ -243,21 +243,14 @@ async def test_manager_saves_a_brief_and_the_next_turn_continues_from_it(manager
 
 @pytest.mark.asyncio
 async def test_staff_cannot_use_the_manager_brief_tool(manager_run):
-    from quantix.office_manager_tools import manager_office_tools
     from quantix.office_tools import OfficeContext
+    from quantix.work_brief_tools import work_brief_tools
 
     repo, tender, _, new_run = manager_run
     run = new_run("Synthetic")
-    tools = {item.name: item for item in manager_office_tools(repo, tender["id"], run["id"], None)}
-    staff_like = OfficeContext(
-        repo,
-        tender["id"],
-        run["id"],
-        actor_id="staff-1",
-        assignment_id="assignment-1",
-        route_binding_id="binding-1",
-    )
-    with pytest.raises(ValueError, match="Tender Manager context"):
+    tools = {item.name: item for item in work_brief_tools(repo, tender["id"], run["id"], "manager")}
+    staff_like = OfficeContext(repo, tender["id"], run["id"], actor_id="staff-1", assignment_id="assignment-1")
+    with pytest.raises(ValueError, match="Only the Tender Manager"):
         await tools["save_work_brief"].invoke(
             staff_like,
             {"outcome": "x", "status": "in_progress", "expected_version": 0},

@@ -112,7 +112,7 @@ def build_model_settings(route: dict, connection: dict) -> dict:
             profile = OpenAIProvider.model_profile(str(route.get("model_id") or "")) or {}
             if profile.get("openai_supports_reasoning"):
                 settings["openai_reasoning_summary"] = "auto"
-        if provider == "openai" and (route.get("web_search") or "web_search" in generation.native_tools):
+        if provider == "openai" and route.get("web_search"):
             settings["openai_include_web_search_sources"] = True
             # WebSearchTool.max_uses is Anthropic-specific. Responses exposes
             # the documented total native-tool limit through SDK extra_body.
@@ -321,9 +321,6 @@ async def model_for_route(route: dict, connection: dict, credentials: dict[str, 
             raise DirectDependencyError("The bundled HTTP client is missing. Repair the Quantix installation and retry.") from error
 
         transport = None
-        if "code_execution" in route.get("native_tools", []):
-            from .native_provider_transport import NativeCodeTransport
-            transport = NativeCodeTransport(httpx2.AsyncHTTPTransport(retries=0, trust_env=False))
         http = await stack.enter_async_context(
             httpx2.AsyncClient(
                 timeout=REQUEST_TIMEOUT_SECONDS,

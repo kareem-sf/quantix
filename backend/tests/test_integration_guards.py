@@ -8,7 +8,6 @@ import pytest
 from office_test_support import (
     api_result_for,
     approve_plan_and_team,
-    invoke_json_tool,
 )
 from openpyxl import load_workbook
 from test_catalog_authority import configured_office
@@ -167,71 +166,6 @@ def test_historical_read_is_identified_and_does_not_authorize_a_current_citation
 
 
 @pytest.mark.asyncio
-async def test_approval_conditions_reach_specialist_effective_instructions(workspace, monkeypatch):
-    repo, tid = workspace
-    _, evidence, _ = source(repo, tid)
-    plan = plan_for(repo, tid, [evidence["id"]])
-    condition = "Review only supplied evidence; do not perform web research."
-    approved = approve_plan_and_team(repo, tid, plan, condition)
-    task = approved["tasks"][0]
-    run = repo.create_run(tid, "task")
-
-    async def provider(route, connection, credentials, context, instruction, output_type, **kwargs):
-        content = json.loads(instruction)
-        assert condition in json.dumps(content)
-        assert_effective_system_instructions(kwargs["system_instructions"])
-        assert kwargs.get("consult") is None
-        return api_result_for(OfficeOutput(summary="Review prepared", source_ids=[evidence["id"]]))
-
-    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
-    await office.run_specialist(repo, tid, run["id"], task)
-
-
-@pytest.mark.asyncio
-async def test_approved_limits_reach_manager_consultation(workspace, monkeypatch):
-    """Keep the historical test target while asserting current queued behavior."""
-    repo, tid = workspace
-    _, evidence, _ = source(repo, tid)
-    plan = plan_for(repo, tid, [evidence["id"]])
-    condition = "Use supplied sources only; no market research."
-    approve_plan_and_team(repo, tid, plan, condition)
-    run = repo.create_run(tid, "manager")
-
-    calls = []
-
-    async def provider(route, connection, credentials, context, instruction, output_type, **kwargs):
-        calls.append(kwargs)
-        assert context.is_staff is False
-        assert kwargs.get("consult") is None
-        assert "consult_specialist" not in {
-            definition.name for definition in kwargs["definitions"]
-        }
-        assert_effective_system_instructions(kwargs["system_instructions"])
-        content = json.loads(instruction)
-        assert content["engineer_approved_scope"]["rationale"] == condition
-        await invoke_json_tool(
-            context,
-            "read_source",
-            {"source_id": evidence["id"]},
-        )
-        return api_result_for(OfficeOutput(summary="Review prepared", source_ids=[evidence["id"]]))
-
-    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
-    result = await office.run_manager(repo, tid, run["id"], "Check approved scope")
-    assert result.output.source_ids == [evidence["id"]]
-    assert len(calls) == 1
-    with repo.db.connect() as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM office_delegation_grants WHERE tender_id=? AND plan_id=?",
-            (tid, plan["id"]),
-        ).fetchone()[0] == 0
-        assert conn.execute(
-            "SELECT COUNT(*) FROM office_assignments WHERE tender_id=?",
-            (tid,),
-        ).fetchone()[0] == 0
-
-
-@pytest.mark.asyncio
 async def test_resumed_task_uses_original_engineer_limits(workspace, monkeypatch):
     repo, tid = workspace
     plan = plan_for(repo, tid, [])
@@ -309,58 +243,6 @@ async def test_terminal_storage_failure_rolls_back_publication_before_resume(
     await asyncio.gather(*list(jobs.tasks.values()))
     assert repo.get_run(resumed["id"])["status"] == "completed"
     assert len([m for m in repo.messages(tid) if m["role"] == "manager"]) == 1
-    await jobs.close()
-
-
-@pytest.mark.asyncio
-async def test_task_finalization_failure_rolls_back_all_office_records(workspace, monkeypatch):
-    repo, tid = workspace
-    _, evidence, _ = source(repo, tid)
-    plan = plan_for(repo, tid, [evidence["id"]])
-    task = approve_plan_and_team(repo, tid, plan, "Review concrete only")["tasks"][0]
-    jobs = jobs_for(repo)
-
-    async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
-        return api_result_for(
-            OfficeOutput(
-                summary="Concrete reviewed",
-                source_ids=[evidence["id"]],
-                findings=[
-                    {
-                        "title": "Strength",
-                        "detail": "30 MPa",
-                        "kind": "requirement",
-                        "source_ids": [evidence["id"]],
-                    }
-                ],
-                plan={
-                    "title": "Next review",
-                    "tasks": [
-                        {"title": "Check", "description": "Check next detail", "role": "Engineer"}
-                    ],
-                },
-            )
-        )
-
-    monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
-    original = repo.update_task
-
-    def fail_completion(tender_id, task_id, **fields):
-        if fields["status"] == "completed":
-            raise OSError("Synthetic task completion failure")
-        return original(tender_id, task_id, **fields)
-
-    monkeypatch.setattr(repo, "update_task", fail_completion)
-    run = jobs.start_task(tid, task["id"])
-    await asyncio.gather(*list(jobs.tasks.values()))
-    assert repo.get_run(run["id"])["status"] == "failed"
-    assert repo.get_run(run["id"])["result"] == {}
-    assert repo.get_task(tid, task["id"])["status"] == "failed"
-    assert repo.messages(tid) == repo.list_findings(tid) == []
-    assert len(repo.list_plans(tid)) == 1
-    assert not {"analysis_proposed", "completed"}.intersection(
-        e["kind"] for e in repo.run_events(run["id"])
-    )
     await jobs.close()
 
 

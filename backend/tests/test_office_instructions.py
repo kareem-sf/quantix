@@ -20,11 +20,6 @@ def _engineer(tender_id: str, root_run_id: str | None = None) -> OfficeExecution
         root_run_id=root_run_id,
         budget_scope_id=root_run_id,
         assignment_id=None,
-        profile_version=None,
-        route_binding_id=None,
-        instruction_revision_id=None,
-        grant_fingerprint=None,
-        ownership_epoch=None,
         trusted_invocation_id=None,
     )
 
@@ -80,22 +75,9 @@ def test_admit_replay_and_inactive_root_fencing(tmp_path, monkeypatch):
     assert [item.kind for item in listed] == ["constraint"]
 
 
-def test_status_reports_saved_owners_without_provider_work(tmp_path, monkeypatch):
-    from test_staff_context import _build_staff_context, _context_workspace
-
-    repo, tender, staff, binding, assignment_id, _artifact = _context_workspace(
-        tmp_path, monkeypatch, tools=("read_source",)
-    )
-    context = _build_staff_context(repo, binding.id, assignment_id)
-    snapshot = OfficeInstructionService(repo).status(_engineer(tender["id"], context.run_id))
-    assert snapshot.provider_requests == 0
-    assert staff.staff.id in snapshot.owners
-    assert context.run_id in snapshot.owners
-
-
 @pytest.mark.asyncio
 async def test_steering_applies_at_the_next_turn_without_rewriting_results(tmp_path, monkeypatch):
-    from quantix.office import _run as run_office
+    from quantix.office import run_manager as run_office
 
     repo, tender, *_ = configured_office(tmp_path, monkeypatch)
     run = repo.create_run(tender["id"], "manager", "Steered turn")
@@ -144,7 +126,7 @@ async def test_steering_applies_at_the_next_turn_without_rewriting_results(tmp_p
 async def test_cancel_steering_interrupts_work_without_new_results(tmp_path, monkeypatch):
     import asyncio
 
-    from quantix.office import _run as run_office
+    from quantix.office import run_manager as run_office
 
     repo, tender, *_ = configured_office(tmp_path, monkeypatch)
     run = repo.create_run(tender["id"], "manager", "Cancelled turn")

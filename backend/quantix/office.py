@@ -1,5 +1,6 @@
 """Direct API Office dispatch; job lifecycle and engineer decisions stay outside it."""
 
+import asyncio
 import json
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -13,9 +14,9 @@ from .office_tools import (
     redact_prompt_data,
     redact_text,
     safe_text,
-    source_tools,
 )
 from .office_types import OfficeOutput, PreparedOfficeResult
+from .team import TeamService
 from .work_brief import WorkBriefService
 
 if TYPE_CHECKING:
@@ -51,9 +52,6 @@ Put evidence IDs in the source_ids field, not inside sentences the engineer read
 Cite only evidence IDs you read with a tool during this run. An ID quoted in an earlier
 message does not count; read it again in this run before citing it, or leave it out.
 Never invent source IDs, measurements, quantities, prices, decisions or completed work.
-Use the available AI connection catalog to propose an appropriate ai_route for each planned
-specialist. Select only configured models on the tender's allowed connections. The engineer
-approves this AI team with the plan. Existing approved teams and fallback routes remain binding.
 Registered, extracted, analysed and reviewed coverage are different. Reading an excerpt does
 not establish complete document analysis or engineer review. State sampling and exceptions.
 Use BOQ quantities by default; takeoffs and quantity changes are unapproved proposals.
@@ -67,23 +65,13 @@ earlier row ID listed in the estimate's retired_source_rows. Repeated row labels
 different pages are separate items; do not infer that one replacement covers them all.
 Findings and plans are proposals. You cannot approve a plan, assumption, quantity, price,
 commercial commitment or release; send supplier messages; or claim those actions occurred.
-Propose a project-specific plan only when useful; choose task roles from actual project needs.
-When the Manager needs colleagues, create complete task-specific profiles with create_staff.
-Use list_office_staff and read_staff when considering an existing colleague, revise_staff to
-change their professional profile, and plan_staff_work for another work order. Every name,
-role, personality, responsibility and method must come from the actual request and its needs.
-There is no starter roster. Missing fields must be supplied rather than filled from a template.
-A saved profile or work order is planned work, not an executed assignment or granted capability.
-Do not claim a colleague exists until a creation receipt is saved, or that their work started
-without an actual execution record. Requested tools are requests, never permissions.
-Use execute_staff with a saved staff/work-order identity and a reviewed route option to queue
-real work. Queued work starts after this Manager turn ends; never claim it has already run.
-The controller returns actual staff outcomes in the next turn. Read saved drafts with
-read_staff_result and inspect their cited sources yourself before adopting factual conclusions.
-Receipt of a staff draft does not add its sources to your own inspected evidence. Use
-read_office_messages and send_staff_message for real exchanges. Answer an actual waiting
-question with answer_staff_question; this continues the same assignment and shared allowance.
-Ask the engineer when an answer needs their judgment. Do not invent discussions or employees.
+You lead this tender's team. For work that benefits from a specialist or from parallel effort,
+check list_team, hire_staff when no colleague fits (their profile comes from the tender's actual
+needs; there is no starter roster), and assign_work with a brief a professional can act on alone.
+Assigned work starts after your turn ends and its results or questions reach you next turn in
+team_updates. Answer a waiting question with answer_staff. A colleague's findings are not your
+own reading: read their cited sources before stating those facts. Do the work yourself when it is
+small. Ask the engineer when an answer needs their judgment. Never invent colleagues or results.
 Use native web search for current market facts, preserve consulted URLs and dates, and label
 observed quotations separately from estimates. Include units, geography, currency, tax basis,
 validity and conditions; unknowns stay unknown. A search result is not a binding quotation.
@@ -160,12 +148,9 @@ These are unapproved specialist calculations; they never alter supplied BOQ quan
 def _prompt(
     context: OfficeContext,
     instruction: str,
-    task: dict | None,
     manager_profile=None,
     *,
-    delegation=None,
-    staff_outcomes=None,
-    public_search_receipts=None,
+    team_updates=None,
 ) -> str:
     def complete_text(value, label, maximum):
         if not isinstance(value, str) or len(value) > maximum:
@@ -183,15 +168,14 @@ def _prompt(
     from .ai_policy import AIPolicyService
     content = {
         "manager_profile": redact_prompt_data(manager_profile),
-        "manager_work_brief": None if task else redact_prompt_data(
+        "manager_work_brief": redact_prompt_data(
             WorkBriefService(context.repo).prompt_view(context.tender_id)
         ),
-        "available_staff_tool_ids": [definition.name for definition in source_tools()],
-        "reviewed_delegation": redact_prompt_data(delegation),
-        "actual_staff_outcomes_not_source_inspection": redact_prompt_data(staff_outcomes or []),
-        "actual_public_search_receipts_not_citations": redact_prompt_data(
-            public_search_receipts or []
-        ),
+        "team": [
+            member.model_dump(include={"id", "name", "role", "status"})
+            for member in TeamService(context.repo).list_staff(context.tender_id)
+        ],
+        "team_updates_not_source_inspection": redact_prompt_data(team_updates or []),
         "available_ai_connections_not_tender_evidence": AIPolicyService(context.repo).context_catalog(context.tender_id),
         "today_utc": datetime.now(UTC).date().isoformat(),
         "tender": safe_text(overview["tender"]["name"], 200),
@@ -236,14 +220,6 @@ def _prompt(
         if context.approved_scope
         else None,
     }
-    if task:
-        content["assigned_task"] = {
-            key: complete_text(task.get(key, ""), f"task {key}", maximum)
-            for key, maximum in (("title", 4000), ("description", 10000), ("role", 120))
-        }
-        content["task_evidence"] = [
-            context.source(source_id) for source_id in task.get("source_ids", [])[:50]
-        ]
     return json.dumps(content, ensure_ascii=False)
 
 
@@ -334,9 +310,6 @@ def prepare_result(
         ),
         approved_plan_id=context.approved_scope["plan_id"] if context.approved_scope else None,
         actor_id=context.actor_id,
-        staff_version=context.staff_version,
-        assignment_id=context.assignment_id,
-        route_binding_id=context.route_binding_id,
     )
 
 
@@ -344,22 +317,7 @@ def validate_prepared(repo: "Repository", prepared: PreparedOfficeResult) -> Off
     """Revalidate a saved draft's evidence and commercial bases without publishing."""
     if repo.get_run(prepared.run_id)["tender_id"] != prepared.tender_id:
         raise ValueError("The prepared result does not belong to this Tender run.")
-    if bool(prepared.assignment_id) != bool(prepared.route_binding_id):
-        raise ValueError("The prepared staff result is missing its assignment or route identity.")
-    if prepared.assignment_id:
-        from .staff_context import build_staff_context
-
-        context = build_staff_context(repo, prepared.route_binding_id, prepared.assignment_id)
-        if (
-            context.tender_id != prepared.tender_id
-            or context.run_id != prepared.run_id
-            or context.actor_id != prepared.actor_id
-            or context.staff_version != prepared.staff_version
-            or context.approved_scope["plan_id"] != prepared.approved_plan_id
-        ):
-            raise ValueError("The prepared staff result does not match its saved work identity.")
-    else:
-        context = OfficeContext(repo, prepared.tender_id, prepared.run_id, actor_id=prepared.actor_id)
+    context = OfficeContext(repo, prepared.tender_id, prepared.run_id, actor_id=prepared.actor_id)
     context.seen_sources = set(prepared.source_ids_read)
     context.item_bases = dict(prepared.item_bases)
     context.trusted_recipients = set(prepared.trusted_recipients)
@@ -405,9 +363,6 @@ def publish_prepared(repo: "Repository", prepared: PreparedOfficeResult) -> dict
             [task.model_dump() for task in output.plan.tasks],
             run_id=context.run_id,
         )
-        from .ai_policy import AIPolicyService
-        recommendations = {saved["id"]: proposed.ai_route.model_dump() for saved, proposed in zip(plan["tasks"], output.plan.tasks) if proposed.ai_route}
-        AIPolicyService(repo).propose_team(context.tender_id, plan["id"], recommendations)
     urls = list(
         dict.fromkeys(
             url for item in [*output.web_findings, *output.price_proposals] for url in item.urls
@@ -464,16 +419,17 @@ def publish_prepared(repo: "Repository", prepared: PreparedOfficeResult) -> dict
     }
 
 
-async def _run(repo, tender_id, run_id, instruction, task=None):
-    from .ai_connections import AIConnectionService
-    from .ai_execution import execute_api
-    from .ai_policy import AIPolicyService, BudgetMeter
+MAX_MANAGER_TURNS = 6
+
+
+async def run_manager(repo, tender_id, run_id, instruction):
+    from .ai_policy import AIPolicyService
+    from .ai_turn import run_turn
     from .manager_runtime import ManagerRunProfiles, prompt_profile
-    from .office_manager_tools import manager_office_tools
-    from .staff_assignments import StaffAssignmentService
-    from .staff_budget import OfficeBudgetMeter
-    from .staff_generation import staff_generation_tools
-    from .staff_routing import StaffRoutingService
+    from .office_instructions import OfficeInstructionService
+    from .team_runtime import outcome_view, run_queued
+    from .team_tools import team_tools
+    from .work_brief_tools import work_brief_tools
 
     repo.get_tender(tender_id)
     if repo.get_run(run_id)["tender_id"] != tender_id:
@@ -483,214 +439,60 @@ async def _run(repo, tender_id, run_id, instruction, task=None):
     context.actor_id = manager_profile.id
     context.standing_preferences = repo.setting("preferences", "")
     context.trusted_recipients.update(recipient_addresses(instruction))
-    if task:
-        context.approved_scope = repo.approved_scope(tender_id, task["plan_id"])
-    else:
-        approved = next((plan for plan in repo.list_plans(tender_id) if plan["status"] == "approved"), None)
-        if approved:
-            context.approved_scope = repo.approved_scope(tender_id, approved["id"])
+    approved = next((plan for plan in repo.list_plans(tender_id) if plan["status"] == "approved"), None)
+    if approved:
+        context.approved_scope = repo.approved_scope(tender_id, approved["id"])
     if context.approved_scope:
         context.trusted_recipients.update(recipient_addresses(context.approved_scope["rationale"]))
-    routing, connections = AIPolicyService(repo), AIConnectionService(repo)
-    plan_id = context.approved_scope["plan_id"] if context.approved_scope else None
-    generated_staff_tools = staff_generation_tools(repo, tender_id, run_id, plan_id or run_id) if task is None else []
-    office_tools = manager_office_tools(repo, tender_id, run_id, plan_id) if task is None else []
-    staff_routing = StaffRoutingService(repo)
-    assignments = StaffAssignmentService(repo)
-    with repo.db.connect() as conn:
-        has_delegation = bool(plan_id and conn.execute(
-            "SELECT 1 FROM office_delegation_grants WHERE tender_id=? AND plan_id=?", (tender_id, plan_id)
-        ).fetchone())
-    grant = staff_routing.validate_root(tender_id, run_id, plan_id) if has_delegation and task is None else None
+    policies = AIPolicyService(repo)
+    steering = OfficeInstructionService(repo)
+    definitions = [
+        *manager_source_tools(),
+        *team_tools(repo, tender_id, run_id),
+        *work_brief_tools(repo, tender_id, run_id, manager_profile.id),
+    ]
     research = ResearchRecord(context)
     usage_parts = []
-    staff_outcomes = []
-    public_search_outcomes = []
 
-    async def execute(instructions, assigned=None):
-        nonlocal resumed_shared
-        from .office_instructions import OfficeInstructionService
-
-        # Colleagues and searches finish between Manager turns, so reads may legitimately differ.
+    async def turn(instructions, team_updates):
+        # Colleagues finish between Manager turns, so repeated reads may legitimately differ.
         context.__dict__.pop("_repeated_reads", None)
         context.__dict__.pop("_fruitless_searches", None)
-        steering = OfficeInstructionService(repo).pending_for_turn(tender_id, run_id)
-        cancelled = [item for item in steering if item.kind == "cancel"]
-        if cancelled:
-            from .staff_assignments import StaffAssignmentService
-
-            StaffAssignmentService(repo).interrupt_root(
-                tender_id, run_id, "Engineer steering cancelled this work."
+        pending = steering.pending_for_turn(tender_id, run_id)
+        if any(item.kind == "cancel" for item in pending):
+            steering.mark_applied(tender_id, [item.id for item in pending])
+            raise asyncio.CancelledError("Engineer steering cancelled this work.")
+        if pending:
+            instructions += (
+                "\n\nEngineer steering received during the previous step. It applies from this step "
+                "onward; it never rewrites already published results.\n"
+                + "\n".join(f"- [{item.kind}] {steering.admission_text(tender_id, item.id)}" for item in pending)
             )
-            OfficeInstructionService(repo).mark_applied(
-                tender_id, [item.id for item in steering]
-            )
-            import asyncio as _asyncio
-
-            raise _asyncio.CancelledError("Engineer steering cancelled this work.")
-        steering_lines = []
-        for item in steering:
-            text = OfficeInstructionService(repo).admission_text(tender_id, item.id)
-            steering_lines.append(f"- [{item.kind}] {text}")
-        if steering_lines:
-            instructions = (
-                instructions
-                + "\n\nEngineer steering received during the previous step. "
-                + "It applies from this step onward; it never rewrites already published results.\n"
-                + "\n".join(steering_lines)
-            )
-        if resumed_block and not resumed_shared:
-            instructions = instructions + resumed_block
-            resumed_shared = True
-        routes = routing.routes_for(tender_id, plan_id=plan_id,
-                                    task_id=assigned["id"] if assigned and assigned.get("id") else None)[:1]
-        prompt = _prompt(context, instructions, assigned, prompt_profile(manager_profile),
-                         delegation=grant.envelope.model_dump(mode="json") if grant else None,
-                         staff_outcomes=staff_outcomes,
-                         public_search_receipts=public_search_outcomes)
-        for index, route in enumerate(routes):
-            policy = routing.get(tender_id)
-            with connections.lease(route["connection_id"]) as connection:
-                # Recheck after leasing: a profile edited between route lookup
-                # and execution must not inherit the previous data approval.
-                routing.routes_for(tender_id, plan_id=plan_id,
-                                   task_id=assigned["id"] if assigned and assigned.get("id") else None)
-                from .ai_connections import is_supported_profile
-                if not is_supported_profile(connection):
-                    raise ValueError("This saved AI account is retired. Choose one of the five supported provider routes.")
-                meter = OfficeBudgetMeter(routing, tender_id, run_id, route, plan_id=plan_id) if grant else BudgetMeter(routing, tender_id, run_id, route)
-                if grant and route["web_search"]:
-                    remaining_search = min(route["max_search_calls"], meter.remaining_search_calls())
-                    if remaining_search < 1:
-                        raise ValueError("The shared online research allowance is exhausted. Review saved progress before continuing.")
-                    if remaining_search < route["max_search_calls"]:
-                        route = route | {"max_search_calls": remaining_search}
-                        meter = OfficeBudgetMeter(routing, tender_id, run_id, route, plan_id=plan_id)
-                from .ai_readiness import require_ready
-                checked_component = require_ready(repo, connection, route["model_id"])
-                with repo.db.connect() as conn:
-                    _, _, used_requests = routing._totals(conn, tender_id, run_id)
-                remaining = min(policy["max_requests"], grant.envelope.max_requests if grant else policy["max_requests"]) - used_requests
-                if remaining < 1:
-                    raise ValueError("The shared AI request allowance is exhausted. Review saved progress before continuing.")
-                connection = connection | {"_model": meter.model, "_checked_component_version": checked_component,
-                    "_execution_limits": {"max_requests": remaining,
-                                          "max_output_tokens": route["max_output_tokens"],
-                                          "context_window": meter.model["capabilities"].get("context_window")}}
-                repo.event(run_id, "ai_route_selected", "Using an approved AI connection.",
-                           {"connection_id": connection["id"], "provider": connection["provider_id"],
-                            "model": route["model_id"], "billing": connection["billing"],
-                            "connection_revision": connection["revision"], "endpoint": connection["base_url"],
-                            "connection_settings": connection["settings"], "model_snapshot": meter.model,
-                            "role": (assigned or {}).get("role", "Tender Manager"), "fallback": index > 0})
-                try:
-                    before_request = meter.before_request
-                    private_credentials = connections.credentials(connection["id"])
-                    runner = execute_api
-                    response = await runner(route, connection, private_credentials, context,
-                                            prompt, OfficeOutput,
-                                            system_instructions=INSTRUCTIONS,
-                                            definitions=[*manager_source_tools(), *generated_staff_tools, *office_tools] if task is None else None,
-                                            before_request=before_request, on_response=meter.on_response,
-                                            validate_output=publication_checks(context, research))
-                    connections.mark_used(connection["id"])
-                except Exception as error:
-                    meter.interrupted(error)
-                    connections.mark_error(connection["id"], str(error))
-                    message = str(error)
-                    for secret in locals().get("private_credentials", {}).values():
-                        if secret:
-                            message = message.replace(secret, "[private credential]")
-                    raise ValueError(message) from None
-                except BaseException:
-                    meter.interrupted()
-                    raise
-            research.add_sources(response["web_sources"])
-            usage_parts.append(response["usage"])
-            output = OfficeOutput.model_validate(response["output"])
-            _validate_output(output, context, research.sources)
-            research.validate(output)
-            from .office_instructions import OfficeInstructionService as _SteeringService
-
-            _SteeringService(repo).mark_applied(tender_id, [item.id for item in steering])
-            return output
-        raise ValueError("No approved AI route is available.")
+        route = policies.routes_for(tender_id)[0]
+        prompt = _prompt(context, instructions, prompt_profile(manager_profile), team_updates=team_updates)
+        response = await run_turn(
+            repo, tender_id, run_id, route, context, prompt, OfficeOutput,
+            system_instructions=INSTRUCTIONS, definitions=definitions,
+            validate_output=publication_checks(context, research),
+            role="Tender Manager",
+        )
+        research.add_sources(response["web_sources"])
+        usage_parts.append(response["usage"])
+        output = OfficeOutput.model_validate(response["output"])
+        _validate_output(output, context, research.sources)
+        research.validate(output)
+        steering.mark_applied(tender_id, [item.id for item in pending])
+        return output
 
     repo.event(run_id, "analysis_started", "Tender evidence analysis started.")
-    from .office_checkpoints import OfficeCheckpointService as _CheckpointService
-
-    resumed_checkpoints = (
-        _CheckpointService(repo).verified_staff_for_root(tender_id, run_id, plan_id)
-        if grant else []
-    )
-    staff_outcomes.extend(resumed_checkpoints)
-    resumed_block = ""
-    if resumed_checkpoints:
-        resumed_block = (
-            "\n\nCompleted staff steps from before the interruption passed current server basis checks. "
-            "Reuse their saved result IDs; do not repeat these assignments. Read their results and inspect "
-            "cited sources separately before adopting conclusions. They are not fresh work or source reads.\n"
-            + "\n".join(
-                f"- result {item['result_id']} (checkpoint {item['checkpoint_id']})"
-                for item in resumed_checkpoints
-            )
-        )
-    resumed_shared = False
-    while True:
-        output = await execute(instruction, task)
-        if task is not None or grant is None:
+    team_updates: list[dict] = []
+    for _ in range(MAX_MANAGER_TURNS):
+        output = await turn(instruction, team_updates)
+        finished = await run_queued(repo, tender_id, run_id)
+        if not finished:
             break
-        # The next Manager turn receives only research completed after its
-        # previous prompt. Earlier receipts remain durable and queryable.
-        public_search_outcomes.clear()
-        # The Manager's provider and account lease are now closed. Execute
-        # ready children inline in this root's lane; a child is never a new
-        # job. Independent branches overlap up to the reviewed concurrency
-        # cap while original-client accounts stay serial; every dispatch
-        # holds an aggregate reservation from the same root allowance.
-        from .office_concurrency import drain_queued_assignments
-
-        wave_outcomes = []
-        drain_failed = None
-        try:
-            await drain_queued_assignments(
-                repo,
-                tender_id,
-                run_id,
-                max_concurrency=grant.envelope.max_concurrency,
-                max_requests=grant.envelope.max_requests,
-                sink=wave_outcomes,
-            )
-        except BaseException as error:
-            drain_failed = error
-        from .research_search import PublicSearchService
-
-        public_search = PublicSearchService(repo)
-        search_requests = public_search.pending(tender_id, run_id)[:10]
-        for request in search_requests:
-            try:
-                receipt = await public_search.execute(context, request.id)
-            except Exception as error:
-                # A failed search is an inspectable receipt, not a reason to
-                # hide the failure from the Manager or terminate siblings.
-                receipt = public_search.fail(tender_id, request.id, error)
-            if receipt.usage:
-                usage_parts.append(receipt.usage)
-            public_search_outcomes.append(receipt.model_dump(mode="json"))
-        if not wave_outcomes and not public_search_outcomes and drain_failed is None:
-            break
-        for outcome in wave_outcomes:
-            usage_parts.append(outcome.usage)
-            staff_outcomes.append({
-                "assignment": outcome.assignment.model_dump(mode="json"),
-                "result_id": outcome.result_id,
-                "question_message_id": outcome.question_message_id,
-            })
-        if drain_failed is not None:
-            raise drain_failed
-        # Only current states are projected on the next turn; receipt/source
-        # inspection stays with its original actor.
-        staff_outcomes[:] = [item | {"assignment": assignments.get(tender_id, item["assignment"]["id"]).model_dump(mode="json")} for item in staff_outcomes]
+        usage_parts.extend(assignment.usage for assignment in finished)
+        team_updates = [outcome_view(repo, assignment) for assignment in finished]
     usage = {key: sum(part.get(key, 0) or 0 for part in usage_parts) for key in (
         "requests", "input_tokens", "output_tokens", "cached_input_tokens", "reasoning_tokens", "web_search_calls")}
     usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
@@ -699,10 +501,3 @@ async def _run(repo, tender_id, run_id, instruction, task=None):
                  estimated_cost_usd=None, cost_basis="See the per-connection AI usage ledger for reported tokens and budget estimates.")
     return prepare_result(output, context, usage, research)
 
-
-async def run_manager(repo, tender_id, run_id, instruction):
-    return await _run(repo, tender_id, run_id, instruction)
-
-
-async def run_specialist(repo, tender_id, run_id, task):
-    return await _run(repo, tender_id, run_id, task.get("description", ""), task)

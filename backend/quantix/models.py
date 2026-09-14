@@ -226,7 +226,6 @@ class DecisionRequest(ApiModel):
 
 class ApprovalRequest(ApiModel):
     rationale: str = Field(min_length=1, max_length=4000)
-    ai_team_fingerprint: str | None = None
 
 
 class Settings(ApiModel):

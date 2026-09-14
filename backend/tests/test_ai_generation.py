@@ -1,5 +1,4 @@
 """Generation authority and SDK mapping; never calls a provider."""
-from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -35,12 +34,6 @@ def test_unknown_explicit_sampling_fails_instead_of_silently_dropping():
         build_model_settings({"model_id": "exact-test-model", "temperature": .4}, account())
 
 
-def test_hosted_code_cannot_be_enabled_by_model_metadata_or_route():
-    from quantix.ai_generation import native_tools_for
-    with pytest.raises(ValueError, match="code"):
-        native_tools_for({"native_tools": ["code_execution"]}, account(code_execution=True))
-
-
 def test_client_sampling_is_explicitly_unavailable():
     from quantix.ai_generation import validate_generation
     with pytest.raises(ValueError, match="temperature"):
@@ -56,40 +49,10 @@ def test_preview_never_exposes_connection_private_fields():
     assert '"effective"' in result and '"temperature":0.5' in result
 
 
-def test_web_fetch_requires_reviewed_domain_scope_and_rejects_native_output():
-    from quantix.ai_generation import native_tools_for, validate_generation
-    connection = account("anthropic", "anthropic", web_fetch=True, structured_output=True)
-    with pytest.raises(ValueError, match="domain"):
-        native_tools_for({"native_tools": ["web_fetch"]}, connection)
-    connection["_native_tool_grant"] = fetch_grant()
-    tools = native_tools_for({"native_tools": ["web_fetch"], "max_native_tool_calls": 2}, connection,
-                             context=SimpleNamespace(tender_id="tender", run_id="run"))
-    assert tools[0].max_uses == 2 and tools[0].allowed_domains == ["example.com"]
-    with pytest.raises(ValueError, match="native output"):
-        validate_generation({"native_tools": ["web_fetch"], "output_mode": "native"}, connection)
-
-
 def fetch_grant():
     return {"approval_id": "review", "tender_id": "tender", "run_id": "run", "connection_id": "account",
             "connection_revision": 2, "model_id": "exact-test-model", "source_scope_fingerprint": "scope",
             "native_tools": ["web_fetch"], "web_fetch_domains": ["example.com"], "max_calls_per_request": 2}
-
-
-@pytest.mark.parametrize("change", [{"run_id": "other"}, {"connection_revision": 3}, {"model_id": "other"},
-                                   {"native_tools": []}, {"max_calls_per_request": 1}])
-def test_native_fetch_grant_must_match_current_request(change):
-    from quantix.ai_generation import native_tools_for
-    connection = account("anthropic", "anthropic", web_fetch=True)
-    connection["_native_tool_grant"] = {**fetch_grant(), **change}
-    with pytest.raises(ValueError, match="grant"):
-        native_tools_for({"native_tools": ["web_fetch"], "max_native_tool_calls": 2}, connection,
-                         context=SimpleNamespace(tender_id="tender", run_id="run"))
-
-
-def test_new_search_selection_retains_existing_budget_flag():
-    from quantix.ai_models import AIRoute
-    route = AIRoute(connection_id="a", model_id="exact", native_tools=["web_search"])
-    assert route.web_search is True
 
 
 def test_absent_controls_preserve_historical_route_identity():
@@ -130,44 +93,11 @@ def test_openai_search_uses_provider_enforced_total_native_call_limit():
 
 
 @pytest.mark.parametrize("protocol,provider", [("google", "google"), ("openai_responses", "xai")])
-@pytest.mark.parametrize("legacy", [True, False])
-def test_unbounded_native_search_is_rejected_even_for_legacy_route_flag(protocol, provider, legacy):
+def test_unbounded_native_search_is_rejected(protocol, provider):
     from quantix.ai_generation import validate_generation
-    route = {"web_search": True} if legacy else {"native_tools": ["web_search"]}
+    route = {"web_search": True}
     with pytest.raises(ValueError, match="enforce|call limit"):
         validate_generation(route, account(protocol, provider, web_search=True))
-
-
-@pytest.mark.parametrize("tools", [[], ["web_search"], ["web_search", "code_execution"]])
-def test_openai_combined_limit_never_exceeds_either_reviewed_ceiling(tools):
-    from quantix.ai_api_provider import build_model_settings
-    from quantix.ai_generation import generation_preview
-    connection = account(web_search=True, code_execution=True)
-    route = {"web_search": True, "native_tools": tools, "max_search_calls": 7, "max_native_tool_calls": 2}
-    assert build_model_settings(route, connection)["extra_body"]["max_tool_calls"] == 2
-    preview = generation_preview(connection, route)
-    limit = next(item for item in preview.capabilities if item.id == "native_call_limit")
-    assert "2" in limit.detail and "shared" in limit.detail
-
-
-def test_google_fetch_describes_native_restriction_and_distinct_shared_reader():
-    from quantix.ai_generation import descriptors
-    capabilities = {item.id: item for item in descriptors(account("google", "google", web_fetch=True))}
-    assert capabilities["web_fetch"].support == "supported"
-    assert capabilities["web_fetch"].runtime_supported is False
-    assert "URL Context" in capabilities["web_fetch"].detail
-    assert "allowed domains" in capabilities["web_fetch"].detail
-    assert "https://ai.google.dev/gemini-api/docs/url-context" in capabilities["web_fetch"].evidence
-    assert capabilities["fetch_public_url"].origin == "quantix"
-
-
-@pytest.mark.parametrize("legacy", [True, False])
-def test_anthropic_mixed_native_tools_do_not_silently_allocate_independent_limits(legacy):
-    from quantix.ai_generation import validate_generation
-    route = {"native_tools": ["web_fetch"] if legacy else ["web_fetch", "web_search"],
-             "web_search": legacy, "max_search_calls": 2, "max_native_tool_calls": 5}
-    with pytest.raises(ValueError, match="combined limit.*Select one"):
-        validate_generation(route, account("anthropic", "anthropic", web_search=True, web_fetch=True))
 
 
 @pytest.mark.asyncio
@@ -204,7 +134,7 @@ async def test_reported_search_calls_above_shared_native_cap_are_withheld_and_un
             model_name="exact-test-model", usage=RequestUsage(input_tokens=100, output_tokens=20))
     model = MeteredModel(FunctionModel(response, model_name="exact-test-model"),
         route={"model_id": "exact-test-model", "web_search": True, "max_output_tokens": 1024,
-               "max_search_calls": 7, "max_native_tool_calls": 1},
+               "max_search_calls": 1},
         connection=account(web_search=True, context_window=2000), context=None,
         before_request=lambda *_: "held", on_response=lambda usage, _: reported.append(usage))
     with pytest.raises(ValueError, match="exceeded.*native-call"):

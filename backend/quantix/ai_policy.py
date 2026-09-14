@@ -95,14 +95,12 @@ def route_request_cost(connection: dict, model: dict, route: dict, estimated_inp
     ) * count / Decimal(1000000)
     if route.get("web_search"):
         amount += Decimal(str(prices["web_search_per_call"])) * int(route.get("max_search_calls", 0)) * count
-    from .ai_native_tools import native_request_fields
-    amount += Decimal(str(native_request_fields(route, model, count).get("reserved_code_cost_usd", 0)))
     return amount
 
 
 def route_usage_cost(connection: dict, model: dict, route: dict, input_tokens: int,
                      output_tokens: int, search_calls: int = 0,
-                     cached_input_tokens: int | None = None, code_sessions: int | None = None) -> float | None:
+                     cached_input_tokens: int | None = None) -> float | None:
     """Return the estimated cost for complete, trustworthy route usage.
 
     Provider-reported cached input uses the card's cached rate when it has one.
@@ -129,10 +127,6 @@ def route_usage_cost(connection: dict, model: dict, route: dict, input_tokens: i
         if price is None:
             return None
         amount += Decimal(str(price)) * int(search_calls)
-    if "code_execution" in route.get("native_tools", []):
-        if type(code_sessions) is not int or code_sessions < 0 or prices.get("code_execution_per_session") is None:
-            return None
-        amount += Decimal(str(prices["code_execution_per_session"])) * code_sessions
     return float(amount)
 
 
@@ -246,137 +240,19 @@ class AIPolicyService:
         model = next(m for m in self.connections.models(connection["id"]) if m["model_id"] == route["model_id"])
         return {"route": route, "connection_revision": connection["revision"], "model": model}
 
-    def _assert_idle(self, conn, tender_id):
-        if conn.execute("SELECT 1 FROM runs WHERE tender_id=? AND status IN ('queued','running')", (tender_id,)).fetchone():
-            raise ValueError("Stop or finish the current work before changing its AI team.")
-
-    @staticmethod
-    def _saved_team(conn, tender_id, plan_id):
-        row = conn.execute("SELECT data_json FROM plan_ai_team WHERE tender_id=? AND plan_id=?", (tender_id, plan_id)).fetchone()
-        return json.loads(row[0]) if row else None
-
-    def propose_team(self, tender_id, plan_id, recommendations=None, *, refresh=False):
-        with self.connections.authority_guard(), self.repo.atomic() as conn:
-            plan = self.repo.get_plan(tender_id, plan_id)
-            if plan["status"] not in {"proposed", "approved"}:
-                raise ValueError("This work plan is superseded.")
-            saved = self._saved_team(conn, tender_id, plan_id)
-            # Publication may create its new plan's first proposal during its
-            # own run. Replacing any saved team always requires stopped work.
-            if refresh or saved is not None or plan["status"] == "approved":
-                self._assert_idle(conn, tender_id)
-            return self._propose_team(conn, tender_id, plan, recommendations)
-
-    def _propose_team(self, conn, tender_id, plan, recommendations=None):
-        plan_id = plan["id"]
-        policy = self.get(tender_id)
-        recommendations = recommendations or {}
-        saved = self._saved_team(conn, tender_id, plan_id)
-        saved_by_task = {
-            member.get("task_id"): member.get("route")
-            for member in (saved or {}).get("specialists", [])
-            if member.get("task_id") and member.get("route")
-        }
-        members, warnings, snapshots = [], [], []
-        if not policy["manager"]:
-            warnings.append("Choose the Tender Manager and approve AI routes and budgets before starting this plan.")
-        for task in plan["tasks"]:
-            # An explicit refresh keeps each previously displayed specialist
-            # assignment, including reasoning/output/search settings. New
-            # recommendations remain an intentional override for that task.
-            route = (recommendations.get(task["id"])
-                     or saved_by_task.get(task["id"])
-                     or policy["role_routes"].get(task["role"])
-                     or policy["specialist"]
-                     or policy["manager"])
-            if route:
-                self.validate_route(route, policy["allowed_connection_ids"])
-                members.append({"task_id": task["id"], "role": task["role"], "route": route, "rationale": "Proposed for the specialist role using the tender's approved connection choices."})
-        for route in [policy["manager"], *[m["route"] for m in members], *policy["fallback_routes"]]:
-            if route:
-                snapshots.append(self._snapshot(route, policy["allowed_connection_ids"]))
-        data = {"plan_id": plan_id, "policy_revision": policy["revision"], "manager": policy["manager"], "specialists": members, "fallback_routes": policy["fallback_routes"], "status": "proposed", "warnings": warnings}
-        data["fingerprint"] = fingerprint({"team": data, "snapshots": snapshots})
-        conn.execute("INSERT INTO plan_ai_team VALUES(?,?,?) ON CONFLICT(plan_id) DO UPDATE SET data_json=excluded.data_json", (plan_id, tender_id, dump(data | {"_snapshots": snapshots})))
-        return data
-
-    def _public_team(self, data):
-        public = {k: v for k, v in data.items() if not k.startswith("_")}
-        warnings = list(public["warnings"])
-        for snapshot in data.get("_snapshots", []):
-            try:
-                changed = self.connections.get(snapshot["route"]["connection_id"])["revision"] != snapshot["connection_revision"]
-            except KeyError:
-                changed = True
-            if changed:
-                warnings.append("A connection changed or was removed. Refresh and approve the AI team before continuing work.")
-        public["warnings"] = list(dict.fromkeys(warnings))
-        return public
-
-    def team(self, tender_id, plan_id):
-        with self.connections.authority_guard(), self.repo.atomic() as conn:
-            plan = self.repo.get_plan(tender_id, plan_id)
-            data = self._saved_team(conn, tender_id, plan_id)
-            if data and (data["status"] == "approved" or data["policy_revision"] == self.get(tender_id)["revision"]):
-                return self._public_team(data)
-            if plan["status"] not in {"proposed", "approved"}:
-                raise ValueError("This work plan is superseded.")
-            self._assert_idle(conn, tender_id)
-            return self._propose_team(conn, tender_id, plan)
-
-    def approve_team(self, tender_id, plan_id, expected, rationale="Approved with the work plan", *, require_approved_plan=False):
-        with self.connections.authority_guard(), self.repo.atomic() as conn:
-            self._assert_idle(conn, tender_id)
-            plan = self.repo.get_plan(tender_id, plan_id)
-            if require_approved_plan:
-                if plan["status"] != "approved":
-                    raise ValueError("Approve a proposed AI team together with its engineering work plan.")
-            elif plan["status"] != "proposed":
-                raise ValueError("Only the current proposed plan can be approved.")
-            saved = self._saved_team(conn, tender_id, plan_id)
-            if not saved or not expected or expected != saved["fingerprint"]:
-                raise ValueError("Review the current AI team before approving the work plan.")
-            policy = self.get(tender_id)
-            if saved["policy_revision"] != policy["revision"]:
-                raise ValueError("The tender's AI permissions changed. Refresh and review its AI team before approval.")
-            if saved["warnings"] or not saved["manager"]:
-                raise ValueError("Configure this tender's AI routes before approving the plan.")
-            for snapshot in saved["_snapshots"]:
-                self.validate_route(snapshot["route"], policy["allowed_connection_ids"])
-                if self.connections.get(snapshot["route"]["connection_id"])["revision"] != snapshot["connection_revision"]:
-                    raise ValueError("An AI connection changed. Refresh the team proposal before approval.")
-            saved["status"] = "approved"
-            conn.execute("UPDATE plan_ai_team SET data_json=? WHERE tender_id=? AND plan_id=?", (dump(saved), tender_id, plan_id))
-            conn.execute("INSERT INTO ai_team_history VALUES(?,?,?,?,?,?)", (new_id(), plan_id, tender_id, dump(saved), rationale, now()))
-            conn.execute("INSERT INTO decisions VALUES(?,?,?,?,?,?,?)", (new_id(), tender_id, "ai_team", plan_id, "approve", rationale, now()))
-            return self._public_team(saved)
-
-    def routes_for(self, tender_id, *, plan_id=None, task_id=None, role=None):
+    def routes_for(self, tender_id, *, role=None):
         with self.connections.authority_guard(), self.repo.db.connect() as conn:
-            return self._routes_for(conn, tender_id, plan_id=plan_id, task_id=task_id, role=role)
+            return self._routes_for(conn, tender_id, role=role)
 
-    def _routes_for(self, conn, tender_id, *, plan_id=None, task_id=None, role=None):
+    def _routes_for(self, conn, tender_id, *, role=None):
         policy = self.get(tender_id)
-        if plan_id:
-            if self.repo.get_plan(tender_id, plan_id)["status"] != "approved":
-                raise ValueError("This work requires an approved current plan.")
-            team = self._saved_team(conn, tender_id, plan_id)
-            if not team or team["status"] != "approved":
-                raise ValueError("Review and approve the AI team for this work plan.")
-            route = next((m["route"] for m in team["specialists"] if (task_id and m["task_id"] == task_id) or (role and m["role"] == role)), None) if task_id or role else team["manager"]
-            route = route or team["manager"]
-            fallbacks = team["fallback_routes"]
-            for snapshot in team["_snapshots"]:
-                if self.connections.get(snapshot["route"]["connection_id"])["revision"] != snapshot["connection_revision"]:
-                    raise ValueError("An approved AI connection changed. Approve a refreshed team before continuing.")
-        else:
-            route = (policy["role_routes"].get(role) or policy["specialist"] or policy["manager"]) if role else policy["manager"]
-            fallbacks = policy["fallback_routes"]
-            row = conn.execute("SELECT data_json FROM tender_ai_policy WHERE tender_id=?", (tender_id,)).fetchone()
-            versions = json.loads(row[0]).get("_connection_versions", {}) if row else {}
-            for proposed in [route, *fallbacks]:
-                if proposed and self.connections.get(proposed["connection_id"])["revision"] != versions.get(proposed["connection_id"]):
-                    raise ValueError("An AI connection changed. Review and save this tender's allowed data routes again before starting the Manager.")
+        route = (policy["role_routes"].get(role) or policy["specialist"] or policy["manager"]) if role else policy["manager"]
+        fallbacks = policy["fallback_routes"]
+        row = conn.execute("SELECT data_json FROM tender_ai_policy WHERE tender_id=?", (tender_id,)).fetchone()
+        versions = json.loads(row[0]).get("_connection_versions", {}) if row else {}
+        for proposed in [route, *fallbacks]:
+            if proposed and self.connections.get(proposed["connection_id"])["revision"] != versions.get(proposed["connection_id"]):
+                raise ValueError("An AI connection changed. Review and save this tender's allowed data routes again before starting the Manager.")
         if not route:
             raise ValueError("Open AI setup for this tender and choose a Manager model, allowed connections and budgets.")
         return [self.validate_route(r, policy["allowed_connection_ids"]) for r in [route, *fallbacks]]
@@ -435,8 +311,6 @@ class BudgetMeter:
         self.pending = set()
 
     async def before_request(self, estimated_input, max_output, requests=1):
-        if "code_execution" in self.route.get("native_tools", []):
-            raise ValueError("Hosted code requires a reviewed office root and its shared native-tool spending allowance.")
         with self.service.connections.authority_guard():
             policy = self.service.get(self.tender_id)
             metered = self.connection["billing"] in {"metered", "unknown"}

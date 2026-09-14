@@ -1,9 +1,0 @@
-{
-  "name": "quantix-research-browser",
-  "private": true,
-  "version": "1.0.0",
-  "type": "module",
-  "dependencies": {
-    "playwright": "1.63.0"
-  }
-}

@@ -562,9 +562,6 @@ class AIConnectionService:
                 if old_value:
                     if model.pricing is None and old_value.get("pricing"):
                         model.pricing = PriceCard.model_validate(old_value["pricing"])
-                    elif model.pricing is not None and model.pricing.code_execution_per_session is None and (old_value.get("pricing") or {}).get("code_execution_per_session") is not None:
-                        model.pricing = model.pricing.model_copy(update={key: old_value["pricing"][key]
-                            for key in ("code_execution_per_session", "code_execution_source", "code_execution_as_of")})
                     evidence = self._model_evidence(conn, identifier, model.model_id)
                     if evidence.get("check", {}).get("status") == "passed" and evidence.get("checked_revision") == expected_revision:
                         for field in ("tools", "structured_output"):

@@ -7,7 +7,6 @@ from quantix.ai_models import ConnectionInput, ModelInput
 from quantix.ai_policy import AIPolicyService
 from quantix.ai_readiness import ready_evidence, require_ready
 from quantix.ai_setup_store import SetupStore
-from quantix.plan_review import PlanReviewService
 from quantix.repository import Repository
 
 
@@ -47,16 +46,8 @@ def configured_office(tmp_path, monkeypatch, *, max_requests=12, model_id="synth
 
 
 @pytest.mark.parametrize("source", ["provider", "manual"])
-def test_unrelated_catalog_model_keeps_manager_and_approved_team_authority(tmp_path, monkeypatch, source):
+def test_unrelated_catalog_model_keeps_manager_authority(tmp_path, monkeypatch, source):
     repo, tender, connections, account, model, policy, route = configured_office(tmp_path, monkeypatch)
-    plan = repo.create_plan(tender["id"], "Review", [{"title": "Concrete", "role": "Reviewer", "description": "Review", "source_ids": []}])
-    from quantix.jobs import JobManager
-    jobs = JobManager(repo, object())
-    service = PlanReviewService(repo, save_runs_in_transaction=jobs.queue_approved_plan_runs)
-    review = service.review(tender["id"], plan["id"])
-    service.approve_and_start(tender["id"], plan["id"], {"fingerprint": review["fingerprint"], "engineer_confirmed": True})
-    for run in repo.list_runs(tender["id"]):
-        repo.update_run(run["id"], status="completed")
     incoming = {key: model[key] for key in ModelInput.model_fields}
     extra = incoming | {"model_id": "unrelated-new-model"}
     if source == "provider":
@@ -65,7 +56,7 @@ def test_unrelated_catalog_model_keeps_manager_and_approved_team_authority(tmp_p
         connections.save_model(account["id"], extra)
     assert connections.get(account["id"])["revision"] == account["revision"]
     assert policy.routes_for(tender["id"])[0] == route
-    assert policy.routes_for(tender["id"], plan_id=plan["id"])[0] == route
+    assert policy.routes_for(tender["id"], role="specialist")[0] == route
     assert require_ready(repo, connections.get(account["id"]), model["model_id"]) == "synthetic"
 
 
@@ -137,44 +128,3 @@ async def test_discovery_respects_explicit_provider_capability_denial(tmp_path, 
         await connections.discover(account["id"])
     assert connections.models(account["id"])[0]["capabilities"]["tools"] is False
     assert ready_evidence(repo, connections.get(account["id"]), model["model_id"]) is None
-
-
-@pytest.mark.parametrize("change", ["timestamp", "price", "context_window"])
-def test_review_fingerprint_binds_material_model_metadata_only(tmp_path, monkeypatch, change):
-    repo, tender, connections, account, model, *_ = configured_office(tmp_path, monkeypatch)
-    plan = repo.create_plan(tender["id"], "Review", [{"title": "Concrete", "role": "Reviewer", "description": "Review", "source_ids": []}])
-    service = PlanReviewService(repo)
-    before = service.review(tender["id"], plan["id"])
-    incoming = {key: model[key] for key in ModelInput.model_fields}
-    if change == "timestamp":
-        incoming["pricing"] = incoming["pricing"] | {"as_of": "2026-09-10"}
-    elif change == "price":
-        incoming["pricing"] = incoming["pricing"] | {"input_per_million": 7}
-    else:
-        incoming["capabilities"] = incoming["capabilities"] | {"context_window": 100000}
-    connections.store_discovered_models(account["id"], [incoming], account["revision"])
-    after = service.review(tender["id"], plan["id"])
-    assert (before["fingerprint"] == after["fingerprint"]) is (change == "timestamp")
-    assert connections.get(account["id"])["revision"] == account["revision"]
-    if change != "context_window":
-        assert ready_evidence(repo, connections.get(account["id"]), model["model_id"]) is not None
-
-
-@pytest.mark.parametrize("missing", ["model_price", "web_search_price"])
-def test_unstartable_paid_route_has_specific_model_pricing_blocker(tmp_path, monkeypatch, missing):
-    repo, tender, connections, account, model, *_ = configured_office(tmp_path, monkeypatch, search=missing == "web_search_price")
-    incoming = {key: model[key] for key in ModelInput.model_fields}
-    if missing == "model_price":
-        incoming["pricing"] = None
-    else:
-        incoming["pricing"] = incoming["pricing"] | {"web_search_per_call": None}
-    connections.save_model(account["id"], incoming)
-    plan = repo.create_plan(tender["id"], "Review", [{"title": "Concrete", "role": "Reviewer", "description": "Review", "source_ids": []}])
-    review = PlanReviewService(repo).review(tender["id"], plan["id"])
-    assert review["can_approve"] is False
-    blocker = next(item for item in review["blockers"] if item["code"] == "spending")
-    assert blocker["model_id"] == model["model_id"]
-    assert blocker["connection_id"] == account["id"]
-    assert blocker["repair_target"].startswith("/settings?section=accounts&connection=")
-    assert f"model={model['model_id']}" in blocker["repair_target"]
-    assert "More options" in blocker["detail"]

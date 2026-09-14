@@ -5,8 +5,6 @@ from fastapi import APIRouter
 from .ai_connections import AIConnectionService, is_supported_profile
 from .ai_models import (
     AIReconcile,
-    AITeam,
-    AITeamApproval,
     AIUsageRecord,
     ConnectionInput,
     ConnectionRecord,
@@ -97,19 +95,6 @@ def create_router(repo, runtimes, setup):
     @router.put("/tenders/{tender_id}/ai-policy", response_model=TenderAIRecord)
     def update_policy(tender_id: str, request: TenderAIInput):
         return policies.update(tender_id, request)
-
-    @router.get("/tenders/{tender_id}/plans/{plan_id}/ai-team", response_model=AITeam)
-    def team(tender_id: str, plan_id: str):
-        return policies.team(tender_id, plan_id)
-
-    @router.post("/tenders/{tender_id}/plans/{plan_id}/ai-team/refresh", response_model=AITeam)
-    def refresh_team(tender_id: str, plan_id: str):
-        return policies.propose_team(tender_id, plan_id, refresh=True)
-
-    @router.post("/tenders/{tender_id}/plans/{plan_id}/ai-team/approve", response_model=AITeam)
-    def approve_team(tender_id: str, plan_id: str, request: AITeamApproval):
-        return policies.approve_team(tender_id, plan_id, request.fingerprint, request.rationale,
-                                     require_approved_plan=True)
 
     @router.get("/tenders/{tender_id}/ai-usage", response_model=list[AIUsageRecord])
     def usage(tender_id: str):

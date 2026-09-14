@@ -22,33 +22,12 @@ class PriceCard(AIModel):
     source: str = Field(min_length=1, max_length=1000)
     as_of: str = Field(min_length=1, max_length=50)
     web_search_per_call: float | None = Field(default=None, ge=0, allow_inf_nan=False)
-    code_execution_per_session: float | None = Field(default=None, gt=0, allow_inf_nan=False)
-    code_execution_source: str | None = Field(default=None, max_length=2000)
-    code_execution_as_of: str | None = Field(default=None, max_length=50)
-
-    @model_validator(mode="after")
-    def documented_code_price(self):
-        values = (self.code_execution_per_session, self.code_execution_source, self.code_execution_as_of)
-        if any(value is not None for value in values):
-            from .ai_native_tools import NativeCodePrice
-            NativeCodePrice(per_session_usd=values[0], source=values[1], as_of=values[2])
-        return self
-
-    @model_serializer(mode="wrap")
-    def preserve_saved_price_identity(self, handler):
-        data = handler(self)
-        for key in ("code_execution_per_session", "code_execution_source", "code_execution_as_of"):
-            if data.get(key) is None:
-                data.pop(key, None)
-        return data
 
 
 class ModelCapabilities(AIModel):
     streaming: bool | None = None
     temperature: bool | None = None
     top_p: bool | None = None
-    web_fetch: bool | None = None
-    code_execution: bool | None = None
     tools: bool | None = None
     structured_output: bool | None = None
     images: bool | None = None
@@ -61,7 +40,7 @@ class ModelCapabilities(AIModel):
     @model_serializer(mode="wrap")
     def preserve_saved_capability_identity(self, handler):
         data = handler(self)
-        for key in ("temperature", "top_p", "web_fetch", "code_execution", "streaming"):
+        for key in ("temperature", "top_p", "streaming"):
             if data.get(key) is None:
                 data.pop(key, None)
         return data
@@ -131,7 +110,7 @@ class ModelRecord(ModelInput):
 
 def _route_schema(schema):
     # New default controls are intentionally absent from serialized old routes.
-    for name in ("temperature", "top_p", "output_mode", "native_tools", "max_native_tool_calls"):
+    for name in ("temperature", "top_p", "output_mode"):
         schema.get("properties", {}).get(name, {}).pop("default", None)
 
 
@@ -141,19 +120,12 @@ class AIRoute(GenerationSettings):
     model_id: str = Field(min_length=1, max_length=300)
     web_search: bool = False
 
-    @model_validator(mode="after")
-    def search_budget_flag(self):
-        if "web_search" in self.native_tools:
-            self.web_search = True
-        return self
-
     @model_serializer(mode="wrap")
     def preserve_saved_route_identity(self, handler):
         data = handler(self)
         # Old approvals retain precisely their settings. An absent new control
         # means provider default, never a new capability or a changed route ID.
-        for key, default in (("temperature", None), ("top_p", None), ("output_mode", "auto"),
-                             ("native_tools", []), ("max_native_tool_calls", 3)):
+        for key, default in (("temperature", None), ("top_p", None), ("output_mode", "auto")):
             if data.get(key) == default:
                 data.pop(key, None)
         legacy_order = ("connection_id", "model_id", "reasoning", "max_output_tokens", "web_search", "max_search_calls")
@@ -203,32 +175,8 @@ class TenderAIRecord(AIModel):
     provider_managed_extras: dict[str, int] = Field(default_factory=dict)
 
 
-class AITeamMember(AIModel):
-    task_id: str
-    role: str
-    route: AIRoute
-    rationale: str
-
-
-class AITeam(AIModel):
-    plan_id: str
-    policy_revision: int
-    manager: AIRoute | None
-    specialists: list[AITeamMember]
-    fallback_routes: list[AIRoute]
-    status: Literal["proposed", "approved"]
-    warnings: list[str]
-    fingerprint: str
-
-
 class AIReconcile(AIModel):
     estimated_cost_usd: float = Field(ge=0, allow_inf_nan=False)
-    engineer_confirmed: Literal[True]
-    rationale: str = Field(min_length=1, max_length=4000)
-
-
-class AITeamApproval(AIModel):
-    fingerprint: str
     engineer_confirmed: Literal[True]
     rationale: str = Field(min_length=1, max_length=4000)
 

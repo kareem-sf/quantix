@@ -152,8 +152,6 @@ def evidence_tools():
         if offset < 0 or not 1 <= limit <= 50:
             raise ToolArgumentError("Choose a non-negative offset and a limit of 1–50.")
         artifacts = office.repo.list_artifacts(office.tender_id)
-        if office.is_staff:
-            artifacts = [item for item in artifacts if item["id"] in office.reviewed_artifacts]
         with office.repo.db.connect() as conn:
             rows = [_document_coverage(conn, artifact) for artifact in artifacts]
         totals = {
@@ -412,7 +410,6 @@ def evidence_tools():
                     (tender_id, *sorted(earlier_ids)),
                 ).fetchall()
                 labels = {
-                    "working_memory": "working_notes",
                     "work_product_version": "work_products",
                     "work_brief_version": "working_brief",
                 }

@@ -10,7 +10,7 @@ from test_estimates import approval, seed
 
 from quantix.ai_tools import ToolArgumentError
 from quantix.estimates import EstimateService
-from quantix.office_tools import OfficeContext, manager_source_tools, source_tools
+from quantix.office_tools import OfficeContext, source_tools
 from quantix.outputs import OutputService
 from quantix.repository import Repository
 
@@ -94,8 +94,8 @@ async def test_coverage_reports_unreadable_and_ocr_pages_without_claiming_analys
 @pytest.mark.asyncio
 async def test_revision_compare_and_impact_name_exact_changes_and_dependent_records(tmp_path):
     from quantix.execution_context import engineer_identity
-    from quantix.memory_models import WorkingMemoryCommand
-    from quantix.memory_service import MemoryService
+    from quantix.work_product_models import WorkProductDraft
+    from quantix.work_products import WorkProductService
 
     repo = Repository(tmp_path)
     tender = repo.create_tender("Synthetic revision Tender")
@@ -112,15 +112,10 @@ async def test_revision_compare_and_impact_name_exact_changes_and_dependent_reco
         origin="agent",
     )
     repo.add_finding(tender["id"], "Unrelated", "Not linked.", "observation", [], origin="agent")
-    MemoryService(repo).save(
+    WorkProductService(repo).save_draft(
         engineer_identity(tender["id"]),
-        WorkingMemoryCommand(
-            kind="assumption",
-            title="Grade",
-            content="Use C30/37.",
-            source_ids=[old_grade["id"]],
-            idempotency_key="grade-note",
-        ),
+        WorkProductDraft(kind="note", title="Grade", content="Use C30/37.",
+                         source_refs=[old_grade["id"]], idempotency_key="grade-note"),
     )
     context = _manager(repo, tender["id"])
     with pytest.raises(ToolArgumentError, match="no earlier version"):
@@ -144,20 +139,9 @@ async def test_revision_compare_and_impact_name_exact_changes_and_dependent_reco
     assert impact["affected_counts"]["findings"] == 1
     assert impact["affected"]["findings"][0]["id"] == finding["id"]
     assert impact["affected"]["findings"][0]["marked_stale"] is True
-    assert impact["affected_counts"]["working_notes"] == 1
+    assert impact["affected_counts"]["work_products"] == 1
     assert "Nothing was changed" in impact["limitation"]
     assert repo.list_findings(tender["id"])[0]["title"] in {"Concrete grade", "Unrelated"}
-
-
-@pytest.mark.asyncio
-async def test_staff_cannot_use_whole_tender_checks():
-    from quantix.staff_capabilities import capability_catalog
-
-    granted = {item.id for item in capability_catalog()}
-    for name in ("trace_change_impact", "check_estimate_coverage", "rehearse_submission"):
-        assert name not in granted
-        assert name in {item.name for item in manager_source_tools()}
-    assert {"inspect_extraction_coverage", "compare_source_versions"} <= granted
 
 
 @pytest.mark.asyncio

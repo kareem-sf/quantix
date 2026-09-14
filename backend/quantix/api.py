@@ -16,7 +16,6 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__
 from . import models as m
-from .ai_policy import AIPolicyService
 from .ai_routes import create_router as create_ai_router
 from .ai_runtimes import RuntimeService
 from .ai_setup import AISetupService
@@ -33,15 +32,12 @@ from .knowledge_routes import create_router as create_knowledge_router
 from .manager_routes import create_router as create_manager_router
 from .map_routes import create_router as create_map_router
 from .measurement_routes import create_router as create_measurement_router
-from .office_read import OfficeReadService
 from .pending import (
     PendingInstruction,
     PendingInstructionCancel,
     PendingInstructionConfirm,
     PendingInstructionEdit,
 )
-from .plan_review import PlanReviewService
-from .plan_review_routes import create_router as create_plan_review_router
 from .repository import Repository
 from .requirement_routes import create_router as create_requirement_router
 from .reset_routes import create_router as create_reset_router
@@ -50,10 +46,10 @@ from .retrieval_service import retrieve
 from .semantic import SemanticService
 from .semantic_models import SemanticStatus
 from .settings import SettingsService
-from .staff_routes import create_router as create_staff_router
 from .storage import logs_dir, prepare_process_environment
 from .submission_models import ConstructionProgramme, ProgrammeProposalRecord
 from .submission_routes import create_router as create_submission_router
+from .team_routes import create_router as create_team_router
 
 ALLOWED_ORIGINS = (
     "http://127.0.0.1:1420",
@@ -81,10 +77,6 @@ def create_app(home: Path, token: str) -> FastAPI:
     runtimes = None if recovery else RuntimeService(repo)
     ai_setup = None if recovery else AISetupService(repo)
     semantic = None if recovery else SemanticService(repo)
-    office_reader = None if recovery else OfficeReadService(repo)
-    from .podman_runtime import get_code_runtime
-
-    code_runtime = None if recovery else get_code_runtime(repo)
 
     def reset_busy():
         blockers = []
@@ -107,12 +99,6 @@ def create_app(home: Path, token: str) -> FastAPI:
         worker = getattr(repo, "_ai_worker_client", None)
         if worker and worker.executions:
             blockers.append("Finish or stop current AI work before resetting Quantix.")
-        if code_runtime and (
-            code_runtime.active_runs or code_runtime.operations or code_runtime.lock.locked()
-        ):
-            blockers.append(
-                "Finish or stop calculations and local code setup before resetting Quantix."
-            )
         return blockers
 
     async def close_clients():
@@ -125,11 +111,6 @@ def create_app(home: Path, token: str) -> FastAPI:
             await ai_setup.close()
         if runtimes:
             await runtimes.close()
-        if code_runtime:
-            if reset.pending:
-                await code_runtime.remove_for_reset()
-            else:
-                await code_runtime.close()
 
     reset = FactoryResetService(home, repo=repo, busy=reset_busy, close_clients=close_clients)
 
@@ -137,7 +118,9 @@ def create_app(home: Path, token: str) -> FastAPI:
     async def lifespan(app):
         if repo and not reset.pending:
             repo.recover_interrupted_runs()
-            office_reader.assignments.recover_interrupted()
+            from .team import TeamService
+
+            TeamService(repo).recover_interrupted()
             try:
                 from .ai_reservations import release_rejected_reservations
 
@@ -158,7 +141,6 @@ def create_app(home: Path, token: str) -> FastAPI:
 
     app = FastAPI(title="Quantix local workspace", version=__version__, lifespan=lifespan)
     app.state.repo, app.state.jobs, app.state.diagnostics = repo, jobs, diagnostics
-    app.state.code_runtime = code_runtime
     app.state.reset = reset
 
     @app.middleware("http")
@@ -257,17 +239,12 @@ def create_app(home: Path, token: str) -> FastAPI:
                 "submission_requirements",
                 "ai_connections",
                 "guided_ai_setup",
-                "agent_library",
                 "generation_controls",
                 "agent_chat",
-                "code_runtime_setup",
-                "research",
-                "working_memory",
+                "team",
                 "work_products",
-                "watches",
                 "tender_profile",
                 "company_library",
-                "voice_input",
             ]
             + engine_capabilities(),
         )
@@ -471,11 +448,8 @@ def create_app(home: Path, token: str) -> FastAPI:
     async def approve_plan(tender_id: str, plan_id: str, command: m.ApprovalRequest):
         if jobs.active(tender_id):
             raise ValueError("Finish or stop the current Tender work before approving a new plan.")
-        policy = AIPolicyService(repo)
-        with policy.connections.authority_guard(), repo.atomic():
-            policy.approve_team(tender_id, plan_id, command.ai_team_fingerprint, command.rationale)
-            plan = repo.approve_plan(tender_id, plan_id, command.rationale)
-        jobs.activate_plan(tender_id, plan_id)
+        plan = repo.approve_plan(tender_id, plan_id, command.rationale)
+        jobs.carry_out_plan(tender_id, plan_id)
         return plan
 
     @app.get("/api/tenders/{tender_id}/tasks", response_model=list[m.Task])
@@ -628,7 +602,7 @@ def create_app(home: Path, token: str) -> FastAPI:
         return app
 
     app.include_router(create_manager_router(repo))
-    app.include_router(create_staff_router(repo, office_reader))
+    app.include_router(create_team_router(repo))
     app.include_router(create_estimate_router(repo))
     app.include_router(create_backup_router(repo))
     app.include_router(create_correspondence_router(repo))
@@ -647,23 +621,9 @@ def create_app(home: Path, token: str) -> FastAPI:
     from .run_activity_routes import create_router as create_activity_router
 
     app.include_router(create_activity_router(repo, should_stop=lambda: reset.pending))
-    from .agent_definition_routes import create_router as create_agent_definition_router
-    from .sandbox_routes import create_router as create_sandbox_router
-
-    app.include_router(create_agent_definition_router(repo))
-    app.include_router(create_sandbox_router(repo, runtime=code_runtime))
-    from .research_routes import create_router as create_research_router
-
-    app.include_router(create_research_router(repo))
     from .native_execution_routes import create_router as create_native_execution_router
 
     app.include_router(create_native_execution_router(repo))
-    plan_review = PlanReviewService(
-        repo,
-        save_runs_in_transaction=jobs.queue_approved_plan_runs,
-        schedule_after_commit=jobs.schedule_approved_plan_runs,
-    )
-    app.include_router(create_plan_review_router(repo, plan_review))
     app.include_router(create_submission_router(repo))
     from .later_routes import create_router as create_later_router
 

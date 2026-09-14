@@ -131,14 +131,13 @@ async def test_routing_a_message_uses_the_lightest_thinking(tmp_path, monkeypatc
 def test_classifier_uses_shared_documented_levels_without_raising_approved_cap(reasoning):
     from quantix.conversation import classification_route
 
-    approved = {"reasoning": reasoning, "max_output_tokens": 1024, "web_search": True,
-                "native_tools": ["code_execution"]}
+    approved = {"reasoning": reasoning, "max_output_tokens": 1024, "web_search": True}
     result = classification_route(approved, _direct("openai", "openai_responses"),
                                   {"capabilities": {}})
     assert result["reasoning"] == ("low" if reasoning == "high" else reasoning)
     assert result["max_output_tokens"] == 1024
-    assert result["native_tools"] == [] and result["web_search"] is False
-    assert approved["reasoning"] == reasoning and approved["native_tools"] == ["code_execution"]
+    assert result["web_search"] is False
+    assert approved["reasoning"] == reasoning and approved["web_search"] is True
 
 
 class _Proposal(BaseModel):

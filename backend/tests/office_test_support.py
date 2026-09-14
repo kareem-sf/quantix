@@ -47,18 +47,6 @@ async def invoke_json_tool(context, name, arguments, *, options=None):
 
 
 def approve_plan_and_team(repo, tender_id, plan, rationale):
-    """Create the current approved plan/team state required by job execution."""
+    """Approve a plan as the engineer does; the Manager assigns its team at run time."""
 
-    from quantix.ai_policy import AIPolicyService
-
-    policy = AIPolicyService(repo)
-    proposed = policy.propose_team(tender_id, plan["id"])
-    approved = repo.approve_plan(tender_id, plan["id"], rationale)
-    policy.approve_team(
-        tender_id,
-        plan["id"],
-        proposed["fingerprint"],
-        rationale=rationale,
-        require_approved_plan=True,
-    )
-    return approved
+    return repo.approve_plan(tender_id, plan["id"], rationale)

@@ -34,16 +34,6 @@ class ToolFenceError(ValueError):
         super().__init__(detail)
 
 
-def _granted_ids(context) -> set[str]:
-    tools = getattr(context, "reviewed_tools", None) or []
-    granted: set[str] = set()
-    for item in tools:
-        identifier = item.id if hasattr(item, "id") else item.get("id")
-        if identifier:
-            granted.add(identifier)
-    return granted
-
-
 def _blocked(identity: OfficeExecutionIdentity, capability_id: str, request_id: str, detail: str) -> ExecutionReceipt:
     return ExecutionReceipt(
         status="blocked",
@@ -103,10 +93,6 @@ async def invoke(
         raise ToolFenceError(
             _blocked(identity, capability_id, request_id, "Tool arguments must be an object.")
         )
-    granted = _granted_ids(context)
-    if identity.actor_kind == "staff" and capability_id not in granted:
-        detail = f"The tool '{capability_id}' is not granted for this staff assignment."
-        raise ToolFenceError(_blocked(identity, capability_id, request_id, detail))
     from .run_activity import ActivityRecorder, current_operation
 
     if current_operation():

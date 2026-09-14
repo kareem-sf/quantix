@@ -36,7 +36,7 @@ def classification_route(approved_route, connection, model):
     from .ai_thinking import light_level
 
     approved_limit = approved_route["max_output_tokens"]
-    route = {**approved_route, "web_search": False, "max_search_calls": 0, "native_tools": [],
+    route = {**approved_route, "web_search": False, "max_search_calls": 0,
              "max_output_tokens": min(2048, approved_limit)}
     recorded = (model.get("capabilities") or {}).get("reasoning") or []
     candidate = light_level(connection, model)
@@ -171,14 +171,10 @@ async def run_conversation(repo: "Repository", tender_id: str, run_id: str, inst
     manager_profile = ManagerRunProfiles(repo).capture(tender_id, run_id)
     policy = AIPolicyService(repo)
     connections = AIConnectionService(repo)
-    approved = next(
-        (plan for plan in repo.list_plans(tender_id) if plan["status"] == "approved"), None
-    )
-    plan_id = approved["id"] if approved else None
-    route = policy.routes_for(tender_id, plan_id=plan_id)[:1][0]
+    route = policy.routes_for(tender_id)[0]
     context = OfficeContext(repo, tender_id, run_id)
     with connections.lease(route["connection_id"]) as connection:
-        policy.routes_for(tender_id, plan_id=plan_id)
+        policy.routes_for(tender_id)
         # Routing a message and replying to small talk needs the lightest
         # thinking the model offers; the engineer's level applies to the work.
         model = next((m for m in connections.models(connection["id"]) if m["model_id"] == route["model_id"]), {})

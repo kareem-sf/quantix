@@ -328,7 +328,7 @@ async def test_supplier_named_in_approved_engineer_scope_is_preserved_for_public
 
 
 @pytest.mark.asyncio
-async def test_full_engineer_instruction_and_preferences_reach_manager_and_specialist(
+async def test_full_engineer_instruction_and_preferences_reach_the_manager(
     setup, monkeypatch
 ):
     repo, tid, artifact, estimates, item, quotes, run = setup
@@ -350,28 +350,12 @@ async def test_full_engineer_instruction_and_preferences_reach_manager_and_speci
 
     monkeypatch.setattr("quantix.ai_execution.execute_api", provider)
     await office.run_manager(repo, tid, run["id"], instruction)
-    repo.update_run(run["id"], status="completed")
-    plan = repo.create_plan(
-        tid,
-        "Scope review",
-        [
-            {
-                "title": "Review scope",
-                "description": "Review. " * 1000 + "KEEP_THIS_FINAL_ENGINEER_LIMIT",
-                "role": "Scope reviewer",
-                "source_ids": [item["source_id"]],
-            }
-        ],
-    )
-    approved = approve_plan_and_team(repo, tid, plan, "Proceed with the complete written scope.")
-    specialist_run = repo.create_run(tid, "task", approved["tasks"][0]["description"])
-    await office.run_specialist(repo, tid, specialist_run["id"], approved["tasks"][0])
 
 
 def test_oversized_worker_instruction_is_rejected_instead_of_clipped(setup):
     repo, tid, artifact, estimates, item, quotes, run = setup
     with pytest.raises(ValueError, match="instruction|limit"):
-        office._prompt(OfficeContext(repo, tid, run["id"]), "x" * 40001, None)
+        office._prompt(OfficeContext(repo, tid, run["id"]), "x" * 40001)
 
 
 @pytest.mark.asyncio

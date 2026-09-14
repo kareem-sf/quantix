@@ -505,7 +505,7 @@ def business_tools():
         semantic_service = ctx.context.semantic_service
         if semantic_service is None:
             semantic_service = SemanticService(ctx.context.repo)
-        artifact_ids = list(ctx.context.reviewed_artifacts) if ctx.context.is_staff else None
+        artifact_ids = None
         try:
             response = await asyncio.to_thread(
                 retrieve,

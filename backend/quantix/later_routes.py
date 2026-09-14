@@ -14,13 +14,6 @@ from .documents import MAX_PDF_PAGES
 from .execution_context import engineer_identity
 from .extraction_adapters import ExtractionService
 from .extraction_models import ReprocessRequest, ReprocessResult
-from .office_reviews import (
-    OfficeReviewService,
-    ReviewContribution,
-    ReviewDraft,
-    ReviewResolution,
-    ReviewSession,
-)
 from .staff_models import OfficeConflict
 from .tender_calendar import TenderCalendarService
 from .tender_profile import TenderProfileService
@@ -54,7 +47,6 @@ def create_router(repo) -> APIRouter:
     profiles = TenderProfileService(repo)
     calendar = TenderCalendarService(repo)
     calculations = CalculationService(repo)
-    reviews = OfficeReviewService(repo)
     library = CompanyLibraryService(repo)
     extractions = ExtractionService(repo)
 
@@ -142,26 +134,6 @@ def create_router(repo) -> APIRouter:
     )
     def get_calculation(tender_id: str, calculation_id: str):
         return _call(lambda: calculations.get(tender_id, calculation_id))
-
-    @router.post("/tenders/{tender_id}/reviews", response_model=ReviewSession)
-    def start_review(tender_id: str, command: ReviewDraft, author_total: str | None = None):
-        return _call(lambda: reviews.start(engineer_identity(tender_id), command, author_total=author_total))
-
-    @router.get("/tenders/{tender_id}/reviews", response_model=list[ReviewSession])
-    def list_reviews(tender_id: str, status: str | None = None, limit: int = 50):
-        return _call(lambda: reviews.list(tender_id, status=status, limit=limit))
-
-    @router.get("/tenders/{tender_id}/reviews/{session_id}", response_model=ReviewSession)
-    def get_review(tender_id: str, session_id: str):
-        return _call(lambda: reviews.get(tender_id, session_id))
-
-    @router.post("/tenders/{tender_id}/reviews/{session_id}/contributions", response_model=ReviewSession)
-    def contribute_review(tender_id: str, session_id: str, command: ReviewContribution):
-        return _call(lambda: reviews.contribute(engineer_identity(tender_id), session_id, command))
-
-    @router.post("/tenders/{tender_id}/reviews/{session_id}/resolve", response_model=ReviewSession)
-    def resolve_review(tender_id: str, session_id: str, command: ReviewResolution):
-        return _call(lambda: reviews.resolve(engineer_identity(tender_id), session_id, command))
 
     @router.post("/company-assets", response_model=CompanyAsset)
     def propose_asset(command: CompanyAssetDraft):

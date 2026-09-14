@@ -1,15 +1,22 @@
-"""Status reads and instruction revisions without starting provider work."""
+"""Engineer steering for a running Manager run, applied at its next turn."""
 
 from __future__ import annotations
 
-from .assignment_graph import AssignmentGraphService
+import hashlib
+import json
+
 from .db import new_id, now
 from .execution_context import OfficeExecutionIdentity
 from .instruction_models import InstructionAdmission, InstructionRevisionRequest
-from .office_ownership import OfficeOwnershipService
-from .staff_assignments import StaffAssignmentService
-from .staff_models import OfficeConflict, OfficeModel
-from .staff_store import _canonical_hash, _key
+from .staff_models import OfficeConflict
+
+
+def _key(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _canonical_hash(value: dict) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 _STEERING_SCHEMA = (
     """
@@ -30,20 +37,9 @@ _STEERING_SCHEMA = (
 )
 
 
-class WorkStatusSnapshot(OfficeModel):
-    tender_id: str
-    root_run_id: str | None
-    owners: list[str]
-    blockers: list[str]
-    provider_requests: int = 0
-
-
 class OfficeInstructionService:
     def __init__(self, repo):
         self.repo = repo
-        self.graphs = AssignmentGraphService(repo)
-        self.ownership = OfficeOwnershipService(repo)
-        self.assignments = StaffAssignmentService(repo)
         with repo.atomic() as conn:
             for statement in _STEERING_SCHEMA:
                 conn.execute(statement)
@@ -194,42 +190,3 @@ class OfficeInstructionService:
                 )
                 for row in rows
             ]
-
-    def status(self, ctx: OfficeExecutionIdentity) -> WorkStatusSnapshot:
-        if not ctx.tender_id:
-            raise ValueError("Status requires a selected Tender.")
-        blockers = []
-        owners = []
-        if ctx.root_run_id:
-            graph = self.graphs.latest(ctx.tender_id, ctx.root_run_id)
-            if graph:
-                for node in graph.nodes:
-                    if node.state == "blocked":
-                        blockers.append(f"{node.key} is waiting on a prerequisite.")
-                    if node.owner_staff_id:
-                        owners.append(node.owner_staff_id)
-            for assignment in self.assignments.list(
-                ctx.tender_id, root_run_id=ctx.root_run_id, limit=200
-            ):
-                if assignment.status in {"queued", "running"}:
-                    if assignment.staff_id not in owners:
-                        owners.append(assignment.staff_id)
-                elif assignment.status == "waiting":
-                    if assignment.staff_id not in owners:
-                        owners.append(assignment.staff_id)
-                    detail = (assignment.detail or "").strip()
-                    blockers.append(
-                        f"{assignment.staff_id} is waiting: {detail[:200]}"
-                        if detail
-                        else f"{assignment.staff_id} is waiting for a reply."
-                    )
-            run = self.repo.get_run(ctx.root_run_id)
-            if run["status"] in {"queued", "running"}:
-                owners.append(run["id"])
-        return WorkStatusSnapshot(
-            tender_id=ctx.tender_id,
-            root_run_id=ctx.root_run_id,
-            owners=owners,
-            blockers=blockers,
-            provider_requests=0,
-        )

@@ -85,14 +85,12 @@ class ActivityRecorder:
             or current_operation()
             or getattr(self.context, "_activity_parent_operation", None)
         )
-        profile = getattr(self.context, "staff_profile", None)
         metadata = {
             "category": category,
             "operation_id": operation_id,
             "parent_operation_id": parent,
             "actor_id": getattr(self.context, "actor_id", None) or "manager",
-            "actor_label": getattr(profile, "name", None)
-            or ("Specialist" if getattr(self.context, "assignment_id", None) else "Tender Manager"),
+            "actor_label": "Staff member" if getattr(self.context, "assignment_id", None) else "Tender Manager",
             "assignment_id": getattr(self.context, "assignment_id", None),
             "tool": tool,
             "provider": provider,

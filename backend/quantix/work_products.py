@@ -9,7 +9,6 @@ import re
 from .db import dump, new_id, now
 from .execution_context import OfficeExecutionIdentity
 from .research_dependencies import DependencyService
-from .research_service import ResearchService
 from .staff_models import OfficeConflict
 from .work_product_models import (
     WorkProductDraft,
@@ -94,13 +93,9 @@ class WorkProductService:
         from .capability_models import validate_result_value
 
         validate_result_value(draft.model_dump(mode="json"))
-        public_refs = [item for item in draft.source_refs if item.startswith("public_citation:")]
-        local_refs = [item for item in draft.source_refs if not item.startswith("public_citation:")]
-        if public_refs or any(
-            item.startswith(("http://", "https://")) for item in draft.source_refs
-        ):
-            ResearchService(self.repo).validate_work_product_refs(ctx, draft.source_refs)
-        for source_id in local_refs:
+        if any(item.startswith(("http://", "https://", "public_citation:")) for item in draft.source_refs):
+            raise ValueError("Cite Tender evidence IDs here. Web sources belong in the answer's web findings.")
+        for source_id in draft.source_refs:
             self.repo.get_evidence(ctx.tender_id, source_id)
         payload = draft.model_dump(mode="json")
         payload_hash = _hash(payload)
@@ -183,7 +178,7 @@ class WorkProductService:
                 ctx.tender_id,
                 "work_product_version",
                 identifier,
-                local_refs,
+                draft.source_refs,
             )
             return self._version(conn, identifier)
 

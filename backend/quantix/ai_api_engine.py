@@ -142,9 +142,6 @@ def response_usage(response) -> dict:
     input_tokens = int(input_tokens or 0)
     output_tokens = int(output_tokens or 0)
     parts = getattr(response, "parts", ()) or ()
-    code_calls = [part for part in parts if getattr(part, "part_kind", "") == "builtin-tool-call" and getattr(part, "tool_name", "") == "code_execution"]
-    container_ids = [getattr(part, "args", {}).get("container_id") for part in code_calls if isinstance(getattr(part, "args", None), dict)]
-    code_ids_known = len(container_ids) == len(code_calls) and all(isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,200}", value) for value in container_ids)
     return {
         "requests": 1,
         "input_tokens": input_tokens,
@@ -154,8 +151,6 @@ def response_usage(response) -> dict:
         "cached_input_tokens": getattr(usage, "cache_read_tokens", None),
         "reasoning_tokens": int(details.get("reasoning_tokens", 0) or 0),
         "actual_model": getattr(response, "model_name", None),
-        "code_execution_calls": len(code_calls),
-        "code_execution_container_ids": list(dict.fromkeys(container_ids)) if code_ids_known else None,
         "web_search_calls": sum(
             getattr(part, "part_kind", "") == "builtin-tool-call"
             and "search" in getattr(part, "tool_name", "")
@@ -196,11 +191,9 @@ class DraftStreamEvents:
         self.connection = connection
         fields = output_type.model_fields
         if "summary" in fields:
-            self.paths = [("summary",)]
+            self.paths = [("summary",), ("question",)] if "question" in fields else [("summary",)]
         elif "reply" in fields:
             self.paths = [("reply",)]
-        elif "result" in fields:
-            self.paths = [("result", "output", "summary"), ("result", "question")]
         else:
             self.paths = []
         self.total_chars = 0
@@ -473,7 +466,6 @@ class MeteredModel(WrapperModel):
         sources=None,
         requests=None,
         expected_model=None,
-        hosted_code=None,
     ):
         super().__init__(wrapped)
         self.route = route
@@ -486,7 +478,6 @@ class MeteredModel(WrapperModel):
         self.sources = sources if sources is not None else {}
         self.requests = requests if requests is not None else []
         self.expected_model = expected_model
-        self.hosted_code = hosted_code
         # (input bytes, reported input tokens) of the last fully reported request.
         self._calibration = None
         self.activity = ActivityRecorder(None if check_mode else context)
@@ -570,7 +561,7 @@ class MeteredModel(WrapperModel):
         capabilities = self.connection.get("_model", {}).get("capabilities", {})
         context_window = capabilities.get("context_window")
         expanded_context = (
-            bool(self.route.get("web_search")) or bool(self.route.get("native_tools"))
+            bool(self.route.get("web_search"))
             or b'"media_type":"image/' in serialized
         )
         if (
@@ -626,8 +617,6 @@ class MeteredModel(WrapperModel):
         parameters, reserved, input_bytes, expanded_context = await self._admit_request(
             messages, model_request_parameters
         )
-        if self.hosted_code is not None:
-            parameters = await self.hosted_code.prepare(parameters, reserved)
         self._request_started(parameters)
         try:
             response = await self.wrapped.request(messages, model_settings, parameters)
@@ -636,12 +625,7 @@ class MeteredModel(WrapperModel):
         except (DirectAPIError, DirectProviderError, InterruptedError, ActivityRecordingError):
             raise
         except Exception as error:
-            failure = provider_failure(error)
-            if self.hosted_code is not None:
-                from .ai_api_errors import rejected_before_processing
-                if rejected_before_processing(failure):
-                    self.hosted_code.request_rejected(reserved)
-            raise failure from None
+            raise provider_failure(error) from None
         return await self._finalize_response(response, reserved, input_bytes, expanded_context)
 
     @asynccontextmanager
@@ -652,8 +636,6 @@ class MeteredModel(WrapperModel):
         parameters, reserved, input_bytes, expanded_context = await self._admit_request(
             messages, model_request_parameters
         )
-        if self.hosted_code is not None:
-            parameters = await self.hosted_code.prepare(parameters, reserved)
         self._request_started(parameters)
         try:
             async with self.wrapped.request_stream(messages, model_settings, parameters, run_context) as stream:
@@ -693,16 +675,9 @@ class MeteredModel(WrapperModel):
         except (DirectAPIError, DirectProviderError, InterruptedError, ActivityRecordingError):
             raise
         except Exception as error:
-            failure = provider_failure(error)
-            if self.hosted_code is not None:
-                from .ai_api_errors import rejected_before_processing
-                if rejected_before_processing(failure):
-                    self.hosted_code.request_rejected(reserved)
-            raise failure from None
+            raise provider_failure(error) from None
 
     async def _finalize_response(self, response, reserved, input_bytes, expanded_context, *, force_incomplete=False):
-        if self.hosted_code is not None:
-            self.hosted_code.observe(response, reserved)
         usage = response_usage(response)
         from .ai_generation import bounded_native_call_limit
 
@@ -719,9 +694,7 @@ class MeteredModel(WrapperModel):
             usage["usage_complete"] = False
         if usage["usage_complete"] and not expanded_context:
             self._calibration = (input_bytes, usage["input_tokens"])
-        if self.hosted_code is not None:
-            self.hosted_code.defer_usage(usage, reserved, self.on_response_callback)
-        elif self.on_response_callback is not None:
+        if self.on_response_callback is not None:
             try:
                 reported = self.on_response_callback(usage, reserved)
                 if inspect.isawaitable(reported):
@@ -771,8 +744,6 @@ class MeteredModel(WrapperModel):
             raise DirectAPIError(
                 "The provider reported a different model. Its result was withheld; select the exact approved model identifier before retrying."
             )
-        if self.hosted_code is not None and not force_incomplete and getattr(response, "state", "complete") == "complete":
-            await self.hosted_code.collect(response)
         return response
 
 
@@ -825,12 +796,6 @@ async def _run_model(
     if max_requests < 1 or max_output < 1:
         raise DirectAPIError("The direct API request limits are invalid.")
     check_mode = operation == "check"
-    if route.get("native_tools") and not check_mode:
-        from .ai_native_tools import grant_for_execution
-        if context is None:
-            raise DirectAPIError("Native tools require a reviewed Tender execution context.")
-        native_grant = grant_for_execution(context, connection, route)
-        connection = {**connection, "_native_tool_grant": native_grant.model_dump() if native_grant else None}
     if check_mode and (max_requests > CHECK_MAX_REQUESTS or max_output > CHECK_MAX_OUTPUT_TOKENS):
         raise DirectAPIError("The connection check exceeds its small approved request limits.")
     image_support = connection.get("_model", {}).get("capabilities", {}).get("images") is True
@@ -858,7 +823,7 @@ async def _run_model(
     ]
     try:
         generation = validate_generation(route, connection)
-        native = [NativeTool(tool) for tool in native_tools_for(route, connection, context=context)]
+        native = [NativeTool(tool) for tool in native_tools_for(route, connection)]
     except ValueError as error:
         raise DirectAPIError(str(error)) from None
     check_tool = next(
@@ -872,12 +837,6 @@ async def _run_model(
         min(max_output, CHECK_MAX_OUTPUT_TOKENS) if check_mode else max_output
     )
     async with model_for_route(chosen, connection, credentials) as binding:
-        hosted_code = None
-        if "code_execution" in chosen.get("native_tools", []):
-            from .native_hosted_code import HostedCodeExecution
-            if on_response is None:
-                raise DirectAPIError("Hosted code requires the shared root usage recorder.")
-            hosted_code = HostedCodeExecution(context, connection, chosen, binding.client)
         try:
             validate_sdk_settings(binding.settings, binding.model.profile)
             if generation.output_mode == "native" and not binding.model.profile.get("supports_json_schema_output"):
@@ -898,7 +857,6 @@ async def _run_model(
             sources=sources,
             requests=request_details,
             expected_model=binding.model.model_name,
-            hosted_code=hosted_code,
         )
         bridge.request_operation = lambda: wrapped.last_request_id
         from .ai_execution import TURN_CONTEXT_MARKER
@@ -954,7 +912,7 @@ async def _run_model(
                     tool_calls_limit=min(1000, max_requests * 10),
                 ),
             )
-            result = await asyncio.wait_for(execution, timeout=900) if hosted_code is not None else await execution
+            result = await execution
         except asyncio.CancelledError:
             raise
         except (DirectAPIError, DirectProviderError, InterruptedError, ActivityRecordingError):
@@ -976,8 +934,6 @@ async def _run_model(
             raise provider_failure(error) from None
         finally:
             bridge.closed = True
-            if hosted_code is not None:
-                await hosted_code.close()
     try:
         output = output_type.model_validate(result.output)
     except Exception:
@@ -988,7 +944,6 @@ async def _run_model(
     return {
         "output": output,
         "web_sources": list(sources.values()),
-        "native_artifacts": hosted_code.artifacts if hosted_code is not None else [],
         "usage": {
             "requests": int(getattr(usage, "requests", len(request_details)) or 0),
             "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),

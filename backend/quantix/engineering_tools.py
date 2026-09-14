@@ -20,13 +20,9 @@ from .work_products import WorkProductService
 
 
 def _sources(office, references):
-    from .research_service import ResearchService
-
-    identity = identity_from_office_context(office)
-    ResearchService(office.repo).validate_work_product_refs(identity, references)
     for reference in references:
-        if reference.startswith("public_citation:"):
-            continue
+        if reference.startswith(("http://", "https://", "public_citation:")):
+            raise ValueError("Cite Tender evidence IDs here. Web sources belong in the answer's web findings.")
         office.ensure_evidence_allowed(reference, tool_id=None)
         if reference not in office.seen_sources:
             raise ValueError("Read each source before using it in a work product or calculation.")
@@ -48,7 +44,6 @@ def _work(ctx, capability, payload, action, event, *, source_refs=()):
         if office.repo.get_run(office.run_id)["status"] not in {"queued", "running"}:
             raise InterruptedError("This Tender run is no longer active.")
         office.require_tool(capability)
-        office._active_root()
         office.ensure_scope_current()
         _sources(office, source_refs)
         conn.execute("""CREATE TABLE IF NOT EXISTS engineering_work_receipts (
@@ -224,7 +219,6 @@ def engineering_tools():
         """Read a specific saved work-product version and a bounded page of its rows. Inspect its cited sources separately before adopting its findings."""
         office = ctx.context
         office.require_tool("read_work_product")
-        office._active_root()
         office.ensure_scope_current()
         if offset < 0 or not 1 <= limit <= 100:
             raise ValueError("Choose a non-negative row offset and a limit of 1–100.")
@@ -250,7 +244,6 @@ def engineering_tools():
         """List saved work products newest first: ID, title, kind, current version and whether a source behind it changed. Use read_work_product for the content."""
         office = ctx.context
         office.require_tool("list_work_products")
-        office._active_root()
         office.ensure_scope_current()
         if offset < 0 or not 1 <= limit <= 50:
             raise ToolArgumentError("Choose a non-negative offset and a limit of 1–50.")

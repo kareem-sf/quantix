@@ -56,26 +56,20 @@ class NativeExecutionService:
             current = connections.get(connection["id"])
             if current["revision"] != connection["revision"]:
                 raise ValueError("The original-client account changed before session admission.")
-            if getattr(context, "is_staff", False):
-                profile_id, version = context.actor_id, context.staff_version
-            else:
-                from .manager_runtime import ManagerRunProfiles
-                try:
-                    profile = ManagerRunProfiles(self.repo).get(context.tender_id, context.run_id)
-                except KeyError:
-                    raise ValueError("This work needs its immutable Tender Manager profile pin before starting an original-client session.") from None
-                profile_id, version = profile.id, profile.version
+            from .manager_runtime import ManagerRunProfiles
+            try:
+                profile = ManagerRunProfiles(self.repo).get(context.tender_id, context.run_id)
+            except KeyError:
+                raise ValueError("This work needs its immutable Tender Manager profile pin before starting an original-client session.") from None
+            profile_id, version = (context.actor_id, profile.version) if getattr(context, "is_staff", False) else (profile.id, profile.version)
             runtime = connection.get("_checked_component_version")
             if not runtime:
                 raise ValueError("Check this exact original-client software and model before creating a managed session.")
-            artifacts = getattr(context, "reviewed_artifacts", {})
-            if not artifacts and operation != "conversation":
+            artifacts = []
+            if operation != "conversation":
                 artifacts = [{key: artifact[key] for key in ("id", "version", "content_hash")} for artifact in self.repo.list_artifacts(context.tender_id)]
             scope = _fingerprint({"artifacts": artifacts, "approved_scope": getattr(context, "approved_scope", None),
-                                  "tools": list(tools), "operation": operation,
-                                  "reviewed_tools": getattr(context, "reviewed_tools", []),
-                                  "route_scope": {key: getattr(getattr(context, "route_binding", None), key, None)
-                                                  for key in ("plan_id", "artifacts", "tools", "allowed_draft_outputs")}})
+                                  "tools": list(tools), "operation": operation})
             observed_model = connection.get("_model") or {}
             settings = _fingerprint({"route": route, "model": {key: observed_model.get(key)
                 for key in ("model_id", "capabilities", "pricing", "source")}})

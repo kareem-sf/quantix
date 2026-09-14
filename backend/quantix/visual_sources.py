@@ -134,19 +134,6 @@ async def _visual_source(context, artifact_id, page, region):
                         dump({"visual_reference": True, "text_extracted": False}),
                     ),
                 )
-    if context.is_staff and context._draft() is not None and not existing:
-        evidence = {
-            "id": source_id,
-            "artifact_id": artifact_id,
-            "artifact_name": artifact["name"],
-            "locator": f"Page {page}",
-            "text": "",
-            "page": page,
-            "kind": "visual",
-            "metadata": {"visual_reference": True, "text_extracted": False},
-        }
-    else:
-        evidence = repo.get_evidence(tender_id, source_id)
     reference = {
         "source_id": source_id,
         "artifact_name": artifact["name"],
@@ -155,7 +142,6 @@ async def _visual_source(context, artifact_id, page, region):
         "coordinate_system": "x,y,width,height as fractions from the page's top-left",
         "instruction": "Inspect the image. Cite this source ID; distinguish printed dimensions from your interpretation. This is not a verified quantity takeoff.",
     }
-    context.record_visual_receipt(evidence, artifact, page, region)
     context.add_seen_source(source_id)
     event_data = {
         "source_id": source_id,
@@ -166,13 +152,7 @@ async def _visual_source(context, artifact_id, page, region):
     if context.actor_id is not None:
         event_data["actor_id"] = context.actor_id
     if context.is_staff:
-        event_data.update(
-            {
-                "assignment_id": context.assignment_id,
-                "profile_version": context.staff_version,
-                "route_binding_id": context.route_binding_id,
-            }
-        )
+        event_data["assignment_id"] = context.assignment_id
     context.emit_event(
         "visual_source_viewed",
         "A source drawing region was inspected.",

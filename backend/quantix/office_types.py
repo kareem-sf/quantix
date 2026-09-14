@@ -6,7 +6,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .ai_models import AIRoute
 from .correspondence_models import DraftInput
 from .estimate_models import DraftDocumentProposal, SourceBoqProposal, UnitRateProposalInput
 from .map_models import NodeInput
@@ -32,7 +31,6 @@ class TaskProposal(Proposal):
     description: str = Field(min_length=1, max_length=4000)
     role: str = Field(min_length=1, max_length=100)
     source_ids: list[str] = Field(default_factory=list, max_length=50)
-    ai_route: AIRoute | None = None
 
 
 class PlanProposal(Proposal):
@@ -99,6 +97,3 @@ class PreparedOfficeResult:
     source_recipients: tuple[tuple[str, tuple[str, ...]], ...] = ()
     approved_plan_id: str | None = None
     actor_id: str | None = None
-    staff_version: int | None = None
-    assignment_id: str | None = None
-    route_binding_id: str | None = None

@@ -238,7 +238,6 @@ class DirectAPIService:
             "max_output_tokens": min(1024, int(route.get("max_output_tokens", 1024))),
             "web_search": False,
             "max_search_calls": 3,
-            "native_tools": [],
             "output_mode": "auto",
         }
         bounded = dict(connection)

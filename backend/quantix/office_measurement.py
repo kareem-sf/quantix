@@ -23,81 +23,34 @@ def _clean(value):
 
 def validate_agent_measurement(context, values):
     """Root calls this before accepting/publishing an agent drawing proposal."""
-    if context.is_staff:
-        context.require_tool("calculate_drawing_measurement")
     proposal = AgentMeasurementProposal.model_validate(values)
     context.ensure_scope_current()
     context.ensure_artifact_allowed(proposal.artifact_id)
     context.validate_sources(proposal.source_ids)
     viewed_regions = []
-    if context.is_staff:
-        from .staff_context import StaffContextService
-
-        for receipt in StaffContextService(context.repo).list_visual_receipts(
-            context.tender_id,
-            actor_id=context.actor_id,
-            profile_version=context.staff_version,
-            assignment_id=context.assignment_id,
-            route_binding_id=context.route_binding_id,
-            root_run_id=context.run_id,
-            artifact_id=proposal.artifact_id,
-            page=proposal.page,
+    for event in context.repo.run_events(context.run_id):
+        data = event.get("data") or {}
+        if (
+            event["kind"] != "visual_source_viewed"
+            or data.get("artifact_id") != proposal.artifact_id
+            or data.get("page") != proposal.page
+            or not context.has_seen_source(data.get("source_id"))
         ):
-            if (
-                receipt.method != "visual"
-                or not context.has_seen_source(receipt.source_id)
-                or receipt.actor_id != context.actor_id
-                or receipt.profile_id != context.actor_id
-                or receipt.profile_version != context.staff_version
-                or receipt.assignment_id != context.assignment_id
-                or receipt.route_binding_id != context.route_binding_id
-                or receipt.root_run_id != context.run_id
-                or receipt.artifact_id != proposal.artifact_id
-                or receipt.page != proposal.page
-            ):
-                continue
-            basis = context.reviewed_artifacts.get(receipt.artifact_id)
-            expected_hash = (
-                basis.content_hash if hasattr(basis, "content_hash") else basis["content_hash"]
-            ) if basis is not None else None
-            if receipt.content_hash != expected_hash:
-                continue
-            region = receipt.region
-            if region is None or any(
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(value)
-                for value in region
-            ):
-                continue
-            x, y, width, height = region
-            if min(x, y) < 0 or min(width, height) <= 0 or x + width > 1 or y + height > 1:
-                continue
-            viewed_regions.append(region)
-    else:
-        for event in context.repo.run_events(context.run_id):
-            data = event.get("data") or {}
-            if (
-                event["kind"] != "visual_source_viewed"
-                or data.get("artifact_id") != proposal.artifact_id
-                or data.get("page") != proposal.page
-                or not context.has_seen_source(data.get("source_id"))
-            ):
-                continue
-            region = data.get("region")
-            if not isinstance(region, list) or len(region) != 4:
-                continue
-            if any(
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(value)
-                for value in region
-            ):
-                continue
-            x, y, width, height = region
-            if min(x, y) < 0 or min(width, height) <= 0 or x + width > 1 or y + height > 1:
-                continue
-            viewed_regions.append(region)
+            continue
+        region = data.get("region")
+        if not isinstance(region, list) or len(region) != 4:
+            continue
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            for value in region
+        ):
+            continue
+        x, y, width, height = region
+        if min(x, y) < 0 or min(width, height) <= 0 or x + width > 1 or y + height > 1:
+            continue
+        viewed_regions.append(region)
     if not viewed_regions:
         raise ValueError("Inspect the measured drawing page with view_document_page before proposing a measurement.")
     for px, py in [*proposal.points, *(proposal.calibration_points or [])]:

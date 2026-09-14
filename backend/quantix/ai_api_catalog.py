@@ -44,8 +44,6 @@ def model_entry(item: dict, protocol: str) -> dict | None:
         ("pdf", "pdf_input"),
         ("temperature", "temperature"),
         ("top_p", "top_p"),
-        ("web_fetch", "web_fetch"),
-        ("code_execution", "code_execution"),
     ):
         value = raw.get(source)
         if isinstance(value, dict):
