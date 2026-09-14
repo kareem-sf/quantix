@@ -116,11 +116,20 @@ class MemoryRepository:
         self.get_tender(tender_id)
         if artifact_id != "artifact-1":
             raise KeyError(artifact_id)
-        return {"id": artifact_id, "version": 1, "is_current": True}
+        return {
+            "id": artifact_id,
+            "version": 1,
+            "is_current": True,
+            "name": "Spec.pdf",
+            "relative_path": "Civil/Spec.pdf",
+            "content_hash": "hash-1",
+            "kind": "pdf",
+        }
 
-    def search(self, tender_id, query, limit=20):
+    def search_keyword(self, tender_id, query, limit=20, **_scope):
         self.get_tender(tender_id)
-        return [self.evidence["source-1"]]
+        rows = [self.evidence["source-1"]]
+        return rows, {"scanned": len(rows), "truncated": False, "more": False, "ceiling": limit}
 
     def get_evidence(self, tender_id, evidence_id):
         self.get_tender(tender_id)
